@@ -90,6 +90,29 @@ public static class ShowDocumentValidator
                 if (!cueIds.Contains(target))
                     errors.Add($"cue '{cue.Id}' lists unknown stop-target cue '{target}'.");
 
+        // Audio outputs: unique ids. Routes: an enabled route's SourceId is a cue id and its OutputId must be a
+        // declared audio output or the implicit master — a dangling route otherwise silently never matches at
+        // play time instead of being caught at load (NXT-25).
+        var audioOutputIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var output in document.AudioOutputs)
+        {
+            if (string.IsNullOrEmpty(output.Id))
+                errors.Add("an audio output has an empty id.");
+            else if (!audioOutputIds.Add(output.Id))
+                errors.Add($"duplicate audio output id '{output.Id}'.");
+        }
+
+        foreach (var route in document.Routes)
+        {
+            if (!route.Enabled)
+                continue;
+            if (!cueIds.Contains(route.SourceId))
+                errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an unknown cue.");
+            if (!string.Equals(route.OutputId, ShowSession.MasterOutputId, StringComparison.Ordinal)
+                && !audioOutputIds.Contains(route.OutputId))
+                errors.Add($"route '{route.SourceId}' → '{route.OutputId}' references an undeclared audio output.");
+        }
+
         return errors;
     }
 

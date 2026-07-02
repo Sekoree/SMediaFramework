@@ -87,6 +87,10 @@ public sealed class ShowSession : IAsyncDisposable
     // host id (the GUI's soundboard tile). Independent of the transport groups — the keyed generalization of
     // the single preview above. Owned by the dispatcher.
     private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
+    // Voice opens in flight (NXT-19): voiceId → the open's claim CTS, published so a stop / re-fire / dispose
+    // preempts the OFF-dispatcher open before it commits. Owned by the dispatcher; a canceller only Cancel()s —
+    // the open flow that created the CTS is the one that disposes it (the blocked open still holds its token).
+    private readonly Dictionary<string, CancellationTokenSource> _pendingVoiceOpens = new(StringComparer.Ordinal);
     private volatile bool _disposed;
 
     // Lock-free query view (NXT-16): a volatile snapshot of each group's clock + active player, republished on
@@ -324,7 +328,13 @@ public sealed class ShowSession : IAsyncDisposable
         _audioOutputs = document.AudioOutputs;
         _showGeneration++; // a fire whose open straddled this reload bails at commit (NXT-03 off-dispatcher)
 
-        _ = WarmUpcomingAsync(); // background pre-roll of the first cues so the first GO arms instantly
+        // Background pre-roll of the first cues so the first GO arms instantly. Launched with ExecutionContext
+        // flow SUPPRESSED (NXT-22): we are ON the dispatcher here, and a plain fire-and-forget would carry the
+        // dispatcher's AsyncLocal identity into the warm task's continuations — a future InvokeAsync from such a
+        // continuation would run inline OFF the real loop and race transport commands (the same trap the
+        // monitors guard against with SuppressFlow).
+        using (ExecutionContext.SuppressFlow())
+            _ = Task.Run(() => WarmUpcomingAsync());
     }
 
     private async ValueTask PlayClipAsync(string groupId, ShowClipBinding? binding, CancellationToken cancellationToken)
@@ -559,6 +569,35 @@ public sealed class ShowSession : IAsyncDisposable
                       (variant is null ? string.Empty : $"#{variant}"));
     }
 
+    // NXT-24: backend device enumeration is not free (PortAudio walks the host API's device table, and a flaky
+    // ALSA setup makes it worse) and the spec builder runs on EVERY fire / warm / voice. Cache the list briefly;
+    // thread-safe because the fire path builds specs OFF the dispatcher.
+    private static readonly TimeSpan DeviceCacheTtl = TimeSpan.FromSeconds(5);
+    private readonly object _deviceCacheGate = new();
+    private IReadOnlyList<AudioDeviceInfo>? _cachedOutputDevices;
+    private long _cachedOutputDevicesAtMs;
+
+    /// <summary>The backend's output devices, cached for <see cref="DeviceCacheTtl"/> (NXT-24) — device
+    /// hot-plug is still picked up on the next refresh, but a burst of fires/warms enumerates once.</summary>
+    private IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevicesCached()
+    {
+        var now = Environment.TickCount64;
+        lock (_deviceCacheGate)
+        {
+            if (_cachedOutputDevices is { } cached && now - _cachedOutputDevicesAtMs < (long)DeviceCacheTtl.TotalMilliseconds)
+                return cached;
+        }
+
+        var devices = _audioBackend!.EnumerateOutputDevices();
+        lock (_deviceCacheGate)
+        {
+            _cachedOutputDevices = devices;
+            _cachedOutputDevicesAtMs = now;
+        }
+
+        return devices;
+    }
+
     /// <summary>Returns the hardware/backend nominal rate for a device. JACK devices expose their fixed
     /// graph rate here; opening PortAudio at the media's source rate would fail for 44.1 kHz media on a
     /// 48 kHz JACK graph.</summary>
@@ -566,7 +605,7 @@ public sealed class ShowSession : IAsyncDisposable
     {
         if (_audioBackend is null)
             return null;
-        var devices = _audioBackend.EnumerateOutputDevices();
+        var devices = EnumerateOutputDevicesCached();
         var device = !string.IsNullOrWhiteSpace(deviceId)
             ? devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))
             : devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
@@ -775,15 +814,57 @@ public sealed class ShowSession : IAsyncDisposable
     /// transport groups (the GUI's <c>PreviewCue</c>). Opens a FRESH instance (not the standby-prepared clip),
     /// plays it on <paramref name="previewDeviceId"/> (or the default device), and fires
     /// <see cref="PreviewEnded"/> at its natural end. Replaces any current preview. Returns false when the cue
-    /// has no clip binding.</summary>
-    public Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId = null) =>
-        InvokeAsync(async () =>
+    /// has no clip binding, or when the preview was preempted (stopped/replaced) while its media was opening.
+    /// The open runs OFF the serial dispatcher (NXT-19) so a slow audition open never parks transport, and
+    /// <see cref="StopPreviewAsync"/> / a replacing preview cancels it mid-open.</summary>
+    public async Task<bool> PreviewCueAsync(string cueId, string? previewDeviceId = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // --- SETUP (dispatcher): stop any current preview / pending preview open, resolve the binding, claim.
+        var setup = await InvokeAsync<(ClipSpec Spec, CancellationTokenSource Cts)?>(async () =>
         {
             await ReleasePreviewAsync().ConfigureAwait(false);
             if (!_clipsByCue.TryGetValue(cueId, out var binding))
-                return false;
+                return null;
+            var claim = new CancellationTokenSource();
+            _previewCts = claim; // published: ReleasePreviewAsync cancels it to preempt the open
+            return (BuildClipSpec(binding, "preview"), claim);
+        }).ConfigureAwait(false);
+        if (setup is not { } s)
+            return false;
 
-            var armed = await _standby.ArmAsync(BuildClipSpec(binding, "preview")).ConfigureAwait(false);
+        // --- OPEN (OFF the dispatcher): the long part — the loop stays free throughout (NXT-19).
+        IArmedClip armed;
+        try
+        {
+            armed = await _standby.ArmAsync(s.Spec, s.Cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return false; // preempted by StopPreview / a replacing preview / dispose — not an error
+        }
+
+        // --- COMMIT (dispatcher): only if our claim is still the current preview.
+        try
+        {
+            return await CommitPreviewAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed between the open completing and the commit — release the orphaned clip directly.
+            await armed.ReleaseAsync().ConfigureAwait(false);
+            return false;
+        }
+
+        Task<bool> CommitPreviewAsync() => InvokeAsync(async () =>
+        {
+            if (!ReferenceEquals(_previewCts, s.Cts) || s.Cts.IsCancellationRequested || _disposed)
+            {
+                await armed.ReleaseAsync().ConfigureAwait(false);
+                return false;
+            }
+
             var player = armed.Player;
             var outputs = new List<IAudioOutput>();
             try
@@ -799,8 +880,7 @@ public sealed class ShowSession : IAsyncDisposable
                 armed.Start();
                 _previewClip = armed;
                 _previewOutputs = outputs;
-                _previewCts = new CancellationTokenSource();
-                StartPreviewEndMonitor(cueId, player, _previewCts.Token);
+                StartPreviewEndMonitor(cueId, player, s.Cts.Token);
                 return true;
             }
             catch
@@ -811,15 +891,17 @@ public sealed class ShowSession : IAsyncDisposable
                 throw;
             }
         });
+    }
 
-    /// <summary>Stops the current preview, if any (the GUI's <c>StopPreview</c>). Does not raise
-    /// <see cref="PreviewEnded"/>.</summary>
+    /// <summary>Stops the current preview, if any (the GUI's <c>StopPreview</c>) — including one still opening
+    /// (NXT-19). Does not raise <see cref="PreviewEnded"/>.</summary>
     public Task StopPreviewAsync() => InvokeAsync(() => ReleasePreviewAsync().AsTask());
 
     private async ValueTask ReleasePreviewAsync()
     {
+        // Cancel only — never Dispose the CTS here: a preempted preview open (NXT-19) may still hold its token
+        // off-dispatcher. A cancelled CTS with no timer holds no unmanaged state, so GC reclaims it.
         _previewCts?.Cancel();
-        _previewCts?.Dispose();
         _previewCts = null;
         var clip = _previewClip;
         var outputs = _previewOutputs;
@@ -835,15 +917,22 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>Fires a soundboard voice: opens <paramref name="mediaPath"/> as a fresh player on
     /// <paramref name="deviceId"/> (or the default) at <paramref name="volume"/> and tracks it under
-    /// <paramref name="voiceId"/>. Polyphonic across ids; re-firing the same id replaces its voice. Raises
-    /// <see cref="VoiceEnded"/> at the voice's natural end. (Loop is a later refinement.)</summary>
-    public Task FireVoiceAsync(string voiceId, string mediaPath, string? deviceId = null, float volume = 1f) =>
-        InvokeAsync(async () =>
+    /// <paramref name="voiceId"/>. Polyphonic across ids; re-firing the same id replaces its voice (including a
+    /// still-opening one). Raises <see cref="VoiceEnded"/> at the voice's natural end. The media open runs OFF
+    /// the serial dispatcher (NXT-19) — a slow open never parks transport — and
+    /// <see cref="StopVoiceAsync"/>/<see cref="StopAllVoicesAsync"/>/a re-fire/dispose preempt it; a preempted
+    /// fire completes without error (the voice simply never started). (Loop is a later refinement.)</summary>
+    public async Task FireVoiceAsync(string voiceId, string mediaPath, string? deviceId = null, float volume = 1f)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var outputId = $"voice:{voiceId}";
+
+        // --- SETUP (dispatcher): replace any prior voice / pending open and claim this open.
+        var (spec, cts) = await InvokeAsync(async () =>
         {
             await ReleaseVoiceAsync(voiceId).ConfigureAwait(false); // re-trigger replaces the prior voice
-            var outputId = $"voice:{voiceId}";
             var targetAudioRate = ResolveBackendSampleRate(deviceId ?? _outputDeviceId);
-            var armed = await _standby.ArmAsync(new ClipSpec(
+            var clipSpec = new ClipSpec(
                 outputId,
                 ClipMediaSource.File(
                     _registry,
@@ -853,7 +942,65 @@ public sealed class ShowSession : IAsyncDisposable
                         TargetAudioSampleRate = targetAudioRate,
                     }),
                 S.Media.Core.ClipWindow.Unbounded,
-                $"{outputId}|rate:{targetAudioRate?.ToString() ?? "source"}")).ConfigureAwait(false);
+                $"{outputId}|rate:{targetAudioRate?.ToString() ?? "source"}");
+            var claim = new CancellationTokenSource();
+            _pendingVoiceOpens[voiceId] = claim;
+            return (clipSpec, claim);
+        }).ConfigureAwait(false);
+
+        // --- OPEN (OFF the dispatcher): the long part — the loop stays free throughout (NXT-19).
+        IArmedClip armed;
+        try
+        {
+            armed = await _standby.ArmAsync(spec, cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            var cancelled = ex is OperationCanceledException;
+            try
+            {
+                await InvokeAsync(() =>
+                {
+                    if (_pendingVoiceOpens.TryGetValue(voiceId, out var current) && ReferenceEquals(current, cts))
+                        _pendingVoiceOpens.Remove(voiceId);
+                    cts.Dispose(); // the open flow owns the claim CTS; the open is over, no one else holds the token
+                    return Task.CompletedTask;
+                }).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // disposed mid-open — DisposeStateAsync already dropped/cancelled the pending claim
+            }
+
+            if (cancelled)
+                return; // preempted by stop/re-fire/dispose — not an error, the voice just never started
+            throw; // a real open failure (bad path/device) surfaces to the caller as before
+        }
+
+        // --- COMMIT (dispatcher): only if our claim is still current (not stopped/re-fired during the open).
+        try
+        {
+            await CommitVoiceAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed between the open completing and the commit — release the orphaned clip directly (the
+            // standby engine is internally thread-safe; nothing registered it, so nothing else will).
+            await armed.ReleaseAsync().ConfigureAwait(false);
+        }
+
+        Task CommitVoiceAsync() => InvokeAsync(async () =>
+        {
+            var current = _pendingVoiceOpens.TryGetValue(voiceId, out var pending) && ReferenceEquals(pending, cts);
+            if (current)
+                _pendingVoiceOpens.Remove(voiceId);
+            if (!current || cts.IsCancellationRequested || _disposed)
+            {
+                cts.Dispose();
+                await armed.ReleaseAsync().ConfigureAwait(false);
+                return;
+            }
+
             var player = armed.Player;
             var outputs = new List<IAudioOutput>();
             try
@@ -867,7 +1014,7 @@ public sealed class ShowSession : IAsyncDisposable
                 }
 
                 armed.Start();
-                var cts = new CancellationTokenSource();
+                // The claim CTS becomes the running voice's CTS (cancels the end monitor on release).
                 _voices[voiceId] = new VoiceHandle(armed, outputs, outputId, cts);
                 StartVoiceEndMonitor(voiceId, player, cts.Token);
             }
@@ -876,18 +1023,20 @@ public sealed class ShowSession : IAsyncDisposable
                 foreach (var output in outputs)
                     (output as IDisposable)?.Dispose();
                 await armed.ReleaseAsync().ConfigureAwait(false);
+                cts.Dispose();
                 throw;
             }
         });
+    }
 
     /// <summary>Stops one soundboard voice (no <see cref="VoiceEnded"/>).</summary>
     public Task StopVoiceAsync(string voiceId) => InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask());
 
-    /// <summary>Stops every soundboard voice (the GUI's StopAllSounds).</summary>
+    /// <summary>Stops every soundboard voice (the GUI's StopAllSounds) — including any still opening (NXT-19).</summary>
     public Task StopAllVoicesAsync() =>
         InvokeAsync(async () =>
         {
-            foreach (var id in _voices.Keys.ToArray())
+            foreach (var id in _voices.Keys.Concat(_pendingVoiceOpens.Keys).Distinct().ToArray())
                 await ReleaseVoiceAsync(id).ConfigureAwait(false);
         });
 
@@ -938,6 +1087,12 @@ public sealed class ShowSession : IAsyncDisposable
 
     private async ValueTask ReleaseVoiceAsync(string voiceId)
     {
+        // Preempt a still-opening voice (NXT-19): cancel its claim so the off-dispatcher open aborts and its
+        // commit is refused. Only Cancel here — the open flow that created the CTS disposes it (it still holds
+        // the token inside the blocked open).
+        if (_pendingVoiceOpens.Remove(voiceId, out var pending))
+            pending.Cancel();
+
         if (!_voices.Remove(voiceId, out var v))
             return;
         v.Cts.Cancel();
@@ -1090,24 +1245,27 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>Pre-warms (opens + seeks-to-Start, holds ready) the next <paramref name="count"/> cues after
     /// the last fired in <paramref name="groupId"/> so the next GO arms instantly. Best-effort — a warm
     /// failure is swallowed and never affects transport. Awaitable for the UI/tests; <see cref="GoAsync"/>
-    /// fires it without awaiting so the opens run in the background while the current cue plays.</summary>
-    public Task WarmUpcomingAsync(string groupId = DefaultGroup, int count = 2) =>
-        InvokeAsync(async () =>
+    /// fires it without awaiting so the opens run in the background while the current cue plays. Only the
+    /// cue/group state read marshals onto the dispatcher — the standby refresh (which OPENS media) runs OFF
+    /// it (NXT-19/NXT-22): awaiting warm opens inside a dispatcher work item would park the loop for their
+    /// whole duration (a blocked pre-roll open would freeze every transport command behind it).</summary>
+    public async Task WarmUpcomingAsync(string groupId = DefaultGroup, int count = 2)
+    {
+        try
         {
-            try
-            {
-                var specs = BuildUpcomingSpecs(groupId, count);
-                if (specs.Count > 0)
-                    await _standby.RefreshStandbyAsync(
-                            specs,
-                            new ClipStandbyPolicy(MaxPreparedDecoders: count, Window: count))
-                        .ConfigureAwait(false);
-            }
-            catch
-            {
-                // best-effort pre-roll — a failed warm just means the next GO opens on demand
-            }
-        });
+            var specs = await InvokeAsync(() => Task.FromResult(BuildUpcomingSpecs(groupId, count)))
+                .ConfigureAwait(false);
+            if (specs.Count > 0)
+                await _standby.RefreshStandbyAsync(
+                        specs,
+                        new ClipStandbyPolicy(MaxPreparedDecoders: count, Window: count))
+                    .ConfigureAwait(false);
+        }
+        catch
+        {
+            // best-effort pre-roll — a failed warm just means the next GO opens on demand
+        }
+    }
 
     private static readonly TimeSpan FadeStepInterval = TimeSpan.FromMilliseconds(25);
 
@@ -1512,33 +1670,24 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>Soft-stops and releases the active clip on <paramref name="groupId"/>. The cue's configured
     /// fade-out is used, falling back to the legacy HaPlay 750 ms stop fade. Cancels any in-flight cue fire first
-    /// so STOP never waits behind a long pre-wait/open (NXT-03).</summary>
+    /// so STOP never waits behind a long pre-wait/open (NXT-03). The fade ramp itself runs OFF the serial
+    /// dispatcher (NXT-18) — only short gain/opacity steps and the final release marshal onto it — so other
+    /// commands (pause, seek, load, a following GO's commit) never queue behind a long configured fade. The
+    /// returned task still completes only after the clip is released ("stopped means stopped").</summary>
     /// <param name="fade">When true (the cue Stop/Panic default) the group's audio + layers ramp to silence over
     /// its <see cref="ShowClipBinding.FadeOut"/> or <see cref="SoftStopFadeDuration"/> first; when false the clip is
     /// cut immediately (the media-player deck stops hard — it has no soft-stop fade).</param>
     public Task StopAsync(string groupId = DefaultGroup, bool fade = true)
     {
         CancelActiveFire();
-        return InvokeAsync(async () =>
-        {
-            var group = GetOrAddGroup(groupId);
-            if (fade)
-                await FadeGroupsAsync([group]).ConfigureAwait(false);
-            await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
-        });
+        return StopGroupsCoreAsync(() => [GetOrAddGroup(groupId)], fade);
     }
 
     /// <summary>Soft-stops every active transport group together (HaPlay Stop/Panic parity).</summary>
     public Task StopAllAsync()
     {
         CancelActiveFire();
-        return InvokeAsync(async () =>
-        {
-            var active = _groups.Values.Where(group => group.Active is not null).ToArray();
-            await FadeGroupsAsync(active).ConfigureAwait(false);
-            foreach (var group in active)
-                await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
-        });
+        return StopGroupsCoreAsync(() => _groups.Values.Where(group => group.Active is not null).ToArray(), fade: true);
     }
 
     /// <summary>Stops the cue with <paramref name="cueId"/> wherever it is the active clip (per-cue stop /
@@ -1546,40 +1695,79 @@ public sealed class ShowSession : IAsyncDisposable
     public Task StopCueAsync(string cueId)
     {
         CancelActiveFire();
-        return InvokeAsync(async () =>
-        {
-            foreach (var group in _groups.Values)
-                if (group.Active?.Spec.Id == cueId)
-                {
-                    await FadeGroupsAsync([group]).ConfigureAwait(false);
-                    await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
-                }
-        });
+        return StopGroupsCoreAsync(
+            () => _groups.Values.Where(group => group.Active?.Spec.Id == cueId).ToArray(), fade: true);
     }
 
-    /// <summary>Ramps active audio routes and composition layers to silence. All groups advance from one
-    /// stopwatch so Panic fades them concurrently instead of serially. Must be called by the session dispatcher.</summary>
-    private static async Task FadeGroupsAsync(IReadOnlyList<TransportGroup> groups)
-    {
-        var fades = new List<GroupFade>(groups.Count);
-        foreach (var group in groups)
-        {
-            if (group.Active is not { } clip || !group.TryBeginFadeOut(clip.Player))
-                continue;
-            fades.Add(new GroupFade(
-                group,
-                clip,
-                group.ActiveBinding?.FadeOut is { } configured && configured > TimeSpan.Zero
-                    ? configured
-                    : SoftStopFadeDuration,
-                group.ActiveAudioScale,
-                group.ActiveLayer?.Opacity ?? 0f,
-                group.ActiveRouteTargets));
-        }
-        if (fades.Count == 0)
-            return;
+    /// <summary>What one stop targeted, captured on the dispatcher at claim time: the group, the clip that was
+    /// active THEN (the only clip this stop may release), and — when the fade claim succeeded — its ramp.</summary>
+    private sealed record StopClaim(TransportGroup Group, IArmedClip? Clip, GroupFade? Fade);
 
-        var maxDuration = fades.Max(fade => fade.Duration);
+    /// <summary>The shared stop path (NXT-18): resolves the target groups and claims their fades ON the
+    /// dispatcher, ramps OFF it (<see cref="RunStopFadeAsync"/>), then releases each claimed clip back ON the
+    /// dispatcher — identity-guarded, so a cue fired DURING the fade survives (a stop only releases the clip it
+    /// saw at claim time; the previous on-dispatcher implementation got the same outcome by queuing the fire's
+    /// commit behind the whole fade). A group whose fade claim lost to an in-flight natural fade-out skips the
+    /// ramp (that fade task owns the levels) but is still released here — a STOP preempts a natural fade.
+    /// <paramref name="selectGroups"/> runs on the dispatcher.</summary>
+    private async Task StopGroupsCoreAsync(Func<IReadOnlyList<TransportGroup>> selectGroups, bool fade)
+    {
+        var claims = await InvokeAsync(() =>
+        {
+            var groups = selectGroups();
+            var list = new List<StopClaim>(groups.Count);
+            foreach (var group in groups)
+            {
+                var clip = group.Active;
+                GroupFade? groupFade = null;
+                if (fade && clip is not null && group.TryBeginFadeOut(clip.Player))
+                {
+                    groupFade = new GroupFade(
+                        group,
+                        clip,
+                        group.ActiveBinding?.FadeOut is { } configured && configured > TimeSpan.Zero
+                            ? configured
+                            : SoftStopFadeDuration,
+                        group.ActiveAudioScale,
+                        group.ActiveLayer?.Opacity ?? 0f,
+                        group.ActiveRouteTargets);
+                }
+
+                list.Add(new StopClaim(group, clip, groupFade));
+            }
+
+            return Task.FromResult<IReadOnlyList<StopClaim>>(list);
+        }).ConfigureAwait(false);
+
+        var fades = claims.Where(c => c.Fade is not null).Select(c => c.Fade!).ToArray();
+        if (fades.Length > 0)
+            await RunStopFadeAsync(fades).ConfigureAwait(false);
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                foreach (var claim in claims)
+                    if (claim.Clip is not null && ReferenceEquals(claim.Group.Active, claim.Clip))
+                        await ReplaceActiveAsync(claim.Group, null, [], []).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The session was disposed mid-stop — disposal releases every clip itself.
+        }
+    }
+
+    /// <summary>Ramps the claimed stop fades to silence OFF the dispatcher: each step marshals one short
+    /// gain/opacity commit onto it (the <see cref="StartNaturalFadeOut"/> pattern), so the serial loop is never
+    /// parked for the fade duration (NXT-18). All fades advance from one stopwatch so Panic fades groups
+    /// concurrently. Exits early when every claimed clip has been replaced (nothing left to fade).</summary>
+    private async Task RunStopFadeAsync(IReadOnlyList<GroupFade> fades)
+    {
+        var maxDuration = TimeSpan.Zero;
+        foreach (var fade in fades)
+            if (fade.Duration > maxDuration)
+                maxDuration = fade.Duration;
         if (maxDuration <= TimeSpan.Zero)
             return;
 
@@ -1587,16 +1775,32 @@ public sealed class ShowSession : IAsyncDisposable
         while (true)
         {
             var elapsed = sw.Elapsed;
-            foreach (var fade in fades)
+            bool anyStillActive;
+            try
             {
-                if (!ReferenceEquals(fade.Group.Active, fade.Clip))
-                    continue;
-                var scale = (float)Math.Clamp(1d - elapsed.TotalMilliseconds / fade.Duration.TotalMilliseconds, 0d, 1d);
-                fade.Group.ApplyFadeLevel(
-                    fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartOpacity, scale);
+                anyStillActive = await InvokeAsync(() =>
+                {
+                    var applied = false;
+                    foreach (var fade in fades)
+                    {
+                        if (!ReferenceEquals(fade.Group.Active, fade.Clip))
+                            continue; // replaced/ended during the fade — leave the new clip alone
+                        var scale = (float)Math.Clamp(
+                            1d - elapsed.TotalMilliseconds / fade.Duration.TotalMilliseconds, 0d, 1d);
+                        fade.Group.ApplyFadeLevel(
+                            fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartOpacity, scale);
+                        applied = true;
+                    }
+
+                    return Task.FromResult(applied);
+                }).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return; // session disposed mid-fade — disposal owns the teardown
             }
 
-            if (elapsed >= maxDuration)
+            if (!anyStillActive || elapsed >= maxDuration)
                 return;
             await Task.Delay(FadeStepInterval).ConfigureAwait(false);
         }
@@ -1881,7 +2085,7 @@ public sealed class ShowSession : IAsyncDisposable
     private async Task DisposeStateAsync()
     {
         await ReleasePreviewAsync().ConfigureAwait(false);
-        foreach (var id in _voices.Keys.ToArray())
+        foreach (var id in _voices.Keys.Concat(_pendingVoiceOpens.Keys).Distinct().ToArray())
             await ReleaseVoiceAsync(id).ConfigureAwait(false);
         foreach (var group in _groups.Values)
             await group.DisposeAsync().ConfigureAwait(false);

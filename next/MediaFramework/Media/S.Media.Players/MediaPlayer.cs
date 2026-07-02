@@ -485,16 +485,25 @@ public sealed class MediaPlayer : IDisposable
             ? new AttachedPictureVideoSource(result.Video)
             : result.Video;
 
-        if (TryOpenLive(result.Audio, video, options, videoNegotiationLead, disposeNegotiationLead: false,
-                disposeSourcesOnDispose: false,
-                (source, targetRate) => registry.CreateResampler(source, targetRate)
-                    ?? throw new InvalidOperationException(
-                        $"no audio resampler is registered for {source.Format.SampleRate} Hz → {targetRate} Hz"),
-                out player, out error))
+        try
         {
-            player.RegisterOwnedCompanion(result); // the player owns the atomic asset; disposes it on dispose
-            WireAdaptiveRateFromRegistry(registry, player);
-            return true;
+            if (TryOpenLive(result.Audio, video, options, videoNegotiationLead, disposeNegotiationLead: false,
+                    disposeSourcesOnDispose: false,
+                    (source, targetRate) => registry.CreateResampler(source, targetRate)
+                        ?? throw new InvalidOperationException(
+                            $"no audio resampler is registered for {source.Format.SampleRate} Hz → {targetRate} Hz"),
+                    out player, out error, cancellationToken))
+            {
+                player.RegisterOwnedCompanion(result); // the player owns the atomic asset; disposes it on dispose
+                WireAdaptiveRateFromRegistry(registry, player);
+                return true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A cancelled graph wiring (e.g. the live first-frame wait, NXT-26) must not leak the opened asset.
+            result.Dispose();
+            throw;
         }
 
         result.Dispose();
@@ -652,7 +661,8 @@ public sealed class MediaPlayer : IDisposable
         IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
-        out string? errorMessage) =>
+        out string? errorMessage,
+        CancellationToken cancellationToken = default) =>
         TryOpenLive(
             audioSource,
             videoSource,
@@ -662,7 +672,8 @@ public sealed class MediaPlayer : IDisposable
             disposeSourcesOnDispose: true,
             resamplerFactory: null,
             out player,
-            out errorMessage);
+            out errorMessage,
+            cancellationToken);
 
     /// <summary>
     /// Opens a player graph from live sources. When
@@ -679,7 +690,8 @@ public sealed class MediaPlayer : IDisposable
         bool disposeSourcesOnDispose,
         Func<IAudioSource, int, IAudioSource>? resamplerFactory,
         [NotNullWhen(true)] out MediaPlayer? player,
-        out string? errorMessage)
+        out string? errorMessage,
+        CancellationToken cancellationToken = default)
     {
         player = null;
         errorMessage = null;
@@ -751,11 +763,14 @@ public sealed class MediaPlayer : IDisposable
                 ownedDisposables.Add(videoDisposable);
 
             // A live video source (NDI/capture) publishes its NativePixelFormats only after its first frame,
-            // which VideoPlayer's up-front negotiation needs. Block for that first frame and discard it; the
-            // player re-anchors the source to the master at Play (Doc 03 §2).
+            // which VideoPlayer's up-front negotiation needs. Wait for that first frame (it is discarded); the
+            // player re-anchors the source to the master at Play (Doc 03 §2). The wait is bounded and honours
+            // the open's cancellation token (NXT-26): a live receiver's read blocks until a frame arrives, so a
+            // connected-but-silent sender must not hang the open forever — or past a ShowSession STOP.
             var liveVideo = videoSource as ILiveVideoSource;
-            if (liveVideo is not null && videoSource!.TryReadNextFrame(out var warmFrame))
-                warmFrame.Dispose();
+            if (liveVideo is not null && !TryWaitLiveFirstFrame(videoSource!, cancellationToken))
+                throw new TimeoutException(
+                    $"live video source delivered no frame within {LiveFirstFrameTimeout.TotalSeconds:0}s.");
 
             router = new VideoRouter(null);
             string primaryOutputId;
@@ -816,10 +831,25 @@ public sealed class MediaPlayer : IDisposable
                 videoNegotiationLead?.GetType().Name ?? "(discard)");
             return true;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // An aborted open propagates as cancellation (NXT-03/NXT-26), matching the registry open path —
+            // after releasing everything built so far.
+            CleanupPartialOpen();
+            player = null;
+            throw;
+        }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
             Trace.LogError(ex, "TryOpenLive failed");
+            CleanupPartialOpen();
+            player = null;
+            return false;
+        }
+
+        void CleanupPartialOpen()
+        {
             TryDispose(() => videoPlayer?.Dispose(), "MediaPlayer.TryOpenLive: VideoPlayer");
             TryDispose(() => audioRouter?.Dispose(), "MediaPlayer.TryOpenLive: AudioRouter");
             TryDispose(() => audioClock?.Dispose(), "MediaPlayer.TryOpenLive: AudioClock");
@@ -827,8 +857,47 @@ public sealed class MediaPlayer : IDisposable
             TryDispose(() => freerun?.Dispose(), "MediaPlayer.TryOpenLive: MediaClock");
             foreach (var d in ownedDisposables)
                 TryDispose(d.Dispose, "MediaPlayer.TryOpenLive: live source");
-            player = null;
-            return false;
+        }
+    }
+
+    // NXT-26: a live receiver's TryReadNextFrame blocks until a frame arrives (or the source faults/disposes),
+    // so the first-frame wait needs a backstop — a live sender that produced nothing for this long is a failed
+    // open, not something to block a cue fire on indefinitely.
+    private static readonly TimeSpan LiveFirstFrameTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Waits (bounded + cancellable — NXT-26) for a live source's first video frame so its native
+    /// pixel formats are published for negotiation; the frame itself is discarded. Returns false on the
+    /// backstop timeout; throws <see cref="OperationCanceledException"/> when the open's token fires. An
+    /// abandoned blocking read unblocks once the caller's failure path disposes the source (live receivers
+    /// re-check fault/dispose state on a short internal interval); a late frame it delivered is disposed.</summary>
+    private static bool TryWaitLiveFirstFrame(IVideoSource videoSource, CancellationToken cancellationToken)
+    {
+        var read = Task.Run(
+            () => videoSource.TryReadNextFrame(out var frame) ? frame : null,
+            CancellationToken.None);
+        // The warm frame is always discarded — and an abandoned read's late frame/fault must not leak/go
+        // unobserved — so one continuation owns both.
+        _ = read.ContinueWith(
+            static t =>
+            {
+                if (t.IsCompletedSuccessfully)
+                    t.Result?.Dispose();
+                else
+                    _ = t.Exception; // observe a faulted abandoned read (e.g. the source was disposed)
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        try
+        {
+            return read.Wait((int)LiveFirstFrameTimeout.TotalMilliseconds, cancellationToken);
+        }
+        catch (AggregateException)
+        {
+            // The read itself faulted (source faulted/disposed mid-open) — proceed; the format negotiation
+            // right after surfaces the real failure as the open error.
+            return true;
         }
     }
 

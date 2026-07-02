@@ -102,6 +102,24 @@ public partial class MediaPlayerViewModel
                 await Dispatcher.UIThread.InvokeAsync(StopShowSessionPoll);
                 try { await _playerShowSession.StopAsync(fade: false).ConfigureAwait(true); }
                 catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession stop before source switch"); }
+
+                // NXT-20: detach the still-attached outputs from the LIVE composition BEFORE the release/
+                // re-acquire block below. The composition pump outlives the clip; releasing a line first
+                // reconfigures its sink (idle slate) while the old composition is still submitting canvas
+                // frames into it — the same format-mismatch flood ShowSessionStopAsync guards against.
+                var attachedLines = await Dispatcher.UIThread.InvokeAsync(() => _playerAcquiredLines.ToList());
+                foreach (var held in attachedLines)
+                {
+                    try
+                    {
+                        await _playerShowSession.RemoveCompositionOutputAsync(
+                            MediaPlayerShowMapper.PlayerCompositionId, CompositionOutputId(held)).ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowLog.LogWarning(ex, "MediaPlayer: ShowSession detach output on source switch");
+                    }
+                }
             }
 
             // UI thread: drop any idle logo, release the prior single-holder leases, then (re)acquire the video
@@ -159,9 +177,11 @@ public partial class MediaPlayerViewModel
                 audioRoutes = BuildDeckShowAudioRoutes(lines);
             });
 
-            _playerShowSession.LoadDocument(
+            // NXT-21: await the load instead of the sync-blocking LoadDocument — this runs on the UI thread,
+            // and blocking it on the session dispatcher turns any dispatcher stall into a whole-app freeze.
+            await _playerShowSession.LoadDocumentAsync(
                 MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
-                    (item as FilePlaylistItem)?.Subtitles));
+                    (item as FilePlaylistItem)?.Subtitles)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
 
             // UI thread: flip the deck into the playing state (observable-property writes).

@@ -13,7 +13,7 @@ namespace HaPlay;
 /// The process-wide media registry — the rewritten framework's single composition root. Replaces the old
 /// static <c>MediaFrameworkRuntime.Init().UseFFmpeg()/UsePortAudio()/…</c> + <c>AudioBackends</c> +
 /// <c>MediaFrameworkPlugins</c> surface (all removed in the AOT-pure rewrite, P2). Built once at startup;
-/// engines open media via <c>MediaPlayer.OpenFile(MediaRuntime.Registry, MediaRuntime.Registry, …)</c> and resolve output devices
+/// engines open media via <c>MediaPlayer.OpenFile(MediaRuntime.Registry, path)</c> and resolve output devices
 /// from <see cref="IMediaRegistry.AudioBackends"/>. Module registration is best-effort per module so an
 /// unavailable backend (e.g. NDI on a host without the runtime) degrades rather than blocking startup.
 /// </summary>

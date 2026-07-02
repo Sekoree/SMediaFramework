@@ -84,6 +84,12 @@ public sealed record CueExecutionLogEntry(
 
 public sealed class CueGraph
 {
+    // NXT-23: the execution log is bounded — a long-running show (looping / auto-continue installs) fires
+    // indefinitely, and an unbounded list both grows without limit and makes every ExecutionLog snapshot
+    // copy it all. Consumers only ever read the recent tail; trim in batches so appends stay O(1) amortized.
+    private const int MaxLogEntries = 512;
+    private const int LogTrimBatch = 64;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<string, CueEntry> _cues = new(StringComparer.Ordinal);
     private readonly List<CueExecutionLogEntry> _log = [];
@@ -97,6 +103,8 @@ public sealed class CueGraph
         }
     }
 
+    /// <summary>The recent execution history, newest last — bounded to the last 512 entries (NXT-23), so a
+    /// long-running looping show cannot grow it without limit.</summary>
     public IReadOnlyList<CueExecutionLogEntry> ExecutionLog
     {
         get
@@ -292,6 +300,8 @@ public sealed class CueGraph
                 status,
                 DateTimeOffset.UtcNow,
                 message));
+            if (_log.Count >= MaxLogEntries + LogTrimBatch)
+                _log.RemoveRange(0, _log.Count - MaxLogEntries); // keep the newest MaxLogEntries (NXT-23)
         }
         return status;
     }

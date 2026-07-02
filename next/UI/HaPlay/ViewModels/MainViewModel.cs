@@ -40,12 +40,14 @@ public partial class MainViewModel : ViewModelBase
     // Phase-8 convergence: the cue transport runs on this headless session by default (2026-07-01 flip); the engine
     // above is the HAPLAY_USE_SHOWSESSION=0 fallback. See TryWireShowSessionCueTransport / ShowSessionGate.
     private ShowSession? _cueShowSession;
-    // compositionId → the real video outputs it renders to, acquired on the UI thread in ReloadCueShowSession
-    // so ShowSession's video factory is a pure lookup during (synchronous) LoadDocument (no deadlock).
+    // compositionId → the real video outputs it renders to, acquired on the UI thread in the cue reload
+    // so ShowSession's video factory is a pure lookup during LoadDocumentAsync.
     private Dictionary<string, CueShowVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
     private sealed record CueShowVideoOutput(Guid LineId, IVideoOutput Output, CueOutputMapping? Mapping);
-    // The output lines currently held by the re-back (single-holder leases) — released before each reload so a
-    // cue-list change doesn't leave them stuck-held (which would make the re-acquire return null = no video).
+    // The output lines currently held by the re-back (single-holder leases). Holds persist across reloads for
+    // lines the new model still binds (no release→re-acquire churn, NXT-20); lines no longer bound are detached
+    // from the live compositions first, then released, so the old composition pump never submits into a sink
+    // the idle slate just reconfigured.
     private readonly List<Guid> _cueAcquiredVideoLines = new();
     // The selected cue list's node collection we watch so an in-place edit (add/remove cue) reloads the stale
     // ShowSession graph — otherwise only a SelectedCueList *switch* reloaded, so a freshly-built/edited cue fired
@@ -251,7 +253,7 @@ public partial class MainViewModel : ViewModelBase
     /// instead of <c>CuePlaybackEngine</c>. This is the <b>default</b> as of the 2026-07-01 flip; set
     /// <c>HAPLAY_USE_SHOWSESSION=0</c> to fall back to the engine (see <see cref="ShowSessionGate"/>). Audio
     /// realizes on the default device via the session's backend; cue video realizes on the OutputManagement
-    /// NDI/SDL/local lines acquired per composition→line binding in <see cref="ReloadCueShowSession"/> and fanned
+    /// NDI/SDL/local lines acquired per composition→line binding in <see cref="ReloadCueShowSessionAsync"/> and fanned
     /// out through the session's composition-id video factory. Best-effort: any failure logs and leaves the engine
     /// active as a safety net. The show reloads on cue-list change.</summary>
     private void TryWireShowSessionCueTransport()
@@ -290,11 +292,12 @@ public partial class MainViewModel : ViewModelBase
                 if (e.PropertyName == nameof(CuePlayer.SelectedCueList))
                 {
                     SubscribeCueGraphForReload(); // re-bind model watches to the newly-selected list
-                    ReloadCueShowSession();       // a list switch is discrete → reload now (its nodes are populated)
+                    // a list switch is discrete → reload now (its nodes are populated); async (NXT-21)
+                    FireAndLog(ReloadCueShowSessionAsync(), "cue ShowSession reload (list switch)");
                 }
             };
             SubscribeCueGraphForReload();
-            ReloadCueShowSession();
+            FireAndLog(ReloadCueShowSessionAsync(), "cue ShowSession reload (initial)");
 
             // Cue output-line health now comes from the session's composition throughput (overrides the engine
             // probe wired at construction) — so a cue-driven line's health LED keeps working on the ShowSession
@@ -733,11 +736,12 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        ReloadCueShowSession();
+        FireAndLog(ReloadCueShowSessionAsync(), "cue ShowSession reload (debounced edit)");
     }
 
     /// <summary>Flushes a pending debounced cue-model edit before firing. Media execution runs on a worker
-    /// thread, while output acquisition and document mapping must run on Avalonia's UI thread.</summary>
+    /// thread, while output acquisition and document mapping must run on Avalonia's UI thread — the load
+    /// itself is awaited (never sync-blocked, NXT-21).</summary>
     private async Task EnsureCueShowSessionCurrentAsync()
     {
         if (!_cueShowGraphDirty)
@@ -745,11 +749,10 @@ public partial class MainViewModel : ViewModelBase
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            if (_cueShowGraphDirty)
-            {
-                _cueReloadDebounce?.Stop();
-                ReloadCueShowSession();
-            }
+            if (!_cueShowGraphDirty)
+                return Task.CompletedTask;
+            _cueReloadDebounce?.Stop();
+            return ReloadCueShowSessionAsync();
         });
 
         if (_cueShowGraphDirty)
@@ -945,23 +948,56 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Loads the selected cue list into the re-back <see cref="ShowSession"/> (no-op when disabled).</summary>
-    private void ReloadCueShowSession()
+    // The in-flight reload (UI thread only). Reloads await the session's LoadDocumentAsync (NXT-21), so a
+    // second trigger can arrive mid-reload — it marks the graph dirty and shares this task; the runner loops
+    // until clean, so line holds (single-holder!) are never acquired by two overlapping passes.
+    private Task? _cueReloadTask;
+
+    /// <summary>(UI thread) Loads the selected cue list into the re-back <see cref="ShowSession"/> (no-op when
+    /// disabled). Single-runner: a reload triggered while one is in flight is coalesced into it (the runner
+    /// re-checks the dirty flag before finishing). The returned task completes when the graph is current.</summary>
+    private Task ReloadCueShowSessionAsync()
     {
-        if (_cueShowSession is null || CuePlayer.SelectedCueList is not { } list)
-            return;
+        if (_cueReloadTask is { } inFlight)
+        {
+            _cueShowGraphDirty = true; // the in-flight runner re-loops on this before completing
+            return inFlight;
+        }
+
+        var run = RunCueReloadLoopAsync();
+        _cueReloadTask = run.IsCompleted ? null : run;
+        return run;
+    }
+
+    private async Task RunCueReloadLoopAsync()
+    {
+        try
+        {
+            do
+            {
+                _cueShowGraphDirty = false; // this pass captures the current model; a mid-pass edit re-marks it
+                if (!await ReloadCueShowSessionOnceAsync().ConfigureAwait(true))
+                {
+                    _cueShowGraphDirty = true; // failed: stay dirty (the fire-path flush surfaces it) — no spin
+                    return;
+                }
+            }
+            while (_cueShowGraphDirty);
+        }
+        finally
+        {
+            _cueReloadTask = null;
+        }
+    }
+
+    /// <summary>One reload pass (UI thread). Returns false on failure (logged; the graph stays dirty).</summary>
+    private async Task<bool> ReloadCueShowSessionOnceAsync()
+    {
+        if (_cueShowSession is not { } session || CuePlayer.SelectedCueList is not { } list)
+            return true; // nothing to load — not a failure
         try
         {
             var model = list.ToModel();
-            // (UI thread) acquire the real video outputs for the cue list's composition→line bindings up front,
-            // so ShowSession's video factory is a pure lookup during LoadDocument — acquisition (SDL window /
-            // NDI sender) must be on the UI thread, and doing it here avoids a cross-thread acquire that would
-            // deadlock the synchronous LoadDocument. Old leases release as their compositions are disposed below.
-            // Release the previous reload's holds first — these are single-holder leases, so re-acquiring without
-            // releasing returns null (the line stays held), which would silently drop video after a cue-list switch.
-            foreach (var heldLine in _cueAcquiredVideoLines)
-                OutputManagement.ReleaseVideoOutputForLine(heldLine);
-            _cueAcquiredVideoLines.Clear();
 
             // Mapping=null historically meant "raw full canvas" to the runtime, but the layout editor presents
             // an unmapped output as an implicit native-sized tile (for example 1280x720 at the top-left of a
@@ -970,14 +1006,76 @@ public partial class MainViewModel : ViewModelBase
             // those same implicit tiles up front so initial playback and the editor describe one layout.
             var effectiveMappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(
                 model, OutputManagement.DefinitionsSnapshot);
+
+            // (UI thread) Line holds across the reload (NXT-20): lines still bound by the new model KEEP their
+            // hold and output — no release→re-acquire churn, so the idle slate never touches a line that stays
+            // in use. Lines the new model no longer binds are DETACHED from the live compositions FIRST, then
+            // released: the old composition pump outlives its clip and keeps submitting, and releasing first
+            // reconfigures the sink (idle slate) while frames still flow into it — the format-mismatch flood
+            // the deck stop path documents. Acquisition stays up front so ShowSession's video factory remains a
+            // pure lookup during the load.
+            var previousOutputsByLine = new Dictionary<Guid, IVideoOutput>();
+            foreach (var outs in _cueVideoOutputs.Values)
+                foreach (var o in outs)
+                    previousOutputsByLine.TryAdd(o.LineId, o.Output);
+            var neededLines = model.VideoOutputs
+                .Where(b => b.OutputLineId != Guid.Empty)
+                .Select(b => b.OutputLineId)
+                .ToHashSet();
+
+            foreach (var heldLine in _cueAcquiredVideoLines.Where(l => !neededLines.Contains(l)).ToList())
+            {
+                foreach (var (compId, outs) in _cueVideoOutputs)
+                {
+                    if (!outs.Any(o => o.LineId == heldLine))
+                        continue;
+                    try
+                    {
+                        await session.RemoveCompositionOutputAsync(compId, heldLine.ToString("N"))
+                            .ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.LogWarning(ex, "HaPlay: ShowSession detach of dropped line {Line} failed", heldLine);
+                    }
+                }
+
+                OutputManagement.ReleaseVideoOutputForLine(heldLine);
+                _cueAcquiredVideoLines.Remove(heldLine);
+            }
+
             var videoOutputs = new Dictionary<string, CueShowVideoOutput[]>(StringComparer.Ordinal);
+            var usedThisPass = new HashSet<Guid>();
             foreach (var binding in model.VideoOutputs)
             {
                 if (binding.OutputLineId == Guid.Empty)
                     continue;
-                if (OutputManagement.AcquireVideoOutputForLine(binding.OutputLineId) is not { } output)
+                if (!usedThisPass.Add(binding.OutputLineId))
+                    continue; // one physical line drives one binding (parity: a duplicate was dropped before too)
+
+                IVideoOutput? output;
+                if (_cueAcquiredVideoLines.Contains(binding.OutputLineId))
+                {
+                    output = previousOutputsByLine.GetValueOrDefault(binding.OutputLineId);
+                    if (output is null)
+                    {
+                        // Stale hold with no tracked output — resync by releasing and re-acquiring.
+                        OutputManagement.ReleaseVideoOutputForLine(binding.OutputLineId);
+                        _cueAcquiredVideoLines.Remove(binding.OutputLineId);
+                        output = OutputManagement.AcquireVideoOutputForLine(binding.OutputLineId);
+                        if (output is not null)
+                            _cueAcquiredVideoLines.Add(binding.OutputLineId);
+                    }
+                }
+                else
+                {
+                    output = OutputManagement.AcquireVideoOutputForLine(binding.OutputLineId);
+                    if (output is not null)
+                        _cueAcquiredVideoLines.Add(binding.OutputLineId);
+                }
+
+                if (output is null)
                     continue;
-                _cueAcquiredVideoLines.Add(binding.OutputLineId);
                 var key = binding.CompositionId.ToString();
                 var target = new CueShowVideoOutput(
                     binding.OutputLineId,
@@ -988,7 +1086,9 @@ public partial class MainViewModel : ViewModelBase
             _cueVideoOutputs = videoOutputs;
 
             var doc = HaPlayShowMapper.ToShowDocument(model, OutputManagement.DefinitionsSnapshot);
-            _cueShowSession.LoadDocument(doc);
+            // NXT-21: await the load — blocking the UI thread on the session dispatcher would turn any
+            // dispatcher stall into a whole-app freeze.
+            await session.LoadDocumentAsync(doc).ConfigureAwait(true);
             // Map each cue → its transport group so the progress poll can attribute per-group snapshot state.
             var groupByCue = new Dictionary<Guid, string>();
             foreach (var c in doc.Cues)
@@ -999,14 +1099,15 @@ public partial class MainViewModel : ViewModelBase
                 .Select(clip => Guid.TryParse(clip.CueId, out var cueId) ? cueId : Guid.Empty)
                 .Where(cueId => cueId != Guid.Empty)
                 .ToHashSet();
-            _cueShowGraphDirty = false;
             Trace.LogInformation(
                 "HaPlay: cue ShowSession reloaded — {Cues} cues, {Clips} clips, {Comps} compositions, {Lines} video lines",
                 doc.Cues.Count, doc.Clips.Count, doc.Compositions.Count, _cueAcquiredVideoLines.Count);
+            return true;
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "HaPlay: ShowSession LoadDocument from cue list failed");
+            return false;
         }
     }
 
