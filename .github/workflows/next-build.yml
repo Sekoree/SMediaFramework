@@ -56,12 +56,14 @@ jobs:
 
       # --blame-hang: a test that never completes on the runner (device-less audio/MIDI environment) would
       # otherwise stall the job until the 6h job timeout with NO name in the log. The hang timeout kills the
-      # wedged testhost after 10 minutes and reports which tests had started-but-not-finished, turning a
-      # silent stall into an actionable failure.
+      # wedged testhost and reports which tests had started-but-not-finished, turning a silent stall into an
+      # actionable failure. 4 minutes ≈ 10x the slowest assembly's normal runtime — short enough that the
+      # report fires before anyone cancels the job by hand (the 2026-07-02 HaPlay.Tests hang was canceled at
+      # ~6 min, before the then-10m blame report could name the test).
       - name: Tests (arch rules + Core/Time/Routing)
         run: >
           dotnet test next/MFPlayer.Next.sln -c Release --no-build
-          --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type none
+          --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type none
 
       - name: AOT-publish smoke
         run: >

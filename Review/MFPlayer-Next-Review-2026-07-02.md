@@ -435,6 +435,23 @@ SessionSmoke exit 0; headless app launch clean):
    suite 1,416 / 0; local xvfb HAPLAY_SMOKE launch exit 0. The smoke stays best-effort until it has a green
    history on both runners, but this is the first regression it caught — promotion candidate.
 
+13. **CI round 5 — two more Windows timing races + an unnamed Linux HaPlay.Tests hang.** Round-4 fixes all
+   held (Session tests green on both OSes; skips active).
+   (a) `AudioRouterControlTests.SetRouteGain_RampsCleanly_FirstChunkInterpolatesFromOldToNew` failed on
+   Windows ("no ramp chunk; countBefore=35 total=61"): the capture output sits behind a pump that DROPS on
+   overflow for non-primary outputs, so the ONE ramp chunk a mutation produces can be lost on a loaded
+   runner before it ever reaches the capture list. The test now retries the mutation (steady 1.0 → 0.5,
+   up to 5 attempts, fresh ramp chunk each time) until a ramp chunk is actually captured — the
+   interpolation assertion itself is unchanged.
+   (b) `CuePlayerViewInteractionTests.Go_DispatchedStatusMessage_IsRaisedOnUiThread` failed on Windows at
+   its 2 s `PumpUntil` window — the cue executor hops through `Task.Run` on a thread pool the parallel test
+   collections keep saturated. Both Go tests widened to 20 s (early-exit on success).
+   (c) Linux hung inside HaPlay.Tests (log stops after the UYVY skip) but the job was canceled at ~6 min —
+   BEFORE the 10-minute `--blame-hang` report could name the hung test. Not reproducible locally (HaPlay.Tests
+   495/495 in 3 s). `--blame-hang-timeout` cut to 4 m (~10x the slowest assembly's normal runtime) so the
+   next hang produces a NAMED failure instead of a mystery cancel; if it hangs again, let the step run to
+   the blame report. Post-fix: full suite 1,416 / 0 locally.
+
 ## Verification appendix
 
 ```bash

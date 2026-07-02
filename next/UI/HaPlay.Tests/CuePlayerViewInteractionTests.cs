@@ -110,7 +110,9 @@ public sealed class CuePlayerViewInteractionTests
             vm.GoCommand.Execute(null);
         });
 
-        PumpUntil(() => seenFinalStatus.IsSet, TimeSpan.FromSeconds(2));
+        // Generous window: the executor hops through Task.Run on a thread pool the parallel test
+        // collections keep saturated on CI — 2 s flaked on the Windows runner. Exits early on success.
+        PumpUntil(() => seenFinalStatus.IsSet, TimeSpan.FromSeconds(20));
 
         Assert.True(seenFinalStatus.IsSet);
         Assert.False(statusRaisedOffUiThread);
@@ -146,7 +148,7 @@ public sealed class CuePlayerViewInteractionTests
             vm.GoCommand.Execute(null);
         });
 
-        PumpUntil(() => seenFailureStatus.IsSet, TimeSpan.FromSeconds(2));
+        PumpUntil(() => seenFailureStatus.IsSet, TimeSpan.FromSeconds(20));
 
         DispatchUi(() =>
         {
