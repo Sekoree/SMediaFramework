@@ -387,6 +387,15 @@ SessionSmoke exit 0; headless app launch clean):
    NAMES the started-but-unfinished tests instead of stalling silently. `libportmidi0` added to the runner
    so the app-level MIDI probe behaves like a real install. Follow-up: read the blame output of the next CI
    run and fix the named test.
+   **Outcome (next CI run, same evening): the hang is GONE on both OSes** — every assembly completes; it was
+   downstream of the now-fixed MIDI/FFmpeg environment cascade. The run surfaced ONE last failure, identical
+   on both OSes: `OutputPresetVideoSourceTests.TryReadNextFrame_ConvertsUyvyLiveInput_ToBgraPresetRaster` —
+   the UYVY→BGRA test needs FFmpeg's swscale, dead on the runners for the same root cause as (a) (Windows
+   has no FFmpeg; Ubuntu 24.04's FFmpeg 6.1 doesn't match the bindings' expected major, so every dynamic
+   binding throws `NotSupportedException`). Fixed with a HaPlay.Tests `FFmpegNativeFactAttribute` probing
+   `VideoCpuFrameConverter.CanConvert` (a real swscale context open). NOTE for later promotion work: the
+   runner's apt `ffmpeg` is currently USELESS to the managed tests — to make the FFmpeg-native tests RUN on
+   CI (not skip), pin an FFmpeg build matching FFmpeg.AutoGen's expected major version.
 
 ## Verification appendix
 
