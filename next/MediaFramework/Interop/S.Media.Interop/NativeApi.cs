@@ -132,7 +132,7 @@ internal static unsafe class NativeApi
         }
         catch (Exception ex)
         {
-            SetLastError($"mfp_session_create failed: {ex.Message}");
+            SetLastError($"mfp_session_create failed: {ex}");
             return 0;
         }
     }
@@ -165,7 +165,7 @@ internal static unsafe class NativeApi
         }
         catch (Exception ex)
         {
-            SetLastError($"mfp_session_load_show failed: {ex.Message}");
+            SetLastError($"mfp_session_load_show failed: {ex}");
             return MfpErrLoadFailed;
         }
     }
@@ -228,7 +228,7 @@ internal static unsafe class NativeApi
         }
         catch (Exception ex)
         {
-            SetLastError(ex.Message);
+            SetLastError(ex.ToString());
             return MfpErrGeneric;
         }
     }
@@ -262,7 +262,7 @@ internal static unsafe class NativeApi
         }
         catch (Exception ex)
         {
-            SetLastError(ex.Message);
+            SetLastError(ex.ToString());
             return MfpErrGeneric;
         }
     }
@@ -287,7 +287,7 @@ internal static unsafe class NativeApi
         }
         catch (Exception ex)
         {
-            SetLastError(ex.Message);
+            SetLastError(ex.ToString());
             return MfpErrGeneric;
         }
     }
@@ -308,7 +308,7 @@ internal static unsafe class NativeApi
         }
         catch (Exception ex)
         {
-            SetLastError(ex.Message);
+            SetLastError(ex.ToString());
             return MfpErrGeneric;
         }
     }

@@ -138,6 +138,11 @@ public class AudioRouterControlTests
 
         Assert.False(r.IsRunning);
         Assert.True(r.CompletedNaturally);
+        // IsRunning flips before the finishing thread's flush call — give the flush its own window instead of
+        // asserting the instant the flag drops (a preemption between the two flaked on the CI runner).
+        var flushDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (output.FlushCount <= flushBefore && DateTime.UtcNow < flushDeadline)
+            Thread.Sleep(10);
         Assert.True(output.FlushCount > flushBefore,
             "natural EOF should call IFlushableOutput.Flush from FinishRunLoopThreadLifetime");
     }

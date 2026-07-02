@@ -148,23 +148,27 @@ internal sealed class UnboundedHeldProvider(TimeSpan duration) : IMediaDecoderPr
         MediaRegistry.Build(b => b.AddDecoder(new UnboundedHeldProvider(duration)));
 }
 
-internal sealed class FakeVideoDecoderProvider : IMediaDecoderProvider
+internal sealed class FakeVideoDecoderProvider(int frameCount = 30) : IMediaDecoderProvider
 {
     public string Name => "fake-video";
 
     public double Probe(string uri, MediaKind kind) => kind == MediaKind.Video ? 1.0 : 0.0;
 
-    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => new SyntheticVideoSource();
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => new SyntheticVideoSource(frameCount);
 
     public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
         throw new NotSupportedException("fake provider is video-only");
 
-    public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new FakeVideoDecoderProvider()));
+    /// <summary>A registry whose fake video clips run <paramref name="frameCount"/>/30 seconds. Tests that
+    /// STOP a playing clip need runway (a slow CI runner can otherwise reach the clip's natural fade-out
+    /// window first, whose claim then beats the stop's — the stop returns without ramping).</summary>
+    public static IMediaRegistry Registry(int frameCount = 30) =>
+        MediaRegistry.Build(b => b.AddDecoder(new FakeVideoDecoderProvider(frameCount)));
 }
 
-internal sealed class SyntheticVideoSource : IVideoSource, ISeekableSource
+internal sealed class SyntheticVideoSource(int frameCount = 30) : IVideoSource, ISeekableSource
 {
-    private const int FrameCount = 30;
+    private readonly int FrameCount = frameCount;
     private int _next;
 
     public VideoFormat Format { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));

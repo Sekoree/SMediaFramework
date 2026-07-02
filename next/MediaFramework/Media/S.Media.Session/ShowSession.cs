@@ -359,6 +359,20 @@ public sealed class ShowSession : IAsyncDisposable
 
     private async Task LoadDocumentCoreAsync(ShowDocument document)
     {
+        // Normalize null collections FIRST (NXT-12): a minimal/older JSON simply omits arrays the document
+        // gained later, and source-gen leaves missing positional params null. Every consumer below (and at
+        // fire time) assumes non-null lists, so a partial document must never smuggle a null past the load.
+        document = document with
+        {
+            Cues = document.Cues ?? [],
+            Clips = document.Clips ?? [],
+            Compositions = document.Compositions ?? [],
+            Outputs = document.Outputs ?? [],
+            Routes = document.Routes ?? [],
+            Devices = document.Devices ?? [],
+            AudioOutputs = document.AudioOutputs ?? [],
+        };
+
         // Validate BEFORE any teardown — a malformed document (bad version, duplicate ids/numbers, dangling
         // references, a cyclic auto-continue chain) must never destroy the running show (NXT-12 / NXT-07).
         ShowDocumentValidator.ThrowIfInvalid(document);

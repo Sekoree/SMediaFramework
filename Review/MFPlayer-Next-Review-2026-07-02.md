@@ -397,6 +397,26 @@ SessionSmoke exit 0; headless app launch clean):
    runner's apt `ffmpeg` is currently USELESS to the managed tests — to make the FFmpeg-native tests RUN on
    CI (not skip), pin an FFmpeg build matching FFmpeg.AutoGen's expected major version.
 
+11. **CI round 3 — two Windows test races + the Linux outbound C-ABI smoke NRE.**
+   (a) `ShowSessionTests.StopAllAsync_FadesCompositionLayerBeforeRelease` failed on the Windows runner
+   ("stop returned before its fade, 7.9 ms"): the fake video clip is only 1 s, so with `FadeOut=180 ms` the
+   NATURAL fade-out window opens at 820 ms — a slow runner reaches it before `StopAllAsync`, the natural fade
+   claims first, and the stop's lost-claim path returns without ramping (documented behavior, wrong test
+   setup). `SyntheticVideoSource`/`FakeVideoDecoderProvider.Registry` now take a frame count; the test uses a
+   30 s clip so the stop always owns the fade.
+   (b) `AudioRouterControlTests.NaturalEof_FlushesFlushableOutputs` asserted `FlushCount` the instant
+   `IsRunning` flipped — but the run loop clears the flag BEFORE `FinishRunLoopThreadLifetime` flushes, so a
+   preemption between the two failed it. The test now polls for the flush with a 2 s deadline.
+   (c) Linux `mfp_session_load_show` failed with a bare "Object reference not set…" `last_error`. NOT
+   reproducible locally: the exact CI recipe (fresh AOT publish + gcc + run) passes exit 0 on this box, and a
+   new managed regression test (`LoadDocument_TheCAbiSmokesEmptyShowJson_OnABackendlessSession_Loads`) passes.
+   Hardened anyway per NXT-12 — `ShowDocumentValidator` null-guards every top-level collection and
+   `LoadDocumentCoreAsync` normalizes null collections to `[]` before validation (a minimal/older JSON omits
+   later-added arrays; source-gen leaves missing positional params null) — and `NativeApi` error surfaces
+   enriched from `ex.Message` to the full `ex.ToString()`, so if the runner still fails, `last_error` names
+   the exception type and AOT frame instead of a bare message. Post-fix: full suite 1,416 passed / 0 failed;
+   local C-ABI smoke exit 0.
+
 ## Verification appendix
 
 ```bash
@@ -406,6 +426,7 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-remediation (NXT-18…26): 1,436 passed / 0 failed
 # post-engine-deletion (NXT-13): 1,409 passed / 0 failed (−38 engine tests)
 # post-follow-ups (VU meters / NotifyNaturalEnd / progressive waveform): 1,412 passed / 0 failed
+# post-implementation-pass (items 1–11): 1,416 passed / 0 failed
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

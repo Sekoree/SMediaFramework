@@ -437,6 +437,21 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task LoadDocument_TheCAbiSmokesEmptyShowJson_OnABackendlessSession_Loads()
+    {
+        // The EXACT call the outbound C-ABI smoke makes (SmpSmoke EMPTY_SHOW + audioBackend: null) — this
+        // regressed on CI with an NRE while the smoke step had been unreachable for a while; pin it here so
+        // the managed suite catches it before the C client does.
+        const string emptyShow =
+            "{\"Version\":1,\"Cues\":[],\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), audioBackend: null);
+
+        session.LoadDocument(ShowDocument.FromJson(emptyShow));
+
+        Assert.Empty(await session.GetCueDefinitionsAsync());
+    }
+
+    [Fact]
     public async Task SetPausedAsync_NoActiveClip_IsNoOp()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
@@ -1218,7 +1233,10 @@ public sealed class ShowSessionTests
             Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
             Outputs: [], Routes: [], Devices: []);
         await using var session = new ShowSession(
-            FakeVideoDecoderProvider.Registry(),
+            // 30s of fake video: the STOP must always win the fade claim — with the default 1s clip a slow
+            // CI runner could reach the natural fade-out window first, and the stop then returns without
+            // ramping (the documented lost-claim path; flaked on the Windows runner).
+            FakeVideoDecoderProvider.Registry(frameCount: 900),
             videoOutputFactory: (_, _, _, _) =>
                 [new ClipCompositionOutputLease("screen-out", "Screen", output)],
             compositorFactory: fmt => new ClipCompositionCompositor(

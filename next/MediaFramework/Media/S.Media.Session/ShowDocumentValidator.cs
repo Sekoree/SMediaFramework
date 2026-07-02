@@ -34,7 +34,7 @@ public static class ShowDocumentValidator
         // Cues: non-empty unique ids, and unique numbers (GO advances by number, so duplicates break the cursor).
         var cueIds = new HashSet<string>(StringComparer.Ordinal);
         var cueNumbers = new HashSet<int>();
-        foreach (var cue in document.Cues)
+        foreach (var cue in document.Cues ?? [])
         {
             if (string.IsNullOrEmpty(cue.Id))
                 errors.Add("a cue has an empty id.");
@@ -48,7 +48,7 @@ public static class ShowDocumentValidator
 
         // Compositions: unique ids, positive dimensions and frame rate.
         var compIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var comp in document.Compositions)
+        foreach (var comp in document.Compositions ?? [])
         {
             if (string.IsNullOrEmpty(comp.Id))
                 errors.Add("a composition has an empty id.");
@@ -63,7 +63,7 @@ public static class ShowDocumentValidator
         // Clips: at most one per cue (the runtime keys clips by cue id — a duplicate throws at load), and every
         // clip must reference an existing cue and, if placed, an existing composition.
         var clipCues = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var clip in document.Clips)
+        foreach (var clip in document.Clips ?? [])
         {
             if (!clipCues.Add(clip.CueId))
                 errors.Add($"more than one clip binds cue '{clip.CueId}' — a cue binds at most one clip.");
@@ -98,10 +98,10 @@ public static class ShowDocumentValidator
             }
         }
 
-        ValidateFollowOn(document.Cues, cueIds, errors);
+        ValidateFollowOn(document.Cues ?? [], cueIds, errors);
 
         // Stop targets must reference existing cues.
-        foreach (var cue in document.Cues)
+        foreach (var cue in document.Cues ?? [])
             foreach (var target in cue.StopTargetIds ?? [])
                 if (!cueIds.Contains(target))
                     errors.Add($"cue '{cue.Id}' lists unknown stop-target cue '{target}'.");
@@ -110,7 +110,7 @@ public static class ShowDocumentValidator
         // declared audio output or the implicit master — a dangling route otherwise silently never matches at
         // play time instead of being caught at load (NXT-25).
         var audioOutputIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var output in document.AudioOutputs)
+        foreach (var output in document.AudioOutputs ?? [])
         {
             if (string.IsNullOrEmpty(output.Id))
                 errors.Add("an audio output has an empty id.");
@@ -118,7 +118,7 @@ public static class ShowDocumentValidator
                 errors.Add($"duplicate audio output id '{output.Id}'.");
         }
 
-        foreach (var route in document.Routes)
+        foreach (var route in document.Routes ?? [])
         {
             if (!route.Enabled)
                 continue;
