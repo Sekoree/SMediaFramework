@@ -5,8 +5,8 @@ namespace HaPlay.Playback;
 
 /// <summary>
 /// Maps a GUI <see cref="CueList"/> onto the framework's headless <see cref="ShowDocument"/> — the bridge
-/// that lets the cue workspace run on <see cref="S.Media.Session.ShowSession"/> instead of the ported
-/// <see cref="CuePlaybackEngine"/> (Phase 8 "full superset" convergence, slice 8a).
+/// that runs the cue workspace on <see cref="S.Media.Session.ShowSession"/> (Phase 8 "full superset"
+/// convergence; the ported <c>CuePlaybackEngine</c> it replaced is deleted).
 /// </summary>
 /// <remarks>
 /// Lossless today for the cue core: the media/group node tree flattens to ordered cues carrying a

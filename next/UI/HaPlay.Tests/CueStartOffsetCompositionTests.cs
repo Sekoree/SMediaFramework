@@ -8,7 +8,7 @@ namespace HaPlay.Tests;
 /// <summary>
 /// Integration regression for the start-offset black-screen bug. A cue with a start offset is
 /// seeked to <c>ClipWindow.Start</c>, so its frames carry source-timeline PTS (e.g. 82 s in).
-/// <c>CuePlaybackEngine</c> wraps the composition layer slot in
+/// The clip composition wiring wraps the composition layer slot in
 /// <see cref="RetimingVideoOutput"/> (offset <c>−ClipWindow.Start</c>) so those frames are rebased
 /// to cue-relative PTS before they reach the master-aligned slot. These tests drive frames through
 /// the same <see cref="VideoCompositorSource"/> slot path cue playback uses (the
@@ -28,7 +28,7 @@ public sealed class CueStartOffsetCompositionTests
         var slot = mixer.AddSlot();
         slot.KeepPolicy = SlotKeepPolicy.MasterAligned;
 
-        // Same wrapping CuePlaybackEngine.WireVideoPlacements applies for a start-offset cue.
+        // Same wrapping the clip composition wiring applies for a start-offset cue.
         using var layerOutput = new RetimingVideoOutput(slot.Output, -StartOffset);
         layerOutput.Configure(Bgra4x4);
 

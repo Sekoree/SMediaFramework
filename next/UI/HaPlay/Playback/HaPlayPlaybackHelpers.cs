@@ -5,13 +5,17 @@ using S.Media.Players;
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Stateless media-open / output helpers shared across the playback paths, extracted from
-/// <see cref="HaPlayPlaybackSession"/> so the cue workspace, playlist cache, output-setup dialog, and cue
-/// composition runtime do not depend on the (legacy, deletion-bound) deck engine type. Pure functions only —
-/// no session/engine state. (NXT-13 engine-deletion prep, stage 1.)
+/// Stateless media-open / output helpers shared across the playback paths (cue workspace, playlist cache,
+/// output-setup dialog, clip composition runtime). Pure functions only — no session state.
 /// </summary>
 internal static class HaPlayPlaybackHelpers
 {
+    /// <summary>Whether an output line can carry audio (a PortAudio device, or an NDI carrier whose stream
+    /// mode includes audio) — the soundboard/routing pickers' filter.</summary>
+    internal static bool IsAudioCapableOutput(OutputDefinition definition) =>
+        definition is PortAudioOutputDefinition
+        || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
+
     /// <summary>Builds the provider-owned <c>ndi:</c> descriptor URI for a live NDI input item, carrying its
     /// per-item stream selection, bandwidth mode, and audio jitter-buffer override — the ONE builder both the
     /// deck and the cue mapper must use, so a persisted item keeps its options on either playback path (the

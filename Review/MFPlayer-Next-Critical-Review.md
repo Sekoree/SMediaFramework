@@ -914,13 +914,16 @@ output fan-out** (NDI/SDL/local); **live inputs** (`ndi://` + `padev://`); subti
 - Hardware soak of the full gated path (the review's own Gate-4 exit) — including visual checks of the new
   cue-preview, live audio-route edit, and text-cue rendering. **Done** (operator-confirmed, 2026-07-01).
 - **DEFAULT FLIPPED (2026-07-01):** ShowSession is now the default runtime for both the cue workspace and the
-  media-player deck. The gate is centralized in `ShowSessionGate` (`UI/HaPlay/ShowSessionGate.cs`) and inverted:
-  ShowSession runs unless `HAPLAY_USE_SHOWSESSION` is an explicit falsey value (`0`/`false`/`off`/`no`), so the
-  legacy engines remain a **no-rebuild fallback** while the default-on soaks in real use. A startup log line names
-  the active path. The engines are still present.
-- **Remaining:** once the default-on has real-world miles, delete `SoundboardEngine` → `CuePlaybackEngine` →
-  `HaPlayPlaybackSession` (smallest blast radius first) and drop the flag — the review's largest simplification
-  (NXT-13). See *Engine-deletion footprint* below.
+  media-player deck. The gate was centralized in `ShowSessionGate` with `HAPLAY_USE_SHOWSESSION` as a falsey-value
+  fallback to the legacy engines while the default-on soaked in real use.
+- **ENGINES DELETED (2026-07-02):** after the operator soak, `SoundboardEngine`, `CuePlaybackEngine`(+partials/types),
+  `HaPlayPlaybackSession`(+partials), `ShowSessionGate`/the env flag, and every engine-only helper (genlock,
+  preview session, pre-roll + pre-connect caches, playlist decoder cache, input connectors, subtitle overlay
+  source, audio source adapters, throughput diagnostics) were removed in one pass — 25 files, net −9.8k lines.
+  Shared DTOs live on in `Playback/CuePlaybackTypes.cs`; cue auto-follow rides the new
+  `ShowSession.ClipNaturallyEnded` event. ShowSession is the **only** playback runtime; there is no fallback.
+  Gates after deletion: full sln build clean, 1,409 tests green, real-media SessionSmoke OK, AotSmoke OK.
+  This closes the review's largest simplification (NXT-13). The *Engine-deletion footprint* below is historical.
 
 With cue preview, the live audio-route edit, and text cues all now on the ShowSession path (action/comment cues
 were never engine-bound), the gated cue path's **transport/playback parity is complete** — the flip is gated on

@@ -108,7 +108,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
     public void RefreshOutputOptions()
     {
         var lines = _outputs?.Outputs
-                        .Where(line => CuePlaybackEngine.IsAudioCapableOutput(line.Definition))
+                        .Where(line => HaPlayPlaybackHelpers.IsAudioCapableOutput(line.Definition))
                         .Select(line => new SoundboardOutputOption(line.Definition.Id, line.Definition.DisplayName))
                         .ToList()
                     ?? [];

@@ -48,71 +48,22 @@ public partial class MediaPlayerViewModel
 
     partial void OnHoldFallbackVideoChanged(bool value)
     {
+        _ = value;
         OnPropertyChanged(nameof(HoldImageSummary));
-        if (value && _session is not null && IsMediaLoaded && !string.IsNullOrWhiteSpace(FallbackImagePath))
-        {
-            // Phase 3 — toggling hold on (with an image path already set) must re-apply the image so
-            // outputs reconfigure to the image's native size.
-            try { _session.ApplyFallbackImage(FallbackImagePath); }
-            catch { /* best effort */ }
-        }
-
-        _session?.SetHoldFallback(value);
-        if (_session is not null && IsMediaLoaded)
-        {
-            if (value)
-            {
-                StartHoldPumpTimer();
-            }
-            else
-            {
-                StopHoldPumpTimer();
-                // Restore the last real decoded frame at the current playhead so single-frame sources
-                // (attached_pic / album cover art) come back instead of leaving receivers stuck on the
-                // no-longer-pumped template.
-                try
-                {
-                    var pt = _session.Player.PlayClock.CurrentPosition;
-                    _session.ResubmitLastCachedFramesAt(pt);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-            }
-        }
-
-        // ShowSession deck (the flipped default, _session is null): apply/clear the hold image as the
-        // composition's held top layer — the engine wiring above is inert without an engine session.
-        if (_session is null && ShowSessionActive)
+        // Apply/clear the hold image as the composition's held top layer while playing; the idle slate
+        // covers the not-playing (and ShowSession audio-only) cases.
+        if (ShowSessionActive)
             _ = ApplyShowSessionHoldImageAsync();
-
         SyncIdleSlate();
     }
 
     partial void OnFallbackImagePathChanged(string? value)
     {
+        _ = value;
         OnPropertyChanged(nameof(HoldImageSummary));
-        if (_session is not null && !string.IsNullOrWhiteSpace(value))
-            _session.ApplyFallbackImage(value);
-        if (_session is not null && IsMediaLoaded && HoldFallbackVideo && !string.IsNullOrWhiteSpace(value))
-        {
-            try
-            {
-                _session.PumpHoldFrames(_session.Player.PlayClock.CurrentPosition);
-            }
-            catch
-            {
-                /* best effort */
-            }
-
-            StartHoldPumpTimer();
-        }
-
-        // ShowSession deck: a new image while HOLD is engaged re-renders the held top layer in place.
-        if (_session is null && ShowSessionActive && HoldFallbackVideo)
+        // A new image while HOLD is engaged re-renders the held top layer in place.
+        if (ShowSessionActive && HoldFallbackVideo)
             _ = ApplyShowSessionHoldImageAsync();
-
         SyncIdleSlate();
     }
 
@@ -267,8 +218,8 @@ public partial class MediaPlayerViewModel
     private bool CanAddNDIInput() => IsNdiAvailable;
 
     /// <summary>Opens the subtitle track picker for the selected file item and stores the chosen tracks +
-    /// font/placement overrides on it. Applies on the item's next load/play (the deck composites them as a
-    /// top overlay layer — see <see cref="HaPlayPlaybackSession.AttachMediaPlayerSubtitles"/>).</summary>
+    /// font/placement overrides on it. Applies on the item's next load/play (the ShowSession clip
+    /// composition renders them as a top overlay layer).</summary>
     [RelayCommand]
     private async Task ConfigureSubtitlesAsync()
     {
@@ -435,9 +386,8 @@ public partial class MediaPlayerViewModel
         SelectedPlaylistItem = item;
     }
 
-    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.
-    /// Routes both file items and live items through the open path; live playback wiring lands in Phase C.5
-    /// (currently surfaces "live items not yet supported" on play).</summary>
+    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing
+    /// (the ShowSession open fires immediately for file and live items alike).</summary>
     public async Task PlayPlaylistItemAsync(PlaylistItem? item)
     {
         if (!SDebug.ChangeTrace.IsActive)
@@ -447,12 +397,6 @@ public partial class MediaPlayerViewModel
         {
             SDebug.ChangeTrace.End("cancelled (null item)");
             return;
-        }
-
-        if (_pendingCueFilePlayback is null)
-        {
-            CancelCueEnvelope();
-            SDebug.ChangeTrace.Step("CancelCueEnvelope");
         }
 
         // Callable from pool threads (cue executors) as well as the view — marshal the observable
@@ -466,12 +410,6 @@ public partial class MediaPlayerViewModel
         SDebug.ChangeTrace.Step("PrepareCurrentItemAsync");
         await OpenOrReloadAsync().ConfigureAwait(false);
         SDebug.ChangeTrace.Step("OpenOrReloadAsync");
-        if (_session is not null && !IsPlaying)
-        {
-            await StartPlaybackAsync().ConfigureAwait(false);
-            SDebug.ChangeTrace.Step("StartPlaybackAsync");
-        }
-
         SDebug.ChangeTrace.End("PlayPlaylistItemAsync");
     }
 

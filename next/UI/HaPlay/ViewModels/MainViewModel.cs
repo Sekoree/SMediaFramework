@@ -35,10 +35,8 @@ public partial class MainViewModel : ViewModelBase
 
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
-    private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
-    private readonly Playback.SoundboardEngine _soundboardEngine;
-    // Phase-8 convergence: the cue transport runs on this headless session by default (2026-07-01 flip); the engine
-    // above is the HAPLAY_USE_SHOWSESSION=0 fallback. See TryWireShowSessionCueTransport / ShowSessionGate.
+    // The cue workspace's playback runtime: the headless per-app ShowSession (Phase-8 cutover complete — the
+    // legacy CuePlaybackEngine/SoundboardEngine/HaPlayPlaybackSession fallbacks are deleted).
     private ShowSession? _cueShowSession;
     // compositionId → the real video outputs it renders to, acquired on the UI thread in the cue reload
     // so ShowSession's video factory is a pure lookup during LoadDocumentAsync.
@@ -110,71 +108,16 @@ public partial class MainViewModel : ViewModelBase
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
-        _cuePlaybackEngine = new Playback.CuePlaybackEngine(OutputManagement, CuePlayer);
-        OutputManagement.CueLineMetricsProbe = _cuePlaybackEngine.TryGetLineHealthMetrics;
-        _cuePlaybackEngine.NaturalEnd += OnCuePlaybackEngineNaturalEndAsync;
-        _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
-        _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
-        _cuePlaybackEngine.CueProgress += (_, p) => CuePlayer.OnCueProgress(p);
-        _cuePlaybackEngine.PreparedCuesChanged += ids =>
-        {
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-                CuePlayer.OnPreRollCacheChanged(ids);
-            else
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
-        };
-        _cuePlaybackEngine.PreparedCueStatesChanged += states =>
-        {
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-                CuePlayer.OnPreparedCueStatesChanged(states);
-            else
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreparedCueStatesChanged(states));
-        };
-        _cuePlaybackEngine.PreviewEnded += (_, id) => CuePlayer.OnPreviewEnded(id);
-        CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
-        CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
-        CuePlayer.MediaCueGroupExecutor = _cuePlaybackEngine.ExecuteGroupAsync;
-        CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
-        CuePlayer.SetPlaybackPausedCallback = _cuePlaybackEngine.SetPausedAsync;
-        CuePlayer.PreviewCueCallback = async (cue, ct) =>
-        {
-            _cuePlaybackEngine.PreviewAudioDeviceIndex = CuePlayer.PreviewAudioDeviceIndex;
-            return await _cuePlaybackEngine.PreviewCueAsync(cue, ct);
-        };
-        CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
-        CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
-        CuePlayer.SeekCuesCallback = _cuePlaybackEngine.SeekCuesAsync;
         Soundboard = new SoundboardWorkspaceViewModel(OutputManagement);
-        _soundboardEngine = new Playback.SoundboardEngine(_cuePlaybackEngine);
-        Soundboard.PlaySoundCallback = _soundboardEngine.PlayAsync;
-        Soundboard.FadeOutSoundCallback = _soundboardEngine.FadeOutAsync;
-        Soundboard.StopSoundCallback = _soundboardEngine.StopAsync;
-        Soundboard.StopAllSoundsCallback = _soundboardEngine.StopAllAsync;
-        Soundboard.SetSoundVolumeCallback = _soundboardEngine.SetVolume;
         Soundboard.ProbeDurationCallback = CueMediaProbe.TryProbeDurationMsAsync;
-        _soundboardEngine.SoundStarted += (_, id) => Soundboard.OnSoundStarted(id);
-        _soundboardEngine.SoundProgress += (_, p) => Soundboard.OnSoundProgress(p);
-        _soundboardEngine.SoundEnded += (_, id) => Soundboard.OnSoundEnded(id);
-        CuePlayer.UpdateActiveCueVideoPlacementCallback = _cuePlaybackEngine.UpdateActiveCueVideoPlacementAsync;
-        CuePlayer.UpdateActiveCueAudioRoutesCallback = _cuePlaybackEngine.UpdateActiveCueAudioRoutesAsync;
-        CuePlayer.UpdateOutputMappingCallback = _cuePlaybackEngine.UpdateCompositionOutputMapping;
-        CuePlayer.UpdateCompositionVideoFxCallback = _cuePlaybackEngine.UpdateCompositionVideoFx;
-        CuePlayer.SetCompositionTestPatternCallback = (compositionId, outputLineId, mapping, show) =>
-            _cuePlaybackEngine.SetCompositionTestPattern(
-                show ? CuePlayer.SelectedCueList?.ToModel() : null, compositionId, outputLineId, mapping, show);
-        _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) =>
             FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
-        CuePlayer.CueStandbyInvalidated += (_, cueId) =>
-        {
-            _cuePlaybackEngine.MarkPreparedCueStale(cueId);
-            ScheduleCueShowSessionReload();
-        };
+        CuePlayer.CueStandbyInvalidated += (_, _) => ScheduleCueShowSessionReload();
         CuePlayer.RefreshPreviewAudioDevices();
-        TryWireShowSessionCueTransport(); // convergence: cue transport on ShowSession by default (HAPLAY_USE_SHOWSESSION=0 opts out)
-        foreach (var player in Players)
-            player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
+        // The cue workspace + soundboard run on the headless ShowSession — the only playback runtime since the
+        // legacy CuePlaybackEngine/SoundboardEngine were deleted (NXT-06/NXT-13 cutover completion).
+        WireShowSessionCueTransport();
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
@@ -249,25 +192,15 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
 
-    /// <summary>Phase-8 convergence: run the cue workspace's transport on the headless <see cref="ShowSession"/>
-    /// instead of <c>CuePlaybackEngine</c>. This is the <b>default</b> as of the 2026-07-01 flip; set
-    /// <c>HAPLAY_USE_SHOWSESSION=0</c> to fall back to the engine (see <see cref="ShowSessionGate"/>). Audio
-    /// realizes on the default device via the session's backend; cue video realizes on the OutputManagement
-    /// NDI/SDL/local lines acquired per composition→line binding in <see cref="ReloadCueShowSessionAsync"/> and fanned
-    /// out through the session's composition-id video factory. Best-effort: any failure logs and leaves the engine
-    /// active as a safety net. The show reloads on cue-list change.</summary>
-    private void TryWireShowSessionCueTransport()
+    /// <summary>Runs the cue workspace's transport + soundboard on the headless <see cref="ShowSession"/> — the
+    /// app's ONLY playback runtime since the Phase-8 cutover completed and the legacy engines were deleted.
+    /// Audio realizes on the routed/default device via the session's backend; cue video realizes on the
+    /// OutputManagement NDI/SDL/local lines acquired per composition→line binding in
+    /// <see cref="ReloadCueShowSessionAsync"/> and fanned out through the session's composition-id video factory.
+    /// The show reloads on cue-list change.</summary>
+    private void WireShowSessionCueTransport()
     {
-        // One unambiguous startup line records which playback path this run uses, so a hardware-soak log makes the
-        // active engine obvious from the top instead of having to infer it from later behaviour. ShowSession is the
-        // default now (2026-07-01 flip); HAPLAY_USE_SHOWSESSION=0 forces the legacy engine as a no-rebuild fallback.
-        var useShowSession = ShowSessionGate.UseShowSession;
-        Trace.LogInformation(
-            "HaPlay cue playback path: {Path} (HAPLAY_USE_SHOWSESSION={Flag}).",
-            useShowSession ? "ShowSession (convergence default)" : "legacy CuePlaybackEngine (opt-out)",
-            ShowSessionGate.DescribeOptOut());
-        if (!useShowSession)
-            return;
+        Trace.LogInformation("HaPlay cue playback path: ShowSession (cutover complete — no legacy engine).");
 
         try
         {
@@ -299,9 +232,8 @@ public partial class MainViewModel : ViewModelBase
             SubscribeCueGraphForReload();
             FireAndLog(ReloadCueShowSessionAsync(), "cue ShowSession reload (initial)");
 
-            // Cue output-line health now comes from the session's composition throughput (overrides the engine
-            // probe wired at construction) — so a cue-driven line's health LED keeps working on the ShowSession
-            // path, and deleting CuePlaybackEngine later won't leave those lines dark.
+            // Cue output-line health comes from the session's composition throughput, so a cue-driven line's
+            // health LED keeps working.
             OutputManagement.CueLineMetricsProbe = TryGetCueShowLineHealthMetrics;
 
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
@@ -435,9 +367,8 @@ public partial class MainViewModel : ViewModelBase
                 return null;
             };
 
-            // The editor callbacks are independent of transport. Leaving these on CuePlaybackEngine made every
-            // placement/output-layout edit target an engine with no active ShowSession composition, so the model
-            // persisted but the running image never changed.
+            // The editor callbacks are independent of transport — they must target the live ShowSession
+            // composition so a placement/output-layout edit changes the running image, not just the model.
             CuePlayer.UpdateActiveCueVideoPlacementCallback = async (cueId, _, placement) =>
             {
                 var updated = await _cueShowSession.UpdateActivePlacementAsync(
@@ -552,11 +483,19 @@ public partial class MainViewModel : ViewModelBase
                     Dispatcher.UIThread.Post(() => Soundboard.OnSoundEnded(tileId));
             };
 
-            Trace.LogInformation("HaPlay: cue transport + soundboard running on ShowSession (convergence default).");
+            // A cue clip's NATURAL end (out-point stop / fade-out completed — never an operator stop) drives
+            // cue auto-follow, the role the legacy engine's NaturalEnd event played.
+            _cueShowSession.ClipNaturallyEnded += _ =>
+                Dispatcher.UIThread.Post(() => FireAndLog(OnCueClipNaturallyEndedAsync(), "cue auto-follow"));
+
+            Trace.LogInformation("HaPlay: cue transport + soundboard running on ShowSession.");
         }
         catch (Exception ex)
         {
-            Trace.LogWarning(ex, "HaPlay: ShowSession cue re-back failed; staying on the engine.");
+            // With the legacy engines deleted there is no fallback runtime — this is a startup-fatal wiring
+            // failure for the cue workspace; log loudly and surface it to the operator.
+            Trace.LogError(ex, "HaPlay: ShowSession cue transport wiring FAILED — cue playback is unavailable.");
+            CuePlayer.StatusMessage = $"Cue playback unavailable: {ex.Message}";
             _cueShowSession = null;
         }
     }
@@ -1373,19 +1312,6 @@ public partial class MainViewModel : ViewModelBase
             SelectedWorkspace = Workspaces[idx];
     }
 
-    private async Task ReleaseMediaPlayerOutputsForCueAsync(IReadOnlyCollection<Guid> outputLineIds)
-    {
-        if (outputLineIds.Count == 0)
-            return;
-
-        var wanted = outputLineIds.ToHashSet();
-        var targets = await Dispatcher.UIThread.InvokeAsync(() =>
-            Players.Where(p => p.IsHoldingAnyOutputLine(wanted)).ToList());
-
-        foreach (var player in targets)
-            await player.ReleaseSessionForExternalPlaybackAsync().ConfigureAwait(false);
-    }
-
     public OutputManagementViewModel OutputManagement { get; }
     public CuePlayerViewModel CuePlayer { get; }
     public SoundboardWorkspaceViewModel Soundboard { get; }
@@ -1857,34 +1783,13 @@ public partial class MainViewModel : ViewModelBase
     {
         var name = Strings.Format(nameof(Strings.PlayerNameFormat), _nextPlayerNumber++);
         var player = new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
-        player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         player.DetachRequested += OnPlayerDetachRequested;
-        player.CuePreRollChanged += ids =>
-        {
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-                CuePlayer.OnPreRollCacheChanged(ids);
-            else
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
-        };
         return player;
     }
 
-    private async void OnPlayerNaturalPlaybackEnded(object? sender, EventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        try
-        {
-            await CuePlayer.OnMediaCueNaturallyEndedAsync();
-        }
-        catch (Exception ex)
-        {
-            Trace.LogWarning(ex, "OnPlayerNaturalPlaybackEnded: cue auto-follow failed");
-            CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
-        }
-    }
-
-    private async Task OnCuePlaybackEngineNaturalEndAsync()
+    /// <summary>A headless cue clip reached its natural end (<see cref="ShowSession.ClipNaturallyEnded"/>) —
+    /// run the cue auto-follow.</summary>
+    private async Task OnCueClipNaturallyEndedAsync()
     {
         try
         {
@@ -1892,7 +1797,7 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            Trace.LogWarning(ex, "OnCuePlaybackEngineNaturalEndAsync: cue auto-follow failed");
+            Trace.LogWarning(ex, "OnCueClipNaturallyEndedAsync: cue auto-follow failed");
             CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
         }
     }
@@ -1903,7 +1808,6 @@ public partial class MainViewModel : ViewModelBase
         if (idx < 0) return;
         if (_detachedPlayerWindows.TryGetValue(player, out var detachedWindow))
             detachedWindow.Close();
-        player.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
         player.DetachRequested -= OnPlayerDetachRequested;
         await player.DisposeAsync();
         Players.RemoveAt(idx);
@@ -1977,7 +1881,6 @@ public partial class MainViewModel : ViewModelBase
                     return;
                 }
 
-                var player = SelectedPlayer;
                 var list = CuePlayer.SelectedCueList;
                 if (list is null)
                 {
@@ -1985,45 +1888,21 @@ public partial class MainViewModel : ViewModelBase
                     return;
                 }
 
-                var engineTargets = CuePlayer.GetPreparedMediaCueTargets();
-                var ndiTargets = CuePlayer.GetNdiPreConnectTargets();
-                var paTargets = CuePlayer.GetPortAudioPreConnectTargets();
-                Trace.LogDebug(
-                    "RefreshCuePreRollAsync: engineTargets={EngineTargets} ndiTargets={NdiTargets} portAudioTargets={PortAudioTargets} player={Player}",
-                    engineTargets.Count,
-                    ndiTargets.Count,
-                    paTargets.Count,
-                    player?.Name ?? "<none>");
+                var warmTargets = CuePlayer.GetPreparedMediaCueTargets();
+                Trace.LogDebug("RefreshCuePreRollAsync: warmTargets={WarmTargets}", warmTargets.Count);
 
-                player?.InvalidateCuePreRoll();
                 if (_cueShowSession is { } showSession)
                 {
-                    // The gated transport must prepare through the same ShowSession graph it fires. Running the
-                    // legacy CuePlaybackEngine pre-roll here opened a second, differently-configured player
-                    // (often video-only when cue audio routes existed), obscured diagnostics, and could leave the
-                    // actual ShowSession graph stale. Flush pending edits first, then warm its upcoming cue(s).
-                    // BUT NOT while a cue is playing: the flush is a full LoadDocument that rebuilds the graph and
-                    // tears down the running cue — which is exactly what stopped a playing text cue on every edit
-                    // (pre-roll refresh fires per edit). While playing, the edit lands live (the frame swap) or on
-                    // the next fire's own flush; warm the current graph as-is.
+                    // Prepare through the SAME ShowSession graph that fires. Flush pending edits first, then warm
+                    // its upcoming cue(s) — but NOT while a cue is playing: the flush is a full LoadDocument that
+                    // rebuilds the graph and tears down the running cue (pre-roll refresh fires per edit). While
+                    // playing, the edit lands live (the frame swap) or on the next fire's own flush; warm the
+                    // current graph as-is.
                     if (!CuePlayer.HasActiveCues)
                         await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
-                    await showSession.WarmUpcomingAsync(count: Math.Max(1, engineTargets.Count)).ConfigureAwait(false);
+                    await showSession.WarmUpcomingAsync(count: Math.Max(1, warmTargets.Count)).ConfigureAwait(false);
                 }
-                else
-                {
-                    await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);
-                }
-                if (player is null)
-                {
-                    timing?.SetOutcome("no-selected-player");
-                    return;
-                }
-                ct.ThrowIfCancellationRequested();
-                await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
-                ct.ThrowIfCancellationRequested();
-                await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
-                timing?.SetOutcome($"engine={engineTargets.Count} ndi={ndiTargets.Count} portAudio={paTargets.Count}");
+                timing?.SetOutcome($"warm={warmTargets.Count}");
             }
             catch (OperationCanceledException)
             {
@@ -2319,7 +2198,8 @@ public partial class MainViewModel : ViewModelBase
             CuePlayer.ApplyCueLists(project.CueLists);
         if (Has(ProjectSections.Soundboards))
         {
-            FireAndLog(_soundboardEngine.StopAllAsync(), "SoundboardEngine.StopAllAsync project-load");
+            if (_cueShowSession is { } showSession)
+                FireAndLog(showSession.StopAllVoicesAsync(), "ShowSession.StopAllVoicesAsync project-load");
             Soundboard.ApplySnapshot(project.Soundboards);
         }
         if (Has(ProjectSections.Control))
@@ -2338,7 +2218,6 @@ public partial class MainViewModel : ViewModelBase
         while (Players.Count > project.Players.Count && Players.Count > 1)
         {
             var removed = Players[^1];
-            removed.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
             removed.DetachRequested -= OnPlayerDetachRequested;
             Players.RemoveAt(Players.Count - 1);
             FireAndLog(removed.DisposeAsync(), "MediaPlayerViewModel.DisposeAsync project-load-removed-player");

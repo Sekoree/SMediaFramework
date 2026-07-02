@@ -5,7 +5,7 @@ namespace HaPlay.Playback;
 
 /// <summary>
 /// Maps a standalone media-player source onto a 1-cue <see cref="ShowDocument"/> so the player can run on a
-/// per-player <see cref="ShowSession"/> (Phase-8 full convergence — replacing <c>HaPlayPlaybackSession</c>).
+/// per-player <see cref="ShowSession"/> (Phase-8 full convergence — the <c>HaPlayPlaybackSession</c> it replaced is deleted).
 /// The single cue's clip plays on one composition (when there is video) that the host renders to the player's
 /// video output lines, with audio on its <see cref="ShowClipAudioRoute"/>s.
 /// </summary>

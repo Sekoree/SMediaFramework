@@ -382,9 +382,9 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B follow-up — raised *before* a line's runtime is torn down so any active
-    /// <c>HaPlayPlaybackSession</c> can call <c>TryRemoveOutput</c> first and avoid Submit'ing to a
-    /// disposed output. Subscribers must run synchronously: by the time the event returns, the runtime
+    /// Phase B follow-up — raised *before* a line's runtime is torn down so any active playback
+    /// can detach its route to that line first and avoid Submit'ing to a disposed output.
+    /// Subscribers must run synchronously: by the time the event returns, the runtime
     /// stop / dispose path is about to run.
     /// </summary>
     public event EventHandler<OutputLineViewModel>? OutputLineRemoving;
@@ -1172,20 +1172,8 @@ public partial class OutputManagementViewModel : ViewModelBase
     [RelayCommand]
     private void ClearHealth()
     {
-        var players = ActivePlayersProbe?.Invoke();
-        if (players is not null)
-        {
-            foreach (var player in players)
-            {
-                var session = player.PlaybackSession;
-                if (session is null)
-                    continue;
-
-                foreach (var line in Outputs)
-                    session.ResetHealthCounters(line);
-            }
-        }
-
+        // The ShowSession health probes read cumulative session counters (composition stats / audio pumps);
+        // clearing here just resets the panel's displayed state — the counters re-accumulate on the next poll.
         foreach (var line in Outputs)
         {
             line.Health = OutputLineHealthState.Unknown;
@@ -1212,24 +1200,11 @@ public partial class OutputManagementViewModel : ViewModelBase
             var anyWired = false;
             foreach (var player in players)
             {
-                Playback.OutputLineHealthEvaluator.LineHealthMetrics metrics;
-                string? metricsDetail;
-                // A deck on the ShowSession path (the flipped default) drives lines through its per-player
-                // ShowSession, not its (idle/absent) engine session — read the session-side composition health.
-                // Falls back to the engine health evaluator when this player isn't ShowSession-driving the line.
-                if (player.TryGetShowSessionLineHealthMetrics(line.Definition.Id) is { } showMetrics)
-                {
-                    metrics = showMetrics;
-                    metricsDetail = FormatShowSessionHealthDetail(showMetrics);
-                }
-                else
-                {
-                    var session = player.PlaybackSession;
-                    if (session is null)
-                        continue;
-                    metrics = OutputLineHealthEvaluator.EvaluateWithMetrics(session, line);
-                    metricsDetail = FormatHealthDetail(session, line, metrics.State);
-                }
+                // Each deck drives lines through its per-player ShowSession (the only runtime since the
+                // legacy engine was deleted) — read the session-side composition/audio-pump health.
+                if (player.TryGetShowSessionLineHealthMetrics(line.Definition.Id) is not { } metrics)
+                    continue;
+                var metricsDetail = FormatShowSessionHealthDetail(metrics);
 
                 if (metrics.State != OutputLineHealthState.Unknown)
                 {
@@ -1304,47 +1279,11 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private static string FormatShowSessionHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
         m.State == OutputLineHealthState.Healthy
-            ? $"Player: {m.VideoSubmitted:N0} f"
-            : $"Player: {m.VideoDropped:N0} drops of {m.VideoSubmitted:N0} f";
-
-    private static string? FormatHealthDetail(
-        HaPlayPlaybackSession session,
-        OutputLineViewModel line,
-        OutputLineHealthState state)
-    {
-        if (state == OutputLineHealthState.Unknown)
-            return null;
-
-        if (session.TryGetVideoHealthMetrics(line, out var vm))
-        {
-            return state switch
+            ? (m.VideoSubmitted, m.AudioEnqueued) switch
             {
-                OutputLineHealthState.Healthy =>
-                    Strings.Format(nameof(Strings.OutputHealthVideoPumpOkFormat), vm.SubmittedFrames, vm.CurrentQueuedDepth, vm.MaxQueueDepth),
-                _ => Strings.Format(nameof(Strings.OutputHealthVideoDropsFormat), vm.DroppedFrames, vm.SubmittedFrames, vm.CurrentQueuedDepth, vm.MaxQueueDepth),
-            };
-        }
-
-        if (session.TryGetAudioHealthMetrics(line, out var st))
-        {
-            var detail = state switch
-            {
-                OutputLineHealthState.Healthy => Strings.Format(nameof(Strings.OutputHealthAudioPumpOkFormat), st.Processed),
-                _ => Strings.Format(nameof(Strings.OutputHealthAudioDropsFormat), st.Dropped, st.Enqueued),
-            };
-            if (session.TryGetPortAudioOutput(line, out var pa) && pa is not null)
-            {
-                var underrunDelta = session.GetPortAudioUnderrunDelta(line);
-                if (underrunDelta > 0)
-                {
-                    detail += " " + Strings.Format(nameof(Strings.OutputHealthPortAudioUnderrunsFormat), underrunDelta,
-                        pa.QueuedSamples);
-                }
+                (> 0, > 0) => $"Player: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch",
+                (_, > 0) => $"Player: {m.AudioEnqueued:N0} ch",
+                _ => $"Player: {m.VideoSubmitted:N0} f",
             }
-
-            return detail;
-        }
-
-        return state.ToString();
-    }
+            : $"Player: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
 }

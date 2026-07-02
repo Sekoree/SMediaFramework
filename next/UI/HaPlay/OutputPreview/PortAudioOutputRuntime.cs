@@ -39,7 +39,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     /// <summary>
     /// Raised after <see cref="ReconfigureAsync"/> swaps the underlying audio output.
     /// Any prior reference handed out by <see cref="AcquireForPlayback"/> is now stale; subscribers
-    /// (i.e. an in-flight <c>HaPlayPlaybackSession</c>) should release + re-acquire to pick up the new
+    /// holding an in-flight playback lease should release + re-acquire to pick up the new
     /// stream. Phase A wires the event but does not orchestrate the re-acquire — that's Phase B's job.
     /// </summary>
     public event EventHandler? Reconfigured;

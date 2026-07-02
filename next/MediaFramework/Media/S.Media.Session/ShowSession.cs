@@ -261,6 +261,13 @@ public sealed class ShowSession : IAsyncDisposable
     /// on its own. Not raised on an explicit <see cref="StopVoiceAsync"/> / <see cref="FadeVoiceAsync"/>.</summary>
     public event Action<string>? VoiceEnded;
 
+    /// <summary>Raised (with the cue id) when a transport-group clip reaches its NATURAL end and is released by
+    /// the end-of-clip machinery — the trimmed/duration out-point's plain stop, or a natural fade-out completing.
+    /// Never raised for an operator stop/cancel/reload, a loop (keeps running), or a freeze (stays up) — it is
+    /// the host's cue auto-follow trigger (the legacy engine's <c>NaturalEnd</c>). Raised from the session
+    /// dispatcher; marshal in the handler.</summary>
+    public event Action<string>? ClipNaturallyEnded;
+
     private sealed record VoiceHandle(
         IArmedClip Clip, IReadOnlyList<IAudioOutput> Outputs, string OutputId, CancellationTokenSource Cts);
 
@@ -1507,6 +1514,7 @@ public sealed class ShowSession : IAsyncDisposable
                                 }
                                 // Plain Stop: release the clip at the out-point. FadeOutAndStop is handled above.
                                 await ReplaceActiveAsync(GetOrAddGroup(groupId), null, [], []).ConfigureAwait(false);
+                                ClipNaturallyEnded?.Invoke(binding.CueId); // natural end → host cue auto-follow
                                 return true;
                             }).ConfigureAwait(false);
                             if (done)
@@ -1567,7 +1575,11 @@ public sealed class ShowSession : IAsyncDisposable
                             {
                                 if (_groups.GetValueOrDefault(groupId) is { } group
                                     && ReferenceEquals(group.Active, clip))
+                                {
+                                    var endedCueId = clip.Spec.Id;
                                     await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
+                                    ClipNaturallyEnded?.Invoke(endedCueId); // natural fade-out completed
+                                }
                             }).ConfigureAwait(false);
                         }
                     }

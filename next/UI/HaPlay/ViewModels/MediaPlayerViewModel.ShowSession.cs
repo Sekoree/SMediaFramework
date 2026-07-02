@@ -11,11 +11,10 @@ using S.Media.Session;
 namespace HaPlay.ViewModels;
 
 /// <summary>
-/// Phase-8 convergence: the media-player deck's file and live-input playback runs on a per-player headless
-/// <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) instead of <c>HaPlayPlaybackSession</c>.
-/// This is the <b>default</b> as of the 2026-07-01 flip; <c>HAPLAY_USE_SHOWSESSION=0</c> falls back to the engine
-/// (see <see cref="ShowSessionGate"/>). Covers play / pause / resume / stop / seek + position readout, end-of-track
-/// auto-advance, idle logo/hold, and NDI live input. The transport methods early-return into here only while
+/// The media-player deck's file and live-input playback runs on a per-player headless
+/// <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) — the only playback runtime since the
+/// legacy engines were deleted (NXT-13). Covers play / pause / resume / stop / seek + position readout,
+/// end-of-track auto-advance, idle logo/hold, and NDI live input. The transport methods operate only while
 /// <see cref="ShowSessionActive"/>.
 /// </summary>
 public partial class MediaPlayerViewModel
@@ -46,21 +45,20 @@ public partial class MediaPlayerViewModel
     // The current show's composition canvas size (set at open) — the HOLD image renders at this size so the
     // top layer covers the canvas exactly.
     private (int Width, int Height) _playerShowCanvas = (1920, 1080);
+    // Whether the current source opened with a video composition (the file probe / live stream selection at
+    // open) — drives the SourceKindLabel readout.
+    private bool _playerShowHasVideo;
 
     /// <summary>True while a deck source is playing through the per-player ShowSession (transport diverts here).</summary>
     public bool ShowSessionActive { get; private set; }
 
-    private static bool UseShowSessionPlayer => ShowSessionGate.UseShowSession;
-
-    /// <summary>Gated source open: builds/loads the 1-cue player show and fires it. Returns false (and leaves the
-    /// engine path to run) when disabled or on any failure.</summary>
+    /// <summary>Opens a deck source: builds/loads the 1-cue player show and fires it. Returns false on a
+    /// non-live open failure (the caller surfaces the error); live failures enter the waiting-for-source
+    /// retry and return true.</summary>
     private async Task<bool> TryOpenViaShowSessionAsync(PlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
     {
-        if (!UseShowSessionPlayer)
-            return false;
-
-        // Resolve the registry URI + whether there's a video composition. Files probe for a video stream; an NDI
-        // deck source maps to ndi://<name> (the registry's NDIModule opens it live). Other kinds stay on the engine.
+        // Resolve the registry URI + whether there's a video composition. Files probe for a video stream;
+        // live inputs map to their option-carrying ndi:/padev: descriptor URIs.
         string mediaPath;
         bool hasVideo;
         switch (item)
@@ -201,6 +199,7 @@ public partial class MediaPlayerViewModel
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
 
             _playerShowCanvas = canvas; // the HOLD top-layer renders at this canvas size
+            _playerShowHasVideo = hasVideo;
 
             // UI thread: flip the deck into the playing state (observable-property writes).
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -489,7 +488,7 @@ public partial class MediaPlayerViewModel
     /// to the next fire — see <see cref="ShowSession.ApplyActiveAudioRoutesAsync"/>.</summary>
     private void ReapplyDeckAudioToShowSessionIfActive()
     {
-        if (_session is not null || !ShowSessionActive || _playerShowSession is not { } session)
+        if (!ShowSessionActive || _playerShowSession is not { } session)
             return;
         var routes = BuildDeckShowAudioRoutes(SelectedOutputLines());
         _ = ReapplyShowSessionAudioRoutesAsync(session, routes);
@@ -600,7 +599,7 @@ public partial class MediaPlayerViewModel
     /// re-apply defers. Keeps playback running (the clip's discard sink stays) even when no output is routed.</summary>
     private async Task RebuildDeckShowSessionAudioAsync()
     {
-        if (_session is not null || !ShowSessionActive || _playerShowSession is not { } session)
+        if (!ShowSessionActive || _playerShowSession is not { } session)
             return;
         var routes = BuildDeckShowAudioRoutes(SelectedOutputLines());
         try
@@ -744,18 +743,11 @@ public partial class MediaPlayerViewModel
 
             // Live-source disconnect: an NDI/capture input dropped (its live source is exhausted, though a live
             // router can keep reporting IsRunning while it waits for data — so this is checked separately). A
-            // live source NEVER playlist-auto-advances; end the clip like the engine's IsLiveSourceDisconnected
-            // path — return to idle, and fire cue AutoFollow when this deck was playing a cue.
+            // live source NEVER playlist-auto-advances; return the deck to idle.
             if (snap.LiveSourceDisconnected && IsPlaying)
             {
                 StopShowSessionPoll();
-                var wasCue = _cuePlaybackActive;
                 await ShowSessionStopAsync().ConfigureAwait(true);
-                if (wasCue)
-                {
-                    _cuePlaybackActive = false;
-                    NaturalPlaybackEnded?.Invoke(this, EventArgs.Empty);
-                }
                 return;
             }
 

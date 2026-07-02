@@ -1294,12 +1294,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
-    /// <summary>Host callback — pre-roll cache membership changed. Snapshot lists the cue ids
+    /// <summary>Host callback — the set of warmed (standby-ready) cues changed. Snapshot lists the cue ids
     /// that are currently warmed. Walks every loaded cue node and sets <c>IsPreRollWarm</c>
     /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).
     /// <para>This method does not marshal threads on its own; the host wiring (MainViewModel)
     /// hops onto the UI dispatcher before invoking, because the underlying
-    /// <see cref="CuePreRollCache.EntriesChanged"/> can fire from any thread.</para>
+    /// <c>ShowSession.PreparedCuesChanged</c> can fire from any thread.</para>
     /// </summary>
     public void OnPreRollCacheChanged(IReadOnlyCollection<Guid> warmCueIds)
     {
