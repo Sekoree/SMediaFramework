@@ -833,7 +833,11 @@ public partial class MediaPlayerViewModel
 
     private void SyncIdleSlate()
     {
-        if (IsMediaLoaded)
+        // Loaded media normally owns the outputs: the engine path holds its own LogoFallback wrappers and the
+        // ShowSession deck covers its composition with the hold top-layer. The EXCEPTION is ShowSession
+        // audio-only playback — it acquires no video lines, so the idle slate stays responsible for showing
+        // the hold image on them (legacy parity: audio track + logo on the video outputs).
+        if (IsMediaLoaded && !(ShowSessionActive && _playerAcquiredLines.Count == 0))
         {
             StopIdleSlate();
             return;

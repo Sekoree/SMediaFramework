@@ -3,7 +3,6 @@ using System.Text;
 using Avalonia.Threading;
 using HaPlay.ViewModels;
 using S.Media.Core.Video;
-using S.Media.Present.SDL3;
 
 namespace HaPlay.Playback;
 
@@ -11,12 +10,17 @@ namespace HaPlay.Playback;
 /// Shows the user-supplied fallback image on selected video outputs when no <see cref="MediaPlayer"/> session
 /// is open. For NDI outputs, the image is installed on the persistent <c>NDIOutputPreviewRuntime</c> carrier
 /// (via <see cref="OutputManagementViewModel.SetNDICarrierLogo"/>) so receivers see the slate over the same
-/// sender they were already locked onto — no NDI re-discovery. For SDL3 OpenGL outputs, a dedicated logo
-/// output + pump is created here.
+/// sender they were already locked onto — no NDI re-discovery. For local video outputs, the line's PERSISTENT
+/// window/sink is acquired (single-holder, same seam playback uses) and the image is pumped into it — previews
+/// stay alive across playback in the current output model (<c>StopPreviewsForPlayback</c> is a no-op), so the
+/// old approach of creating a dedicated slate window put a SECOND window next to the real output instead of
+/// showing the image on it. A line currently held by a playback session is skipped; the periodic
+/// <c>SyncIdleSlate</c> re-sync picks it up once it frees.
 /// </summary>
 internal sealed class IdleLogoSlateSession : IDisposable
 {
-    private readonly List<LogoFallbackVideoOutput> _sdlLogos = new();
+    private readonly List<LogoFallbackVideoOutput> _localLogos = new();
+    private readonly List<OutputLineViewModel> _localLines = new();
     private readonly List<OutputLineViewModel> _ndiLines = new();
     private readonly OutputManagementViewModel _outputs;
     private readonly DispatcherTimer _timer;
@@ -24,10 +28,14 @@ internal sealed class IdleLogoSlateSession : IDisposable
     private long _frameIndex;
     private bool _disposed;
 
-    private IdleLogoSlateSession(IReadOnlyList<LogoFallbackVideoOutput> sdlLogos, IReadOnlyList<OutputLineViewModel> ndiLines,
+    private IdleLogoSlateSession(
+        IReadOnlyList<LogoFallbackVideoOutput> localLogos,
+        IReadOnlyList<OutputLineViewModel> localLines,
+        IReadOnlyList<OutputLineViewModel> ndiLines,
         OutputManagementViewModel outputs, TimeSpan frameDuration)
     {
-        _sdlLogos.AddRange(sdlLogos);
+        _localLogos.AddRange(localLogos);
+        _localLines.AddRange(localLines);
         _ndiLines.AddRange(ndiLines);
         _outputs = outputs;
         _frameDuration = frameDuration;
@@ -42,7 +50,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
             return;
         _frameIndex++;
         var pt = TimeSpan.FromTicks(checked(_frameIndex * _frameDuration.Ticks));
-        foreach (var logo in _sdlLogos)
+        foreach (var logo in _localLogos)
         {
             try
             {
@@ -94,7 +102,8 @@ internal sealed class IdleLogoSlateSession : IDisposable
             }
         }
 
-        var sdlLogos = new List<LogoFallbackVideoOutput>();
+        var localLogos = new List<LogoFallbackVideoOutput>();
+        var localAcquired = new List<OutputLineViewModel>();
         var ndiInstalled = new List<OutputLineViewModel>();
         try
         {
@@ -102,26 +111,42 @@ internal sealed class IdleLogoSlateSession : IDisposable
             {
                 switch (line.Definition)
                 {
-                    case LocalVideoOutputDefinition lv when lv.Engine == VideoOutputEngine.SdlOpenGl:
+                    case LocalVideoOutputDefinition lv:
                     {
-                        var (sw, sh) = InitialSdlSize(lv);
-                        var sdlFmt = new VideoFormat(sw, sh, PixelFormat.Bgra32, new Rational(60, 1));
-                        var sdl = new SDL3GLVideoOutput(lv.DisplayName, sw, sh);
-                        var logo = new LogoFallbackVideoOutput(sdl, disposeInnerOnDispose: true);
-                        logo.Configure(sdlFmt);
-                        var sdlProto = FallbackImageLoader.TryBuildHoldCpuFrame(sdlFmt, imagePath);
-                        if (sdlProto is null)
-                            throw new InvalidOperationException("Slate image conversion failed for SDL output size.");
+                        // Acquire the line's PERSISTENT window/sink (the same single-holder seam playback
+                        // uses) and pump the image into it. Null ⇒ the line is held by a playback session or
+                        // its preview isn't running — skip it; the periodic slate re-sync retries later.
+                        var sink = repository.TryAcquireLocalVideoOutputForPlayback(line);
+                        if (sink is null)
+                            break;
+
+                        var logo = new LogoFallbackVideoOutput(sink, disposeInnerOnDispose: false);
                         try
                         {
-                            logo.TrySetHoldTemplate(FallbackImageLoader.CloneHoldTemplate(sdlProto));
+                            var (sw, sh) = InitialLocalSize(lv);
+                            var slateFmt = new VideoFormat(sw, sh, PixelFormat.Bgra32, new Rational(30, 1));
+                            logo.Configure(slateFmt);
+                            var proto = FallbackImageLoader.TryBuildHoldCpuFrame(slateFmt, imagePath)
+                                ?? throw new InvalidOperationException(
+                                    "Slate image conversion failed for the output size.");
+                            try
+                            {
+                                logo.TrySetHoldTemplate(FallbackImageLoader.CloneHoldTemplate(proto));
+                            }
+                            finally
+                            {
+                                proto.Dispose();
+                            }
                         }
-                        finally
+                        catch
                         {
-                            sdlProto.Dispose();
+                            logo.Dispose(); // wrapper only — the borrowed sink stays alive
+                            repository.ReleaseLocalVideoOutputForPlayback(line);
+                            throw;
                         }
 
-                        sdlLogos.Add(logo);
+                        localLogos.Add(logo);
+                        localAcquired.Add(line);
                         break;
                     }
                     case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.AudioOnly:
@@ -133,23 +158,30 @@ internal sealed class IdleLogoSlateSession : IDisposable
                 }
             }
 
-            if (sdlLogos.Count == 0 && ndiInstalled.Count == 0)
+            if (localLogos.Count == 0 && ndiInstalled.Count == 0)
             {
-                errorMessage = "No NDI or SDL3 video outputs are selected.";
+                errorMessage = "No NDI or local video outputs are selected (or all are in use).";
                 ndiProto?.Dispose();
                 return false;
             }
 
             ndiProto?.Dispose();
-            session = new IdleLogoSlateSession(sdlLogos, ndiInstalled, repository, TimeSpan.FromSeconds(1.0 / 30.0));
+            session = new IdleLogoSlateSession(
+                localLogos, localAcquired, ndiInstalled, repository, TimeSpan.FromSeconds(1.0 / 30.0));
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
-            foreach (var logo in sdlLogos)
+            foreach (var logo in localLogos)
             {
                 try { logo.Dispose(); }
+                catch { /* best effort */ }
+            }
+
+            foreach (var line in localAcquired)
+            {
+                try { repository.ReleaseLocalVideoOutputForPlayback(line); }
                 catch { /* best effort */ }
             }
 
@@ -182,7 +214,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
         return sb.ToString();
     }
 
-    private static (int W, int H) InitialSdlSize(LocalVideoOutputDefinition d)
+    private static (int W, int H) InitialLocalSize(LocalVideoOutputDefinition d)
     {
         if (d.SurfaceMode == VideoSurfaceMode.Windowed && d.WindowWidth is { } w && d.WindowHeight is { } h)
             return (w, h);
@@ -204,13 +236,23 @@ internal sealed class IdleLogoSlateSession : IDisposable
             /* best effort */
         }
 
-        foreach (var logo in _sdlLogos)
+        foreach (var logo in _localLogos)
         {
-            try { logo.Dispose(); }
+            try { logo.Dispose(); } // wrapper only — the borrowed persistent sink stays alive
             catch { /* best effort */ }
         }
 
-        _sdlLogos.Clear();
+        _localLogos.Clear();
+
+        // Release the acquired lines so they return to their idle preview (and a playback session can
+        // acquire them next — the deck's open path calls StopIdleSlate BEFORE it acquires).
+        foreach (var line in _localLines)
+        {
+            try { _outputs.ReleaseLocalVideoOutputForPlayback(line); }
+            catch { /* best effort */ }
+        }
+
+        _localLines.Clear();
 
         foreach (var line in _ndiLines)
         {

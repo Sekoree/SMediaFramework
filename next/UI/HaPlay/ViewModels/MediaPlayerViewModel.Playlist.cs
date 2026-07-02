@@ -82,6 +82,11 @@ public partial class MediaPlayerViewModel
             }
         }
 
+        // ShowSession deck (the flipped default, _session is null): apply/clear the hold image as the
+        // composition's held top layer — the engine wiring above is inert without an engine session.
+        if (_session is null && ShowSessionActive)
+            _ = ApplyShowSessionHoldImageAsync();
+
         SyncIdleSlate();
     }
 
@@ -103,6 +108,10 @@ public partial class MediaPlayerViewModel
 
             StartHoldPumpTimer();
         }
+
+        // ShowSession deck: a new image while HOLD is engaged re-renders the held top layer in place.
+        if (_session is null && ShowSessionActive && HoldFallbackVideo)
+            _ = ApplyShowSessionHoldImageAsync();
 
         SyncIdleSlate();
     }

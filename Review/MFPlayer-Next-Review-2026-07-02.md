@@ -209,6 +209,54 @@ All nine findings implemented the same day, on top of `cb6fa9e`. Verified: full 
 
 **Hardware checks for the next real-hardware session:** (a) stop-fade sounds identical (same ramp math, new scheduling); (b) an `ndi://` deck/cue open against a registered-but-silent sender fails bounded (~30 s) instead of hanging, and STOP preempts it; (c) cue-list edits while idle no longer flash the idle slate on still-bound output lines; (d) soundboard rapid-fire on slow media keeps GO/STOP responsive.
 
+## Deck-bug fixes from operator testing (2026-07-02, same day)
+
+Three flipped-default deck bugs reported from real use, root-caused and fixed (suite after: **1,439/1,439**, +3 tests; real-media `SessionSmoke` still exit 0):
+
+| Bug | Root cause | Fix |
+|---|---|---|
+| Routing an audio device mid-playback → no output | Two layers: `RebuildActiveClipAudioOutputsAsync` removed every output *then* faulted whole on the first bad device — and on a fixed-rate JACK graph `CreateOutput` at the clip's mix rate throws, so one route add silenced everything. | **Per-route error isolation** (`ShowSession.TryAttachRouteOutput`, used by the rebuild AND both fire-path route loops — legacy parity: a bad output logs + the clip plays its remaining routes); the deck audio factory (`BuildDeckAudioLease`) now creates PortAudio outputs itself and, when a device rejects the mix rate, opens it at the line's configured rate behind an egress `ResamplingAudioOutput` (device released via the lease hook). Tests: `AudioRouteRebuildTests` (zero→one rebuild pumps; rebuild + fire survive a bad device). |
+| Audio line never shows active in the I/O menu while playing | `TryGetShowSessionLineHealthMetrics` was gated on the deck's *video* lines (`_playerAcquiredLines`) — an audio-only PA line always fell through to the idle engine probe. | Combined video+audio health like the cue path: reverse-map the line to its PA backend device id / NDI carrier-audio key and fold `GetActiveAudioPumpStatsByDevice` into the score. |
+| Hold image doesn't work (+ picker flyout needs sideways scrolling) | Under the flipped default every HOLD path gated on the null legacy `_session` (playback no-op); the idle slate still *created a second SDL window* (pre-port behavior — previews now persist and playback acquires them, `StopPreviewsForPlayback` is a no-op); the flyout had `MinWidth` only, so a long path blew it past the screen. | HOLD during ShowSession playback = the hold image rendered at the composition canvas and held in the top-most full-canvas layer (`ApplyShowSessionHoldImageAsync` via `SetCompositionTestPatternAsync`; re-applied per track); idle slate now **acquires the line's persistent sink** (single-holder, wrapper never disposes the borrowed inner, released on dispose → idle preview restored) and covers all local engines, not just SDL; ShowSession **audio-only** playback keeps the slate allowed (deck holds no video lines) for the classic "audio + logo" use; flyout got `MaxWidth` so Browse stays reachable. |
+
+**Hardware checks for these:** hold image during video playback (covers all outputs, clears on toggle-off), hold + audio-only track (slate on video lines), idle hold image on local windows (no extra window appears; window returns to idle preview on un-hold/play), mid-play routing of a JACK/48k device onto a 44.1k file (audio arrives, resampled), I/O LEDs for audio-only deck lines, and that a *known-bad* device mid-play no longer silences the good ones.
+
+## Engine-deletion readiness — refined audit (2026-07-02, evening)
+
+Operator confirmed the deck fixes on hardware. Progress + the now-precise blocker list for deleting
+`SoundboardEngine`/`CuePlaybackEngine`/`HaPlayPlaybackSession` (delete all three together with `ShowSessionGate`
+once this list is empty — a piecemeal delete would leave the `HAPLAY_USE_SHOWSESSION=0` escape hatch
+half-working):
+
+**Closed this pass:** `PortAudioInputPlaylistItem` now plays through the deck ShowSession path
+(`padev://<escaped-name>`, audio-only — the deck's last unrouted source kind; image/text/subtitle items are
+cue-editor-only). Suite 1,439 green.
+
+**Remaining blockers (all bounded, enumerated by code audit — the deck's live `_session` feature surface is
+small; most of the 102 textual usages are engine-path plumbing that deletes *with* the engine):**
+1. **NDI per-item options are dropped by the ShowSession deck path** — `LowBandwidth`, `VideoOnly`,
+   `AudioMinBufferedDurationMs` (the probed jitter-buffer override!) vanish because the deck re-opens plain
+   `ndi://<name>` and disposes its pre-connected configured receiver. Needs option carriage (URI query params
+   parsed by `NDIDecoderProvider`, or a configured-receiver handoff into the registry open).
+2. **padev per-item config dropped** the same way (`Channels`/`SampleRate`/`HostApi*`/`SuggestedLatency` — the
+   provider resolves name → device defaults, ≤2 ch). Same option-carriage design as (1).
+3. **Waiting-for-source retry** for an offline live item only engages via the engine's failure path today
+   (ShowSession open fails → engine also fails → `EnterWaitingForSource`). The ShowSession path must call it
+   directly for live items.
+4. **Per-cell audio gain matrix live-apply** on the deck (framework `ApplyActiveAudioMatrixAsync` exists;
+   deck sends an int channel map + compound gain — the near-1:1 wire-up the ledger already flagged,
+   hardware-gated).
+5. Final `_session` sweep — the active member surface is only: hold
+   (`ApplyFallbackImage`/`PumpHoldFrames`/`ResubmitLastCachedFramesAt`/`SetHoldFallback` — ShowSession
+   equivalents exist), hot routing (`TryAddOutput`/`TryRemoveOutput` — equivalents exist), live-state probes
+   (`IsLive`/`LiveHasVideo`/`LiveHasAudio`/`IsLiveSourceDisconnected`/`HasWiredLine`), `Player`
+   position/clock reads, and `TrySetOutputMatrix`/`AttachMediaPlayerSubtitles` (equivalents exist). Everything
+   else is guards/assignments.
+
+**Non-blocker discovered:** `HeadphonesCueEnabled`/targets/tap-points are persisted + shown in the UI but have
+NO playback consumer on either path (the wiring never made the port) — a vestigial feature to either re-wire
+onto ShowSession later or remove from the UI; it does not gate deletion.
+
 ---
 
 # Part 5 — Simplifications and optimizations

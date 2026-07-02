@@ -34,10 +34,18 @@ public partial class MediaPlayerViewModel
     // on stop/switch — the audio analogue of _playerVideoOutputs / _playerAcquiredLines.
     private readonly Dictionary<string, IAudioOutput> _playerNdiAudioOutputs = new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredAudioLines = new();
+    // PortAudio route device id → the LINE's configured sample rate, so the audio-output factory can fall back
+    // to opening a device at its own rate (behind an egress resampler) when it rejects the clip's mix rate.
+    // Concurrent: written on the UI thread (route building), read on the session thread (the factory).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _playerPaDeviceRates =
+        new(StringComparer.Ordinal);
     private DispatcherTimer? _playerShowPoll;
     // Consecutive poll ticks that observed the clip stopped-while-playing. A coordinated seek transiently
     // pauses the clip, so the deck only treats "not running" as end-of-track once it PERSISTS across ticks.
     private int _showSessionEndConfirmTicks;
+    // The current show's composition canvas size (set at open) — the HOLD image renders at this size so the
+    // top layer covers the canvas exactly.
+    private (int Width, int Height) _playerShowCanvas = (1920, 1080);
 
     /// <summary>True while a file is playing through the per-player ShowSession (the transport guards divert here).</summary>
     public bool ShowSessionActive { get; private set; }
@@ -66,6 +74,12 @@ public partial class MediaPlayerViewModel
                 mediaPath = $"ndi://{Uri.EscapeDataString(ndi.SourceName)}";
                 hasVideo = !ndi.AudioOnly;
                 break;
+            case PortAudioInputPlaylistItem paIn:
+                // Live capture through the registry's `padev:` provider (the same URI the cue path uses; the
+                // provider unescapes, so device names with spaces round-trip). Audio-only — no composition.
+                mediaPath = $"padev://{Uri.EscapeDataString(paIn.DeviceName)}";
+                hasVideo = false;
+                break;
             default:
                 return false;
         }
@@ -90,7 +104,7 @@ public partial class MediaPlayerViewModel
                 // carrier audio is borrowed (held via _playerAcquiredAudioLines, released on stop) so the session
                 // never disposes it; only a per-fire resampler wrapper (when the carrier rate ≠ the clip rate) is
                 // session-owned. Pure lookup — the carrier was acquired on the UI thread during open.
-                audioOutputFactory: (deviceId, format) => BuildNdiAudioLease(deviceId, format));
+                audioOutputFactory: (deviceId, format) => BuildDeckAudioLease(deviceId, format));
 
             // Switching from a currently-playing source: stop its poll and clip FIRST so the old clip releases its
             // audio DEVICE and borrowed video leases before we re-acquire and fire the new source. Without this the
@@ -184,6 +198,8 @@ public partial class MediaPlayerViewModel
                     (item as FilePlaylistItem)?.Subtitles)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
 
+            _playerShowCanvas = canvas; // the HOLD top-layer renders at this canvas size
+
             // UI thread: flip the deck into the playing state (observable-property writes).
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -199,6 +215,10 @@ public partial class MediaPlayerViewModel
                 // StartWaveformExtraction cancels any in-flight run and no-ops for a null/NDI (non-file) path.
                 StartWaveformExtraction((item as FilePlaylistItem)?.Path);
                 UpdateNoOutputWarning(); // opened with no output routed → play to nothing + warn
+                // HOLD survives track changes: the new document replaced the composition (and with it the
+                // hold top-layer), so re-cover the fresh canvas when the toggle is on.
+                if (HoldFallbackVideo)
+                    _ = ApplyShowSessionHoldImageAsync();
             });
             ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
             return true;
@@ -221,31 +241,61 @@ public partial class MediaPlayerViewModel
         _playerShowSession?.SeekAsync(position) ?? Task.CompletedTask;
 
     /// <summary>Deck output-line health under the ShowSession path (engine-parity for the outputs-panel LEDs):
-    /// reads this player's ShowSession composition throughput for a line it drives and scores video health like
-    /// the engine's <see cref="Playback.OutputLineHealthEvaluator"/>. Returns null when this deck isn't
-    /// ShowSession-driving the line, so the caller falls back to the engine probe. Video only for now — the
-    /// ShowSession deck path does not yet device-route audio (that is the audio-matrix re-back gap), so an
-    /// audio-only deck line still reports Unknown here. Lock-free (composition stats), no marshaling.</summary>
+    /// sums this player's ShowSession composition throughput for a video line it drives AND the audio-pump
+    /// chunks of any deck route to the line's device (a PortAudio line's backend device id, or an NDI line's
+    /// carrier-audio key), scoring a combined state like the engine's
+    /// <see cref="Playback.OutputLineHealthEvaluator"/> — so an audio-only deck line lights up too (it used to
+    /// report Idle because this probe was gated on the deck's VIDEO lines). Returns null when this deck isn't
+    /// ShowSession-driving the line at all, so the caller falls back to the engine probe. Lock-free
+    /// (composition stats + audio-pump snapshot), no marshaling.</summary>
     internal OutputLineHealthEvaluator.LineHealthMetrics? TryGetShowSessionLineHealthMetrics(Guid outputLineId)
     {
         if (!ShowSessionActive || _playerShowSession is not { } session)
             return null;
-        if (!_playerAcquiredLines.Contains(outputLineId))
-            return null;
-        if (session.GetCompositionStats(MediaPlayerShowMapper.PlayerCompositionId) is not { } stats)
+
+        long videoSubmitted = 0;
+        long videoDropped = 0;
+        var driven = false;
+        if (_playerAcquiredLines.Contains(outputLineId)
+            && session.GetCompositionStats(MediaPlayerShowMapper.PlayerCompositionId) is { } stats
+            && stats.FramesSubmitted > 0)
+        {
+            driven = true;
+            videoSubmitted = stats.FramesSubmitted;
+            videoDropped = stats.PumpOverruns + stats.SlotOverflowFrames;
+        }
+
+        // Audio: reverse-map the line to the device id the deck routes to — PortAudio lines by their backend
+        // device, NDI lines by their carrier-audio key — and sum the active clip's pump chunks for it.
+        long audioEnqueued = 0;
+        long audioDropped = 0;
+        var deviceId = _outputs.DefinitionsSnapshot
+                .OfType<PortAudioOutputDefinition>()
+                .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId
+            ?? (_playerNdiAudioOutputs.ContainsKey(NdiAudioDeviceId(outputLineId))
+                ? NdiAudioDeviceId(outputLineId)
+                : null);
+        if (deviceId is not null
+            && session.GetActiveAudioPumpStatsByDevice().TryGetValue(deviceId, out var audio)
+            && audio.Enqueued > 0)
+        {
+            driven = true;
+            audioEnqueued = audio.Enqueued;
+            audioDropped = audio.Dropped;
+        }
+
+        if (!driven)
             return null;
 
-        var videoSubmitted = stats.FramesSubmitted;
-        if (videoSubmitted == 0)
-            return null;
-        var videoDropped = stats.PumpOverruns + stats.SlotOverflowFrames;
-        var state = videoDropped == 0
+        var totalSubmitted = videoSubmitted + audioEnqueued;
+        var totalDropped = videoDropped + audioDropped;
+        var state = totalDropped == 0
             ? OutputLineHealthState.Healthy
-            : videoDropped > 120 || (double)videoDropped / videoSubmitted > 0.05
+            : totalDropped > 120 || (double)totalDropped / totalSubmitted > 0.05
                 ? OutputLineHealthState.Error
                 : OutputLineHealthState.Warning;
         return new OutputLineHealthEvaluator.LineHealthMetrics(
-            state, videoSubmitted, videoDropped, 0, 0, 0, 0);
+            state, videoSubmitted, videoDropped, 0, 0, audioEnqueued, audioDropped);
     }
 
     /// <summary>Builds the deck's initial ShowSession audio routes from its selected PortAudio output bindings, so
@@ -271,6 +321,8 @@ public partial class MediaPlayerViewModel
             switch (line.Definition)
             {
                 case PortAudioOutputDefinition pa:
+                    if (pa.EffectiveAudioBackendDeviceId is { } paDevice)
+                        _playerPaDeviceRates[paDevice] = pa.SampleRate; // factory rate-fallback lookup
                     routes.Add(new ShowClipAudioRoute(
                         pa.EffectiveAudioBackendDeviceId, matrix, CompoundEnvelope(binding),
                         pa.SampleRate > 0 ? pa.SampleRate : null));
@@ -300,21 +352,50 @@ public partial class MediaPlayerViewModel
     private static string CompositionOutputId(Guid lineId) =>
         $"{MediaPlayerShowMapper.PlayerCompositionId}_line_{lineId:N}";
 
-    /// <summary>The audio-output factory body: resolves an NDI route's device id to the borrowed carrier audio
-    /// held since open, wrapping it in a per-fire resampler only when the carrier's audio format differs from the
-    /// clip's requested format. Null for a device the deck didn't acquire (a PortAudio route → the session's
-    /// backend creates it). Pure dictionary lookup, safe on the session thread.</summary>
-    private ClipAudioOutputLease? BuildNdiAudioLease(string deviceId, AudioFormat format)
+    /// <summary>The audio-output factory body. NDI route device ids resolve to the borrowed carrier audio held
+    /// since open (wrapped in a per-fire resampler only when the carrier's format differs). Every other device id
+    /// is a PortAudio route: the deck creates it here so a device that rejects the clip's mix rate (a fixed-rate
+    /// JACK graph, mismatched hardware) can be opened at the LINE's configured rate behind an egress resampler —
+    /// without this, routing a device to an already-playing clip whose mix rate the device can't open simply
+    /// failed (the mid-play "route → no output" bug). Safe on the session thread.</summary>
+    private ClipAudioOutputLease? BuildDeckAudioLease(string deviceId, AudioFormat format)
     {
-        if (!_playerNdiAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
-            return null;
-        if (carrierAudio.Format.SampleRate == format.SampleRate && carrierAudio.Format.Channels == format.Channels)
-            // Format matches → route straight into the carrier (borrowed: released by the deck on stop).
-            return new ClipAudioOutputLease(carrierAudio, DisposeOutputOnRuntimeDispose: false);
-        // Mismatch → a per-fire resampler adapts the clip to the carrier. Its Dispose frees only the resampler
-        // (NOT the borrowed carrier), so the session may own it (DisposeOutputOnRuntimeDispose: true).
-        return new ClipAudioOutputLease(
-            ResamplingAudioOutput.Wrap(carrierAudio, format), DisposeOutputOnRuntimeDispose: true);
+        if (_playerNdiAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
+        {
+            if (carrierAudio.Format.SampleRate == format.SampleRate && carrierAudio.Format.Channels == format.Channels)
+                // Format matches → route straight into the carrier (borrowed: released by the deck on stop).
+                return new ClipAudioOutputLease(carrierAudio, DisposeOutputOnRuntimeDispose: false);
+            // Mismatch → a per-fire resampler adapts the clip to the carrier. Its Dispose frees only the resampler
+            // (NOT the borrowed carrier), so the session may own it (DisposeOutputOnRuntimeDispose: true).
+            return new ClipAudioOutputLease(
+                ResamplingAudioOutput.Wrap(carrierAudio, format), DisposeOutputOnRuntimeDispose: true);
+        }
+
+        if (MediaRuntime.Registry.AudioBackends.FirstOrDefault() is not { } backend)
+            return null; // no backend — let the session report the failure its own way
+
+        try
+        {
+            // The common case: the device accepts the clip's mix rate directly (session-owned output).
+            return new ClipAudioOutputLease(backend.CreateOutput(deviceId, format), DisposeOutputOnRuntimeDispose: true);
+        }
+        catch
+        {
+            // The device rejected the clip's mix rate. Open it at ITS rate (the line's configured rate, else
+            // the device default) and egress-resample the router format into it. The session owns the wrapper;
+            // the created device is released via the lease hook (ResamplingAudioOutput never owns its inner).
+            var deviceRate = _playerPaDeviceRates.GetValueOrDefault(deviceId, 0);
+            if (deviceRate <= 0)
+                deviceRate = (int)Math.Round(backend.EnumerateOutputDevices()
+                    .FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))?.DefaultSampleRate ?? 0);
+            if (deviceRate <= 0 || deviceRate == format.SampleRate)
+                throw; // no viable alternative rate — surface the real open failure
+            var device = backend.CreateOutput(deviceId, new AudioFormat(deviceRate, format.Channels));
+            return new ClipAudioOutputLease(
+                ResamplingAudioOutput.Wrap(device, format),
+                DisposeOutputOnRuntimeDispose: true,
+                Release: () => (device as IDisposable)?.Dispose());
+        }
     }
 
     /// <summary>Pure: the deck's composition-canvas size = the LARGEST driven output resolution (by pixel area),
@@ -479,6 +560,46 @@ public partial class MediaPlayerViewModel
         }
     }
 
+    /// <summary>Applies (HOLD on + image set) or clears the deck's hold image on the RUNNING per-player
+    /// ShowSession: the image renders letterboxed at the composition canvas size and is held in the top-most
+    /// full-canvas layer (<see cref="ShowSession.SetCompositionTestPatternAsync"/> — the same held-top-layer
+    /// mechanism the calibration grid uses), so every fanned-out output shows it while audio keeps playing.
+    /// This is the ShowSession replacement for the engine's <c>LogoFallbackVideoOutput</c> hold: under the
+    /// flipped default the engine session is null, so the old wiring made the HOLD button a silent no-op
+    /// during playback. Audio-only media has no composition (returns false harmlessly) — the idle slate
+    /// covers that case (see <c>SyncIdleSlate</c>). UI thread (reads deck observable state).</summary>
+    internal async Task ApplyShowSessionHoldImageAsync()
+    {
+        if (!ShowSessionActive || _playerShowSession is not { } session)
+            return;
+        try
+        {
+            if (HoldFallbackVideo && !string.IsNullOrWhiteSpace(FallbackImagePath) && File.Exists(FallbackImagePath))
+            {
+                var canvasFormat = new VideoFormat(
+                    _playerShowCanvas.Width, _playerShowCanvas.Height, PixelFormat.Bgra32, new Rational(30, 1));
+                var frame = FallbackImageLoader.TryBuildHoldCpuFrame(canvasFormat, FallbackImagePath!);
+                if (frame is null)
+                {
+                    ShowLog.LogWarning("MediaPlayer: hold image '{Path}' could not be loaded/converted.", FallbackImagePath);
+                    return;
+                }
+
+                await session.SetCompositionTestPatternAsync(
+                    MediaPlayerShowMapper.PlayerCompositionId, frame).ConfigureAwait(true);
+            }
+            else
+            {
+                await session.SetCompositionTestPatternAsync(
+                    MediaPlayerShowMapper.PlayerCompositionId, null).ConfigureAwait(true);
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowLog.LogWarning(ex, "MediaPlayer: ShowSession hold image apply/clear");
+        }
+    }
+
     /// <summary>Surfaces a banner when a loaded/playing deck has NO output routed — playback continues (to
     /// nothing) rather than stopping, matching a hardware player. Cleared once any output is routed again.</summary>
     private void UpdateNoOutputWarning()
@@ -525,6 +646,7 @@ public partial class MediaPlayerViewModel
                 _outputs.ReleaseAudioOutputForLine(held);
             _playerAcquiredAudioLines.Clear();
             _playerNdiAudioOutputs.Clear();
+            _playerPaDeviceRates.Clear();
             ShowSessionActive = false;
             IsPlaying = false;
             IsMediaLoaded = false;

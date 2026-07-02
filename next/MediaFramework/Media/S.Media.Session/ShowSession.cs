@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Registry;
 using S.Media.Core.Threading;
 using S.Media.Core.Video;
@@ -129,6 +130,51 @@ public sealed class ShowSession : IAsyncDisposable
         o.Release?.Invoke();
         if (o.DisposeOnRelease)
             (o.Output as IDisposable)?.Dispose();
+    }
+
+    /// <summary>Resolves + attaches ONE audio route's output with per-route error isolation: a device that
+    /// cannot be opened (fixed-rate JACK graph rejecting the clip's mix rate, unplugged hardware) or attached is
+    /// logged and skipped so the clip still plays on its remaining routes — instead of one bad device faulting
+    /// the whole cue fire or (worse) a mid-play rebuild that has already detached every output. On success the
+    /// output is appended to <paramref name="outputs"/> (the caller's ownership-tracked set).</summary>
+    private bool TryAttachRouteOutput(
+        S.Media.Players.MediaPlayer player,
+        string outputId,
+        string? deviceId,
+        ChannelMap? channelMap,
+        int rate,
+        float gain,
+        List<ClipAudioOutput> outputs)
+    {
+        ClipAudioOutput o;
+        try
+        {
+            var channels = channelMap?.OutputChannels ?? 2;
+            o = ResolveAudioOutput(deviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogWarning(
+                "ShowSession: audio route '{0}' → device '{1}' could not open ({2}); the clip plays without it.",
+                outputId, deviceId ?? "(default)", ex.Message);
+            return false;
+        }
+
+        try
+        {
+            player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: gain);
+        }
+        catch (Exception ex)
+        {
+            ReleaseClipAudioOutput(o);
+            MediaDiagnostics.LogWarning(
+                "ShowSession: audio route '{0}' → device '{1}' could not attach ({2}); the clip plays without it.",
+                outputId, deviceId ?? "(default)", ex.Message);
+            return false;
+        }
+
+        outputs.Add(o);
+        return true;
     }
 
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
@@ -439,12 +485,11 @@ public sealed class ShowSession : IAsyncDisposable
                     for (var i = 0; i < clipRoutes.Count; i++)
                     {
                         var route = clipRoutes[i];
-                        var channelMap = route.ToChannelMap();
-                        var channels = channelMap?.OutputChannels ?? 2;
                         var outputId = $"clip{i}";
-                        var o = ResolveAudioOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
-                        player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
-                        outputs.Add(o);
+                        if (!TryAttachRouteOutput(
+                                player, outputId, route.DeviceId, route.ToChannelMap(), rate,
+                                gain: fadeIn ? 0f : route.Gain, outputs))
+                            continue; // one un-openable device must not fault the whole cue — play the rest
                         routeTargets.Add((outputId, route.Gain));
                         if (route.DeviceId is { } clipDevice)
                             audioPumps.Add((outputId, clipDevice));
@@ -458,12 +503,11 @@ public sealed class ShowSession : IAsyncDisposable
                     // sets the channel count; an output with no route for this clip is plain stereo.
                     foreach (var outDef in ResolveGroupOutputs(groupId))
                     {
-                        var channelMap = ResolveOutputChannelMap(binding, outDef.Id);
-                        var channels = channelMap?.OutputChannels ?? 2;
-                        var o = ResolveAudioOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
                         // Fade-in: attach silent (gain 0) and ramp the route gain up to unity over FadeIn after Start.
-                        player.AttachAudioOutput(o.Output, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
-                        outputs.Add(o);
+                        if (!TryAttachRouteOutput(
+                                player, outDef.Id, outDef.DeviceId, ResolveOutputChannelMap(binding, outDef.Id), rate,
+                                gain: fadeIn ? 0f : 1f, outputs))
+                            continue;
                         routeTargets.Add((outDef.Id, 1f));
                         if (outDef.DeviceId is { } groupDevice)
                             audioPumps.Add((outDef.Id, groupDevice));
@@ -755,7 +799,10 @@ public sealed class ShowSession : IAsyncDisposable
                              .Where(id => id.StartsWith("clip", StringComparison.Ordinal)).ToList())
                     router.RemoveOutput(id);
 
-                // 2) Re-add one output per route (mirrors CommitClipAsync's per-clip audio block).
+                // 2) Re-add one output per route (mirrors CommitClipAsync's per-clip audio block). Per-route
+                //    isolation is CRITICAL here: step 1 already removed every output, so without it one
+                //    un-openable device (e.g. a fixed-rate JACK graph rejecting the clip's mix rate) faulted the
+                //    whole rebuild and left the clip totally silent instead of playing its remaining routes.
                 var rate = active.Player.SampleRate > 0 ? active.Player.SampleRate : 48_000;
                 var newOutputs = new List<ClipAudioOutput>(routes.Count);
                 var audioPumps = new List<(string OutputId, string DeviceId)>();
@@ -763,12 +810,11 @@ public sealed class ShowSession : IAsyncDisposable
                 for (var i = 0; i < routes.Count; i++)
                 {
                     var route = routes[i];
-                    var channelMap = route.ToChannelMap();
-                    var channels = channelMap?.OutputChannels ?? 2;
                     var outputId = $"clip{i}";
-                    var o = ResolveAudioOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
-                    active.Player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: route.Gain);
-                    newOutputs.Add(o);
+                    if (!TryAttachRouteOutput(
+                            active.Player, outputId, route.DeviceId, route.ToChannelMap(), rate,
+                            gain: route.Gain, newOutputs))
+                        continue;
                     routeTargets.Add((outputId, route.Gain));
                     if (route.DeviceId is { } dev)
                         audioPumps.Add((outputId, dev));

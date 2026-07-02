@@ -240,11 +240,14 @@
                             <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
                             <Button.Flyout>
                                 <Flyout Placement="Bottom">
-                                    <StackPanel Spacing="6" Margin="4" MinWidth="280">
+                                    <!-- Width is BOUNDED: without MaxWidth a long image path makes the star-column
+                                         TextBox size to its text, blowing the flyout past the screen edge so the
+                                         Browse button needs sideways scrolling to reach. -->
+                                    <StackPanel Spacing="6" Margin="4" MinWidth="320" MaxWidth="440">
                                         <TextBlock Classes="CaptionText" TextWrapping="Wrap"
                                                    Text="{x:Static res:Strings.IdleImageHeaderTooltip}" />
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                                            <TextBox Grid.Column="0"
+                                            <TextBox Grid.Column="0" MaxWidth="360"
                                                      PlaceholderText="{x:Static res:Strings.FallbackPathPlaceholder}"
                                                      Text="{Binding FallbackImagePath}" />
                                             <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}"
