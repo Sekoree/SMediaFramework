@@ -27,6 +27,12 @@ public sealed class ArchitectureTests
         // forward IPlaybackClock, which lives in S.Media.Time. Downward ref (Time is tier 2); the module
         // keeps the cohesive FFmpeg audio-processing set together rather than spinning up a new project.
         ["S.Media.Decode.FFmpeg"] = ["S.Media.Core", "S.Media.Time", "S.Media.FFmpeg.Common"],
+        // External-source module (Gate 5): YoutubeExplode is an out-of-tree LOCAL SOURCE reference
+        // (Reference/YoutubeExplode-6.6) and deliberately not part of the layering table.
+        ["S.Media.Source.YouTube"] =
+            ["S.Media.Core", "S.Media.FFmpeg.Common", "S.Media.Decode.FFmpeg", "S.Media.Time", "YoutubeExplode"],
+        // MMD prototype (Gate 6): pure managed PMX/VMD + software render — Core/Time only.
+        ["S.Media.Source.MMD"] = ["S.Media.Core", "S.Media.Time"],
         ["S.Media.Encode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
         ["S.Media.Audio.PortAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "PALib"],
         ["S.Media.Audio.MiniAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "MALib"],

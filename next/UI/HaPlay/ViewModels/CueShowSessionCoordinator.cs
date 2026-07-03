@@ -452,7 +452,7 @@ public sealed class CueShowSessionCoordinator
             .OfType<PortAudioOutputDefinition>()
             .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId;
         if (deviceId is not null
-            && session.GetActiveAudioPumpStatsByDevice().TryGetValue(deviceId, out var audio))
+            && session.TryGetActiveAudioPumpStats(deviceId, out var audio))
         {
             driven = true;
             audioEnqueued = audio.Enqueued;

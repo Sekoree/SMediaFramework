@@ -129,6 +129,54 @@ public partial class CuePlayerViewModel
 
     private bool CanAddNdiInputCue() => IsNdiAvailable;
 
+    /// <summary>Gate 6 — adds an MMD scene cue through the camera-placement dialog. The scene renders
+    /// like any video cue on its composition; audio pairs as a separate cue in the same group.</summary>
+    [RelayCommand]
+    private async Task AddMmdCueAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.AddMmdDialogViewModel();
+        var dialog = new Views.Dialogs.AddMmdDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MmdPlaylistItem?>(owner);
+        if (result is null) return;
+        AddLiveInputCue(result, result.DisplayName);
+    }
+
+    /// <summary>Gate 5 — adds a YouTube media cue through the same stream-selection dialog the deck uses
+    /// (selectable video/audio/subtitle tracks + caching of the selected pair). The produced cue carries
+    /// the prepared caption sidecar as its subtitle selection, so it renders like any sidecar subtitle.</summary>
+    [RelayCommand]
+    private async Task AddYouTubeCueAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.AddYouTubeDialogViewModel();
+        var dialog = new Views.Dialogs.AddYouTubeDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<YouTubePlaylistItem?>(owner);
+        if (result is null) return;
+
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = result.DisplayName,
+            MediaSourceItem = result,
+            SourceOrAction = result.DisplayName,
+            // The prepared caption sidecar rides as a normal sidecar subtitle selection.
+            PersistedSubtitles = result.Subtitles,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
     [RelayCommand]
     private async Task AddPortAudioInputCueAsync()
     {

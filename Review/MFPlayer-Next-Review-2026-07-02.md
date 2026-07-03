@@ -465,6 +465,108 @@ SessionSmoke exit 0; headless app launch clean):
    work is the hardware/scheduled tier: sustained physical multi-output presentation-skew gates and exposing
    this same contract to first-class plugin surfaces when NXT-10 lands.
 
+15. **CI round 6 — one more GO-settle race (both OSes otherwise green; the HaPlay.Tests hang did NOT
+   recur).** `CuePlayerViewModelTests.Go_InvokesMediaCueExecutor` waited a fixed 20 ms after `GoCommand`
+   before asserting the executor ran — the trigger plan is async and the loaded Linux runner missed the
+   window. Now polls via the file's existing `WaitUntilAsync` (20 s ceiling, early exit); the sibling
+   `GoAdvancesSelectionToNextFireableCue` had the same fixed-sleep pattern (2×50 ms) and got the same
+   treatment preemptively. (The group pre-wait test's fixed delays are ORDER-sensitive by design — 80 ms
+   pre-wait windows — and were left alone; a polling rewrite would not strengthen them.)
+
+16. **Remaining-board closure pass (2026-07-02, evening): D10 + hygiene pair.**
+   (a) **D10 CLOSED (post-pivot resolution).** UI layout already lived in a per-machine sidecar; the real
+   gap was that a saved show was never persisted as the framework document. New `ShowDocumentSidecar`
+   (HaPlay/Models): every full project save also writes one mapped+validated `ShowDocument` per cue list
+   (`<project>.show.<n>.json`, produced by the same `HaPlayShowMapper` the live session uses and gated by
+   `ShowDocumentValidator`, so a headless/C-ABI host can't reject it at load); stale sidecars are cleaned
+   up when the list count shrinks; sidecar errors surface in the save status but never fail the save. The
+   FULL descent of `HaPlayProject` into Session was deliberately NOT done: decks/playlists, soundboards,
+   control graphs and action endpoints are app-domain, not show-execution data (the original D10 wording
+   predates the lift-and-shift pivot). Plan docs updated (08-Open-Decisions D10 resolution note;
+   09-Phase-Checklists Phase-8 exit item checked). Tests: `ShowDocumentSidecarTests` ×3.
+   (b) **Hygiene pair.** `ShowSession.TryGetActiveAudioPumpStats(deviceId)` — allocation-free
+   single-device variant of the per-poll dictionary build; both UI health polls switched (deck + cue
+   coordinator); parity asserted in the existing borrowed-carrier test. The NXT-20 "structural variant
+   inside `LoadDocumentCoreAsync`" was resolved as a documented factory contract instead of code:
+   reordering the transactional load would trade away NXT-12's never-destroy-the-running-show guarantee,
+   so the reload-ordering obligation (hand over still-bound exclusive lines; detach dropped lines before
+   release) is now spelled out on `_videoOutputFactory`. Post-pass: **1,426/1,426** green.
+
+17. **Gate 5 framework slice — `S.Media.Source.YouTube` SHIPPED (UI slice next).** Per the review's
+   Gate-5 design + operator UX requirements (separate audio/video streams, stream selection, caching):
+   (a) `FFmpegStreamCopyRemuxer` (S.Media.FFmpeg.Common) — in-process libavformat stream-copy of a
+   video-only + audio-only input (or single-input pass-through) into one local MKV, dts-ordered
+   interleaving, cancellable, coarse progress, explicit container name for `.partial` temp paths; NO
+   shelled ffmpeg. Tests: `StreamCopyRemuxerTests` (real x264+AAC lavfi inputs → remux → reopen both
+   tracks through the registry; `RemuxFact` skips where natives/CLI are absent).
+   (b) `S.Media.Source.YouTube` — new module referencing the LOCAL YoutubeExplode source
+   (Reference/YoutubeExplode-6.6; net10 target, IsTrimmable+IsAotCompatible; declares 0.0.0-dev, i.e.
+   pinned by checkout not by the folder name). Canonical URI `youtube://<id>?v=…&a=…&sub=…&novideo=1`;
+   watch/share URLs normalize via `VideoId.TryParse`. Stream identity = operator-readable descriptors
+   (video `label|codec|container`, audio `codec|container|language`) since this YoutubeExplode exposes
+   no itags. `IYouTubeGateway` seam (manifest DTOs for the picker UI: video/audio streams + caption
+   tracks; SRT caption download) with `YoutubeExplodeGateway` impl. `YouTubePreparer`: content-addressed
+   cache (`<id>-<sha16>.mkv`), "best" resolution → CONCRETE descriptors (returned as `ResolvedSelection`
+   for the UI to persist), `.partial` + atomic rename, per-key coalescing, subtitle sidecar `.srt`.
+   `YouTubeDecoderProvider`: probe 1.0 canonical / 0.9 watch URLs; RELIABLE MODE — opens only the
+   prepared local asset via a private FFmpeg registry; an unprepared open throws actionably (GO never
+   starts a network download). Tests: 17 offline (URI round-trip, best resolution, cache hit,
+   coalescing 8→1 run, stale-selection error, audio-only+subs, probe scoring, unprepared-open) + 1
+   LIVE opt-in (`MFP_YOUTUBE_LIVE_TESTS=1`; ran GREEN locally against a real video: resolve → download
+   separate streams → in-process remux → registry playback via the resolved URI). Arch rules updated
+   (YoutubeExplode allowed for this module only). Post-slice: **1,446/1,446** green.
+   ~~REMAINING for Gate 5: the HaPlay UI slice~~ — CLOSED same day, see item 18.
+
+18. **Gate 5 UI slice — YouTube in HaPlay SHIPPED (Gate 5 complete).**
+   `YouTubePlaylistItem` (persisted RESOLVED stream descriptors + cached display metadata + caption
+   sidecar selections; polymorphic `kind:"youtube"`), `HaPlayPlaybackHelpers.BuildYouTubeUri`,
+   cue+deck mapper wiring (canonical URI; `NotifyNaturalEnd` for auto-follow), MediaRuntime registers
+   `YouTubeSourceModule` via the shared `Playback.YouTubeRuntime` (one preparer/cache for provider AND
+   dialogs — coalescing works app-wide). `AddYouTubeDialog` (+VM, injectable gateway/preparer): paste
+   URL → resolve manifest → pick SEPARATE video stream / audio stream / subtitle track (muxed streams
+   are rarely offered) or audio-only → cache-status hint → "Download & add" with per-phase progress →
+   item carries the resolved descriptors + prepared `.srt` sidecar. Deck: playlist add-menu entry +
+   `youtube://` case in the ShowSession open path (subtitles pass through like file items). Cue player:
+   add-menu entry; the cue row persists the caption sidecar, and — gap fix — `HaPlayShowMapper` now maps
+   `MediaCueNode.Subtitles` onto the clip (`MapCueSubtitles`, mirroring the deck mapper; previously the
+   cue picker's selections were persisted but never mapped to playback). Tests:
+   `YouTubeIntegrationTests` ×5 offline (dialog resolve/prepare with caption sidecar; audio-only;
+   bad-URL validation; canonical-URI + project-JSON round-trip; cue mapper → URI + sidecar subtitle +
+   NotifyNaturalEnd). Post-slice: **1,449/1,449** green; xvfb HAPLAY_SMOKE launch exit 0 with the module
+   registered.
+
+19. **Gate 6 prototype — `S.Media.Source.MMD` SHIPPED (review stages 1–2 + camera-placement preview).**
+   Pure managed module, zero native deps (arch rule: Core/Time only):
+   (a) **Parsers.** `PmxDocument` — PMX 2.0/2.1: UTF-16/UTF-8 text, variable-width indices, vertices
+   with BDEF1/2/4 + SDEF/QDEF skinning reads (SDEF/QDEF evaluated as their linear-blend equivalents),
+   faces, materials, bones incl. IK data (parsed, not yet solved), vertex/group morphs; other morph
+   kinds + trailing sections structurally skipped; every read bounds-checked → `PmxFormatException`
+   (truncation fuzz test sweeps the fixture). `VmdDocument` — Shift-JIS names (CodePages), bone tracks
+   with the packed per-channel Bezier blocks, morph tracks, camera track, 30 fps timeline.
+   (b) **Evaluation.** `MmdAnimator` — MMD Bezier easing (bisection solve, tested), bone track sampling,
+   FK with append/inherit rotation+translation (topologically ordered, cycle-safe), vertex morphs, CPU
+   linear-blend skinning; camera sampling with VMD conventions. Deterministic pure-function-of-time
+   (seek = playhead move; NO physics — review stage 5, deliberately omitted; IK solving is the known
+   stage-6 artifact source on dance feet).
+   (c) **Render + source.** `MmdSoftwareRenderer` — z-buffered flat-shaded rasterizer, MMD→RH
+   conversion, material diffuse + one directional light, back-face culling honoring double-sided
+   materials. `MmdVideoSource` (BGRA32, 30 fps, seekable, finite by motion duration) behind
+   `mmd://?model=…&motion=…&camera=…` URIs with manual camera-override params; `MmdSourceModule`/
+   provider registered in HaPlay's MediaRuntime.
+   (d) **HaPlay camera placement.** `MmdPlaylistItem` (model/motion/camera paths + manual camera fields,
+   persisted) + `AddMmdDialog`: file pickers and camera controls (distance/target/rotation/FOV sliders +
+   preview-time scrubber) driving a LIVE debounced software-rendered preview — the rudimentary 3D
+   camera-placement view the operator asked for; deck playlist + cue add-menu entries; mapper/deck open
+   paths wired.
+   (e) **Tests.** 8 module tests: byte-level PURPOSE-MADE tiny PMX/VMD fixtures (the bundled model/motion
+   assets are non-redistributable → their tests are local-gated): parse, truncation fuzz, animation
+   sampling incl. deterministic seek-back, Bezier endpoints/ease, video-source frames+seek+duration,
+   camera-framing effect; plus the LOCAL-asset test (real YYB Miku + Rolling Girl: 50+ bones, minutes-long
+   motion, most vertices moved 20 s in, model visibly renders at 320×180 — ran GREEN on this box) and a
+   HaPlay mapper/JSON round-trip test. Post-slice: **1,460/1,460** green; xvfb launch smoke exit 0.
+   NEXT (staged): GL renderer with real MMD materials/toon/outline via the first-class layer-surface work
+   (NXT-10) — this module is the consumer that drives that ABI before v1 freezes; IK solving; physics.
+
 ## Verification appendix
 
 ```bash
@@ -476,6 +578,10 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-follow-ups (VU meters / NotifyNaturalEnd / progressive waveform): 1,412 passed / 0 failed
 # post-implementation-pass (items 1–11): 1,416 passed / 0 failed
 # post-authoritative-timeline contract (item 14): 1,423 passed / 0 failed
+# post-closure pass (items 15–16, D10 sidecars): 1,426 passed / 0 failed
+# post-Gate-5 framework slice (item 17, YouTube module): 1,446 passed / 0 failed
+# post-Gate-5 UI slice (item 18, YouTube in HaPlay): 1,449 passed / 0 failed
+# post-Gate-6 prototype (item 19, MMD module + camera preview): 1,460 passed / 0 failed
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

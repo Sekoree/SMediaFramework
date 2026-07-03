@@ -17,6 +17,8 @@ namespace HaPlay.Models;
 [JsonDerivedType(typeof(ImagePlaylistItem), typeDiscriminator: "image")]
 [JsonDerivedType(typeof(SubtitlePlaylistItem), typeDiscriminator: "subtitle")]
 [JsonDerivedType(typeof(TextPlaylistItem), typeDiscriminator: "text")]
+[JsonDerivedType(typeof(YouTubePlaylistItem), typeDiscriminator: "youtube")]
+[JsonDerivedType(typeof(MmdPlaylistItem), typeDiscriminator: "mmd")]
 public abstract record PlaylistItem
 {
     /// <summary>Stable per-instance identity. Lets the same underlying source appear twice in a
@@ -161,6 +163,79 @@ public sealed record TextPlaylistItem : PlaylistItem
     public override bool IsLive => false;
     public override string ToolTip => $"Text · {DisplayName}";
     public override string KindGlyph => "🅣";
+}
+
+/// <summary>An MMD scene (Gate-6 prototype): a PMX model + optional VMD motion + optional VMD camera
+/// motion, rendered by the rudimentary software 3D renderer behind an <c>mmd://</c> URI. When no camera
+/// VMD is set, the manual placement fields below drive the camera — the deck preview IS the
+/// camera-placement view (tweak → replay → see the framing).</summary>
+public sealed record MmdPlaylistItem(string ModelPath) : PlaylistItem
+{
+    public string? MotionPath { get; init; }
+
+    /// <summary>Camera VMD; when set it overrides the manual placement below.</summary>
+    public string? CameraMotionPath { get; init; }
+
+    public int RenderWidth { get; init; } = 1280;
+    public int RenderHeight { get; init; } = 720;
+
+    // Manual camera placement (MMD conventions: orbit target at distance, XYZ rotation in degrees).
+    public double CameraDistance { get; init; } = -35;
+    public double CameraTargetX { get; init; }
+    public double CameraTargetY { get; init; } = 12;
+    public double CameraTargetZ { get; init; }
+    public double CameraRotationXDeg { get; init; }
+    public double CameraRotationYDeg { get; init; }
+    public double CameraRotationZDeg { get; init; }
+    public double CameraFovDeg { get; init; } = 30;
+
+    public override string DisplayName =>
+        string.IsNullOrEmpty(ModelPath) ? "(MMD model unset)" : System.IO.Path.GetFileName(ModelPath);
+    public override bool IsLive => false;
+    public override string ToolTip =>
+        $"MMD · {ModelPath}" +
+        (MotionPath is { Length: > 0 } m ? $" · {System.IO.Path.GetFileName(m)}" : " · bind pose") +
+        (CameraMotionPath is { Length: > 0 } c ? $" · cam {System.IO.Path.GetFileName(c)}" : string.Empty);
+    public override string KindGlyph => "🕺";
+}
+
+/// <summary>A YouTube video prepared into the local cache (Gate 5). Persists the RESOLVED stream
+/// descriptors chosen in the add/edit dialog (muxed streams are rarely offered, so audio and video are
+/// separate stream selections) plus display metadata cached at resolve time. Playback is reliable-mode:
+/// the mapped <c>youtube://</c> URI only opens the locally cached asset — never the network.</summary>
+public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
+{
+    /// <summary>Video title cached at resolve time (display only — refresh by re-resolving).</summary>
+    public string? Title { get; init; }
+
+    public string? Author { get; init; }
+
+    public double? DurationSeconds { get; init; }
+
+    /// <summary>Resolved video stream descriptor (<c>label|codec|container</c>); null = audio-only item.</summary>
+    public string? VideoStreamDescriptor { get; init; }
+
+    /// <summary>Resolved audio stream descriptor (<c>codec|container|language</c>).</summary>
+    public string? AudioStreamDescriptor { get; init; }
+
+    /// <summary>Selected caption-track language code; the prepared cache holds its sidecar .srt.</summary>
+    public string? SubtitleLanguage { get; init; }
+
+    /// <summary>True = the video leg was deliberately not selected (audio-only cue/deck item).</summary>
+    public bool AudioOnly { get; init; }
+
+    /// <summary>Subtitle overlays for playback — filled with the prepared caption sidecar by the dialog;
+    /// same shape as <see cref="FilePlaylistItem.Subtitles"/> so the overlay path is shared.</summary>
+    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
+
+    public override string DisplayName =>
+        !string.IsNullOrWhiteSpace(Title) ? Title! : $"YouTube · {VideoId}";
+    public override bool IsLive => false;
+    public override string ToolTip =>
+        $"YouTube · {VideoId}" +
+        (VideoStreamDescriptor is { } v ? $" · {v.Split('|')[0]}" : " · audio only") +
+        (Author is { Length: > 0 } a ? $" · {a}" : string.Empty);
+    public override string KindGlyph => "▶";
 }
 
 /// <summary>NDI receiver item — identified by the NDI source name. Manual-name items load even when

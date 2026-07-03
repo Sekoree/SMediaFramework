@@ -46,6 +46,8 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Subtitles\S.Media.Subtitles.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Interop\S.Media.Interop\S.Media.Interop.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.YouTube\S.Media.Source.YouTube.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.MMD\S.Media.Source.MMD.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.PortAudio\S.Media.Audio.PortAudio.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.MiniAudio\S.Media.Audio.MiniAudio.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.NDI\S.Media.NDI.csproj" />

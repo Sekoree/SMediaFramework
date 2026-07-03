@@ -1049,16 +1049,19 @@ public sealed class CuePlayerViewModelTests
         vm.SelectedCueNode = cue1;
         vm.StandbySelectedCommand.Execute(null);
         vm.GoCommand.Execute(null);
-        // Let the dispatched trigger-plan run settle — its steps update CurrentCueNode async and
-        // must NOT move the selection back to the fired cue.
-        await Task.Delay(50);
+        // Wait for the dispatched trigger-plan run to settle (fixed 50 ms sleeps flake on a loaded
+        // runner) — its steps update CurrentCueNode async and must NOT move the selection back to
+        // the fired cue.
+        await WaitUntilAsync(
+            () => ReferenceEquals(vm.CurrentCueNode, cue1) && ReferenceEquals(vm.SelectedCueNode, cue2),
+            timeoutMs: 20_000);
         Assert.Same(cue1, vm.CurrentCueNode);
         Assert.Same(cue2, vm.SelectedCueNode);
         Assert.Same(cue2, vm.StandbyCueNode);
 
         // Last cue in the list: nothing after it, selection stays on the fired cue.
         vm.GoCommand.Execute(null);
-        await Task.Delay(50);
+        await WaitUntilAsync(() => ReferenceEquals(vm.CurrentCueNode, cue2), timeoutMs: 20_000);
         Assert.Same(cue2, vm.CurrentCueNode);
         Assert.Same(cue2, vm.SelectedCueNode);
     }
@@ -1187,7 +1190,9 @@ public sealed class CuePlayerViewModelTests
 
         vm.StandbySelectedCommand.Execute(null);
         vm.GoCommand.Execute(null);
-        await Task.Delay(20);
+        // GO runs the trigger plan asynchronously — wait for the executor instead of a fixed delay
+        // (a 20 ms sleep flaked on the loaded CI runner). Exits as soon as the call lands.
+        await WaitUntilAsync(() => Volatile.Read(ref callCount) == 1, timeoutMs: 20_000);
 
         Assert.Equal(1, callCount);
     }

@@ -75,6 +75,16 @@ public partial class MediaPlayerViewModel
                 mediaPath = BuildNdiInputUri(ndi);
                 hasVideo = !ndi.AudioOnly;
                 break;
+            case YouTubePlaylistItem yt:
+                // Prepared-cache asset behind its canonical URI (reliable mode: unprepared selections fail
+                // the open with an actionable error instead of starting a download mid-show).
+                mediaPath = HaPlayPlaybackHelpers.BuildYouTubeUri(yt);
+                hasVideo = !yt.AudioOnly && yt.VideoStreamDescriptor is not null;
+                break;
+            case MmdPlaylistItem mmd:
+                mediaPath = HaPlayPlaybackHelpers.BuildMmdUri(mmd);
+                hasVideo = true; // the MMD source is video-only
+                break;
             case PortAudioInputPlaylistItem paIn:
                 // Live capture through the registry's `padev:` provider (the same URI the cue path uses; the
                 // provider unescapes, so device names with spaces round-trip). Audio-only — no composition.
@@ -196,7 +206,8 @@ public partial class MediaPlayerViewModel
             // and blocking it on the session dispatcher turns any dispatcher stall into a whole-app freeze.
             await _playerShowSession.LoadDocumentAsync(
                 MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
-                    (item as FilePlaylistItem)?.Subtitles)).ConfigureAwait(true);
+                    (item as FilePlaylistItem)?.Subtitles
+                        ?? (item as YouTubePlaylistItem)?.Subtitles)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
@@ -303,7 +314,7 @@ public partial class MediaPlayerViewModel
                 ? NdiAudioDeviceId(outputLineId)
                 : null);
         if (deviceId is not null
-            && session.GetActiveAudioPumpStatsByDevice().TryGetValue(deviceId, out var audio)
+            && session.TryGetActiveAudioPumpStats(deviceId, out var audio)
             && audio.Enqueued > 0)
         {
             driven = true;

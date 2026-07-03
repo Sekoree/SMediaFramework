@@ -222,7 +222,23 @@ public partial class MainViewModel
             await ProjectIO.SaveAsync(snapshot, path);
             CurrentProjectPath = path;
             PushRecentProject(path);
-            ProjectStatus = Strings.Format(nameof(Strings.ProjectSavedStatusFormat), Path.GetFileName(path));
+
+            // D10: every full save also publishes the framework ShowDocument per cue list, so the
+            // saved show runs headless / via the C ABI without HaPlay. Best-effort — a sidecar
+            // problem is reported but never fails the save.
+            var sidecarErrors = new List<string>();
+            var sidecars = await ShowDocumentSidecar.WriteAllAsync(snapshot, path, sidecarErrors);
+
+            var statusParts = new List<string>
+            {
+                Strings.Format(nameof(Strings.ProjectSavedStatusFormat), Path.GetFileName(path)),
+            };
+            if (sidecars.Count > 0)
+                statusParts.Add(Strings.Format(nameof(Strings.ProjectShowSidecarsSavedFormat), sidecars.Count));
+            if (sidecarErrors.Count > 0)
+                statusParts.Add(Strings.Format(nameof(Strings.ProjectShowSidecarFailedFormat),
+                    sidecarErrors.Count, string.Join("; ", sidecarErrors)));
+            ProjectStatus = string.Join(" ", statusParts);
         }
         catch (Exception ex)
         {

@@ -88,6 +88,8 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(ImagePlaylistItem))]
 [JsonSerializable(typeof(SubtitlePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
+[JsonSerializable(typeof(YouTubePlaylistItem))]
+[JsonSerializable(typeof(MmdPlaylistItem))]
 [JsonSerializable(typeof(ControlGraphConfig))]
 [JsonSerializable(typeof(ControlNodeConfig))]
 [JsonSerializable(typeof(ControlConnectionConfig))]

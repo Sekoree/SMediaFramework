@@ -11,6 +11,11 @@ public sealed class FFmpegException : Exception
         ErrorCode = errorCode;
     }
 
+    /// <summary>For failures that have no libav error code (null returns, missing streams).</summary>
+    public FFmpegException(string message) : base(message)
+    {
+    }
+
     internal static unsafe void ThrowIfError(int ret, string operation)
     {
         if (ret >= 0) return;

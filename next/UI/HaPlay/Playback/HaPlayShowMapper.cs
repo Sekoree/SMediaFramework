@@ -183,7 +183,11 @@ public static class HaPlayShowMapper
             // A real FILE cue must fire cue auto-follow when it plays through, even as a bare plain-Stop clip
             // with no trim/fade/loop (which otherwise starts no end monitor and just idles at EOF). Files only:
             // images/text hold deliberately, and live inputs never naturally end.
-            NotifyNaturalEnd = media.Source is FilePlaylistItem,
+            NotifyNaturalEnd = media.Source is FilePlaylistItem or YouTubePlaylistItem,
+            // The cue's picked subtitle tracks (embedded stream indices or sidecar paths — including a
+            // prepared YouTube caption sidecar). Only when the cue is placed on a composition: subtitles
+            // need a canvas. Same mapping as the deck's MediaPlayerShowMapper.MapSubtitles.
+            Subtitles = MapCueSubtitles(media.Subtitles, hasCanvas: primary is not null),
             // Primary placement's full appearance; the fit enum name maps straight to the framework's fit string
             // (MapFit lowercases it). Any additional placements ride along in ExtraPlacements.
             Placement = primary is null ? null : ToShowVideoPlacement(primary),
@@ -261,8 +265,29 @@ public static class HaPlayShowMapper
         // rate / latency) instead of silently opening with provider defaults.
         NDIInputPlaylistItem n => HaPlayPlaybackHelpers.BuildNdiInputUri(n),
         PortAudioInputPlaylistItem p => HaPlayPlaybackHelpers.BuildPortAudioInputUri(p),
+        // Prepared-cache youtube asset behind its canonical URI (reliable mode — see the provider).
+        YouTubePlaylistItem y => HaPlayPlaybackHelpers.BuildYouTubeUri(y),
+        MmdPlaylistItem mmd => HaPlayPlaybackHelpers.BuildMmdUri(mmd),
         _ => null,
     };
+
+    private static IReadOnlyList<ShowSubtitleSelection>? MapCueSubtitles(
+        IReadOnlyList<CueSubtitleSelection>? subtitles, bool hasCanvas)
+    {
+        if (!hasCanvas || subtitles is not { Count: > 0 })
+            return null;
+
+        var mapped = new List<ShowSubtitleSelection>(subtitles.Count);
+        foreach (var s in subtitles)
+        {
+            if (s.StreamIndex is { } idx)
+                mapped.Add(new ShowSubtitleSelection(StreamIndex: idx)); // embedded container stream
+            else if (!string.IsNullOrWhiteSpace(s.Path))
+                mapped.Add(new ShowSubtitleSelection(Path: s.Path)); // sidecar file (StreamIndex stays -1)
+        }
+
+        return mapped.Count > 0 ? mapped : null;
+    }
 
     private static ClipEndBehavior MapEndBehavior(CueEndBehavior behavior) => behavior switch
     {

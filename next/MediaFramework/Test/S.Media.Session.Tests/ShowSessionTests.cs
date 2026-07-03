@@ -679,12 +679,16 @@ public sealed class ShowSessionTests
         // The route wired to the host's device (so the backend was NOT asked to create "ndi:cam").
         Assert.True(session.GetActiveAudioPumpStatsByDevice().ContainsKey("ndi:cam"),
             "the route must be wired to the host-provided output's device");
+        // The allocation-free single-device lookup (the UI health polls) agrees with the dictionary view.
+        Assert.True(session.TryGetActiveAudioPumpStats("ndi:cam", out _));
+        Assert.False(session.TryGetActiveAudioPumpStats("no-such-device", out _));
 
         await session.StopAsync(fade: false);
 
         Assert.Equal(0, borrowed.DisposeCount);        // borrowed → the session never disposes it
         Assert.True(released >= 1, "the lease's Release hook must run on teardown");
         Assert.False(session.GetActiveAudioPumpStatsByDevice().ContainsKey("ndi:cam")); // cleared on stop
+        Assert.False(session.TryGetActiveAudioPumpStats("ndi:cam", out _)); // cleared on stop
     }
 
     [Fact]

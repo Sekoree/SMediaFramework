@@ -45,9 +45,7 @@
   <data name="FallbackPathPlaceholder" xml:space="preserve">
     <value>PNG / JPEG path…</value>
   </data>
-  <data name="BrowseButton" xml:space="preserve">
-    <value>Browse…</value>
-  </data>
+
   <data name="ShowWhenNoMediaPlaying" xml:space="preserve">
     <value>Show when no media playing</value>
   </data>
@@ -1529,6 +1527,129 @@
   </data>
   <data name="ProjectSavedStatusFormat" xml:space="preserve">
     <value>Saved '{0}'.</value>
+  </data>
+  <data name="ProjectShowSidecarsSavedFormat" xml:space="preserve">
+    <value>{0} show document(s) exported.</value>
+  </data>
+  <data name="ProjectShowSidecarFailedFormat" xml:space="preserve">
+    <value>Show document export skipped {0}: {1}</value>
+  </data>
+  <data name="AddYouTubeDialogTitle" xml:space="preserve">
+    <value>Add YouTube video</value>
+  </data>
+  <data name="EditYouTubeDialogTitle" xml:space="preserve">
+    <value>Edit YouTube video</value>
+  </data>
+  <data name="YouTubeUrlLabel" xml:space="preserve">
+    <value>Video URL or ID</value>
+  </data>
+  <data name="YouTubeResolveButton" xml:space="preserve">
+    <value>Resolve</value>
+  </data>
+  <data name="YouTubeUrlNotRecognized" xml:space="preserve">
+    <value>Not a recognizable YouTube URL or video id.</value>
+  </data>
+  <data name="YouTubeResolveFailedFormat" xml:space="preserve">
+    <value>Resolve failed: {0}</value>
+  </data>
+  <data name="YouTubeResolveFirstHint" xml:space="preserve">
+    <value>Resolve the video first to pick its streams.</value>
+  </data>
+  <data name="YouTubeSelectVideoStreamHint" xml:space="preserve">
+    <value>Select a video stream (or enable audio-only).</value>
+  </data>
+  <data name="YouTubeVideoStreamLabel" xml:space="preserve">
+    <value>Video stream</value>
+  </data>
+  <data name="YouTubeAudioStreamLabel" xml:space="preserve">
+    <value>Audio stream</value>
+  </data>
+  <data name="YouTubeSubtitleTrackLabel" xml:space="preserve">
+    <value>Subtitle track</value>
+  </data>
+  <data name="YouTubeNoSubtitlesOption" xml:space="preserve">
+    <value>(no subtitles)</value>
+  </data>
+  <data name="YouTubeAudioOnlyCheckbox" xml:space="preserve">
+    <value>Audio only (skip the video stream)</value>
+  </data>
+  <data name="YouTubeDownloadAndAddButton" xml:space="preserve">
+    <value>Download &amp; add</value>
+  </data>
+  <data name="YouTubePrepareFailedFormat" xml:space="preserve">
+    <value>Download/cache failed: {0}</value>
+  </data>
+  <data name="YouTubePhaseResolving" xml:space="preserve">
+    <value>Resolving streams…</value>
+  </data>
+  <data name="YouTubePhaseDownloadingVideo" xml:space="preserve">
+    <value>Downloading video stream…</value>
+  </data>
+  <data name="YouTubePhaseDownloadingAudio" xml:space="preserve">
+    <value>Downloading audio stream…</value>
+  </data>
+  <data name="YouTubePhaseRemuxing" xml:space="preserve">
+    <value>Combining into local asset…</value>
+  </data>
+  <data name="YouTubePhaseReady" xml:space="preserve">
+    <value>Ready (cached)</value>
+  </data>
+  <data name="YouTubeAlreadyCachedStatus" xml:space="preserve">
+    <value>This selection is already cached — adding is instant.</value>
+  </data>
+  <data name="YouTubeNotCachedStatus" xml:space="preserve">
+    <value>Not cached yet — the selected streams download when you add.</value>
+  </data>
+  <data name="AddYouTubeMenuItem" xml:space="preserve">
+    <value>YouTube video…</value>
+  </data>
+  <data name="AddMmdDialogTitle" xml:space="preserve">
+    <value>Add MMD scene</value>
+  </data>
+  <data name="EditMmdDialogTitle" xml:space="preserve">
+    <value>Edit MMD scene</value>
+  </data>
+  <data name="AddMmdMenuItem" xml:space="preserve">
+    <value>MMD scene…</value>
+  </data>
+  <data name="MmdModelPathLabel" xml:space="preserve">
+    <value>Model (.pmx)</value>
+  </data>
+  <data name="MmdMotionPathLabel" xml:space="preserve">
+    <value>Motion (.vmd, optional)</value>
+  </data>
+  <data name="MmdCameraMotionPathLabel" xml:space="preserve">
+    <value>Camera motion (.vmd, optional — overrides manual camera)</value>
+  </data>
+  <data name="MmdModelPathRequired" xml:space="preserve">
+    <value>Pick an existing .pmx model file.</value>
+  </data>
+  <data name="MmdPreviewFailedFormat" xml:space="preserve">
+    <value>Preview failed: {0}</value>
+  </data>
+  <data name="MmdCameraSectionLabel" xml:space="preserve">
+    <value>Camera placement</value>
+  </data>
+  <data name="MmdPreviewTimeLabel" xml:space="preserve">
+    <value>Preview time (s)</value>
+  </data>
+  <data name="MmdDistanceLabel" xml:space="preserve">
+    <value>Distance</value>
+  </data>
+  <data name="MmdTargetLabel" xml:space="preserve">
+    <value>Target X/Y/Z</value>
+  </data>
+  <data name="MmdRotationLabel" xml:space="preserve">
+    <value>Rotation X/Y/Z (°)</value>
+  </data>
+  <data name="MmdFovLabel" xml:space="preserve">
+    <value>FOV (°)</value>
+  </data>
+  <data name="MmdRenderSizeLabel" xml:space="preserve">
+    <value>Render size</value>
+  </data>
+  <data name="BrowseButton" xml:space="preserve">
+    <value>Browse…</value>
   </data>
   <data name="ProjectSaveFailedFormat" xml:space="preserve">
     <value>Save failed: {0}</value>

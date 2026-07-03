@@ -653,8 +653,15 @@ gating step together with the app's NativeAOT publish; NXT-15 closed.)
       voices, HOLD/fallback, hot output add/remove, live-source retry, per-cell audio matrices, descriptors).
 - [x] Default flipped (2026-07-01) and, after the hardware soak, the legacy engines DELETED (2026-07-02) —
       the re-filed "retire the old playback god-objects" item below is done.
-- [ ] UI persists only **view-state** on top of Session's `ShowDocument` (D10) — the remaining Phase-8 exit
-      item, carried as a standing gate (HaPlayProject still persists the full model; the mapper bridges).
+- [x] UI persists only **view-state** on top of Session's `ShowDocument` (D10) — closed 2026-07-02 with the
+      POST-PIVOT resolution: UI layout was already a per-machine sidecar, and every full project save now also
+      publishes the framework `ShowDocument` per cue list (`<project>.show.<n>.json`, mapped by the same
+      `HaPlayShowMapper` the live session uses, validated by `ShowDocumentValidator` before writing) — so a
+      saved show is directly runnable headless / via the C ABI without HaPlay. The project file remains the
+      app's editing source of truth: decks/playlists, soundboards, control graphs and action endpoints are
+      app-domain data, NOT show-execution data — pushing them into the framework document would contradict
+      the shipped convergence architecture (per-player 1-cue deck sessions, S.Control-owned profiles). The
+      original "runtime/data moves down into Session" wording predates the lift-and-shift pivot.
 
 ### Historical: the abandoned thin-MVVM rebuild (kept for its lessons — XAML/AOT gotchas, preview-surface findings)
 

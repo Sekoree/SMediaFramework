@@ -366,6 +366,10 @@
                                 <MenuItem Header="{x:Static res:Strings.NdiInputMenuHeader}"
                                           Command="{Binding AddNDIInputCommand}"
                                           IsVisible="{Binding IsNdiAvailable}" />
+                                <MenuItem Header="{x:Static res:Strings.AddYouTubeMenuItem}"
+                                          Command="{Binding AddYouTubeCommand}" />
+                                <MenuItem Header="{x:Static res:Strings.AddMmdMenuItem}"
+                                          Command="{Binding AddMmdCommand}" />
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>

@@ -83,6 +83,8 @@
                       Command="{Binding AddNdiInputCueCommand}"
                       IsVisible="{Binding IsNdiAvailable}" />
             <MenuItem Header="{x:Static res:Strings.AddPortAudioInputCueButton}" Command="{Binding AddPortAudioInputCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddYouTubeMenuItem}" Command="{Binding AddYouTubeCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddMmdMenuItem}" Command="{Binding AddMmdCueCommand}" />
             <Separator />
             <MenuItem Header="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />

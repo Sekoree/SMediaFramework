@@ -25,6 +25,7 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
     <!-- Decode / encode (Phase 2) -->
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.1.0" />
+    <PackageVersion Include="System.Text.Encoding.CodePages" Version="9.0.0" />
     <!-- Present / GPU (Phase 2/3) -->
     <PackageVersion Include="SDL3-CS" Version="3.4.10.4" />
     <PackageVersion Include="SDL3-CS.Linux" Version="3.4.10.4" />

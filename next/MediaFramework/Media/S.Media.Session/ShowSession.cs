@@ -79,6 +79,12 @@ public sealed class ShowSession : IAsyncDisposable
     // host output is returned with DisposeOutputOnRuntimeDispose=false (+ an optional release callback), so the
     // session NEVER disposes it (NXT-01: disposing a borrowed SDL/NDI output is a use-after-reload defect).
     // Null ⇒ headless discard. Lets the GUI surface composited video to its output lines.
+    // RELOAD ORDERING CONTRACT (NXT-20): during a document reload the factory is invoked for the NEW graph
+    // while the OLD compositions still hold their leases — staging before teardown is what keeps a failed
+    // load from destroying the running show (NXT-12). A host with exclusive/single-holder output lines must
+    // therefore hand a still-bound line over (keep the existing acquisition and return the same output, as
+    // HaPlay's hold-across-reload does) rather than release-then-reacquire, and must detach a dropped line
+    // from the live compositions before releasing it.
     private readonly Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? _videoOutputFactory;
     // Host compositor factory (canvas format → compositor). Null ⇒ the default CPU compositor; a host that has a
     // GL context can inject a GPU/warp compositor so session compositions use the intended zero-copy GPU path
@@ -1805,6 +1811,32 @@ public sealed class ShowSession : IAsyncDisposable
         }
 
         return result;
+    }
+
+    /// <summary>Allocation-free single-device variant of <see cref="GetActiveAudioPumpStatsByDevice"/> for the
+    /// per-line 1 Hz health polls (each wants exactly one device id): walks the same lock-free view and sums
+    /// only matching pumps instead of building the whole dictionary per poll.</summary>
+    public bool TryGetActiveAudioPumpStats(string deviceId, out (long Enqueued, long Dropped) stats)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(deviceId);
+        long enqueued = 0, dropped = 0;
+        var found = false;
+        foreach (var pump in _audioPumpsView)
+        {
+            if (!string.Equals(pump.DeviceId, deviceId, StringComparison.Ordinal))
+                continue;
+            try
+            {
+                var st = pump.Router.GetPumpStats(pump.OutputId);
+                enqueued += st.Enqueued;
+                dropped += st.Dropped;
+                found = true;
+            }
+            catch (ArgumentException) { /* output retired between snapshot publish and read */ }
+        }
+
+        stats = (enqueued, dropped);
+        return found;
     }
 
     /// <summary>Republishes the lock-free composition view after a load/dispose changes <see cref="_compositions"/>.

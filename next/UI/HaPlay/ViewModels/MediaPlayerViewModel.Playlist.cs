@@ -217,6 +217,39 @@ public partial class MediaPlayerViewModel
 
     private bool CanAddNDIInput() => IsNdiAvailable;
 
+    /// <summary>Gate 6 — opens the MMD scene dialog (model/motion pickers + the rudimentary 3D
+    /// camera-placement preview) and adds the produced item to the playlist.</summary>
+    [RelayCommand]
+    private async Task AddMmdAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.AddMmdDialogViewModel();
+        var dialog = new Views.Dialogs.AddMmdDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MmdPlaylistItem?>(top);
+        if (result is null) return;
+        PlaylistItems.Add(result);
+        SelectedPlaylistItem = result;
+    }
+
+    /// <summary>Gate 5 — opens the YouTube stream-selection dialog (resolve → pick video/audio/subtitle
+    /// streams → download &amp; cache) and adds the produced item. Muxed streams are rarely offered, so the
+    /// dialog selects a separate video-only + audio-only pair; playback later runs from the local cache.</summary>
+    [RelayCommand]
+    private async Task AddYouTubeAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.AddYouTubeDialogViewModel();
+        var dialog = new Views.Dialogs.AddYouTubeDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<YouTubePlaylistItem?>(top);
+        if (result is null) return;
+        PlaylistItems.Add(result);
+        SelectedPlaylistItem = result;
+    }
+
     /// <summary>Opens the subtitle track picker for the selected file item and stores the chosen tracks +
     /// font/placement overrides on it. Applies on the item's next load/play (the ShowSession clip
     /// composition renders them as a top overlay layer).</summary>

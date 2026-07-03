@@ -57,6 +57,39 @@ internal static class HaPlayPlaybackHelpers
         return $"padev://{Uri.EscapeDataString(item.DeviceName)}?{string.Join('&', query)}";
     }
 
+    /// <summary>Builds the <c>mmd://</c> URI for an MMD scene item — the manual camera placement only
+    /// applies when no camera VMD is set (the source prefers the camera track).</summary>
+    internal static string BuildMmdUri(MmdPlaylistItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return S.Media.Source.MMD.MmdSourceUri.Build(new S.Media.Source.MMD.MmdSourceRequest(
+            item.ModelPath,
+            item.MotionPath,
+            item.CameraMotionPath,
+            item.RenderWidth,
+            item.RenderHeight,
+            (float)item.CameraDistance,
+            new System.Numerics.Vector3((float)item.CameraTargetX, (float)item.CameraTargetY, (float)item.CameraTargetZ),
+            new System.Numerics.Vector3((float)item.CameraRotationXDeg, (float)item.CameraRotationYDeg, (float)item.CameraRotationZDeg),
+            (float)item.CameraFovDeg));
+    }
+
+    /// <summary>Builds the canonical <c>youtube://</c> URI for a prepared item — the provider maps it to the
+    /// locally cached asset (reliable mode: an unprepared selection fails the open, never starts a download).</summary>
+    internal static string BuildYouTubeUri(YouTubePlaylistItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return S.Media.Source.YouTube.YouTubeSourceUri.Build(
+            item.VideoId,
+            new S.Media.Source.YouTube.YouTubeStreamSelection(
+                item.AudioOnly ? null : item.VideoStreamDescriptor,
+                item.AudioStreamDescriptor,
+                item.SubtitleLanguage)
+            {
+                IncludeVideo = !item.AudioOnly,
+            });
+    }
+
     /// <summary>
     /// The default file open options for deck / cue / playlist-cache file playback: hardware-decode + Windows
     /// D3D11 shared-handle GL retention gated on <see cref="HardwareVideoDecodeGate"/> and the absence of NDI
