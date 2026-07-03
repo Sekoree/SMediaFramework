@@ -88,7 +88,7 @@ public sealed class CuePlayerViewInteractionTests
         DispatchUi(() =>
         {
             var vm = new CuePlayerViewModel();
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             cue.SourceOrAction = "/tmp/test.mp3";
             vm.MediaCueExecutor = async (_, _) =>
@@ -128,7 +128,7 @@ public sealed class CuePlayerViewInteractionTests
         DispatchUi(() =>
         {
             vm = new CuePlayerViewModel();
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             cue.SourceOrAction = "/tmp/test.mp4";
             vm.MediaCueExecutor = async (_, _) =>
@@ -173,7 +173,7 @@ public sealed class CuePlayerViewInteractionTests
             vm.CueClipModelStaleCallback = () => staleMarks++;
             vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => { liveUpdates++; return Task.CompletedTask; };
 
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             vm.AddVideoPlacementCommand.Execute(null);
             var placement = Assert.Single(vm.VisibleVideoPlacements);
@@ -199,7 +199,7 @@ public sealed class CuePlayerViewInteractionTests
             vm.CueClipModelStaleCallback = () => staleMarks++;
             vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => { liveUpdates++; return Task.CompletedTask; };
 
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             vm.AddVideoPlacementCommand.Execute(null);
             var placement = Assert.Single(vm.VisibleVideoPlacements);

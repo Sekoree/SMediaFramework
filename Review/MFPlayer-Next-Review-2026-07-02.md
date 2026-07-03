@@ -886,6 +886,227 @@ SessionSmoke exit 0; headless app launch clean):
    27/27; full sln 1,494/0. Tuning knob if the operator still wants looser: AngularErp (lower =
    softer), then VelocityIterations.
 
+35. **MMD PHYSICS — XR-ANIMATOR ALIGNMENT + SKIRT-JITTER ROOT CAUSE (operator re-test 2026-07-03:
+   "skirt still gets stuck in the body; upper parts of the hair look quite stiff; XR Animator works
+   best").** Studied the ACTUAL XR Animator physics (jThree MMDplugin `v2.1.2_jThree.MMD.js` + ammo
+   worker — not the stock three.js file): STOP_ERP 0.475 ✓ (already ours), authored limits passed to
+   Bullet VERBATIM (no clamping), real btBoxShape everywhere, fixedTimeStep 1/60 with maxSubSteps ≤ 9,
+   and — the notable extra — a supervisory `bone_constraint` layer that clamps physics-bone rotations
+   and RESETS rigid bodies onto their bones on violation (their anti-stuck; Bullet gets skirts stuck
+   too, XR Animator just un-sticks them).
+   (a) **Upper-hair stiffness**: our 5° angular-lock clamp (a babylon/Havok workaround) froze the
+   upper-hair joints' authored ±2–5° ranges. Limits are now verbatim except sub-degree EPSILON-LOCKS
+   (±0.1° tail authoring, < 1°) which stay collapsed to always-active equality rows — as
+   boundary-triggered ranges their warm-started impulse dies every dip inside the tiny window and
+   whips spin segments (measured 2× bone-spacing artifacts). Upper strand bend now 16-17° avg vs 12.7°
+   bind (was pinned at bind).
+   (b) **"Skirt stuck" was actually a violent 2-frame LIMIT CYCLE** (measured: plates 0_1/0_2
+   teleporting 1–1.5 units EVERY frame at t≈3.4–4.6 s while the body stands still — flickering through
+   the torso): the interim rotational contact-position pass (10 NGS iterations to convergence, ±0.15
+   rad rotational teleports per contact per iteration) fought the ring/joint position pass, each
+   undoing the other. Replaced with TRUE Bullet split impulse: penetration solved as PSEUDO velocities
+   alongside the velocity rows (same Jacobians/effective masses, torque at the arm, accumulator ≥ 0),
+   integrated once after the real integration and discarded — no artificial separating velocity on
+   resting plates AND no sequential position teleports. SplitImpulseErp 0.4, recovery speed cap 20 u/s.
+   (c) **Anti-stuck supervisor** (XR's reset, generalized): a dynamic body deeper than 0.6× the smaller
+   bounding radius inside a KINEMATIC collider for 24 consecutive frames (~0.8 s — far beyond legit
+   crouch transients; the FK pose is itself penetrating there, so hair-trigger resets re-bury bodies,
+   measured before widening) snaps onto its animated bone pose at the START of the next frame (the
+   chain snap then re-anchors children within the same frame — no rendered pop). Fires 0× in 60 s of
+   Rolling Girl — pure safety net for the operator's stuck states. Diagnostics hook `DebugStuckReset`.
+   (d) MaxSubstepsPerFrame 4→8 (XR ≤ 9); MaxAngularCorrection kept at 0.15 (measured: 0.5 lets the
+   position pass itself tunnel bodies through neighbors — it doubles as the anti-tunneling guard).
+   *Verification*: max tail segment stretch 1.000× (was 2.06× mid-fix), min skirt-hip 0.853 (was 0.160
+   with the limit cycle), plate trajectory at the former jitter window now stationary to ±0.01 units,
+   upper/full strand bend 16.2°/64.2° avg with 73°/171° whip maxima, supervisor resets 0, MMD tests
+   35/35, full sln 1,502/0. Bisect methodology mattered: three plausible culprits (unclamped limits,
+   raised angular cap, supervisor) were each exonerated/confirmed by exact-baseline-constant runs
+   before touching the real one (chaotic-system peak metrics vary run to run — only the exact-config
+   comparison was trustworthy).
+
+36. **MMD PHYSICS — XR ANIMATOR'S REMAINING ENHANCEMENTS PORTED (operator 2026-07-03: skirt glitches
+   within first 20 s in the APP, tie tangles over time, upper hair reads as solid blocks; "does XR
+   Animator have any other enhancements?").** Yes — inventoried the jThree plugin and ported the three
+   that map onto the symptoms:
+   (a) **Stop-ERP on limit rows** (`c.setParam(2, MMD.STOP_ERP=0.475)` — set explicitly by both
+   three.js and XR Animator): violated RANGE limits now carry a velocity-level restoring bias
+   (0.475·error/h, capped 10 rad/s against Euler-±π wrap kicks). This was the missing mechanism behind
+   the TIE tangle: its joints author ±5° on all axes with no springs, and a range row without stop-ERP
+   only cancels approach velocity — violent motion winds segments far past the window and the weak
+   positional recovery leaves them knotted. Also firms up the upper-hair ranges against whip spins.
+   (b) **Physics fade-in** (XR's `_reset_rigid_body_physics_` countdown): after ANY reset (playback
+   start, seek, > 0.5 s stall) every body FOLLOWS ITS BONE for 0.5 s, then dynamics resume from the
+   exactly-following pose. A cold start on a mid-dance FK pose interpenetrating the colliders is how
+   the app opened with an exploding skirt — the operator's "first 20 seconds" report is an app-side
+   reset/stall scenario the fixed-cadence probes never exercised. (Epsilon on the countdown gate:
+   15 × (1/30f) leaves ~3e-8 and the last fade frame becomes cadence-dependent otherwise — found via
+   the 30-vs-60 consistency test.)
+   (c) **Softer locked-chain settle** (LockedErp 0.25 vs 0.475 for ranges): Bullet has NO joint
+   position pass at all — locked segments corrected at 0.475/substep in ours read as one solid block
+   in slow motion (the "stiff blocks" hair). Upper-strand bend avg 16.2°→18.7° over a 12.7° bind.
+   Not ported (documented for the future): XR's per-model parameter files (`rigid_default` damping
+   scales / rigid disabling / `rigid_filter`, per-model `bone_constraint` windows, physics_maxSubSteps
+   per model) — they tune specific models by hand; our equivalents would be mmd:// URI knobs.
+   *Verification*: NEW app-cadence torture probe (12–22 ms frame jitter, 600 ms stalls every 15 s,
+   backward seek at t=25): skirt-hip stays in bind range (0.857) THROUGH stalls and seek, tie kink
+   peaks 69° transient and always recovers, no non-finite states; fixed-cadence battery unchanged-good
+   (stretch 1.000×, skirt 0.853, full-strand 66.8° avg); MMD tests 35/35 (KinematicDrive consistency
+   fixed by the fade epsilon; two rigs warm the fade out first); full sln 1,502/0.
+
+37. **MMD BAKED (PRE-RENDERED) PHYSICS — the architectural answer (operator 2026-07-03: preview frames
+   look right but LIVE playback is glitchy; reference MMD renders look "heavy"/"wavy"; "is there some
+   way to pre-render the physics?").** The observation was the diagnosis: frame-stepping resets physics
+   into the bone-following fade (clean FK pose), while live playback rides the real-time solver and its
+   whole failure surface (render cadence, stalls, resets, chaos). The MMD reference videos are
+   themselves OFFLINE forward simulations — so we now do the same: `MmdBakedPhysics` bakes the
+   simulation once, deterministically forward on the 30 fps VMD timeline (1.5 s settle first), storing
+   every physics-driven bone PARENT-RELATIVE per frame; playback samples the bake (slerp) chained onto
+   the live FK parents — a pure function of time: seek-exact, cadence-immune, identical every play.
+   `MmdPhysicsBakeCache` persists bakes to LocalApplicationData/mfplayer/mmd-bake keyed by
+   (model, motion, size, mtime, solver version), atomic .partial→rename, coalesced background bake on
+   first open (live physics meanwhile, hot-swap when it lands) — the YouTube reliable-mode pattern.
+   Animator grew a baked-evaluate path (one transform-order sweep: driven bones chain baked locals,
+   FK bones re-chain) and pose-only bake hooks; both MmdVideoSource and MmdGlLayerSurface prefer the
+   bake. *Measured*: Rolling Girl (5,823 frames) bakes in 31.7 s → 16.9 MB cache; baked playback under
+   the app-cadence torture: stretch exactly 1.000×, skirt-hip in bind range, 236 fps evaluation, and
+   bit-identical results at any cadence by construction. Tests: bake determinism + disk round-trip,
+   seek-independence, cache write-once/load-instant (38/38 MMD).
+   Follow-ups agreed with the operator: bake-on-add UI (button/progress in the dialog) as part of the
+   media-properties-dialog work; live-bake remains the fallback until the cache warms.
+
+38. **Classic.Avalonia THEME — PORTED TO AVALONIA 12 (compiles; application to HaPlay pending).** The
+   operator vendored BAndysc/Classic.Avalonia (Avalonia 11.3) into next/External and added it to the
+   sln, which broke the build (NU1008 — inline versions under Central Package Management). Port work:
+   CPM-ified the three core projects (Classic.Avalonia.Theme, .ColorPicker, Classic.CommonControls)
+   onto the central Avalonia 12.0.5 pins (added Avalonia.Skia pin), retargeted net10.0; REMOVED the
+   DataGrid + Dock theme projects from the sln (operator call — HaPlay uses TreeDataGrid, not
+   DataGrid; files remain on disk). API deltas fixed: SKPaint.FilterQuality → per-draw
+   SKSamplingOptions (SkiaSharp 3); TopLevel.PlatformSettings → Application.Current.PlatformSettings;
+   Avalonia 12 REMOVED the old window chrome (CaptionButtons/TitleBar) → VENDORED equivalents into the
+   theme (Utils/CaptionButtons.cs with the 11 template contract PART_Close/Restore/Minimize/FullScreen
+   + Utils/TitleBar.cs adding drag/double-click-maximize), CaptionButtonsEx now uses the new public
+   Window.IsDialog instead of private-field reflection; dropped dead 11-only XAML
+   (ExtendClientAreaChromeHints, VisualLayerManager.IsPopup/ChromeOverlayLayer); SystemDecorations is
+   no longer styleable → platform choice moved to ClassicTheme's window Loaded hook using the renamed
+   Window.WindowDecorations. Sln 1,505/0. NEXT (item 39+): apply ClassicTheme to HaPlay, author a
+   Classic-style TreeDataGrid ControlTheme, then the UX overhaul (consistent Add menus, cancel-safe
+   item adds, visible remove buttons, one-script-per-window Control editor, dialogs for advanced
+   functions, SVG icon set replacing broken emoji).
+
+39. **YOUTUBE SEEK — FIXED (operator: forward seek "hangs then video fast-forwards to the position",
+   backward seek "audio plays but video stuck"; test asset qdXcG-Fg2Dk).** Bottom-up diagnosis with the
+   operator's actual cached asset exonerated the decode layer immediately (MediaContainerDecoder seeks
+   frame-exact in 10–170 ms both directions). Root cause one line up the stack:
+   `FFmpegModule.OpenVideo` wraps the container's video track in `ContainerOwnedVideoSource`, which
+   implemented IVideoSource but NOT ISeekableSource — and `VideoPlayer.CanSeek` gates the video seek on
+   exactly that interface. Coordinated seeks therefore moved audio + master clock while video kept
+   decoding from the old position: backward = stale future-PTS frames (frozen picture), forward = every
+   frame late → the pump chews through them at decode speed ("fast-forward") after the sync gate's
+   timeout ("the hang"). Regular local files never hit it because the ATOMIC OpenAsync path hands out
+   the shared-demux track directly (which IS seekable) — only the registry OpenVideo path (what the
+   YouTube provider delegates to) lost the interface in the wrapper. Fix: the wrapper forwards
+   ISeekableSource (Duration/Position from the inner track, Seek → container.SeekPresentation —
+   identical semantics to the track's own Seek; live streams still throw, matching the atomic path).
+   Regression test `RegistryVideoSource_IsSeekable_AndSeeksTheDecodedStream` (lavfi-generated mkv,
+   forward + backward seeks through the registry). Verified on the operator's cached 1080p asset:
+   frame-exact landings, 18 ms forward / 13 ms backward. FFmpeg tests 20/20; sln 1,506/0.
+
+40. **MEDIA PROPERTIES DIALOG (operator: "MMD scene parameters can't be changed after the dialog is
+   dismissed" + "a common properties dialog with per-type tabs: file audio/subtitle tracks, YouTube
+   variant re-selection + cache, details tab with resolution/bitrate/duration").** One dialog for every
+   playlist item kind, opened from the playlist context menu ("Properties…", `ShowItemPropertiesAsync`).
+   Architecture: the VM works on a COPY — every edit replaces `Current` via record `with` (same
+   `PlaylistItem.Id`, so cue references and `_currentPlaylistItem` stay valid), only OK hands the result
+   back; nested editors reuse the EXISTING add dialogs' edit mode (`LoadFromExisting`/`TryCommit`
+   already preserved Id — they were just never invoked). Tabs: **Details** (all kinds — static facts
+   instantly, then probed container facts merged from a worker via the NEW
+   `MediaStreamProbe.ProbeContainer` → `MediaContainerInfo` (format/duration/bit rate/size + stream
+   table; `MediaStreamInfo` gained a `BitRate` init prop from codecpar) — YouTube items probe their
+   PREPARED CACHE asset); **Tracks** (file — audio-track combo sharing the context-menu probe path +
+   subtitle picker reuse); **Scene** (MMD — summary rows, "Edit scene…" → AddMmdDialog edit mode, and
+   the operator-requested **"Bake physics now"** button with a progress bar via the new
+   `MmdPhysicsBakeCache.BakeAsync` (joins a running background bake, else bakes with 0..1 progress) +
+   `IsCached` status line); **Streams** (YouTube — descriptor/cache rows, "Change streams…" →
+   AddYouTubeDialog edit mode which re-prepares the cache). Also per the operator's "always pre-bake if
+   possible": `StartBackgroundPhysicsBake` fires the shared coalesced bake the moment an MMD item is
+   ADDED or EDITED (skips no-physics/no-motion/missing-files/already-cached), so first play opens the
+   cache instead of baking during the show. 9 VM tests (`MediaPropertiesDialogViewModelTests`) with
+   injected probes: Id preservation across track/subtitle edits, foreign-Id rejection, detail-row
+   building, bake-status state machine, format helpers. Sln 1,515/0.
+
+41. **CUE PLAYER: MMD + YOUTUBE FIRST-CLASS (operator: "cue player cannot play MMD/YouTube; manage
+   routing/video position in the bottom drawer — currently no routed outputs possible for these").**
+   Root cause was NOT the mapping (HaPlayShowMapper already resolved `mmd://`/`youtube://` descriptor
+   URIs, and the cue ShowSession uses MediaRuntime.Registry which registers both modules) but the
+   drawer's capability gates: `CueNodeViewModel.ApplyLiveSourceDefaults` only knew PortAudio + NDI, so
+   an MMD/YouTube cue landed with SourceHasVideo/SourceHasAudio = false → the Video/Audio tabs never
+   showed → no placement or routing could be authored → the mapped clip had no canvas and explicit
+   silence. Fix: MMD case (video-only, 30 fps BGRA at RenderWidth×Height) + YouTube case (stereo
+   audio, video unless AudioOnly) in the defaults switch — which also HEALS previously saved cues,
+   because FromModel assigns MediaSourceItem after the persisted flags, so the defaults re-derive on
+   load. Add-path polish: a YouTube cue now probes its PREPARED CACHE asset like a file (exact
+   duration/channels/fps/resolution + embedded track choices; metadata-duration fallback), an MMD cue
+   gets its duration from the motion VMD (auto-follow at motion end) and starts the shared background
+   physics pre-bake (helper moved to `HaPlayPlaybackHelpers.StartBackgroundPhysicsBake`, shared with
+   the deck add/edit paths). Mapper: `NotifyNaturalEnd` now includes `MmdPlaylistItem` with a motion
+   (MmdVideoSource exhausts at the VMD's end — bind-pose scenes render indefinitely and stay
+   opt-out). `CueListJsonContext` gained YouTube/MMD registrations — verified REDUNDANT (source-gen
+   resolves `[JsonDerivedType]` subtypes automatically; round-trip passed without them) but kept for
+   consistency with the other six, with a regression round-trip test either way. Tests: 4 new
+   (cue-list JSON round-trip, MMD/YouTube capability flags, descriptor-URI mapping) + NotifyNaturalEnd
+   matrix extended. Sln 1,519/0.
+
+42. **HAPLAY VISUAL OVERHAUL (operator's #15 list — theme application + UX round).** ClassicTheme now
+   IS HaPlay's theme: App.axaml swaps FluentTheme → `<ClassicTheme />` (in-repo Avalonia-12 port from
+   item 38; HaPlay references the Theme + Theme.ColorPicker projects; AvaloniaEdit keeps its Fluent
+   styles). NEW `Styles/ClassicTreeDataGrid.axaml`: a self-contained Classic ControlTheme set for
+   TreeDataGrid (the theme repo ships none) — mirrors the package's Generic.axaml template contract
+   (PART names, editing states) restyled classic: sunken ClassicBorderDecorator well on Window white,
+   raised 3D column headers (RaisedPressed on click), solid Highlight selection with HighlightText,
+   and the Win95 +/- boxed tree expander lifted from the theme's TreeViewItem. EMOJI → VECTOR ICONS:
+   new `Views/AppIcons.cs` (24×24 StreamGeometry set: transport, workspaces, gear/close/plus/pin/
+   warning/info/blocked/duplicate/loop/shuffle/refresh/lock + media kinds) used via PathIcon
+   everywhere the old emoji rendered as tofu — sidebar workspace items (WorkspaceItem now carries a
+   StreamGeometry), deck transport (prev/play/pause/next/stop), gear menus, popout buttons, toast
+   info/warn/error/pin/close, playlist kind icons (PlaylistItemIconConverter replaces KindGlyph in
+   the row template), soundboard loop badge, mapping duplicate, trigger remove, Now-Playing seek
+   padlock. App-level styles paint PathIcon with ControlText and flip to HighlightText inside
+   selected rows. UX items from the operator's list: (a) Add-menu naming normalized to "+ Type…"
+   in BOTH the cue "+ Add cue" and playlist "+ Add" menus; (b) "+ Media…" is now CANCEL-SAFE — the
+   picker runs first and no placeholder cue is created on dismiss (the old seeded-empty-cue flow
+   removed; `AddEmptyMediaCue` kept internal for test fixtures, ~30 test call sites migrated);
+   (c) VISIBLE playlist "Remove" (with ✕ icon) + "Properties…" buttons beside "+ Add" (context menu
+   unchanged); (d) ONE SCRIPT PER WINDOW in the Control editor — new `ScriptEditorWindowViewModel`
+   pins a script row per window (window activation re-asserts it as the workspace selection so the
+   selection-scoped buffer/save/learn/diagnostics machinery targets it), `ControlWorkspaceView` keys
+   editor windows by row so editing two scripts is two windows and list selection never hijacks an
+   open editor; (e) the HOLD idle-image flyout promoted to a real `HoldImageDialog` (browse + clear,
+   live-applied). Verified: full sln 1,519/0; HAPLAY_SMOKE launch gate exit 0 under xvfb; per-
+   workspace screenshots confirm the classic look, icon rendering, and the new toolbar buttons.
+   Follow-ups noted: further relayout polish and any remaining typographic glyphs (↑/↓/▸ render fine
+   in DejaVu) can ride later rounds.
+
+43. **THEME NITPICK ROUND (operator feedback on item 42, 2026-07-04).** (a) WHITE-TEXT-ON-LIGHT fixed
+   at the root: `RequestedThemeVariant` forced to **Light** — the Classic theme is light-only, and
+   "Default" made every remaining variant-aware resource (AvaloniaEdit, validation, fallbacks)
+   resolve DARK values on dark-mode systems. Plus the concrete dark-Fluent-era holdovers: status-line
+   + toast severity shades darkened (#37474F/#8A5A00/#B71C1C, tokens and `StatusLineControl`
+   constants kept in sync), the script editor pane went light (white bg, dark text, Mond .xshd
+   palette swapped from VS-dark to VS-light colors), `WaveformControl` bars white→translucent black
+   (they draw straight on the light chrome). (b) ALIASED TEXT: `<ClassicTheme FontAliasing="False"/>`
+   — the theme ships authentic Win95 aliased text ON by default via its
+   `SystemParameters.FontAliasingKey` resource. (c) The deck's gear-only overflow button is now a
+   labelled dropdown — gear + "Player" + ▾ — and the playback flyout button renamed "Options"→
+   "Playback" so the two menus read distinctly. (d) Collapsed sidebar centers its icons
+   (`Button.sidebar.collapsed` class bound to `SidebarCollapsed`). (e) Remaining Fluent-ish custom
+   styling squared to classic: ALL view `CornerRadius` literals → 0 (cards, chips, drawers, badge),
+   toast restyled as a classic Info balloon (SystemColors Info/InfoText + hard 1px WindowFrame
+   border), level-meter corner rounding removed. (f) INTEGER NumericUpDowns display integers:
+   `FormatString="0"` added to 34 integer-backed spinners across 13 views/dialogs (ms fields, rows/
+   columns, ports, channel counts, sample rates, pixel sizes, layer index; fractional fields like
+   GainDb 0.# and the MMD camera doubles left free-form). Sln 1,519/0; HAPLAY_SMOKE exit 0;
+   screenshots confirm antialiased text, centered collapsed rail, and the labelled Player menu.
+
 ## Verification appendix
 
 ```bash
@@ -908,6 +1129,16 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-reference-aligned rewrite (item 32, 2026-07-03): 1,489 passed / 0 failed / 2 skipped
 # post-skirt/hair fixes + feature closure (item 33, 2026-07-03): 1,494 passed / 0 failed / 2 skipped
 # post-compliance fix (item 34, 2026-07-03): 1,494 passed / 0 failed / 2 skipped
+# post-XR-alignment + split impulse (item 35, 2026-07-03): 1,502 passed / 0 failed
+# post-stop-ERP + fade-in + soft locks (item 36, 2026-07-03): 1,502 passed / 0 failed
+# post-baked-physics (item 37, 2026-07-03): 1,505 passed / 0 failed (sln build red from the just-added
+#   External/Classic.Avalonia projects' CPM violations — theme port in flight, see item 38)
+# post-theme-port (item 38, 2026-07-03): sln green again, 1,505 passed / 0 failed
+# post-youtube-seek fix (item 39, 2026-07-03): 1,506 passed / 0 failed
+# post-properties-dialog (item 40, 2026-07-03): 1,515 passed / 0 failed / 2 skipped (network-gated)
+# post-cue-mmd-youtube (item 41, 2026-07-03): 1,519 passed / 0 failed / 2 skipped
+# post-visual-overhaul (item 42, 2026-07-03): 1,519 passed / 0 failed / 2 skipped; HAPLAY_SMOKE exit 0 (xvfb)
+# post-nitpick round (item 43, 2026-07-04): 1,519 passed / 0 failed / 2 skipped; HAPLAY_SMOKE exit 0
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

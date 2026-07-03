@@ -354,6 +354,29 @@ public class ShowDocumentMapperTests
         Assert.False(Map(new ImagePlaylistItem("/m/a.png")).NotifyNaturalEnd);
         Assert.False(Map(new TextPlaylistItem { Text = "t" }).NotifyNaturalEnd);
         Assert.False(Map(new NDIInputPlaylistItem("cam")).NotifyNaturalEnd);
+        // YouTube plays a finite cached file; an MMD scene is finite exactly when it has a motion.
+        Assert.True(Map(new YouTubePlaylistItem("abc123")).NotifyNaturalEnd);
+        Assert.True(Map(new MmdPlaylistItem("/m/miku.pmx") { MotionPath = "/m/dance.vmd" }).NotifyNaturalEnd);
+        Assert.False(Map(new MmdPlaylistItem("/m/miku.pmx")).NotifyNaturalEnd);
+    }
+
+    [Fact]
+    public void MmdAndYouTubeCues_MapToTheirDescriptorUris()
+    {
+        // The cue path must produce the SAME provider URIs as the deck (HaPlayPlaybackHelpers) so a
+        // cue-fired item keeps its per-item options — this was the "cue player cannot play MMD/YouTube"
+        // gap's mapping leg.
+        ShowClipBinding Map(PlaylistItem source) =>
+            Assert.Single(HaPlayShowMapper.ToShowDocument(
+                new CueList { Nodes = { new MediaCueNode { Label = "n", Source = source } } }).Clips);
+
+        var mmd = Map(new MmdPlaylistItem("/m/miku.pmx") { MotionPath = "/m/dance.vmd", RenderWidth = 1920 });
+        Assert.StartsWith("mmd://", mmd.MediaPath);
+        Assert.Contains("dance.vmd", mmd.MediaPath);
+
+        var yt = Map(new YouTubePlaylistItem("qdXcG-Fg2Dk") { VideoStreamDescriptor = "1080p|vp9|webm" });
+        Assert.StartsWith("youtube://", yt.MediaPath);
+        Assert.Contains("qdXcG-Fg2Dk", yt.MediaPath);
     }
 
     /// <summary>End-to-end: the mapper's output is a valid <see cref="ShowDocument"/> that a real

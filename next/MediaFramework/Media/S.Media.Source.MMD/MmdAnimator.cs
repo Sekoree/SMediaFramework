@@ -150,35 +150,13 @@ public sealed class MmdAnimator
             throw new ArgumentException("normals buffer too small", nameof(normals));
 
         var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
+        EvaluatePose(frame, physics, physicsDeltaSeconds);
+        FinishSkinning(positions, normals);
+    }
 
-        // Morph weights first — bone morphs feed the transform passes below, vertex morphs the skinning.
-        SampleMorphWeights(frame);
-        AccumulateUvAndMaterialMorphs();
-        if (_hasBoneMorphs)
-            AccumulateBoneMorphs();
-
-        // IK deltas reset every evaluation — the pose stays a pure function of time (seek-back determinism).
-        Array.Fill(_ikRotations, Quaternion.Identity);
-
-        for (var p = 0; p < _beforePhysics.Length; p++)
-            ProcessBone(_beforePhysics, p, frame);
-
-        if (physics is not null)
-        {
-            for (var i = 0; i < _bonePhysicsEnabled.Length; i++)
-                _bonePhysicsEnabled[i] = PhysicsEnabledAt(_model.Bones[i].Name, frame);
-            physics.SetBonePhysicsEnabled(_bonePhysicsEnabled);
-            physics.Step(_world, physicsDeltaSeconds);
-            // Re-chain the non-physics bones under their (possibly physics-moved) parents — tip/hem
-            // bones carry skin weights and would otherwise stay at the rigid FK pose where a chain ends.
-            foreach (var i in _beforePhysics)
-                if (!physics.DrivesBone(i))
-                    ComputeWorld(i);
-        }
-
-        for (var p = 0; p < _afterPhysics.Length; p++)
-            ProcessBone(_afterPhysics, p, frame);
-
+    /// <summary>Skin matrices + vertex morphs + skinning from the current bone worlds.</summary>
+    private void FinishSkinning(Vector3[] positions, Vector3[]? normals)
+    {
         // Skin matrix maps a BIND-space point: subtract the bind position, then apply world.
         for (var i = 0; i < _model.Bones.Count; i++)
             _skin[i] = Matrix4x4.CreateTranslation(-_model.Bones[i].Position) * _world[i];
@@ -334,6 +312,87 @@ public sealed class MmdAnimator
     /// <summary>One bone's turn in transform order: sample FK, project onto a fixed axis, fold append
     /// from the donor's CURRENT state (its folded rotation AND its IK delta — babylon-mmd
     /// appendTransformSolver semantics), chain the world matrix, and solve IK if this is an IK bone.</summary>
+    /// <summary>The shared pose pipeline (morph weights → before-physics bones → physics → re-chain →
+    /// after-physics bones), without the skinning tail.</summary>
+    private void EvaluatePose(float frame, MmdPhysics? physics, float physicsDeltaSeconds)
+    {
+        // Morph weights first — bone morphs feed the transform passes below, vertex morphs the skinning.
+        SampleMorphWeights(frame);
+        AccumulateUvAndMaterialMorphs();
+        if (_hasBoneMorphs)
+            AccumulateBoneMorphs();
+
+        // IK deltas reset every evaluation — the pose stays a pure function of time (seek-back determinism).
+        Array.Fill(_ikRotations, Quaternion.Identity);
+
+        for (var p = 0; p < _beforePhysics.Length; p++)
+            ProcessBone(_beforePhysics, p, frame);
+
+        if (physics is not null)
+        {
+            for (var i = 0; i < _bonePhysicsEnabled.Length; i++)
+                _bonePhysicsEnabled[i] = PhysicsEnabledAt(_model.Bones[i].Name, frame);
+            physics.SetBonePhysicsEnabled(_bonePhysicsEnabled);
+            physics.Step(_world, physicsDeltaSeconds);
+            // Re-chain the non-physics bones under their (possibly physics-moved) parents — tip/hem
+            // bones carry skin weights and would otherwise stay at the rigid FK pose where a chain ends.
+            foreach (var i in _beforePhysics)
+                if (!physics.DrivesBone(i))
+                    ComputeWorld(i);
+        }
+
+        for (var p = 0; p < _afterPhysics.Length; p++)
+            ProcessBone(_afterPhysics, p, frame);
+    }
+
+    /// <summary>Evaluation with PRE-BAKED physics (see <see cref="MmdBakedPhysics"/>): the FK/IK pass
+    /// runs as usual, then every physics-driven bone chains its baked parent-relative transform in one
+    /// transform-order sweep — a pure function of time, immune to render cadence, seeks and stalls.</summary>
+    public void Evaluate(TimeSpan time, Vector3[] positions, Vector3[]? normals, MmdBakedPhysics baked)
+    {
+        ArgumentNullException.ThrowIfNull(positions);
+        ArgumentNullException.ThrowIfNull(baked);
+        if (positions.Length < _model.Vertices.Count)
+            throw new ArgumentException("positions buffer too small", nameof(positions));
+        if (normals is not null && normals.Length < _model.Vertices.Count)
+            throw new ArgumentException("normals buffer too small", nameof(normals));
+
+        var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
+        EvaluatePose(frame, physics: null, physicsDeltaSeconds: 0f);
+
+        // One transform-order sweep: driven bones take their baked pose relative to the CURRENT parent
+        // world; everything else re-chains under the (possibly baked) parents. Interleaving in order
+        // handles chains where driven and FK bones alternate.
+        var bakedFrame = MmdBakedPhysics.FrameOf(time);
+        foreach (var i in _beforePhysics)
+        {
+            if (baked.DrivesBone(i))
+            {
+                baked.Sample(i, bakedFrame, out var rotation, out var translation);
+                var local = Matrix4x4.CreateFromQuaternion(rotation) with { Translation = translation };
+                var parent = _model.Bones[i].ParentIndex;
+                _world[i] = parent >= 0 && parent < _model.Bones.Count ? local * _world[parent] : local;
+            }
+            else
+            {
+                ComputeWorld(i);
+            }
+        }
+
+        for (var p = 0; p < _afterPhysics.Length; p++)
+            ProcessBone(_afterPhysics, p, frame);
+
+        FinishSkinning(positions, normals);
+    }
+
+    /// <summary>Pose-only evaluation for the offline physics baker — the full transform pipeline
+    /// including the live physics step, without the vertex-morph/skinning tail.</summary>
+    internal void EvaluatePoseForBake(TimeSpan time, MmdPhysics physics, float physicsDeltaSeconds) =>
+        EvaluatePose((float)(time.TotalSeconds * VmdDocument.FramesPerSecond), physics, physicsDeltaSeconds);
+
+    /// <summary>The last evaluated world transform of a bone (baker capture).</summary>
+    internal Matrix4x4 BoneWorldForBake(int index) => _world[index];
+
     private void ProcessBone(int[] group, int position, float frame)
     {
         var i = group[position];

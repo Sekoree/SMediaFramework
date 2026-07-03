@@ -24,35 +24,72 @@ public sealed class MmdPhysics
 {
     private const float Gravity = -98f;          // model units/s² — MMD's Bullet world (9.8 × 10)
     private const float SubstepSeconds = 1f / 60f;
-    private const int MaxSubstepsPerFrame = 4;
+    private const int MaxSubstepsPerFrame = 8;   // XR Animator allows 9 — headroom against tunneling
+                                                 // when the app renders with uneven frame times
     // Split-impulse architecture (Box2D / Bullet's split impulse): the velocity rows are BIAS-FREE
-    // (drive relative velocity to zero; safe to warm start — no position term ever enters a velocity),
-    // and position errors are corrected AFTER integration by a nonlinear Gauss-Seidel pass that moves
-    // poses directly without adding energy. This is what keeps the file's Bullet-tuned near-locked
-    // chains rigid under load without the ERP limit-cycle wobble.
+    // (drive relative velocity to zero; safe to warm start — no position term ever enters a velocity).
+    // JOINT position errors are corrected after integration by a nonlinear Gauss-Seidel pass; CONTACT
+    // penetration is corrected by Bullet's pseudo-velocity split impulse solved alongside the velocity
+    // rows — consistent effective masses (torque included), integrated once, then discarded, so resting
+    // plates get no artificial separating velocity AND no sequential position teleports (a rotational
+    // position pass run to convergence measurably limit-cycles skirt plates 1+ unit per frame).
     private const int VelocityIterations = 10;        // Bullet's default — part of the authored compliance
     private const int PositionIterations = 10;
     private const float MaxLinearCorrection = 0.2f;   // per NGS iteration (Box2D's caps)
-    private const float MaxAngularCorrection = 0.15f;
+    private const float MaxAngularCorrection = 0.15f; // ALSO the position pass's anti-tunneling guard:
+                                                      // one 0.5 rad anchor-rotation moves a unit-arm body
+                                                      // half a unit in a single non-physical step, straight
+                                                      // through neighboring colliders (measured: skirt dive)
 
-    /// <summary>Fraction of an ANGULAR joint error corrected per substep (Bullet's MMD stop-ERP, per
-    /// the three.js reference). Deliberately NOT iterated to convergence: locked joints resolved
-    /// exactly turn the YYB tail strands into rigid rods and the skirt's locked plate ring into a
-    /// rigid cage that legs tunnel into — the transient violation under load IS the cloth/hair
-    /// compliance every MMD rig is authored against.</summary>
+    /// <summary>Angular ranges this small are authored EPSILON-LOCKS (the YYB tails use ±0.1°), not
+    /// real ranges: collapse them to always-active equality rows whose warm-started impulses hold the
+    /// chain firmly — as a boundary-triggered range row the impulse is lost every time the joint dips
+    /// inside the tiny window and fast whips spin the segment. REAL authored ranges (the upper hair's
+    /// ±2–5°) stay verbatim, per the reference runtimes; compliance comes from the ERP fraction.</summary>
+    private const float AngularEpsilonLock = 1f * MathF.PI / 180f;
+
+    /// <summary>Bullet's stop-ERP (the value three.js/XR Animator set on every MMD constraint): the
+    /// velocity-level restoring bias on VIOLATED LIMIT rows. This is what gives authored ranges (the
+    /// tie's ±5°, the upper hair's ±2–5°) real spring-back strength — without it a range row only
+    /// cancels approach velocity and violent motion winds segments far past their windows where the
+    /// weak positional recovery leaves them tangled.</summary>
+    private const float StopErp = 0.475f;
+
+    /// <summary>Restoring-speed cap for stop-ERP rows (units or rad per second). Unbounded, an Euler
+    /// ±π wrap during a full swing fires a ~90 rad/s kick at cadence-dependent frames.</summary>
+    private const float MaxStopBias = 10f;
+
+    /// <summary>Positional correction fraction per substep for RANGE-limit violations (NGS pass,
+    /// first iteration only — compliance, not convergence).</summary>
     private const float AngularErp = 0.475f;
-    private const float ContactErp = 0.2f;            // Bullet-style Baumgarte in the CONTACT rows only:
-                                                      // depenetration must act at the contact arm (torque)
-                                                      // or a plate pinned by a locked joint can never
-                                                      // rotate out of a static overlap
+
+    /// <summary>Positional correction for LOCKED (equality) chain joints — deliberately SOFTER than
+    /// the range ERP: Bullet has no joint position pass at all, and locked segments corrected at
+    /// 0.475/substep read as one solid block in slow motion (the operator's "upper hair like stiff
+    /// blocks"). The warm-started velocity rows carry the static load either way.</summary>
+    private const float LockedErp = 0.25f;
+    private const float SplitImpulseErp = 0.4f;       // penetration fraction recovered per substep via the
+                                                      // pseudo-velocity pass (Bullet's erp2 territory)
+    private const float MaxSplitRecoverySpeed = 20f;  // units/s cap — deep pops resolve over a few frames
     private const float ContactSlop = 0.005f;         // penetration allowance before correction kicks in
     private const float RestitutionThreshold = 1f;    // approach speed below which contacts don't bounce
 
-    /// <summary>Angular limits smaller than this collapse to 0 — an always-active equality row instead
-    /// of a limit the body coasts through and bounces off every substep (babylon-mmd's
-    /// angularLimitClampThreshold, 5°: "small angular limits do not work well"). The YYB tails lock
-    /// inner joints to ±0.1° — visually rigid either way.</summary>
-    private const float AngularLockThreshold = 5f * MathF.PI / 180f;
+    // Anti-stuck supervisor (XR Animator's bone_constraint reset, generalized): a dynamic body buried
+    // DEEP inside a kinematic collider for a SUSTAINED stretch is un-recoverable by contacts (normals
+    // point the wrong way once the core crossed) — snap it back onto its animated bone pose and let it
+    // re-settle. The persistence window must be generous: transient deep contact during a crouch is
+    // NORMAL (and the FK pose is itself penetrating there — resetting into it just re-buries the body),
+    // while a genuinely wedged plate stays deep for seconds. Bullet-based runtimes get skirts stuck the
+    // same way; XR Animator ships exactly this supervisory reset on top.
+    private const float DeepStuckFraction = 0.6f;  // of the smaller bounding radius
+    private const int StuckResetFrames = 24;       // ~0.8 s at 30 fps — far beyond any legit transient
+
+    /// <summary>After any reset (playback start, seek, stall), dynamic bodies FOLLOW THEIR BONES for
+    /// this long before the simulation takes over — XR Animator's `_reset_rigid_body_physics_`
+    /// countdown. A hard reset drops bodies onto a mid-dance FK pose that can interpenetrate the
+    /// colliders; simulating from that state immediately is how playback starts with an exploding
+    /// skirt or a tie knotted around itself.</summary>
+    private const float FadeInSeconds = 0.5f;
 
     private struct Body
     {
@@ -107,6 +144,7 @@ public sealed class MmdPhysics
         public Vector3 Axis;             // world-space solve direction
         public Vector3 ArmA, ArmB;       // anchor arms (linear rows)
         public float InvEffectiveMass;
+        public float Bias;               // stop-ERP restoring velocity (limit rows only; 0 on equality)
         public float MinImpulse, MaxImpulse;
         public float Impulse;            // accumulated (warm-started from the previous substep)
         public int AccumulatorIndex;     // slot in _jointAccumulators persisted across substeps
@@ -119,9 +157,11 @@ public sealed class MmdPhysics
         public Vector3 Normal;           // A → B
         public Vector3 ArmA;             // contact point relative to each body's centre
         public Vector3 ArmB;
-        public float Bias;               // position correction + restitution target velocity
+        public float Bias;               // restitution target velocity
+        public float Depth;              // penetration at detection — the split-impulse input
         public float Friction;
         public float NormalImpulse;
+        public float SplitImpulse;       // pseudo-velocity accumulator (never pulls)
         public Vector3 Tangent1, Tangent2;
         public float TangentImpulse1, TangentImpulse2;
     }
@@ -144,8 +184,18 @@ public sealed class MmdPhysics
                                                    // substep's impulses re-applied up front so ERP only
                                                    // corrects drift, not the standing gravity load
     private readonly Dictionary<long, CachedContact> _contactCache = [];
+    private readonly bool[] _deepThisFrame;        // anti-stuck: deep inside a kinematic collider this frame
+    private readonly byte[] _stuckFrames;          // consecutive deep frames per body
+    private readonly Vector3[] _pushVelocities;    // split-impulse pseudo state (position-only, per substep)
+    private readonly Vector3[] _turnVelocities;
     private float _pendingSeconds;
+    private float _fadeInRemaining;                // bones drive everything while > 0 (post-reset warmup)
     private bool _primed;
+
+    /// <summary>Diagnostics hook: invoked with the rigid-body index whenever the anti-stuck supervisor
+    /// snaps a body back onto its bone. Null (free) in production; probes subscribe to count/attribute
+    /// resets.</summary>
+    public static Action<int>? DebugStuckReset;
 
     private MmdPhysics(PmxDocument model, Body[] bodies, Joint[] joints, HashSet<long> jointedPairs)
     {
@@ -158,6 +208,10 @@ public sealed class MmdPhysics
         _kinematicTargetPositions = new Vector3[bodies.Length];
         _kinematicStartRotations = new Quaternion[bodies.Length];
         _kinematicTargetRotations = new Quaternion[bodies.Length];
+        _deepThisFrame = new bool[bodies.Length];
+        _stuckFrames = new byte[bodies.Length];
+        _pushVelocities = new Vector3[bodies.Length];
+        _turnVelocities = new Vector3[bodies.Length];
         _drivenBones = new bool[model.Bones.Count];
         foreach (var body in bodies)
             if (body.Dynamic && (uint)body.BoneIndex < (uint)_drivenBones.Length)
@@ -253,8 +307,12 @@ public sealed class MmdPhysics
             ref var a = ref bodies[joint.RigidBodyA];
             ref var b = ref bodies[joint.RigidBodyB];
             var jointRotation = BindRotationOf(joint.RotationRadians);
-            var angularLower = ClampSmallAngles(joint.AngularLowerLimit);
-            var angularUpper = ClampSmallAngles(joint.AngularUpperLimit);
+            // Authored angular limits verbatim — the reference runtimes (three.js/XR Animator) hand
+            // them to Bullet unclamped. The upper hair joints author small ±2–5° ranges whose play,
+            // accumulated over a strand, is most of its visible suppleness. Only sub-degree
+            // EPSILON-LOCKS collapse to 0 (see AngularEpsilonLock).
+            var angularLower = CollapseEpsilonLocks(joint.AngularLowerLimit, joint.AngularUpperLimit);
+            var angularUpper = CollapseEpsilonLocks(joint.AngularUpperLimit, joint.AngularLowerLimit);
             joints.Add(new Joint
             {
                 A = joint.RigidBodyA,
@@ -269,7 +327,7 @@ public sealed class MmdPhysics
                 AngularUpper = angularUpper,
                 LinearSpring = joint.LinearSpring,
                 AngularSpring = joint.AngularSpring,
-                AngularAllLocked = angularLower == Vector3.Zero && angularUpper == Vector3.Zero,
+                AngularAllLocked = MaxAbsComponent(angularLower) < 1e-6f && MaxAbsComponent(angularUpper) < 1e-6f,
                 IsChainLink = IsAncestorBone(model, a.BoneIndex, b.BoneIndex),
                 LinearAllLocked = joint.LinearLowerLimit == Vector3.Zero && joint.LinearUpperLimit == Vector3.Zero,
             });
@@ -290,10 +348,14 @@ public sealed class MmdPhysics
 
         return new MmdPhysics(model, bodies, [.. joints], jointedPairs);
 
-        static Vector3 ClampSmallAngles(Vector3 limits) => new(
-            MathF.Abs(limits.X) < AngularLockThreshold ? 0f : limits.X,
-            MathF.Abs(limits.Y) < AngularLockThreshold ? 0f : limits.Y,
-            MathF.Abs(limits.Z) < AngularLockThreshold ? 0f : limits.Z);
+        static float MaxAbsComponent(Vector3 v) =>
+            MathF.Max(MathF.Abs(v.X), MathF.Max(MathF.Abs(v.Y), MathF.Abs(v.Z)));
+
+        // Per-axis: when BOTH bounds sit inside the epsilon window the axis is an authored lock.
+        static Vector3 CollapseEpsilonLocks(Vector3 limits, Vector3 opposite) => new(
+            MathF.Abs(limits.X) < AngularEpsilonLock && MathF.Abs(opposite.X) < AngularEpsilonLock ? 0f : limits.X,
+            MathF.Abs(limits.Y) < AngularEpsilonLock && MathF.Abs(opposite.Y) < AngularEpsilonLock ? 0f : limits.Y,
+            MathF.Abs(limits.Z) < AngularEpsilonLock && MathF.Abs(opposite.Z) < AngularEpsilonLock ? 0f : limits.Z);
 
         static bool IsFollowBone(PmxDocument model, int bodyIndex) =>
             model.RigidBodies[bodyIndex].Mode == PmxPhysicsMode.FollowBone;
@@ -398,7 +460,10 @@ public sealed class MmdPhysics
 
         Array.Clear(_jointAccumulators);
         _contactCache.Clear();
+        Array.Clear(_deepThisFrame);
+        Array.Clear(_stuckFrames);
         _pendingSeconds = 0f;
+        _fadeInRemaining = FadeInSeconds;
         _primed = true;
     }
 
@@ -413,6 +478,28 @@ public sealed class MmdPhysics
         {
             Reset(world);
             deltaSeconds = SubstepSeconds; // warm one substep so the chain starts settling
+        }
+
+        // Post-reset fade-in (XR Animator's `_reset_rigid_body_physics_`): bones drive EVERY body
+        // until the countdown ends, then dynamics resume from the exactly-following pose. Starting the
+        // simulation cold on a mid-dance FK pose that interpenetrates the colliders is how playback
+        // used to open with an exploding skirt / knotted tie.
+        if (_fadeInRemaining > 1e-4f) // epsilon: 15 × (1/30f) leaves ~3e-8 — without it the last
+        {                             // fade frame becomes cadence-dependent (a 1-frame phase shift)
+            _fadeInRemaining -= deltaSeconds;
+            for (var i = 0; i < _bodies.Length; i++)
+            {
+                ref var body = ref _bodies[i];
+                var target = TargetFromBone(body, world);
+                body.Position = target.Translation;
+                body.Rotation = RotationOf(target);
+                body.LinearVelocity = Vector3.Zero;
+                body.AngularVelocity = Vector3.Zero;
+            }
+
+            _pendingSeconds = 0f;
+            WriteBack(world);
+            return;
         }
 
         _pendingSeconds = MathF.Min(_pendingSeconds + deltaSeconds, MaxSubstepsPerFrame * SubstepSeconds);
@@ -431,6 +518,27 @@ public sealed class MmdPhysics
         // fast limbs from skipping thin skirt/tie bodies between fixed steps.
         if (substeps > 0)
         {
+            // Anti-stuck supervisor, applied BEFORE this frame simulates: bodies that stayed deep
+            // inside a kinematic collider for the whole persistence window snap onto their animated
+            // bone pose (world[] holds the animator's fresh FK pose), then this frame's substeps —
+            // including the chain-inextensibility snap — immediately re-settle their neighbors, so the
+            // reset never renders as a stretched chain.
+            for (var i = 0; i < _bodies.Length; i++)
+            {
+                ref var body = ref _bodies[i];
+                if (!body.Dynamic || _stuckFrames[i] < StuckResetFrames)
+                    continue;
+
+                var stuckTarget = TargetFromBone(body, world);
+                body.Position = stuckTarget.Translation;
+                body.Rotation = RotationOf(stuckTarget);
+                body.LinearVelocity = Vector3.Zero;
+                body.AngularVelocity = Vector3.Zero;
+                _stuckFrames[i] = 0;
+                DebugStuckReset?.Invoke(i);
+            }
+
+            Array.Clear(_deepThisFrame);
             for (var i = 0; i < _bodies.Length; i++)
             {
                 ref var body = ref _bodies[i];
@@ -446,6 +554,16 @@ public sealed class MmdPhysics
             for (var step = 0; step < substeps; step++)
             {
                 Substep(SubstepSeconds, (step + 1f) / substeps);
+            }
+
+            for (var i = 0; i < _bodies.Length; i++)
+            {
+                if (!_bodies[i].Dynamic)
+                    continue;
+                if (_deepThisFrame[i])
+                    _stuckFrames[i] = (byte)Math.Min(_stuckFrames[i] + 1, byte.MaxValue);
+                else
+                    _stuckFrames[i] = 0;
             }
         }
 
@@ -482,6 +600,8 @@ public sealed class MmdPhysics
         DetectContacts();
         BuildJointRows();
 
+        Array.Clear(_pushVelocities);
+        Array.Clear(_turnVelocities);
         for (var iteration = 0; iteration < VelocityIterations; iteration++)
         {
             for (var r = 0; r < _rows.Count; r++)
@@ -495,6 +615,7 @@ public sealed class MmdPhysics
             {
                 var contact = _contacts[c];
                 SolveContact(ref contact);
+                SolveContactSplit(ref contact, h);
                 _contacts[c] = contact;
             }
         }
@@ -528,10 +649,53 @@ public sealed class MmdPhysics
             var omega = new Quaternion(body.AngularVelocity, 0f);
             body.Rotation = Quaternion.Normalize(
                 body.Rotation + Quaternion.Multiply(omega * body.Rotation, 0.5f * h));
+
+            // Split-impulse integration: the pseudo velocities move the pose exactly once and vanish.
+            var push = _pushVelocities[i];
+            var turn = _turnVelocities[i];
+            if (push != Vector3.Zero || turn != Vector3.Zero)
+            {
+                body.Position += push * h;
+                var pseudo = new Quaternion(turn, 0f);
+                body.Rotation = Quaternion.Normalize(
+                    body.Rotation + Quaternion.Multiply(pseudo * body.Rotation, 0.5f * h));
+            }
         }
 
         SolvePositions();
-        SolveContactPositions();
+    }
+
+    /// <summary>Bullet's split impulse: penetration depth is resolved through PSEUDO velocities solved
+    /// with the same Jacobian/effective mass as the real contact (torque at the arm included), then
+    /// integrated once and discarded — resting bodies gain no separating velocity, and nothing
+    /// teleports.</summary>
+    private void SolveContactSplit(ref Contact contact, float h)
+    {
+        var penetration = contact.Depth - ContactSlop;
+        if (penetration <= 0f)
+            return;
+
+        ref var a = ref _bodies[contact.A];
+        ref var b = ref _bodies[contact.B];
+        var n = contact.Normal;
+        var effective = EffectiveMassLinear(a, b, contact.ArmA, contact.ArmB, n);
+        if (effective <= 1e-9f)
+            return;
+
+        var pseudoVelocity = Vector3.Dot(
+            _pushVelocities[contact.B] + Vector3.Cross(_turnVelocities[contact.B], contact.ArmB)
+            - _pushVelocities[contact.A] - Vector3.Cross(_turnVelocities[contact.A], contact.ArmA), n);
+        var targetSpeed = MathF.Min(SplitImpulseErp * penetration / h, MaxSplitRecoverySpeed);
+        var impulse = (targetSpeed - pseudoVelocity) / effective;
+        var accumulated = MathF.Max(contact.SplitImpulse + impulse, 0f);
+        impulse = accumulated - contact.SplitImpulse;
+        contact.SplitImpulse = accumulated;
+
+        var p = n * impulse;
+        _pushVelocities[contact.A] -= p * a.InvMass;
+        _turnVelocities[contact.A] -= InvInertiaWorld(a, Vector3.Cross(contact.ArmA, p));
+        _pushVelocities[contact.B] += p * b.InvMass;
+        _turnVelocities[contact.B] += InvInertiaWorld(b, Vector3.Cross(contact.ArmB, p));
     }
 
     /// <summary>Builds the substep's constraint rows from every joint: springs applied as pre-solve
@@ -591,6 +755,7 @@ public sealed class MmdPhysics
                     ArmA = rA,
                     ArmB = rB,
                     InvEffectiveMass = 1f / effective,
+                    Bias = equality ? 0f : Math.Clamp(StopErp * error / SubstepSeconds, -MaxStopBias, MaxStopBias),
                     // Below-lower violations may only push the value up (λ ≥ 0), above-upper only down.
                     MinImpulse = equality || error > 0f ? float.NegativeInfinity : 0f,
                     MaxImpulse = equality || error < 0f ? float.PositiveInfinity : 0f,
@@ -626,6 +791,7 @@ public sealed class MmdPhysics
                     Angular = true,
                     Axis = n,
                     InvEffectiveMass = 1f / effective,
+                    Bias = equality ? 0f : Math.Clamp(StopErp * error / SubstepSeconds, -MaxStopBias, MaxStopBias),
                     MinImpulse = equality || error > 0f ? float.NegativeInfinity : 0f,
                     MaxImpulse = equality || error < 0f ? float.PositiveInfinity : 0f,
                     AccumulatorIndex = accumulatorIndex,
@@ -699,7 +865,7 @@ public sealed class MmdPhysics
                         if (effective > 1e-9f)
                         {
                             worst = MathF.Max(worst, magnitude);
-                            var correction = MathF.Min(AngularErp * magnitude, MaxAngularCorrection);
+                            var correction = MathF.Min(LockedErp * magnitude, MaxAngularCorrection);
                             if (inertiaB > 0f)
                                 RotateAboutAnchor(ref b, n * (correction * inertiaB / effective),
                                     b.Position + Vector3.Transform(joint.PivotB, b.Rotation));
@@ -719,7 +885,7 @@ public sealed class MmdPhysics
                         var upper = Component(joint.AngularUpper, axis);
                         if (lower > upper)
                             continue;
-                        if (!TryLimitError(Component(euler, axis), lower, upper, out var error, out _))
+                        if (!TryLimitError(Component(euler, axis), lower, upper, out var error, out var equality))
                             continue;
 
                         var n = axes[axis];
@@ -730,7 +896,8 @@ public sealed class MmdPhysics
                             continue;
 
                         worst = MathF.Max(worst, MathF.Abs(error));
-                        var correction = Math.Clamp(-AngularErp * error, -MaxAngularCorrection, MaxAngularCorrection);
+                        var erp = equality ? LockedErp : AngularErp;
+                        var correction = Math.Clamp(-erp * error, -MaxAngularCorrection, MaxAngularCorrection);
                         if (inertiaB > 0f)
                             RotateAboutAnchor(ref b, n * (correction * inertiaB / effective),
                                 b.Position + Vector3.Transform(joint.PivotB, b.Rotation));
@@ -837,7 +1004,7 @@ public sealed class MmdPhysics
                 - a.LinearVelocity - Vector3.Cross(a.AngularVelocity, row.ArmA), row.Axis);
         }
 
-        var impulse = -velocity * row.InvEffectiveMass;
+        var impulse = -(velocity + row.Bias) * row.InvEffectiveMass;
         var accumulated = Math.Clamp(row.Impulse + impulse, row.MinImpulse, row.MaxImpulse);
         impulse = accumulated - row.Impulse;
         row.Impulse = accumulated;
@@ -951,6 +1118,12 @@ public sealed class MmdPhysics
                 if (!TryContactGeometry(a, b, out var normal, out var point, out var depth))
                     continue;
 
+                // Anti-stuck bookkeeping: a dynamic body buried deep in a KINEMATIC collider is
+                // flagged for the supervisor in Step (contacts can no longer rescue it themselves).
+                if (depth > DeepStuckFraction * MathF.Min(a.BoundingRadius, b.BoundingRadius)
+                    && a.Dynamic != b.Dynamic)
+                    _deepThisFrame[a.Dynamic ? i : j] = true;
+
                 var rA = point - a.Position;
                 var rB = point - b.Position;
 
@@ -960,9 +1133,9 @@ public sealed class MmdPhysics
                     - a.LinearVelocity - Vector3.Cross(a.AngularVelocity, rA), normal);
                 var restitution = a.Restitution * b.Restitution;
                 var bounce = approach < -RestitutionThreshold ? -restitution * approach : 0f;
-                // Restitution belongs in the velocity solve. Penetration is handled separately as a
-                // split position impulse after integration, so a resting skirt plate is not given an
-                // artificial separating velocity every substep (a major source of jitter/sticking).
+                // Restitution belongs in the velocity solve. Penetration is resolved by the split
+                // pseudo-velocity pass, so a resting skirt plate is not given an artificial separating
+                // velocity every substep (a major source of jitter/sticking).
                 var bias = bounce;
 
                 var tangent1 = Vector3.Cross(normal, MathF.Abs(normal.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX);
@@ -976,6 +1149,7 @@ public sealed class MmdPhysics
                     ArmA = rA,
                     ArmB = rB,
                     Bias = bias,
+                    Depth = depth,
                     Friction = a.Friction * b.Friction,
                     Tangent1 = tangent1,
                     Tangent2 = Vector3.Cross(normal, tangent1),
@@ -1000,66 +1174,6 @@ public sealed class MmdPhysics
 
                 _contacts.Add(contact);
             }
-        }
-    }
-
-    /// <summary>Bullet-style split penetration correction: refresh contacts after integration and move
-    /// poses directly at the contact arm. No velocity is added, so cloth can slide free instead of
-    /// retaining depenetration energy and friction-locking inside a torso or leg collider.</summary>
-    private void SolveContactPositions()
-    {
-        for (var iteration = 0; iteration < PositionIterations; iteration++)
-        {
-            var worst = 0f;
-            for (var i = 0; i < _bodies.Length; i++)
-            {
-                ref var a = ref _bodies[i];
-                for (var j = i + 1; j < _bodies.Length; j++)
-                {
-                    ref var b = ref _bodies[j];
-                    if (a.InvMass + b.InvMass <= 0f
-                        || (a.Mask & b.Group) == 0 || (b.Mask & a.Group) == 0
-                        || _jointedPairs.Contains(PairKey(i, j))
-                        || !TryContactGeometry(a, b, out var normal, out var point, out var depth))
-                        continue;
-                    var penetration = depth - ContactSlop;
-                    if (penetration <= 0f)
-                        continue;
-                    worst = MathF.Max(worst, penetration);
-                    var rA = point - a.Position;
-                    var rB = point - b.Position;
-                    var effective = EffectiveMassLinear(a, b, rA, rB, normal);
-                    if (effective <= 1e-9f)
-                        continue;
-                    var correction = MathF.Min(ContactErp * penetration, MaxLinearCorrection);
-                    ApplyPositionImpulse(ref a, ref b, rA, rB, normal * (correction / effective));
-                }
-            }
-            if (worst < ContactSlop)
-                break;
-        }
-    }
-
-    private static void ApplyPositionImpulse(
-        ref Body a, ref Body b, Vector3 rA, Vector3 rB, Vector3 impulse)
-    {
-        a.Position -= impulse * a.InvMass;
-        b.Position += impulse * b.InvMass;
-        Rotate(ref a, -InvInertiaWorld(a, Vector3.Cross(rA, impulse)));
-        Rotate(ref b, InvInertiaWorld(b, Vector3.Cross(rB, impulse)));
-
-        static void Rotate(ref Body body, Vector3 theta)
-        {
-            var angle = theta.Length();
-            if (angle < 1e-8f)
-                return;
-            if (angle > MaxAngularCorrection)
-            {
-                theta *= MaxAngularCorrection / angle;
-                angle = MaxAngularCorrection;
-            }
-            body.Rotation = Quaternion.Normalize(
-                Quaternion.CreateFromAxisAngle(theta / angle, angle) * body.Rotation);
         }
     }
 

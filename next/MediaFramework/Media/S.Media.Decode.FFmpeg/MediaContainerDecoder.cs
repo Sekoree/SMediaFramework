@@ -79,6 +79,10 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <summary>Enumerates a file's streams without building a decoder (UI track pickers).</summary>
     public static MediaStreamInfo[] ProbeStreams(string path) => MediaStreamProbe.ProbeFile(path);
 
+    /// <summary>Container-level probe (format/duration/bit rate + stream table) without building a
+    /// decoder (UI details/properties panes).</summary>
+    public static MediaContainerInfo ProbeContainer(string path) => MediaStreamProbe.ProbeContainer(path);
+
     /// <summary>
     /// True when Windows D3D11 NV12 decode exports <see cref="Win32SharedNv12Backing"/> with DXGI NT shared handle only
     /// (no libav <c>ID3D11Device</c>/<c>ID3D11Texture2D</c> COM pointers on the backing). See

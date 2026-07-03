@@ -46,7 +46,7 @@
                      Text="{x:Static res:Strings.ManualSourceNameHint}" />
         </StackPanel>
 
-        <Border Background="#15808080" CornerRadius="4" Padding="10" Margin="0,8,0,0">
+        <Border Background="#15808080" CornerRadius="0" Padding="10" Margin="0,8,0,0">
           <StackPanel Spacing="6">
             <TextBlock Text="{x:Static res:Strings.ConnectionHintsLabel}" FontWeight="SemiBold" />
             <CheckBox Content="{x:Static res:Strings.LowBandwidthPreviewCheckbox}" IsChecked="{Binding LowBandwidth}" />
@@ -54,7 +54,7 @@
             <CheckBox Content="{x:Static res:Strings.VideoOnlyCheckbox}" IsChecked="{Binding VideoOnly}" />
             <StackPanel Orientation="Horizontal" Spacing="6">
               <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.ReconnectIntervalSecondsLabel}" />
-              <NumericUpDown Minimum="0" Maximum="600" Increment="1" Value="{Binding RetrySeconds}" Width="100" />
+              <NumericUpDown FormatString="0" Minimum="0" Maximum="600" Increment="1" Value="{Binding RetrySeconds}" Width="100" />
               <TextBlock VerticalAlignment="Center" Opacity="0.7" FontSize="11"
                          Text="{x:Static res:Strings.ZeroDisablesRetriesHint}" />
             </StackPanel>
@@ -64,7 +64,7 @@
               <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
                          Text="Audio jitter-buffer reserve. Empty = framework default (~50 ms). Smaller = lower latency (audio closer to the live video) at more underrun risk. Probe to find the lowest glitch-free size for this network." />
               <StackPanel Orientation="Horizontal" Spacing="6">
-                <NumericUpDown Minimum="0" Maximum="2000" Increment="1" Width="130"
+                <NumericUpDown FormatString="0" Minimum="0" Maximum="2000" Increment="1" Width="130"
                                PlaceholderText="default" Value="{Binding AudioBufferOverrideMs}" />
                 <TextBlock VerticalAlignment="Center" Opacity="0.7" Text="ms" />
                 <Button Content="Probe lowest" Command="{Binding ProbeBufferCommand}"

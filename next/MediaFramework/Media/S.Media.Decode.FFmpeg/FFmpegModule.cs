@@ -183,8 +183,13 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
             };
 }
 
-/// <summary>Owns a <see cref="MediaContainerDecoder"/> and exposes its video track as an <see cref="IVideoSource"/>.</summary>
-internal sealed class ContainerOwnedVideoSource : IVideoSource, IAttachedPictureSource, IDisposable
+/// <summary>Owns a <see cref="MediaContainerDecoder"/> and exposes its video track as an
+/// <see cref="IVideoSource"/>. MUST forward <see cref="ISeekableSource"/>: <see cref="VideoPlayer"/>
+/// gates its seek on that interface, and a wrapper that hides it makes coordinated seeks move audio
+/// and the clock while the video keeps decoding from the old position (the "YouTube seek" defect —
+/// backward seeks froze video on stale future-PTS frames, forward seeks fast-forwarded through every
+/// late frame until the clock was caught).</summary>
+internal sealed class ContainerOwnedVideoSource : IVideoSource, ISeekableSource, IAttachedPictureSource, IDisposable
 {
     private readonly MediaContainerDecoder _container;
     private readonly IVideoSource _inner;
@@ -205,6 +210,13 @@ internal sealed class ContainerOwnedVideoSource : IVideoSource, IAttachedPicture
     public bool IsExhausted => _inner.IsExhausted;
     public void SelectOutputFormat(PixelFormat format) => _inner.SelectOutputFormat(format);
     public bool TryReadNextFrame(out VideoFrame frame) => _inner.TryReadNextFrame(out frame);
+
+    public TimeSpan Duration => _inner is ISeekableSource seekable ? seekable.Duration : TimeSpan.Zero;
+    public TimeSpan Position => _inner is ISeekableSource seekable ? seekable.Position : TimeSpan.Zero;
+
+    /// <summary>Coordinated container seek (same call the track's own Seek makes) — live streams throw,
+    /// matching the shared-demux track's behavior on the atomic open path.</summary>
+    public void Seek(TimeSpan position) => _container.SeekPresentation(position);
 
     public void Dispose()
     {

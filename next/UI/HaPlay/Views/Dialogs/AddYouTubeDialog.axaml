@@ -33,7 +33,7 @@
                   Command="{Binding ResolveCommand}" IsEnabled="{Binding !IsResolving}" />
         </Grid>
 
-        <Border Background="#15808080" CornerRadius="4" Padding="10" IsVisible="{Binding HasManifest}">
+        <Border Background="#15808080" CornerRadius="0" Padding="10" IsVisible="{Binding HasManifest}">
           <StackPanel Spacing="4">
             <TextBlock Text="{Binding VideoTitle}" FontWeight="SemiBold" TextWrapping="Wrap" />
             <StackPanel Orientation="Horizontal" Spacing="12">

@@ -57,6 +57,10 @@ public partial class MediaPlayerViewModel
         SyncIdleSlate();
     }
 
+    /// <summary>Clears the HOLD idle image (the dialog's Clear button).</summary>
+    [RelayCommand]
+    private void ClearFallbackImage() => FallbackImagePath = null;
+
     partial void OnFallbackImagePathChanged(string? value)
     {
         _ = value;
@@ -231,6 +235,7 @@ public partial class MediaPlayerViewModel
         if (result is null) return;
         PlaylistItems.Add(result);
         SelectedPlaylistItem = result;
+        HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
     }
 
     /// <summary>Gate 5 — opens the YouTube stream-selection dialog (resolve → pick video/audio/subtitle
@@ -282,6 +287,34 @@ public partial class MediaPlayerViewModel
             ? "Subtitles cleared — applies on next play."
             : $"{result.Count} subtitle track(s) selected — applies on next play.";
     }
+
+    /// <summary>Opens the common per-item properties dialog (details / tracks / MMD scene / YouTube
+    /// streams) for the selected playlist item and applies its edits. Edits keep the item's
+    /// <see cref="PlaylistItem.Id"/>, so cue references and the current-item pointer stay valid.</summary>
+    [RelayCommand(CanExecute = nameof(CanShowItemProperties))]
+    private async Task ShowItemPropertiesAsync()
+    {
+        var item = SelectedPlaylistItem;
+        var top = TryGetMainWindow();
+        if (item is null || top is null) return;
+
+        var dialogVm = new Dialogs.MediaPropertiesDialogViewModel(item);
+        var dialog = new Views.Dialogs.MediaPropertiesDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<PlaylistItem?>(top);
+        if (result is null || result.Equals(item))
+            return;
+
+        var idx = PlaylistItems.IndexOf(item);
+        if (idx < 0) return;
+        PlaylistItems[idx] = result;
+        if (ReferenceEquals(_currentPlaylistItem, item))
+            _currentPlaylistItem = result;
+        SelectedPlaylistItem = result;
+        StatusMessage = Strings.Format(nameof(Strings.MediaPropertiesAppliedStatusFormat), result.DisplayName);
+        HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
+    }
+
+    private bool CanShowItemProperties() => SelectedPlaylistItem is not null;
 
     /// <summary>§8.5 quick-play — load and play the first dropped file without mutating the playlist.</summary>
     public async Task QuickPlayDroppedFilesAsync(IEnumerable<string> paths)

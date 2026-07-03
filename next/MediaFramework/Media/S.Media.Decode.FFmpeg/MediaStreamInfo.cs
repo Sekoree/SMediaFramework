@@ -67,7 +67,21 @@ public sealed record MediaStreamInfo(
     /// persisted explicit index no longer points at the same track after a re-mux (and fall back to auto).
     /// </summary>
     public string ContentSignature => $"{Kind}:{CodecName}:{Language ?? ""}:{Channels}:{SampleRate}:{Width}x{Height}";
+
+    /// <summary>Declared stream bit rate in bits/s; 0 when the container doesn't carry one.</summary>
+    public long BitRate { get; init; }
 }
+
+/// <summary>
+/// Container-level probe metadata (no decoding) for details/properties displays: format, duration and
+/// overall bit rate straight from the demuxer plus the full stream table.
+/// </summary>
+public sealed record MediaContainerInfo(
+    string FormatName,
+    TimeSpan Duration,
+    long BitRate,
+    long FileSizeBytes,
+    IReadOnlyList<MediaStreamInfo> Streams);
 
 /// <summary>Probes a media file's stream table without building a decoder.</summary>
 public static unsafe class MediaStreamProbe
@@ -89,6 +103,43 @@ public static unsafe class MediaStreamProbe
             ret = avformat_find_stream_info(fmt, null);
             FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
             return ReadAll(fmt);
+        }
+        finally
+        {
+            avformat_close_input(&fmt);
+        }
+    }
+
+    /// <summary>Container-level probe (format/duration/bit rate + stream table) — same cheap
+    /// open-enumerate-close as <see cref="ProbeFile"/>, no decoders built.</summary>
+    public static MediaContainerInfo ProbeContainer(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        if (!File.Exists(path))
+            throw new FileNotFoundException("media file not found", path);
+
+        FFmpegRuntime.EnsureInitialized();
+
+        AVFormatContext* fmt = null;
+        var ret = avformat_open_input(&fmt, path, null, null);
+        FFmpegException.ThrowIfError(ret, nameof(avformat_open_input));
+        try
+        {
+            ret = avformat_find_stream_info(fmt, null);
+            FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
+
+            var duration = fmt->duration > 0
+                ? TimeSpan.FromTicks(fmt->duration * 10) // AV_TIME_BASE is µs; 10 ticks per µs
+                : TimeSpan.Zero;
+            var formatName = fmt->iformat != null
+                ? Marshal.PtrToStringUTF8((IntPtr)fmt->iformat->name) ?? "unknown"
+                : "unknown";
+            return new MediaContainerInfo(
+                formatName,
+                duration,
+                Math.Max(0, fmt->bit_rate),
+                new FileInfo(path).Length,
+                ReadAll(fmt));
         }
         finally
         {
@@ -130,7 +181,10 @@ public static unsafe class MediaStreamProbe
                 (st->disposition & AV_DISPOSITION_DEFAULT) != 0,
                 (st->disposition & AV_DISPOSITION_FORCED) != 0,
                 (st->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0,
-                avcodec_find_decoder(cp->codec_id) != null);
+                avcodec_find_decoder(cp->codec_id) != null)
+            {
+                BitRate = Math.Max(0, cp->bit_rate),
+            };
         }
 
         return result;

@@ -16,6 +16,33 @@ internal static class HaPlayPlaybackHelpers
         definition is PortAudioOutputDefinition
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
 
+    /// <summary>"Always pre-bake if possible": the moment an MMD scene lands in a playlist or cue list
+    /// (add or edit), start the shared background physics bake so it's warm before the first play
+    /// instead of baking during it. Coalesced + cached by (model, motion) in
+    /// <see cref="S.Media.Source.MMD.MmdPhysicsBakeCache"/>; a scene without physics/motion or with
+    /// missing files is skipped, and failures fall back to the playback-time bake path.</summary>
+    internal static void StartBackgroundPhysicsBake(PlaylistItem? item)
+    {
+        if (item is not MmdPlaylistItem { Physics: true, MotionPath.Length: > 0 } mmd
+            || !File.Exists(mmd.ModelPath) || !File.Exists(mmd.MotionPath)
+            || S.Media.Source.MMD.MmdPhysicsBakeCache.IsCached(mmd.ModelPath, mmd.MotionPath))
+            return;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var model = S.Media.Source.MMD.PmxDocument.Load(mmd.ModelPath);
+                var motion = S.Media.Source.MMD.VmdDocument.Load(mmd.MotionPath!);
+                _ = S.Media.Source.MMD.MmdPhysicsBakeCache.LoadOrStart(mmd.ModelPath, mmd.MotionPath!, model, motion);
+            }
+            catch
+            {
+                // best effort — the playback path bakes on first open when this didn't land
+            }
+        });
+    }
+
     /// <summary>Builds the provider-owned <c>ndi:</c> descriptor URI for a live NDI input item, carrying its
     /// per-item stream selection, bandwidth mode, and audio jitter-buffer override — the ONE builder both the
     /// deck and the cue mapper must use, so a persisted item keeps its options on either playback path (the

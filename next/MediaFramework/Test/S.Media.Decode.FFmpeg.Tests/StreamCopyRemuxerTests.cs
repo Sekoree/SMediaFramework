@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Audio;
 using S.Media.Core.Registry;
 using S.Media.Decode.FFmpeg;
 using S.Media.FFmpeg.Common;
@@ -34,6 +35,46 @@ public sealed class StreamCopyRemuxerTests : IDisposable
         p.WaitForExit(60_000);
         Assert.True(p.ExitCode == 0, $"ffmpeg input generation failed: {stderr}");
         return path;
+    }
+
+    /// <summary>The "YouTube seek" regression: a remuxed local asset opened through the registry's
+    /// OpenVideo path (exactly how the YouTube provider plays its cache) must surface
+    /// <see cref="ISeekableSource"/> — <see cref="S.Media.Players.VideoPlayer"/> gates its seek on that
+    /// interface, and a wrapper hiding it makes coordinated seeks move audio and the clock while video
+    /// keeps decoding from the old position (backward = frozen frame, forward = fast-forward).</summary>
+    [RemuxFact]
+    public void RegistryVideoSource_IsSeekable_AndSeeksTheDecodedStream()
+    {
+        var av = Generate(
+            "-f lavfi -i testsrc2=duration=10:size=192x108:rate=30 -f lavfi -i sine=frequency=440:duration=10 " +
+            "-c:v libx264 -g 30 -pix_fmt yuv420p -c:a aac", "seek.mkv");
+
+        var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
+        Assert.True(registry.TryOpenVideo(av, options: null, out var video));
+        try
+        {
+            var seekable = Assert.IsAssignableFrom<ISeekableSource>(video);
+
+            Assert.True(video.TryReadNextFrame(out var first));
+            Assert.True(first.PresentationTime < TimeSpan.FromSeconds(1), $"unexpected first pts {first.PresentationTime}");
+            first.Dispose();
+
+            seekable.Seek(TimeSpan.FromSeconds(6));
+            Assert.True(video.TryReadNextFrame(out var forward));
+            Assert.True(forward.PresentationTime >= TimeSpan.FromSeconds(5.5) && forward.PresentationTime <= TimeSpan.FromSeconds(6.6),
+                $"forward seek did not move the video stream (pts={forward.PresentationTime})");
+            forward.Dispose();
+
+            seekable.Seek(TimeSpan.FromSeconds(2));
+            Assert.True(video.TryReadNextFrame(out var backward));
+            Assert.True(backward.PresentationTime >= TimeSpan.FromSeconds(1.5) && backward.PresentationTime <= TimeSpan.FromSeconds(2.6),
+                $"backward seek did not move the video stream (pts={backward.PresentationTime})");
+            backward.Dispose();
+        }
+        finally
+        {
+            (video as IDisposable)?.Dispose();
+        }
     }
 
     [RemuxFact]

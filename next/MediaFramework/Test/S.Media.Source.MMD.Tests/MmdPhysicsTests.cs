@@ -61,6 +61,16 @@ public sealed class MmdPhysicsTests
     private static Matrix4x4[] BindWorlds(PmxDocument model) =>
         [.. model.Bones.Select(b => Matrix4x4.CreateTranslation(b.Position))];
 
+    /// <summary>Runs out the post-reset fade-in (bodies bone-follow for 0.5 s) EXACTLY, so the test
+    /// body exercises live dynamics from its first asserted frame with a deterministic start state
+    /// (bone-following pose, zero velocities) at every render cadence.</summary>
+    private static void RunOutFadeIn(MmdPhysics physics, Matrix4x4[] world, float dt = 1f / 60f)
+    {
+        var calls = (int)MathF.Round(0.5f / dt);
+        for (var i = 0; i < calls; i++)
+            physics.Step(world, dt);
+    }
+
     [Fact]
     public void HorizontalPendulum_SwingsDown_AndStaysBounded()
     {
@@ -209,6 +219,7 @@ public sealed class MmdPhysicsTests
         var physics = MmdPhysics.TryCreate(model)!;
         var world = BindWorlds(model);
         physics.Reset(world);
+        RunOutFadeIn(physics, world);
 
         // Whip the anchor: teleport the root 1.5 units per frame, alternating direction.
         for (var frame = 0; frame < 90; frame++)
@@ -353,6 +364,7 @@ public sealed class MmdPhysicsTests
             var physics = MmdPhysics.TryCreate(model)!;
             var world = BindWorlds(model);
             physics.Reset(world);
+            RunOutFadeIn(physics, world, 1f / renderFps);
             for (var frame = 1; frame <= renderFps; frame++)
             {
                 var time = frame / (float)renderFps;

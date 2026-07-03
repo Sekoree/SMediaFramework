@@ -34,6 +34,9 @@
          SDL3→Present.SDL3, Avalonia→Present.Avalonia, Playback→Session; plus the new tiers Time/Routing/
          Players/Gpu the old monolithic Core/Playback have been split into. -->
     <ItemGroup>
+        <!-- Windows-Classic visual theme (Avalonia-12 port lives in-repo, see External/Classic.Avalonia). -->
+        <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme\Classic.Avalonia.Theme.csproj" />
+        <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme.ColorPicker\Classic.Avalonia.Theme.ColorPicker.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Time\S.Media.Time.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Routing\S.Media.Routing.csproj" />

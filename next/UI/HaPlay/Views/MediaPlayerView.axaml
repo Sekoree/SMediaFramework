@@ -138,10 +138,15 @@
                                ToolTip.Tip="{Binding CurrentMediaDisplay}" />
 
                     <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
-                        <!-- Single overflow menu (gear icon). Player Settings lives inside it, so there is
-                             no second "Settings" button competing with it. -->
-                        <Button Padding="8,4" Content="&#x2699;"
+                        <!-- Single overflow menu, labelled so its dropdown nature is obvious
+                             (gear + "Player" + ▾). Player Settings lives inside it. -->
+                        <Button Padding="8,4"
                                 ToolTip.Tip="{x:Static res:Strings.MediaPlayerSettingsTooltip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <PathIcon Data="{x:Static views:AppIcons.Gear}" Width="12" Height="12" />
+                                <TextBlock Text="{x:Static res:Strings.PlayerMenuButtonLabel}" VerticalAlignment="Center" />
+                                <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
+                            </StackPanel>
                             <Button.Flyout>
                                 <MenuFlyout>
                                     <MenuItem Header="{x:Static res:Strings.PlayerSettingsButton}"
@@ -235,27 +240,11 @@
                                       IsChecked="{Binding HoldFallbackVideo}"
                                       Content="{x:Static res:Strings.HoldButtonLabel}"
                                       ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
+                        <!-- HOLD image setup — promoted from a flyout to a real dialog (clearer flow). -->
                         <Button Classes="Std" VerticalAlignment="Center"
+                                Click="OnHoldImageSetupClick"
                                 ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
                             <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
-                            <Button.Flyout>
-                                <Flyout Placement="Bottom">
-                                    <!-- Width is BOUNDED: without MaxWidth a long image path makes the star-column
-                                         TextBox size to its text, blowing the flyout past the screen edge so the
-                                         Browse button needs sideways scrolling to reach. -->
-                                    <StackPanel Spacing="6" Margin="4" MinWidth="320" MaxWidth="440">
-                                        <TextBlock Classes="CaptionText" TextWrapping="Wrap"
-                                                   Text="{x:Static res:Strings.IdleImageHeaderTooltip}" />
-                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                                            <TextBox Grid.Column="0" MaxWidth="360"
-                                                     PlaceholderText="{x:Static res:Strings.FallbackPathPlaceholder}"
-                                                     Text="{Binding FallbackImagePath}" />
-                                            <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}"
-                                                    Command="{Binding BrowseFallbackCommand}" />
-                                        </Grid>
-                                    </StackPanel>
-                                </Flyout>
-                            </Button.Flyout>
                         </Button>
 
                         <!-- Options flyout: loop / auto-advance / shuffle / repeat-all + active badge. -->
@@ -293,19 +282,32 @@
 
                     <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
-                        <Button Classes="Touch" Content="{x:Static res:Strings.PreviousTrackGlyph}"
+                        <Button Classes="Touch"
                                 Command="{Binding PreviousTrackCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}" />
+                                ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}">
+                            <PathIcon Data="{x:Static views:AppIcons.Previous}" Width="14" Height="14" />
+                        </Button>
                         <Button Classes="Touch Go" MinWidth="84"
-                                Content="{Binding PlayPauseLabel}"
                                 Command="{Binding TogglePlayPauseCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.PlayPauseTooltip}" />
-                        <Button Classes="Touch" Content="{x:Static res:Strings.NextTrackGlyph}"
+                                ToolTip.Tip="{x:Static res:Strings.PlayPauseTooltip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <PathIcon Data="{x:Static views:AppIcons.Play}" Width="14" Height="14"
+                                          IsVisible="{Binding !IsPlaying}" />
+                                <PathIcon Data="{x:Static views:AppIcons.Pause}" Width="14" Height="14"
+                                          IsVisible="{Binding IsPlaying}" />
+                                <TextBlock Text="{Binding PlayPauseLabel}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="Touch"
                                 Command="{Binding NextTrackCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}" />
-                        <Button Classes="Touch" Content="{x:Static res:Strings.StopTrackGlyph}"
+                                ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}">
+                            <PathIcon Data="{x:Static views:AppIcons.Next}" Width="14" Height="14" />
+                        </Button>
+                        <Button Classes="Touch"
                                 Command="{Binding StopCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}" />
+                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}">
+                            <PathIcon Data="{x:Static views:AppIcons.Stop}" Width="14" Height="14" />
+                        </Button>
                     </StackPanel>
                 </DockPanel>
 
@@ -346,8 +348,21 @@
         <Border Classes="card">
             <DockPanel LastChildFill="True">
 
-                <!-- Tabs row + consolidated "+ Add" menu. -->
+                <!-- Tabs row + consolidated "+ Add" menu, with the selection actions (remove /
+                     properties) as VISIBLE buttons — the context menu still offers them too. -->
                 <DockPanel DockPanel.Dock="Top" LastChildFill="True" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Padding="8,4" Margin="4,0,0,0"
+                            Command="{Binding RemoveFromPlaylistCommand}"
+                            ToolTip.Tip="{x:Static res:Strings.PlaylistContextRemove}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
+                            <TextBlock Text="{x:Static res:Strings.PlaylistRemoveButtonLabel}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button DockPanel.Dock="Right" Padding="8,4" Margin="6,0,0,0"
+                            Command="{Binding ShowItemPropertiesCommand}"
+                            ToolTip.Tip="{x:Static res:Strings.PlaylistPropertiesButtonTooltip}"
+                            Content="{x:Static res:Strings.PlaylistContextProperties}" />
                     <Button DockPanel.Dock="Right" Padding="10,4"
                             ToolTip.Tip="{x:Static res:Strings.AddToPlaylistTooltip}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -431,6 +446,8 @@
                             </MenuItem>
                             <Separator IsVisible="{Binding SelectedItemHasMultipleAudioTracks}" />
                             <MenuItem Header="Subtitles…" Command="{Binding ConfigureSubtitlesCommand}" />
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextProperties}"
+                                      Command="{Binding ShowItemPropertiesCommand}" />
                             <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
                                       Click="OnCopyPlaylistItemApiUrlClick" />
                             <Separator />
@@ -442,8 +459,9 @@
                         <DataTemplate x:DataType="models:PlaylistItem">
                             <Grid ColumnDefinitions="Auto,Auto,*" >
                                 <TextBlock Grid.Column="0" Classes="drag-handle" Margin="0,0,8,0" />
-                                <TextBlock Grid.Column="1" Text="{Binding KindGlyph}"
-                                           Opacity="0.85" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <PathIcon Grid.Column="1" Width="12" Height="12"
+                                          Data="{Binding Converter={x:Static views:PlaylistItemIconConverter.Instance}}"
+                                          Opacity="0.85" Margin="0,0,6,0" VerticalAlignment="Center" />
                                 <TextBlock Grid.Column="2" Text="{Binding DisplayName}"
                                            ToolTip.Tip="{Binding ToolTip}"
                                            VerticalAlignment="Center"

@@ -33,7 +33,7 @@
 
     <Grid RowDefinitions="*,Auto" RowSpacing="10">
       <Grid Grid.Row="0" ColumnDefinitions="*,*" ColumnSpacing="10">
-        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
           <Grid RowDefinitions="Auto,*">
             <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
               <TextBlock Text="{x:Static res:Strings.InputsHeader}" FontWeight="SemiBold" />
@@ -57,7 +57,7 @@
           </Grid>
         </Border>
 
-        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
           <Grid RowDefinitions="Auto,*">
             <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
               <TextBlock Text="{x:Static res:Strings.OutputsHeader}" FontWeight="SemiBold" />
@@ -83,7 +83,7 @@
       </Grid>
 
       <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="10">
-        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" ColumnSpacing="6" Margin="0,0,0,8">
               <TextBlock Grid.Column="0" Text="Project MIDI inputs" FontWeight="SemiBold" VerticalAlignment="Center" />
@@ -116,7 +116,7 @@
           </DockPanel>
         </Border>
 
-        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
               <TextBlock Grid.Column="0" Text="Project MIDI outputs" FontWeight="SemiBold" VerticalAlignment="Center" />

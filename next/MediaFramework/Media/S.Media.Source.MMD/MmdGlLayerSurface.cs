@@ -24,6 +24,8 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
     private readonly PmxDocument _model;
     private readonly MmdAnimator? _animator;
     private readonly MmdPhysics? _physics;
+    private MmdBakedPhysics? _bakedPhysics;
+    private Task<MmdBakedPhysics?>? _pendingBake;
     private TimeSpan _lastPhysicsTime = TimeSpan.MinValue;
     private readonly Func<TimeSpan, VmdCameraFrame> _camera;
     private readonly Func<TimeSpan, VmdLightFrame> _light;
@@ -66,12 +68,16 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         int sceneWidth,
         int sceneHeight,
         int msaaSamples = 4,
-        bool physics = true)
+        bool physics = true,
+        MmdBakedPhysics? bakedPhysics = null,
+        Task<MmdBakedPhysics?>? pendingBake = null)
     {
         _msaaSamples = Math.Clamp(msaaSamples, 0, 8);
         _model = model;
         _animator = motion is not null ? new MmdAnimator(model, motion) : null;
         _physics = physics && _animator is not null ? MmdPhysics.TryCreate(model) : null;
+        _bakedPhysics = _animator is not null ? bakedPhysics : null;
+        _pendingBake = _animator is not null && bakedPhysics is null ? pendingBake : null;
         _camera = camera;
         _light = light;
         _selfShadow = selfShadow;
@@ -366,15 +372,29 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         if (_disposed || _fbo == 0)
             return;
 
-        // Pose at the transport's source time (the physics layer is stateful: it advances by the
-        // wall delta between rendered frames and resets on seeks/jumps — the documented MMD behavior).
+        // Pose at the transport's source time. With a BAKE the pose is a pure function of time
+        // (seek-exact, cadence-immune — the pre-rendered physics the reference MMD videos have);
+        // otherwise the stateful live solver advances by the wall delta and resets on seeks/jumps.
         if (_animator is not null)
         {
-            var physicsDelta = _lastPhysicsTime == TimeSpan.MinValue
-                ? -1f
-                : (float)(masterTime - _lastPhysicsTime).TotalSeconds;
-            _lastPhysicsTime = masterTime;
-            _animator.Evaluate(masterTime, _positions, _normals, _physics, physicsDelta);
+            if (_bakedPhysics is null && _pendingBake is { IsCompletedSuccessfully: true } landed)
+            {
+                _bakedPhysics = landed.Result;
+                _pendingBake = null;
+            }
+
+            if (_bakedPhysics is not null)
+            {
+                _animator.Evaluate(masterTime, _positions, _normals, _bakedPhysics);
+            }
+            else
+            {
+                var physicsDelta = _lastPhysicsTime == TimeSpan.MinValue
+                    ? -1f
+                    : (float)(masterTime - _lastPhysicsTime).TotalSeconds;
+                _lastPhysicsTime = masterTime;
+                _animator.Evaluate(masterTime, _positions, _normals, _physics, physicsDelta);
+            }
         }
         for (var i = 0; i < _positions.Length; i++)
         {

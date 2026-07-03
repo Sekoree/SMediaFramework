@@ -15,7 +15,7 @@
                  Opacity="0.7" TextWrapping="Wrap" />
     </StackPanel>
 
-    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
       <DockPanel>
         <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,6">
           <TextBlock Grid.Column="0" Text="{x:Static res:Strings.EndpointsHeader}" FontWeight="SemiBold" VerticalAlignment="Center" />
@@ -46,7 +46,7 @@
                 Padding="8"
                 BorderBrush="#22808080"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="0"
                 IsVisible="{Binding IsSelectedOscEndpoint}">
           <StackPanel Spacing="6">
             <TextBlock Text="{x:Static res:Strings.EndpointEditorHeader}" FontWeight="SemiBold" />
@@ -58,7 +58,7 @@
               <TextBlock Grid.Column="0" Text="{x:Static res:Strings.HostLabel}" VerticalAlignment="Center" />
               <TextBox Grid.Column="1" Text="{Binding OscEditHost, Mode=TwoWay}" />
               <TextBlock Grid.Column="2" Text="{x:Static res:Strings.PortLabel}" VerticalAlignment="Center" />
-              <NumericUpDown Grid.Column="3"
+              <NumericUpDown FormatString="0" Grid.Column="3"
                              Minimum="1"
                              Maximum="65535"
                              Value="{Binding OscEditPort, Mode=TwoWay}" />

@@ -181,9 +181,12 @@ public static class HaPlayShowMapper
             // it early. Only when a positive duration is set; a 0-duration text cue holds until the next cue.
             EndAtDuration = media.Source is TextPlaylistItem && media.DurationMs > 0,
             // A real FILE cue must fire cue auto-follow when it plays through, even as a bare plain-Stop clip
-            // with no trim/fade/loop (which otherwise starts no end monitor and just idles at EOF). Files only:
-            // images/text hold deliberately, and live inputs never naturally end.
-            NotifyNaturalEnd = media.Source is FilePlaylistItem or YouTubePlaylistItem,
+            // with no trim/fade/loop (which otherwise starts no end monitor and just idles at EOF). Finite
+            // sources only: images/text hold deliberately, live inputs never naturally end, and an MMD scene
+            // is finite exactly when it has a motion (MmdVideoSource exhausts at the VMD's end; a bind-pose
+            // scene renders indefinitely).
+            NotifyNaturalEnd = media.Source is FilePlaylistItem or YouTubePlaylistItem
+                or MmdPlaylistItem { MotionPath.Length: > 0 },
             // The cue's picked subtitle tracks (embedded stream indices or sidecar paths — including a
             // prepared YouTube caption sidecar). Only when the cue is placed on a composition: subtitles
             // need a canvas. Same mapping as the deck's MediaPlayerShowMapper.MapSubtitles.

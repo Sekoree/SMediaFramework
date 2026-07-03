@@ -460,6 +460,8 @@ public enum CueActionKind
 [JsonSerializable(typeof(ImagePlaylistItem))]
 [JsonSerializable(typeof(SubtitlePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
+[JsonSerializable(typeof(YouTubePlaylistItem))]
+[JsonSerializable(typeof(MmdPlaylistItem))]
 [JsonSerializable(typeof(CueListsCollectionDocument))]
 [JsonSerializable(typeof(CueCompositionsDocument))]
 [JsonSerializable(typeof(List<CueList>))]

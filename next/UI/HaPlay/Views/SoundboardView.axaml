@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HaPlay.Views"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
@@ -75,7 +76,7 @@
 
     <!-- Edit panel (right). -->
     <Border DockPanel.Dock="Right" Width="280" Margin="8,0,0,0"
-            BorderBrush="#33808080" BorderThickness="1" CornerRadius="6" Padding="10"
+            BorderBrush="#33808080" BorderThickness="1" CornerRadius="0" Padding="10"
             IsVisible="{Binding IsEditMode}">
       <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="8">
@@ -124,7 +125,7 @@
             </Grid>
 
             <TextBlock Text="{x:Static res:Strings.SoundboardTileFadeOutLabel}" Opacity="0.7" FontSize="11" />
-            <NumericUpDown Minimum="0" Maximum="60000" Increment="250"
+            <NumericUpDown FormatString="0" Minimum="0" Maximum="60000" Increment="250"
                            Value="{Binding SelectedTile.FadeOutMs, Mode=TwoWay}" />
 
             <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
@@ -146,12 +147,12 @@
             <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
               <StackPanel Grid.Column="0" Spacing="4">
                 <TextBlock Text="{x:Static res:Strings.SoundboardRowsLabel}" Opacity="0.7" FontSize="11" />
-                <NumericUpDown Minimum="1" Maximum="12" Increment="1"
+                <NumericUpDown FormatString="0" Minimum="1" Maximum="12" Increment="1"
                                Value="{Binding SelectedBoard.Rows, Mode=TwoWay}" />
               </StackPanel>
               <StackPanel Grid.Column="1" Spacing="4">
                 <TextBlock Text="{x:Static res:Strings.SoundboardColumnsLabel}" Opacity="0.7" FontSize="11" />
-                <NumericUpDown Minimum="1" Maximum="12" Increment="1"
+                <NumericUpDown FormatString="0" Minimum="1" Maximum="12" Increment="1"
                                Value="{Binding SelectedBoard.Columns, Mode=TwoWay}" />
               </StackPanel>
             </Grid>
@@ -180,7 +181,7 @@
             </Grid>
 
             <TextBlock Text="{x:Static res:Strings.SoundboardTileFadeOutLabel}" Opacity="0.7" FontSize="11" />
-            <NumericUpDown Minimum="0" Maximum="60000" Increment="250"
+            <NumericUpDown FormatString="0" Minimum="0" Maximum="60000" Increment="250"
                            Value="{Binding SelectedBoard.DefaultFadeOutMs, Mode=TwoWay}" />
 
             <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
@@ -222,7 +223,7 @@
                   Classes.editing="{Binding IsEditing}"
                   Classes.selected="{Binding $parent[ItemsControl].((vm:SoundboardWorkspaceViewModel)DataContext).SelectedTile,
                                      Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
-                  Margin="3" CornerRadius="6" BorderThickness="1.5" MinHeight="84"
+                  Margin="3" CornerRadius="0" BorderThickness="1.5" MinHeight="84"
                   Tapped="OnTileTapped">
             <Border.ContextMenu>
               <ContextMenu>
@@ -244,9 +245,9 @@
                              TextTrimming="CharacterEllipsis" MaxLines="3"
                              TextAlignment="Center"
                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                  <TextBlock Text="⟳" FontSize="12" Opacity="0.6"
-                             HorizontalAlignment="Right" VerticalAlignment="Top"
-                             IsVisible="{Binding Loop}" />
+                  <PathIcon Data="{x:Static views:AppIcons.Loop}" Width="11" Height="11" Opacity="0.6"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                            IsVisible="{Binding Loop}" />
                 </Grid>
                 <ProgressBar Grid.Row="1" Height="8" MinWidth="0" Margin="0,4,0,2"
                              Minimum="0" Maximum="100"

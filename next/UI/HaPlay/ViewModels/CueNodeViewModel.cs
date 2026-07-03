@@ -136,6 +136,35 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceVideoHeight = 0;
                 }
                 break;
+            // An MMD scene is a pure video source (30 fps BGRA at the scene's render size, no audio
+            // leg) — without these flags the drawer never offers the Video tab, so the cue could not
+            // be placed on a composition at all.
+            case MmdPlaylistItem mmd:
+                SourceHasVideo = true;
+                SourceHasAudio = false;
+                SourceAudioChannels = 0;
+                SourceVideoIsAttachedPicture = false;
+                SourceFrameRateNum = 30;
+                SourceFrameRateDen = 1;
+                SourceVideoWidth = mmd.RenderWidth;
+                SourceVideoHeight = mmd.RenderHeight;
+                break;
+            // A prepared YouTube item plays from the local cache like a file. Conservative defaults
+            // here (stereo audio, video unless deliberately audio-only) so the Audio/Video tabs show
+            // immediately; the add path refines them by probing the cached asset when it exists.
+            case YouTubePlaylistItem yt:
+                SourceHasVideo = !yt.AudioOnly;
+                SourceHasAudio = true;
+                SourceAudioChannels = Math.Max(SourceAudioChannels, 2);
+                SourceVideoIsAttachedPicture = false;
+                if (yt.AudioOnly)
+                {
+                    SourceFrameRateNum = 0;
+                    SourceFrameRateDen = 0;
+                    SourceVideoWidth = 0;
+                    SourceVideoHeight = 0;
+                }
+                break;
         }
     }
 

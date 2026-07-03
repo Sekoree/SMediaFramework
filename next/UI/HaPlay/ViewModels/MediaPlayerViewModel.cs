@@ -473,8 +473,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Visual label for the Play/Pause toggle.</summary>
-    public string PlayPauseLabel => IsPlaying ? "⏸ Pause" : "▶ Play";
+    /// <summary>Text label for the Play/Pause toggle (the view pairs it with the matching icon).</summary>
+    public string PlayPauseLabel => IsPlaying ? "Pause" : "Play";
 
     public string DetachedWindowTitle => Resources.Strings.Format(
         nameof(Resources.Strings.DetachedPlayerTitleFormat), Name);
@@ -1241,6 +1241,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
+        ShowItemPropertiesCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
         TogglePlayPauseCommand.NotifyCanExecuteChanged();
         _ = RefreshSelectedItemAudioTrackChoicesAsync(value);

@@ -7,6 +7,7 @@
              xmlns:models="using:HaPlay.Models"
              xmlns:res="using:HaPlay.Resources"
              xmlns:views="using:HaPlay.Views"
+             xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
              xmlns:controls="using:HaPlay.Views.Controls"
              mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
              x:Class="HaPlay.Views.MainView"
@@ -24,10 +25,16 @@
       <Setter Property="Background" Value="#22808080" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
-    <Style Selector="TextBlock.sidebar-glyph">
-      <Setter Property="FontSize" Value="18" />
-      <Setter Property="Width" Value="24" />
-      <Setter Property="TextAlignment" Value="Center" />
+    <!-- Collapsed rail: icon-only buttons center their glyph instead of hugging the left edge. -->
+    <Style Selector="Button.sidebar.collapsed">
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="Padding" Value="0,8" />
+    </Style>
+    <Style Selector="PathIcon.sidebar-glyph">
+      <Setter Property="Width" Value="15" />
+      <Setter Property="Height" Value="15" />
+      <Setter Property="Margin" Value="4,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
   </UserControl.Styles>
 
@@ -109,9 +116,10 @@
       <DockPanel>
         <Button DockPanel.Dock="Top"
                 Classes="sidebar"
+                Classes.collapsed="{Binding SidebarCollapsed}"
                 Command="{Binding ToggleSidebarCommand}"
                 ToolTip.Tip="{x:Static res:Strings.TooltipToggleSidebar}">
-          <TextBlock Text="{x:Static res:Strings.SidebarToggleGlyph}" Classes="sidebar-glyph" />
+          <PathIcon Data="{x:Static views:AppIcons.Menu}" Classes="sidebar-glyph" />
         </Button>
 
         <ItemsControl ItemsSource="{Binding Workspaces}">
@@ -120,11 +128,12 @@
               <Button Classes.sidebar="True"
                       Classes.selected="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectedWorkspace,
                                          Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
+                      Classes.collapsed="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SidebarCollapsed}"
                       Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectWorkspaceCommand}"
                       CommandParameter="{Binding}"
                       ToolTip.Tip="{Binding Label}">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="{Binding Glyph}" Classes="sidebar-glyph" />
+                  <PathIcon Data="{Binding Icon}" Classes="sidebar-glyph" />
                   <TextBlock Text="{Binding Label}"
                              VerticalAlignment="Center"
                              IsVisible="{Binding !$parent[ItemsControl].((vm:MainViewModel)DataContext).SidebarCollapsed}" />
@@ -146,10 +155,12 @@
           <Button Grid.Column="1" Content="{x:Static res:Strings.AddPlayerButton}"
                   Command="{Binding AddPlayerCommand}"
                   VerticalAlignment="Center" Margin="6,0,0,0" />
-          <Button Grid.Column="2" Content="{x:Static res:Strings.PopoutButtonLabel}"
+          <Button Grid.Column="2"
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutPlayersClick"
-                  VerticalAlignment="Center" Margin="6,0,0,0" />
+                  VerticalAlignment="Center" Margin="6,0,0,0">
+            <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
+          </Button>
         </Grid>
 
         <ContentControl x:Name="PlayersPopoutHost">
@@ -204,9 +215,11 @@
           <Button Content="{x:Static res:Strings.ActionTargetsButtonLabel}"
                   ToolTip.Tip="{x:Static res:Strings.ActionTargetsButtonTooltip}"
                   Command="{Binding OpenTargetConfigurationCommand}" />
-          <Button Content="{x:Static res:Strings.PopoutButtonLabel}"
+          <Button
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
-                  Click="OnPopOutCuesClick" />
+                  Click="OnPopOutCuesClick">
+            <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
+          </Button>
         </StackPanel>
         <ContentControl x:Name="CuesPopoutHost">
           <views:CuePlayerView DataContext="{Binding CuePlayer}" />
@@ -219,9 +232,11 @@
                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsSoundboardWorkspaceSelected}">
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right"
                     Spacing="6" Margin="0,0,0,6">
-          <Button Content="{x:Static res:Strings.PopoutButtonLabel}"
+          <Button
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
-                  Click="OnPopOutSoundboardClick" />
+                  Click="OnPopOutSoundboardClick">
+            <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
+          </Button>
         </StackPanel>
         <ContentControl x:Name="SoundboardPopoutHost">
           <views:SoundboardView DataContext="{Binding Soundboard}" />
@@ -245,7 +260,7 @@
           <Button Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
         <Grid ColumnDefinitions="1.05*,1.8*" ColumnSpacing="10">
-          <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+          <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
             <DockPanel>
               <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
               <TextBlock DockPanel.Dock="Top"
@@ -269,7 +284,7 @@
 
           <StackPanel Grid.Column="1" Spacing="10">
             <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
@@ -302,7 +317,7 @@
             </Border>
 
             <!-- Remote API — per-machine HTTP control surface for show controllers. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.RemoteApiSectionHeader}" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Spacing="12">
@@ -363,25 +378,32 @@
                 IsHitTestVisible="True">
     <ItemsControl.ItemTemplate>
       <DataTemplate DataType="vm:ToastViewModel">
-        <Border CornerRadius="6" Padding="10,8" Margin="0,0,0,6"
-                Background="#E0303030" BorderThickness="1"
-                BorderBrush="{StaticResource BorderSubtle}">
+        <!-- Classic balloon look: the theme's Info (tooltip-yellow) surface with a hard 1px border. -->
+        <Border CornerRadius="0" Padding="10,8" Margin="0,0,0,6"
+                Background="{DynamicResource {x:Static common:SystemColors.InfoBrushKey}}"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource {x:Static common:SystemColors.WindowFrameBrushKey}}">
           <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
             <Panel Grid.Column="0" VerticalAlignment="Top">
-              <TextBlock Text="ℹ" FontSize="13" Opacity="0.7" IsVisible="{Binding IsInfo}" />
-              <TextBlock Text="⚠" FontSize="13" Foreground="{StaticResource StatusWarnFg}"
-                         IsVisible="{Binding IsWarning}" />
-              <TextBlock Text="⛔" FontSize="13" Foreground="{StaticResource StatusErrorFg}"
-                         IsVisible="{Binding IsError}" />
+              <PathIcon Data="{x:Static views:AppIcons.Info}" Width="13" Height="13"
+                        Foreground="{StaticResource StatusInfoFg}" IsVisible="{Binding IsInfo}" />
+              <PathIcon Data="{x:Static views:AppIcons.Warning}" Width="13" Height="13"
+                        Foreground="{StaticResource StatusWarnFg}" IsVisible="{Binding IsWarning}" />
+              <PathIcon Data="{x:Static views:AppIcons.Blocked}" Width="13" Height="13"
+                        Foreground="{StaticResource StatusErrorFg}" IsVisible="{Binding IsError}" />
             </Panel>
             <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="Wrap"
-                       Foreground="#EEE" FontSize="12"
+                       Foreground="{DynamicResource {x:Static common:SystemColors.InfoTextBrushKey}}"
+                       FontSize="12"
                        PointerPressed="OnToastBodyPressed" />
             <StackPanel Grid.Column="2" Spacing="2">
-              <Button Content="✕" Padding="6,0" MinWidth="22" FontSize="11"
-                      Command="{Binding CloseCommand}" />
-              <TextBlock Text="📌" FontSize="10" HorizontalAlignment="Center"
-                         IsVisible="{Binding IsPinned}" />
+              <Button Padding="6,2" MinWidth="22" Command="{Binding CloseCommand}">
+                <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
+              </Button>
+              <PathIcon Data="{x:Static views:AppIcons.Pin}" Width="10" Height="10"
+                        Foreground="{DynamicResource {x:Static common:SystemColors.InfoTextBrushKey}}"
+                        HorizontalAlignment="Center"
+                        IsVisible="{Binding IsPinned}" />
             </StackPanel>
           </Grid>
         </Border>

@@ -37,7 +37,7 @@
               </ComboBox.ItemTemplate>
             </ComboBox>
             <TextBlock Grid.Column="2" Text="{x:Static res:Strings.MillisecondsShort}" VerticalAlignment="Center" />
-            <NumericUpDown Grid.Column="3" Width="120"
+            <NumericUpDown FormatString="0" Grid.Column="3" Width="120"
                            Minimum="0" Maximum="10000" Increment="50"
                            Value="{Binding TransitionDurationMs}"
                            ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}" />

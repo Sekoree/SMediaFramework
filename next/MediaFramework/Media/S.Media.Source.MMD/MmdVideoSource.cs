@@ -152,6 +152,8 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
     private byte[]? _surfaceModeFrame; // cached transparent frame while the GL surface renders the scene
     private bool _cpuTexturesLoaded;
     private MmdPhysics? _physics;
+    private MmdBakedPhysics? _bakedPhysics;
+    private Task<MmdBakedPhysics?>? _pendingBake;
     private TimeSpan _lastPhysicsTime = TimeSpan.MinValue;
     private long _frameIndex;
 
@@ -163,6 +165,17 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
         _cameraMotion = request.CameraMotionPath is { Length: > 0 } c ? VmdDocument.Load(c) : null;
         _animator = _motion is not null ? new MmdAnimator(_model, _motion) : null;
         _physics = request.Physics ? MmdPhysics.TryCreate(_model) : null;
+
+        // PRE-BAKED physics (the way MMD's own renders are produced — an offline forward simulation):
+        // a cached bake plays deterministically and seek-exactly; the first-ever open of this pair
+        // starts one background bake and plays live physics meanwhile.
+        if (_physics is not null && _motion is not null && _request.MotionPath is { Length: > 0 } motionPath)
+        {
+            var (ready, pending) = MmdPhysicsBakeCache.LoadOrStart(request.ModelPath, motionPath, _model, _motion);
+            _bakedPhysics = ready;
+            _pendingBake = ready is null ? pending : null;
+        }
+
         Duration = _motion?.Duration ?? TimeSpan.FromHours(1);
         _renderer = new MmdSoftwareRenderer(request.Width, request.Height);
         _positions = new Vector3[_model.Vertices.Count];
@@ -213,7 +226,18 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
             return true;
         }
 
-        _animator?.Evaluate(time, _positions, normals: null, _physics, PhysicsDelta(time));
+        // Hot-swap to the bake the moment the background run lands (one-time pose blend; from then on
+        // the pose is a pure function of time).
+        if (_bakedPhysics is null && _pendingBake is { IsCompletedSuccessfully: true } landed)
+        {
+            _bakedPhysics = landed.Result;
+            _pendingBake = null;
+        }
+
+        if (_animator is not null && _bakedPhysics is not null)
+            _animator.Evaluate(time, _positions, normals: null, _bakedPhysics);
+        else
+            _animator?.Evaluate(time, _positions, normals: null, _physics, PhysicsDelta(time));
         var camera = ResolveCamera(time);
         EnsureCpuTextures();
         _renderer.Render(
@@ -244,7 +268,9 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
             _request.Width,
             _request.Height,
             msaaSamples: _request.Antialias ? 4 : 0,
-            physics: _request.Physics);
+            physics: _request.Physics,
+            bakedPhysics: _bakedPhysics,
+            pendingBake: _pendingBake);
         Volatile.Write(ref _surfaceModeFrame, new byte[_pixels.Length]); // all-zero BGRA = transparent
         return surface;
     }

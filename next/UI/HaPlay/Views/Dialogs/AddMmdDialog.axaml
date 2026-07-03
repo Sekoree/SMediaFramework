@@ -42,7 +42,7 @@
                     Click="BrowseCameraClick" />
           </Grid>
 
-          <Border Background="#15808080" CornerRadius="4" Padding="10" IsEnabled="{Binding ManualCameraActive}">
+          <Border Background="#15808080" CornerRadius="0" Padding="10" IsEnabled="{Binding ManualCameraActive}">
             <StackPanel Spacing="8">
               <TextBlock Text="{x:Static res:Strings.MmdCameraSectionLabel}" FontWeight="SemiBold" />
 
@@ -89,16 +89,16 @@
 
           <StackPanel Orientation="Horizontal" Spacing="6">
             <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.MmdRenderSizeLabel}" />
-            <NumericUpDown Minimum="16" Maximum="7680" Increment="16" Value="{Binding RenderWidth}" Width="120" />
+            <NumericUpDown FormatString="0" Minimum="16" Maximum="7680" Increment="16" Value="{Binding RenderWidth}" Width="120" />
             <TextBlock VerticalAlignment="Center" Text="×" />
-            <NumericUpDown Minimum="16" Maximum="4320" Increment="16" Value="{Binding RenderHeight}" Width="120" />
+            <NumericUpDown FormatString="0" Minimum="16" Maximum="4320" Increment="16" Value="{Binding RenderHeight}" Width="120" />
           </StackPanel>
         </StackPanel>
       </ScrollViewer>
 
       <!-- Right: live preview -->
       <StackPanel Grid.Column="2" Spacing="8">
-        <Border Background="#20000000" CornerRadius="4" Height="203">
+        <Border Background="#20000000" CornerRadius="0" Height="203">
           <Panel>
             <Image Source="{Binding PreviewImage}" Stretch="Uniform" />
             <ProgressBar IsIndeterminate="True" VerticalAlignment="Bottom" Height="3"

@@ -41,10 +41,10 @@
 
         <StackPanel Spacing="8" IsVisible="{Binding ShowAudioSettings}">
           <TextBlock Text="{x:Static res:Strings.NdiAudioChannelCountLabel}" FontWeight="SemiBold" />
-          <NumericUpDown Minimum="1" Maximum="64" Value="{Binding AudioChannelCount}" />
+          <NumericUpDown FormatString="0" Minimum="1" Maximum="64" Value="{Binding AudioChannelCount}" />
 
           <TextBlock Text="{x:Static res:Strings.NdiAudioSampleRateLabel}" FontWeight="SemiBold" />
-          <NumericUpDown Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding AudioSampleRate}" />
+          <NumericUpDown FormatString="0" Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding AudioSampleRate}" />
         </StackPanel>
 
         <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Margin="0,8,0,0" Padding="0,8,0,0">

@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HaPlay.Views"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
@@ -57,9 +58,10 @@
                 ToolTip.Tip="Create a project, device, endpoint, or layer script"
                 Command="{Binding AddScriptCommand}" />
         <Button Grid.Row="0" Grid.Column="6"
-                Content="{x:Static res:Strings.PopoutButtonLabel}"
                 ToolTip.Tip="{x:Static res:Strings.PopoutTabButtonTooltip}"
-                Click="OnPopOutTabClick" />
+                Click="OnPopOutTabClick">
+            <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
+          </Button>
         <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="16" Opacity="0.85">
           <TextBlock Text="{Binding DeviceCount, StringFormat='Devices: {0}'}" />
           <TextBlock Text="{Binding ListenerCount, StringFormat='Listeners: {0}'}" />
@@ -201,7 +203,7 @@
                   <Button Content="Export built-ins" Classes="Dense" Command="{Binding ExportBuiltInProfilesCommand}" />
                   <Button Content="Remove project" Classes="Dense" Command="{Binding RemoveSelectedProjectProfileCommand}" />
                 </StackPanel>
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="4" Padding="8"
+                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8"
                         IsVisible="{Binding IsMidiAvailable}">
                   <StackPanel Spacing="6">
                     <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />
@@ -321,7 +323,7 @@
                      PlaceholderText="device" />
           </Grid>
 
-          <Border Grid.Row="1" MinHeight="120" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6">
+          <Border Grid.Row="1" MinHeight="120" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0">
             <Grid>
               <TextBlock Text="Arm Control to see MIDI, OSC, script, and runtime activity here."
                          TextWrapping="Wrap"

@@ -11,13 +11,14 @@ using HaPlay.ViewModels;
 namespace HaPlay.Views;
 
 /// <summary>
-/// Pop-out editor for a single control script. Hosts the AvaloniaEdit code editor plus the script's
-/// metadata, trigger editor, learn mode, and diagnostics. It binds to the live
-/// <see cref="ControlWorkspaceViewModel"/>, so it always reflects the workspace's selected script.
+/// Pop-out editor for ONE control script (one script per window). The window's
+/// <see cref="ScriptEditorWindowViewModel"/> pins its script row for the window's lifetime; window
+/// activation re-asserts the pinned row as the workspace selection so the selection-scoped
+/// machinery (buffer, save, learn, diagnostics) targets this script while it is being edited.
 /// </summary>
 public partial class ScriptEditorWindow : Window
 {
-    private ControlWorkspaceViewModel? _viewModel;
+    private ScriptEditorWindowViewModel? _viewModel;
     private bool _updatingEditor;
     private string? _activeScriptPath;
     private readonly Dictionary<string, TextDocument> _documents = new(StringComparer.Ordinal);
@@ -29,7 +30,8 @@ public partial class ScriptEditorWindow : Window
         ScriptEditor.Document = new TextDocument();
         ScriptEditor.Document.TextChanged += OnEditorDocumentTextChanged;
         DataContextChanged += OnDataContextChanged;
-        BindViewModel(DataContext as ControlWorkspaceViewModel);
+        Activated += (_, _) => _viewModel?.PinSelection();
+        BindViewModel(DataContext as ScriptEditorWindowViewModel);
     }
 
     private void ApplyMondSyntaxHighlighting()
@@ -47,9 +49,9 @@ public partial class ScriptEditorWindow : Window
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e) =>
-        BindViewModel(DataContext as ControlWorkspaceViewModel);
+        BindViewModel(DataContext as ScriptEditorWindowViewModel);
 
-    private void BindViewModel(ControlWorkspaceViewModel? viewModel)
+    private void BindViewModel(ScriptEditorWindowViewModel? viewModel)
     {
         if (ReferenceEquals(_viewModel, viewModel))
             return;
@@ -71,16 +73,13 @@ public partial class ScriptEditorWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ControlWorkspaceViewModel.SelectedScriptText)
-            || e.PropertyName == nameof(ControlWorkspaceViewModel.SelectedScriptRow))
-        {
+        if (e.PropertyName == nameof(ScriptEditorWindowViewModel.SelectedScriptText))
             BindSelectedScriptDocument();
-        }
     }
 
     private void BindSelectedScriptDocument()
     {
-        var path = _viewModel?.SelectedScriptRow?.ScriptPath?.Trim() ?? string.Empty;
+        var path = _viewModel?.SelectedScriptRow.ScriptPath?.Trim() ?? string.Empty;
         var text = _viewModel?.SelectedScriptText ?? string.Empty;
         BindDocument(string.IsNullOrEmpty(path) ? null : path, text);
     }
@@ -171,7 +170,10 @@ public partial class ScriptEditorWindow : Window
         if (ScriptEditor.Document is not null)
             ScriptEditor.Document.TextChanged -= OnEditorDocumentTextChanged;
         if (_viewModel is not null)
+        {
             _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _viewModel.Detach();
+        }
         _viewModel = null;
         _activeScriptPath = null;
         _documents.Clear();

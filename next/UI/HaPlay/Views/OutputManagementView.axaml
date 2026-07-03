@@ -34,7 +34,7 @@
                    Text="{x:Static res:Strings.OutputManagementHint}" />
       </StackPanel>
       <!-- §8.1 aggregate health chip — recolors when any line is warn/error. -->
-      <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="12"
+      <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="0"
               VerticalAlignment="Center"
               Background="{Binding HasAggregateIssues, Converter={x:Static vm:AggregateBrushConverter.Instance}}">
         <TextBlock Text="{Binding AggregateSummary}" FontSize="12" FontWeight="SemiBold"

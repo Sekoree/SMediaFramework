@@ -290,7 +290,7 @@
     <value>Select a cue from the list to edit trigger, routing, media, or action settings.</value>
   </data>
   <data name="AddMediaButton" xml:space="preserve">
-    <value>+ Media</value>
+    <value>+ Media…</value>
   </data>
   <data name="AddActionButton" xml:space="preserve">
     <value>+ Action</value>
@@ -299,10 +299,10 @@
     <value>+ Comment</value>
   </data>
   <data name="AddNdiInputCueButton" xml:space="preserve">
-    <value>+ NDI</value>
+    <value>+ NDI input…</value>
   </data>
   <data name="AddPortAudioInputCueButton" xml:space="preserve">
-    <value>+ Audio In</value>
+    <value>+ Audio input…</value>
   </data>
   <data name="BrowseMediaButton" xml:space="preserve">
     <value>Browse media…</value>
@@ -791,7 +791,7 @@
     <value>Pick from NDI sources currently visible on the network.</value>
   </data>
   <data name="RescanButton" xml:space="preserve">
-    <value>↻ Rescan</value>
+    <value>Rescan</value>
   </data>
   <data name="ManualSourceNameLabel" xml:space="preserve">
     <value>Manual source name (e.g. MACHINE (Instance))</value>
@@ -1067,7 +1067,7 @@
     <value>Idle — no active playback on this line</value>
   </data>
   <data name="MediaPlayerSettingsButtonLabel" xml:space="preserve">
-    <value>⚙ Settings</value>
+    <value>Settings</value>
   </data>
   <data name="MediaPlayerSettingsTooltip" xml:space="preserve">
     <value>Save or load this player's configuration (.haplay.json), playlists, or remove the player.</value>
@@ -1148,25 +1148,25 @@
     <value>Applied downmix '{0}' to {1}.</value>
   </data>
   <data name="LoopToggleLabel" xml:space="preserve">
-    <value>🔁 Loop</value>
+    <value>Loop</value>
   </data>
   <data name="LoopToggleTooltip" xml:space="preserve">
     <value>Restart the current track when it ends.</value>
   </data>
   <data name="AutoAdvanceToggleLabel" xml:space="preserve">
-    <value>⏭ Auto-advance</value>
+    <value>Auto-advance</value>
   </data>
   <data name="AutoAdvanceToggleTooltip" xml:space="preserve">
     <value>When on, the next playlist entry loads and plays automatically when the current track ends.</value>
   </data>
   <data name="ShuffleToggleLabel" xml:space="preserve">
-    <value>🔀 Shuffle</value>
+    <value>Shuffle</value>
   </data>
   <data name="ShuffleToggleTooltip" xml:space="preserve">
     <value>When auto-advancing, play tracks in a random order (each once per cycle). Manual Next/Previous stay in list order.</value>
   </data>
   <data name="RepeatAllToggleLabel" xml:space="preserve">
-    <value>🔁 Repeat all</value>
+    <value>Repeat all</value>
   </data>
   <data name="RepeatAllToggleTooltip" xml:space="preserve">
     <value>When auto-advancing past the last track, wrap back to the first instead of stopping. (Loop repeats the single current track.)</value>
@@ -1208,7 +1208,7 @@
     <value>Load tab…</value>
   </data>
   <data name="AddFilesButton" xml:space="preserve">
-    <value>+ Add files…</value>
+    <value>+ Files…</value>
   </data>
   <data name="AddLiveInputButton" xml:space="preserve">
     <value>+ Live input…</value>
@@ -1217,10 +1217,10 @@
     <value>Add a live source (PortAudio capture device or NDI receiver) to this playlist tab.</value>
   </data>
   <data name="PortAudioInputMenuHeader" xml:space="preserve">
-    <value>PortAudio input…</value>
+    <value>+ Audio input…</value>
   </data>
   <data name="NdiInputMenuHeader" xml:space="preserve">
-    <value>NDI input…</value>
+    <value>+ NDI input…</value>
   </data>
   <data name="RoutingSectionTitle" xml:space="preserve">
     <value>Routing</value>
@@ -1295,10 +1295,10 @@
     <value>(on)</value>
   </data>
   <data name="PlayPausePlayingLabel" xml:space="preserve">
-    <value>⏸ Pause</value>
+    <value>Pause</value>
   </data>
   <data name="PlayPausePausedLabel" xml:space="preserve">
-    <value>▶ Play</value>
+    <value>Play</value>
   </data>
   <data name="SourceKindIdle" xml:space="preserve">
     <value>Idle</value>
@@ -1430,10 +1430,10 @@
     <value>Files…</value>
   </data>
   <data name="PreviewCueButton" xml:space="preserve">
-    <value>▶ Preview</value>
+    <value>Preview</value>
   </data>
   <data name="StopPreviewCueButton" xml:space="preserve">
-    <value>■ Stop Preview</value>
+    <value>Stop Preview</value>
   </data>
   <data name="PreviewingCueStatusFormat" xml:space="preserve">
     <value>Previewing '{0}'. Click again to stop.</value>
@@ -1601,7 +1601,7 @@
     <value>Not cached yet — the selected streams download when you add.</value>
   </data>
   <data name="AddYouTubeMenuItem" xml:space="preserve">
-    <value>YouTube video…</value>
+    <value>+ YouTube video…</value>
   </data>
   <data name="AddMmdDialogTitle" xml:space="preserve">
     <value>Add MMD scene</value>
@@ -1610,7 +1610,7 @@
     <value>Edit MMD scene</value>
   </data>
   <data name="AddMmdMenuItem" xml:space="preserve">
-    <value>MMD scene…</value>
+    <value>+ MMD scene…</value>
   </data>
   <data name="MmdModelPathLabel" xml:space="preserve">
     <value>Model (.pmx)</value>
@@ -1994,7 +1994,7 @@
     <value>Images</value>
   </data>
   <data name="AddImageButton" xml:space="preserve">
-    <value>+ Image</value>
+    <value>+ Image…</value>
   </data>
   <data name="AddTextButton" xml:space="preserve">
     <value>+ Text</value>
@@ -2219,7 +2219,7 @@
     <value>Preview output:</value>
   </data>
   <data name="PlaybackOptionsButton" xml:space="preserve">
-    <value>Options</value>
+    <value>Playback</value>
   </data>
   <data name="PlaybackOptionsTooltip" xml:space="preserve">
     <value>Loop, auto-advance, shuffle and repeat-all options for this player</value>
@@ -2676,5 +2676,197 @@
   </data>
   <data name="CopiedToClipboardToastFormat" xml:space="preserve">
     <value>Copied {0}</value>
+  </data>
+  <data name="PlaylistContextProperties" xml:space="preserve">
+    <value>Properties…</value>
+  </data>
+  <data name="MediaPropertiesAppliedStatusFormat" xml:space="preserve">
+    <value>Updated {0} — applies on next play.</value>
+  </data>
+  <data name="PlaylistRemoveButtonLabel" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="HoldImageDialogTitle" xml:space="preserve">
+    <value>HOLD idle image</value>
+  </data>
+  <data name="PlayerMenuButtonLabel" xml:space="preserve">
+    <value>Player</value>
+  </data>
+  <data name="PlaylistPropertiesButtonTooltip" xml:space="preserve">
+    <value>Details, tracks and per-kind settings for the selected playlist item</value>
+  </data>
+  <data name="MediaPropertiesDialogTitleFormat" xml:space="preserve">
+    <value>Properties — {0}</value>
+  </data>
+  <data name="MediaPropertiesTabDetails" xml:space="preserve">
+    <value>Details</value>
+  </data>
+  <data name="MediaPropertiesTabTracks" xml:space="preserve">
+    <value>Tracks</value>
+  </data>
+  <data name="MediaPropertiesTabScene" xml:space="preserve">
+    <value>Scene</value>
+  </data>
+  <data name="MediaPropertiesTabStreams" xml:space="preserve">
+    <value>Streams</value>
+  </data>
+  <data name="MediaPropertiesDetailsProbing" xml:space="preserve">
+    <value>Reading media details…</value>
+  </data>
+  <data name="MediaPropertiesDetailsUnavailableFormat" xml:space="preserve">
+    <value>Details unavailable: {0}</value>
+  </data>
+  <data name="MediaPropertiesStreamsHeader" xml:space="preserve">
+    <value>Streams</value>
+  </data>
+  <data name="MediaPropertiesAudioTrackLabel" xml:space="preserve">
+    <value>Audio track</value>
+  </data>
+  <data name="MediaPropertiesSubtitlesLabel" xml:space="preserve">
+    <value>Subtitles</value>
+  </data>
+  <data name="MediaPropertiesSubtitlesNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="MediaPropertiesSubtitleCountFormat" xml:space="preserve">
+    <value>{0} track(s) selected</value>
+  </data>
+  <data name="MediaPropertiesEditSubtitlesButton" xml:space="preserve">
+    <value>Choose subtitle tracks…</value>
+  </data>
+  <data name="MediaPropertiesEditSceneButton" xml:space="preserve">
+    <value>Edit scene…</value>
+  </data>
+  <data name="MediaPropertiesChangeStreamsButton" xml:space="preserve">
+    <value>Change streams…</value>
+  </data>
+  <data name="MediaPropertiesBakeButton" xml:space="preserve">
+    <value>Bake physics now</value>
+  </data>
+  <data name="MediaPropertiesBakeInProgress" xml:space="preserve">
+    <value>Baking physics…</value>
+  </data>
+  <data name="MediaPropertiesBakeDone" xml:space="preserve">
+    <value>Physics baked and cached — playback uses the pre-rendered simulation.</value>
+  </data>
+  <data name="MediaPropertiesBakeFailedFormat" xml:space="preserve">
+    <value>Bake failed: {0}</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusCached" xml:space="preserve">
+    <value>Physics bake cached — playback uses the pre-rendered simulation.</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusNotCached" xml:space="preserve">
+    <value>No physics bake cached yet — first playback bakes in the background.</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusNoMotion" xml:space="preserve">
+    <value>Physics baking needs a motion (VMD).</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusDisabled" xml:space="preserve">
+    <value>Physics is disabled for this scene.</value>
+  </data>
+  <data name="MediaPropertiesCacheStateCached" xml:space="preserve">
+    <value>Downloaded and cached</value>
+  </data>
+  <data name="MediaPropertiesCacheStateNotCached" xml:space="preserve">
+    <value>Not cached — downloads before first play</value>
+  </data>
+  <data name="MediaPropertiesRowName" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="MediaPropertiesRowKind" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="MediaPropertiesRowLocation" xml:space="preserve">
+    <value>Location</value>
+  </data>
+  <data name="MediaPropertiesRowContainer" xml:space="preserve">
+    <value>Container</value>
+  </data>
+  <data name="MediaPropertiesRowDuration" xml:space="preserve">
+    <value>Duration</value>
+  </data>
+  <data name="MediaPropertiesRowBitrate" xml:space="preserve">
+    <value>Bit rate</value>
+  </data>
+  <data name="MediaPropertiesRowFileSize" xml:space="preserve">
+    <value>File size</value>
+  </data>
+  <data name="MediaPropertiesRowResolution" xml:space="preserve">
+    <value>Resolution</value>
+  </data>
+  <data name="MediaPropertiesRowFrameRate" xml:space="preserve">
+    <value>Frame rate</value>
+  </data>
+  <data name="MediaPropertiesRowModel" xml:space="preserve">
+    <value>Model</value>
+  </data>
+  <data name="MediaPropertiesRowMotion" xml:space="preserve">
+    <value>Motion</value>
+  </data>
+  <data name="MediaPropertiesRowCameraMotion" xml:space="preserve">
+    <value>Camera motion</value>
+  </data>
+  <data name="MediaPropertiesRowRenderSize" xml:space="preserve">
+    <value>Render size</value>
+  </data>
+  <data name="MediaPropertiesRowCamera" xml:space="preserve">
+    <value>Camera</value>
+  </data>
+  <data name="MediaPropertiesRowPhysics" xml:space="preserve">
+    <value>Physics</value>
+  </data>
+  <data name="MediaPropertiesRowAntialias" xml:space="preserve">
+    <value>Antialiasing</value>
+  </data>
+  <data name="MediaPropertiesRowVideoId" xml:space="preserve">
+    <value>Video ID</value>
+  </data>
+  <data name="MediaPropertiesRowAuthor" xml:space="preserve">
+    <value>Author</value>
+  </data>
+  <data name="MediaPropertiesRowVideoStream" xml:space="preserve">
+    <value>Video stream</value>
+  </data>
+  <data name="MediaPropertiesRowAudioStream" xml:space="preserve">
+    <value>Audio stream</value>
+  </data>
+  <data name="MediaPropertiesRowSubtitleLanguage" xml:space="preserve">
+    <value>Subtitle language</value>
+  </data>
+  <data name="MediaPropertiesRowCacheState" xml:space="preserve">
+    <value>Cache</value>
+  </data>
+  <data name="MediaPropertiesValueNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="MediaPropertiesValueOn" xml:space="preserve">
+    <value>On</value>
+  </data>
+  <data name="MediaPropertiesValueOff" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="MediaPropertiesKindFile" xml:space="preserve">
+    <value>Media file</value>
+  </data>
+  <data name="MediaPropertiesKindImage" xml:space="preserve">
+    <value>Image</value>
+  </data>
+  <data name="MediaPropertiesKindSubtitle" xml:space="preserve">
+    <value>Subtitle overlay</value>
+  </data>
+  <data name="MediaPropertiesKindText" xml:space="preserve">
+    <value>Text card</value>
+  </data>
+  <data name="MediaPropertiesKindMmd" xml:space="preserve">
+    <value>MMD scene</value>
+  </data>
+  <data name="MediaPropertiesKindYouTube" xml:space="preserve">
+    <value>YouTube</value>
+  </data>
+  <data name="MediaPropertiesKindNdi" xml:space="preserve">
+    <value>NDI input</value>
+  </data>
+  <data name="MediaPropertiesKindPortAudio" xml:space="preserve">
+    <value>Audio input</value>
   </data>
 </root>

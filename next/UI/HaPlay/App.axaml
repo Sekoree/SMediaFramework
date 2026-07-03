@@ -2,9 +2,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:views="using:HaPlay.Views"
+             xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
              x:Class="HaPlay.App"
-             RequestedThemeVariant="Default">
-  <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Light">
+  <!-- Forced Light: the Classic theme is a light theme. Following the system variant ("Default") made
+       every remaining variant-aware resource (AvaloniaEdit, validation, fallbacks) resolve DARK values
+       on dark-mode systems — white text on classic light-gray surfaces. -->
 
   <Application.DataTemplates>
     <DataTemplate DataType="vm:MediaPlayerViewModel">
@@ -13,12 +16,15 @@
   </Application.DataTemplates>
 
   <Application.Styles>
-    <FluentTheme DensityStyle="Compact"/>
+    <!-- The Windows-Classic look (in-repo Avalonia-12 port, External/Classic.Avalonia) — replaces FluentTheme.
+         FontAliasing off: the theme's authentic Win95 aliased text is hard to read on modern displays. -->
+    <ClassicTheme FontAliasing="False" />
     <!-- UI rewrite P1: the "Deck" design tokens; the single home for spacing/type/surface/touch styles. -->
     <StyleInclude Source="avares://HaPlay/Styles/Tokens.axaml"/>
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"/>
-    <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml"/>
-    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
+    <!-- Classic-styled TreeDataGrid theme authored in-app (the theme repo ships none). -->
+    <StyleInclude Source="avares://HaPlay/Styles/ClassicTreeDataGrid.axaml"/>
+    <StyleInclude Source="avares://Classic.Avalonia.Theme.ColorPicker/Classic.axaml" />
     <!-- Xaml.Behaviors drag-to-reorder: provides the ListBox.draggable style used by the playlist. -->
     <StyleInclude Source="avares://Xaml.Behaviors.Interactions.Draggable/Styles.axaml"/>
     <!-- Drag feedback: the row being dragged dims + lifts above its neighbours. -->
@@ -26,19 +32,20 @@
       <Setter Property="Opacity" Value="0.6"/>
       <Setter Property="ZIndex" Value="1"/>
     </Style>
-    <Style Selector="NumericUpDown">
-      <Setter Property="MinWidth" Value="120"/>
-    </Style>
-    <Style Selector="ComboBox">
-      <Setter Property="MinHeight" Value="32"/>
-      <Setter Property="VerticalAlignment" Value="Center"/>
-    </Style>
     <Style Selector="Expander.dense /template/ ToggleButton#ExpanderHeader">
       <Setter Property="MinHeight" Value="24"/>
       <Setter Property="Padding" Value="6,2"/>
     </Style>
     <Style Selector="Expander.dense">
       <Setter Property="Padding" Value="0"/>
+    </Style>
+    <!-- App icon set (AppIcons geometries): paint with the Classic text color by default, and flip
+         to HighlightText inside selected rows so icons stay readable on the Highlight-blue band. -->
+    <Style Selector="PathIcon">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlTextBrushKey}}"/>
+    </Style>
+    <Style Selector="ListBoxItem:selected PathIcon">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.HighlightTextBrushKey}}"/>
     </Style>
   </Application.Styles>
 </Application>

@@ -47,44 +47,25 @@ public partial class CuePlayerViewModel
             RenumberFlat(SelectedCueList.Nodes, start: 1, step: 1);
     }
 
+    /// <summary>"+ Media" — cancel-safe: the picker runs FIRST and a cue row is only created per
+    /// successfully picked file. A dismissed picker leaves the cue list untouched (the old flow
+    /// seeded an empty placeholder cue that survived the cancel and had to be removed by hand).</summary>
     [RelayCommand]
     private async Task AddMediaCueAsync()
     {
         var parent = SelectedParentCollection();
         if (parent is null) return;
 
-        // Always seed at least one empty cue (matches the prior "+ Media → row, then pick" UX
-        // and the test contract). Multi-select fills it with the first file plus N-1 follow-ups.
-        var firstRow = new CueNodeViewModel(CueNodeKind.Media)
-        {
-            Number = NextNumber(parent),
-            Label = Strings.CueNodeDefaultMediaLabel,
-        };
-        parent.Add(firstRow);
-        FinalizeAddedCue(firstRow);
-        SelectedCueNode = firstRow;
-
         var picked = await PickMediaFilePathsAsync(allowMultiple: true);
         if (picked.Count == 0)
         {
-            // Picker cancelled — leave the empty cue so the operator can still drag a file onto
-            // it (and so the existing tests' assumptions hold).
-            GoCommand.NotifyCanExecuteChanged();
-            BackCommand.NotifyCanExecuteChanged();
             StatusMessage = null;
             return;
         }
 
-        var firstPath = picked[0];
-        firstRow.MediaSourceItem = new FilePlaylistItem(firstPath);
-        firstRow.SourceOrAction = firstPath;
-        firstRow.Label = Path.GetFileNameWithoutExtension(firstPath);
-        await ProbeAndAssignDurationAsync(firstRow, firstPath);
-
-        CueNodeViewModel lastAdded = firstRow;
-        for (var i = 1; i < picked.Count; i++)
+        CueNodeViewModel? lastAdded = null;
+        foreach (var path in picked)
         {
-            var path = picked[i];
             var row = new CueNodeViewModel(CueNodeKind.Media)
             {
                 Number = NextNumber(parent),
@@ -104,6 +85,26 @@ public partial class CuePlayerViewModel
         StatusMessage = picked.Count > 1
             ? Strings.Format(nameof(Strings.CueAddedFromDropStatusFormat), picked.Count)
             : null;
+    }
+
+    /// <summary>Adds an empty media cue row (no source yet). Kept for programmatic/test fixture use —
+    /// the "+ Media" command itself is cancel-safe and never creates placeholder cues.</summary>
+    internal CueNodeViewModel? AddEmptyMediaCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return null;
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = Strings.CueNodeDefaultMediaLabel,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+        return row;
     }
 
     [RelayCommand(CanExecute = nameof(CanAddNdiInputCue))]
@@ -130,7 +131,9 @@ public partial class CuePlayerViewModel
     private bool CanAddNdiInputCue() => IsNdiAvailable;
 
     /// <summary>Gate 6 — adds an MMD scene cue through the camera-placement dialog. The scene renders
-    /// like any video cue on its composition; audio pairs as a separate cue in the same group.</summary>
+    /// like any video cue on its composition; audio pairs as a separate cue in the same group. The
+    /// cue's duration comes from the motion VMD (0 = bind pose, holds until stopped) and the physics
+    /// bake starts in the background immediately ("always pre-bake if possible").</summary>
     [RelayCommand]
     private async Task AddMmdCueAsync()
     {
@@ -141,7 +144,19 @@ public partial class CuePlayerViewModel
         var dialog = new Views.Dialogs.AddMmdDialog { DataContext = dialogVm };
         var result = await dialog.ShowDialog<MmdPlaylistItem?>(owner);
         if (result is null) return;
-        AddLiveInputCue(result, result.DisplayName);
+        var row = AddLiveInputCue(result, result.DisplayName);
+        HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
+
+        if (row is not null && result.MotionPath is { Length: > 0 } motionPath && File.Exists(motionPath))
+        {
+            var duration = await Task.Run(() =>
+            {
+                try { return S.Media.Source.MMD.VmdDocument.Load(motionPath).Duration; }
+                catch { return TimeSpan.Zero; }
+            });
+            if (duration > TimeSpan.Zero)
+                row.DurationMs = (int)duration.TotalMilliseconds;
+        }
     }
 
     /// <summary>Gate 5 — adds a YouTube media cue through the same stream-selection dialog the deck uses
@@ -175,6 +190,16 @@ public partial class CuePlayerViewModel
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
+
+        // Reliable mode means the selected streams are already in the local cache — probe that asset
+        // like any file so the drawer gets exact duration/channels/fps/resolution (and audio-only
+        // items correctly drop the Video tab). The item-metadata duration is the fallback.
+        var assetPath = YouTubeRuntime.Preparer.AssetPathFor(
+            result.VideoId, result.VideoStreamDescriptor, result.AudioStreamDescriptor);
+        if (File.Exists(assetPath))
+            await ProbeAndAssignDurationAsync(row, assetPath);
+        else if (result.DurationSeconds is { } seconds and > 0)
+            row.DurationMs = (int)TimeSpan.FromSeconds(seconds).TotalMilliseconds;
     }
 
     [RelayCommand]
@@ -192,10 +217,10 @@ public partial class CuePlayerViewModel
         AddLiveInputCue(result, result.DeviceName);
     }
 
-    private void AddLiveInputCue(PlaylistItem source, string label)
+    private CueNodeViewModel? AddLiveInputCue(PlaylistItem source, string label)
     {
         var parent = SelectedParentCollection();
-        if (parent is null) return;
+        if (parent is null) return null;
         var row = new CueNodeViewModel(CueNodeKind.Media)
         {
             Number = NextNumber(parent),
@@ -209,6 +234,7 @@ public partial class CuePlayerViewModel
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
+        return row;
     }
 
     private const int StaticCueDefaultDurationMs = 5000;

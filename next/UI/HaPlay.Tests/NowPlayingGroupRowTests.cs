@@ -21,10 +21,10 @@ public sealed class NowPlayingGroupRowTests
         var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         Assert.True(group.IsGroup);
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var child1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         vm.SelectedCueNode = group;
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var child2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         Assert.Equal(2, group.Children.Count);
         return (vm, group, child1, child2);
@@ -65,7 +65,7 @@ public sealed class NowPlayingGroupRowTests
         DispatchUi(static () =>
         {
             var vm = new CuePlayerViewModel();
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
             vm.OnCueStarted(cue.Id);

@@ -99,6 +99,16 @@ public partial class MediaPlayerView : UserControl
             vm.AddDroppedFilesToPlaylist(paths);
     }
 
+    /// <summary>Opens the HOLD idle-image dialog for this player (was a cramped flyout).</summary>
+    private void OnHoldImageSetupClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm
+            || TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+        var dialog = new Dialogs.HoldImageDialog { DataContext = vm };
+        dialog.Show(owner);
+    }
+
     private void OnPlayerNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is TextBox tb)

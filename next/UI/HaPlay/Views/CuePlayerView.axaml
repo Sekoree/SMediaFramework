@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HaPlay.Views"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
@@ -57,9 +58,10 @@
         </MenuItem>
       </Menu>
       <Button Grid.Column="6"
-              Content="{x:Static res:Strings.CueListSettingsButton}"
               ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
-              Command="{Binding OpenCueListSettingsCommand}" />
+              Command="{Binding OpenCueListSettingsCommand}">
+            <PathIcon Data="{x:Static views:AppIcons.Gear}" Width="13" Height="13" />
+          </Button>
       <TextBlock Grid.Column="7"
                  Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
@@ -178,7 +180,7 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                   <TextBlock Grid.Column="2" Text="{x:Static res:Strings.PreWaitLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="3"
+                  <NumericUpDown FormatString="0" Grid.Column="3"
                                  Minimum="0"
                                  Maximum="120000"
                                  Value="{Binding SelectedCueNode.PreWaitMs, Mode=TwoWay}" />
@@ -197,12 +199,12 @@
                       ColumnSpacing="8"
                       IsVisible="{Binding HasSelectedMediaCue}">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.FadeInMsLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="1"
+                  <NumericUpDown FormatString="0" Grid.Column="1"
                                  Minimum="0"
                                  Maximum="120000"
                                  Value="{Binding SelectedCueNode.FadeInMs, Mode=TwoWay}" />
                   <TextBlock Grid.Column="2" Text="{x:Static res:Strings.FadeOutMsLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="3"
+                  <NumericUpDown FormatString="0" Grid.Column="3"
                                  Minimum="0"
                                  Maximum="120000"
                                  Value="{Binding SelectedCueNode.FadeOutMs, Mode=TwoWay}" />
@@ -333,7 +335,7 @@
                             SelectedItem="{Binding SelectedCueNode.SelectedAudioTrackChoice, Mode=TwoWay}" />
                 </StackPanel>
                 <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
-                        CornerRadius="3" Padding="6,3"
+                        CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectAudioBannerFormat}}" />
@@ -377,7 +379,7 @@
                                  Fill="{Binding LineRef.HealthColor, FallbackValue=#666666}"
                                  ToolTip.Tip="{Binding LineRef.HealthToolTip}" />
                         <TextBlock Text="{x:Static res:Strings.SrcChLabel}" VerticalAlignment="Center" />
-                        <NumericUpDown Value="{Binding SourceChannel, Mode=TwoWay}" Minimum="0" Maximum="63" />
+                        <NumericUpDown FormatString="0" Value="{Binding SourceChannel, Mode=TwoWay}" Minimum="0" Maximum="63" />
                         <TextBlock Text="{x:Static res:Strings.RouteOutputLabel}" VerticalAlignment="Center" />
                         <ComboBox SelectedValue="{Binding OutputLineId, Mode=TwoWay}"
                                   SelectedValueBinding="{Binding Definition.Id}"
@@ -395,7 +397,7 @@
                           </ComboBox.ItemTemplate>
                         </ComboBox>
                         <TextBlock Text="{x:Static res:Strings.OutChLabel}" VerticalAlignment="Center" />
-                        <NumericUpDown Value="{Binding OutputChannel, Mode=TwoWay}" Minimum="1" Maximum="64" />
+                        <NumericUpDown FormatString="0" Value="{Binding OutputChannel, Mode=TwoWay}" Minimum="1" Maximum="64" />
                         <TextBlock Text="{x:Static res:Strings.GainDbLabel}" VerticalAlignment="Center" />
                         <NumericUpDown Value="{Binding GainDb, Mode=TwoWay}" Minimum="-60" Maximum="12" Increment="0.5" FormatString="0.#" />
                         <CheckBox Content="{x:Static res:Strings.CueRouteMuteShortLabel}" IsChecked="{Binding Muted, Mode=TwoWay}" VerticalAlignment="Center" />
@@ -412,19 +414,19 @@
             <ScrollViewer>
               <StackPanel Spacing="8" Margin="6">
                 <Border Background="#22FFA500" BorderBrush="#44FFA500" BorderThickness="1"
-                        CornerRadius="3" Padding="6,3"
+                        CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding HasSelectedMediaCueWithAttachedPictureOnly}">
                   <TextBlock TextWrapping="Wrap"
                              Text="{x:Static res:Strings.VideoTabAttachedPictureHint}" />
                 </Border>
                 <Border Background="#22FF8080" BorderBrush="#44FF8080" BorderThickness="1"
-                        CornerRadius="3" Padding="6,3"
+                        CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding HasVideoFrameRateMismatchWarning}">
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding VideoFrameRateMismatchWarning}" />
                 </Border>
                 <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
-                        CornerRadius="3" Padding="6,3"
+                        CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectVideoBannerFormat}}" />
@@ -456,7 +458,7 @@
                 </WrapPanel>
 
                 <!-- Visual placement canvas: drag to move, bottom-right handle to resize, click to select -->
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="4" MinHeight="220">
+                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" MinHeight="220">
                   <controls:CompositionPlacementCanvas
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
@@ -532,7 +534,7 @@
                                   ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
                                   MinWidth="220" />
                         <TextBlock Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
-                        <NumericUpDown Value="{Binding LayerIndex, Mode=TwoWay}" VerticalAlignment="Center" Minimum="-100" Maximum="100" />
+                        <NumericUpDown FormatString="0" Value="{Binding LayerIndex, Mode=TwoWay}" VerticalAlignment="Center" Minimum="-100" Maximum="100" />
                         <TextBlock Text="{x:Static res:Strings.LayerPositionLabel}" VerticalAlignment="Center" />
                         <ComboBox SelectedItem="{Binding Position, Mode=TwoWay}"
                                   ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).LayerPositions}"
@@ -733,9 +735,11 @@
                          FontWeight="SemiBold"
                          VerticalAlignment="Center" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                <ToggleButton Classes="Dense" Content="&#x1F512;"
+                <ToggleButton Classes="Dense"
                               IsChecked="{Binding NowPlayingSeekUnlocked}"
-                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}" />
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}">
+                  <PathIcon Data="{x:Static views:AppIcons.Lock}" Width="11" Height="11" />
+                </ToggleButton>
                 <Button Content="{x:Static res:Strings.StopAllNowPlayingButton}"
                         Command="{Binding StopCommand}"
                         IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
@@ -748,17 +752,18 @@
             <ItemsControl ItemsSource="{Binding NowPlayingRows}">
               <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
-                  <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="3"
+                  <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4">
                     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding CueNumberDisplay}" FontWeight="SemiBold" Opacity="0.7" />
                         <TextBlock Text="{Binding CueLabel}" TextTrimming="CharacterEllipsis" />
                       </StackPanel>
-                      <Button Grid.Row="0" Grid.Column="1"
-                              Content="✕" Padding="6,0" MinWidth="22"
+                      <Button Grid.Row="0" Grid.Column="1" Padding="6,0" MinWidth="22"
                               Command="{Binding CancelCommand}"
-                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}" />
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}">
+            <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
+          </Button>
                       <ProgressBar Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
                                    Margin="0,4,0,2" Height="10"
                                    Minimum="0" Maximum="100"
@@ -775,7 +780,7 @@
                 </DataTemplate>
 
                 <DataTemplate DataType="vm:ActiveGroupViewModel">
-                  <Border BorderBrush="#33808080" BorderThickness="1" CornerRadius="3"
+                  <Border BorderBrush="#33808080" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4" Background="#0A808080">
                     <StackPanel Spacing="2">
                       <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
@@ -790,10 +795,11 @@
                           <TextBlock Text="{Binding Children.Count, StringFormat='({0})'}" Opacity="0.6" FontSize="11"
                                      VerticalAlignment="Center" />
                         </StackPanel>
-                        <Button Grid.Column="2"
-                                Content="✕" Padding="6,0" MinWidth="22"
+                        <Button Grid.Column="2" Padding="6,0" MinWidth="22"
                                 Command="{Binding CancelAllCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}" />
+                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}">
+            <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
+          </Button>
                       </Grid>
                       <ProgressBar Margin="0,2,0,2" Height="10"
                                    Minimum="0" Maximum="100"
