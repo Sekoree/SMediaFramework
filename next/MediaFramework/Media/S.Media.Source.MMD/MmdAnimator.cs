@@ -25,6 +25,12 @@ public sealed class MmdAnimator
     private readonly Vector3[] _animTranslations; // folded local translation (sample + append)
     private readonly Vector3[] _fixedAxes;        // normalized fixed axis per bone (Zero = none)
     private readonly IkSetup?[] _ikSetups;        // per-bone solver setup; non-null only for solvable IK bones
+    private readonly IReadOnlyList<VmdMorphFrame>?[] _morphTracks; // per-morph VMD track (null = unanimated)
+    private readonly float[] _morphWeights;       // per-morph weight this evaluation (groups fanned out)
+    private readonly bool _hasBoneMorphs;
+    private readonly Quaternion[] _boneMorphRotations;   // accumulated bone-morph deltas (empty when unused)
+    private readonly Vector3[] _boneMorphTranslations;
+    private readonly IReadOnlyList<VmdIkFrame>?[] _ikEnableTracks; // per-IK-bone on/off keys (null = always on)
 
     public MmdAnimator(PmxDocument model, VmdDocument motion)
     {
@@ -61,6 +67,22 @@ public sealed class MmdAnimator
         for (var i = 0; i < count; i++)
             if (IsSolvableIkBone(model, i))
                 _ikSetups[i] = new IkSetup(model, i, orderPosition);
+
+        _morphTracks = new IReadOnlyList<VmdMorphFrame>?[model.Morphs.Count];
+        for (var m = 0; m < model.Morphs.Count; m++)
+            _morphTracks[m] = motion.MorphTracks.TryGetValue(model.Morphs[m].Name, out var track) && track.Count > 0
+                ? track
+                : null;
+        _morphWeights = new float[model.Morphs.Count];
+        _hasBoneMorphs = model.Morphs.Any(m => m.BoneOffsets.Count > 0);
+        _boneMorphRotations = new Quaternion[_hasBoneMorphs ? count : 0];
+        _boneMorphTranslations = new Vector3[_hasBoneMorphs ? count : 0];
+
+        _ikEnableTracks = new IReadOnlyList<VmdIkFrame>?[count];
+        for (var i = 0; i < count; i++)
+            if (_ikSetups[i] is not null
+                && motion.IkEnableTracks.TryGetValue(model.Bones[i].Name, out var ikTrack) && ikTrack.Count > 0)
+                _ikEnableTracks[i] = ikTrack;
     }
 
     /// <summary>An IK bone this solver can run: a valid effector target and at least one valid link.</summary>
@@ -106,6 +128,11 @@ public sealed class MmdAnimator
 
         var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
 
+        // Morph weights first — bone morphs feed the transform passes below, vertex morphs the skinning.
+        SampleMorphWeights(frame);
+        if (_hasBoneMorphs)
+            AccumulateBoneMorphs();
+
         // IK deltas reset every evaluation — the pose stays a pure function of time (seek-back determinism).
         Array.Fill(_ikRotations, Quaternion.Identity);
 
@@ -129,19 +156,16 @@ public sealed class MmdAnimator
         for (var i = 0; i < _model.Bones.Count; i++)
             _skin[i] = Matrix4x4.CreateTranslation(-_model.Bones[i].Position) * _world[i];
 
-        // Vertex morphs (weights sampled at the same time).
+        // Vertex morphs (weights sampled above, group morphs already fanned out).
         var vertices = _model.Vertices;
         for (var v = 0; v < vertices.Count; v++)
             _morphedPositions[v] = vertices[v].Position;
-        foreach (var morph in _model.Morphs)
+        for (var m = 0; m < _morphWeights.Length; m++)
         {
-            if (morph.VertexOffsets.Count == 0 ||
-                !_motion.MorphTracks.TryGetValue(morph.Name, out var track) || track.Count == 0)
+            var weight = _morphWeights[m];
+            if (weight == 0f)
                 continue;
-            var weight = SampleMorph(track, frame);
-            if (weight <= 0f)
-                continue;
-            foreach (var offset in morph.VertexOffsets)
+            foreach (var offset in _model.Morphs[m].VertexOffsets)
                 _morphedPositions[offset.VertexIndex] += offset.Offset * weight;
         }
 
@@ -189,6 +213,14 @@ public sealed class MmdAnimator
         if (bone.FixedAxis is not null)
             rotation = ProjectToAxis(rotation, _fixedAxes[i]);
 
+        // Bone morphs compose on top of the sampled animation (babylon: morph ⊗ anim).
+        if (_hasBoneMorphs)
+        {
+            if (_boneMorphRotations[i] != Quaternion.Identity)
+                rotation = Quaternion.Normalize(_boneMorphRotations[i] * rotation);
+            translation += _boneMorphTranslations[i];
+        }
+
         if (bone.AppendParentIndex >= 0 && bone.AppendParentIndex < _model.Bones.Count)
         {
             var donor = bone.AppendParentIndex;
@@ -196,24 +228,32 @@ public sealed class MmdAnimator
             {
                 // Donor's effective local rotation: its folded animation (which already contains the
                 // donor's OWN append — the recursion) with its IK delta composed on top. This is what
-                // makes the D-bone legs follow the IK solve.
-                var source = _ikRotations[donor] == Quaternion.Identity
-                    ? _animRotations[donor]
-                    : Quaternion.Normalize(_ikRotations[donor] * _animRotations[donor]);
+                // makes the D-bone legs follow the IK solve. LOCAL append (0x0080) reads the donor's
+                // WORLD deformation instead (babylon's isLocal branch).
+                var source = bone.LocalAppend
+                    ? RotationPartOf(_world[donor])
+                    : _ikRotations[donor] == Quaternion.Identity
+                        ? _animRotations[donor]
+                        : Quaternion.Normalize(_ikRotations[donor] * _animRotations[donor]);
                 if (bone.AppendRatio != 1f)
                     source = Quaternion.Normalize(Quaternion.Slerp(Quaternion.Identity, source, bone.AppendRatio));
                 rotation = Quaternion.Normalize(rotation * source);
             }
 
             if (bone.AppendTranslation)
-                translation += _animTranslations[donor] * bone.AppendRatio;
+            {
+                var source = bone.LocalAppend
+                    ? _world[donor].Translation - _model.Bones[donor].Position // world displacement of the donor
+                    : _animTranslations[donor];
+                translation += source * bone.AppendRatio;
+            }
         }
 
         _animRotations[i] = Quaternion.Normalize(rotation);
         _animTranslations[i] = translation;
         ComputeWorld(i);
 
-        if (_ikSetups[i] is { } setup)
+        if (_ikSetups[i] is { } setup && IkEnabledAt(i, frame))
         {
             SolveIk(setup);
             // Bones already processed this pass whose ancestors include a moved link (the toe chain
@@ -223,6 +263,64 @@ public sealed class MmdAnimator
                 ComputeWorld(group[p]);
         }
     }
+
+    /// <summary>Step-samples the VMD IK-enable track for a bone (no keys, or none yet ⇒ IK on).</summary>
+    private bool IkEnabledAt(int bone, float frame)
+    {
+        if (_ikEnableTracks[bone] is not { } track)
+            return true;
+        var enabled = true;
+        for (var k = 0; k < track.Count && track[k].Frame <= frame; k++)
+            enabled = track[k].Enabled;
+        return enabled;
+    }
+
+    /// <summary>Per-morph weights at <paramref name="frame"/>: direct tracks sampled, then group morphs
+    /// fan their weight out ratio-scaled onto their members (PMX forbids nested groups; guarded anyway).</summary>
+    private void SampleMorphWeights(float frame)
+    {
+        for (var m = 0; m < _morphWeights.Length; m++)
+            _morphWeights[m] = _morphTracks[m] is { } track ? SampleMorph(track, frame) : 0f;
+
+        for (var m = 0; m < _morphWeights.Length; m++)
+        {
+            var groups = _model.Morphs[m].GroupOffsets;
+            var weight = _morphWeights[m];
+            if (groups.Count == 0 || weight == 0f)
+                continue;
+            foreach (var member in groups)
+                if ((uint)member.MorphIndex < (uint)_morphWeights.Length
+                    && member.MorphIndex != m
+                    && _model.Morphs[member.MorphIndex].GroupOffsets.Count == 0)
+                    _morphWeights[member.MorphIndex] += weight * member.Ratio;
+        }
+    }
+
+    /// <summary>Folds every active bone morph into per-bone rotation/translation deltas.</summary>
+    private void AccumulateBoneMorphs()
+    {
+        Array.Fill(_boneMorphRotations, Quaternion.Identity);
+        Array.Fill(_boneMorphTranslations, Vector3.Zero);
+        for (var m = 0; m < _morphWeights.Length; m++)
+        {
+            var weight = _morphWeights[m];
+            var offsets = _model.Morphs[m].BoneOffsets;
+            if (weight == 0f || offsets.Count == 0)
+                continue;
+            foreach (var offset in offsets)
+            {
+                if ((uint)offset.BoneIndex >= (uint)_boneMorphRotations.Length)
+                    continue;
+                _boneMorphTranslations[offset.BoneIndex] += offset.Translation * weight;
+                var delta = Quaternion.Slerp(Quaternion.Identity, Quaternion.Normalize(offset.Rotation), weight);
+                _boneMorphRotations[offset.BoneIndex] =
+                    Quaternion.Normalize(delta * _boneMorphRotations[offset.BoneIndex]);
+            }
+        }
+    }
+
+    private static Quaternion RotationPartOf(in Matrix4x4 world) =>
+        Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(world with { Translation = Vector3.Zero }));
 
     /// <summary>Chains one bone's world matrix from its stored folded locals + IK delta and its
     /// parent's CURRENT world. Parents precede children in transform order, so passes that sweep the

@@ -14,6 +14,9 @@ public readonly record struct VmdBoneFrame(
 
 public readonly record struct VmdMorphFrame(uint Frame, float Weight);
 
+/// <summary>One IK on/off key for a single IK bone (from the VMD show/IK section).</summary>
+public readonly record struct VmdIkFrame(uint Frame, bool Enabled);
+
 /// <summary>One VMD camera keyframe (MMD conventions: camera orbits <see cref="Target"/> at
 /// <see cref="Distance"/> with XYZ euler <see cref="RotationRadians"/>; <see cref="FovDegrees"/> vertical).</summary>
 public readonly record struct VmdCameraFrame(
@@ -26,8 +29,9 @@ public readonly record struct VmdCameraFrame(
 
 /// <summary>
 /// Parsed VMD motion (review Gate-6 stage 1): bone tracks (grouped by Shift-JIS bone name), morph
-/// tracks, and the camera track. Light/self-shadow/IK-enable sections are ignored (out of prototype
-/// scope). Frames are the MMD 30 fps timeline; conversion to session time is the animator's job.
+/// tracks, the camera track, and per-IK-bone enable tracks (the show/IK section). Light/self-shadow
+/// sections are structurally skipped. Frames are the MMD 30 fps timeline; conversion to session time
+/// is the animator's job.
 /// </summary>
 public sealed class VmdDocument
 {
@@ -37,6 +41,10 @@ public sealed class VmdDocument
     public required IReadOnlyDictionary<string, IReadOnlyList<VmdBoneFrame>> BoneTracks { get; init; }
     public required IReadOnlyDictionary<string, IReadOnlyList<VmdMorphFrame>> MorphTracks { get; init; }
     public required IReadOnlyList<VmdCameraFrame> CameraTrack { get; init; }
+
+    /// <summary>IK on/off keys per IK bone name (step-sampled; a bone with no track is always on).</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<VmdIkFrame>> IkEnableTracks { get; init; } =
+        new Dictionary<string, IReadOnlyList<VmdIkFrame>>(StringComparer.Ordinal);
 
     /// <summary>Last keyframe across all tracks, as a 30 fps frame number.</summary>
     public uint LastFrame { get; init; }
@@ -127,6 +135,49 @@ public sealed class VmdDocument
             camera.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
         }
 
+        // Light frames (28 bytes each) and self-shadow frames (9 bytes each) — structurally skipped.
+        if (stream.Position < stream.Length)
+        {
+            var lightCount = ReadCount(r, "light-frame");
+            for (var i = 0; i < lightCount; i++)
+                if (r.ReadBytes(28).Length != 28)
+                    throw new PmxFormatException("truncated VMD light frame");
+        }
+
+        if (stream.Position < stream.Length)
+        {
+            var shadowCount = ReadCount(r, "self-shadow-frame");
+            for (var i = 0; i < shadowCount; i++)
+                if (r.ReadBytes(9).Length != 9)
+                    throw new PmxFormatException("truncated VMD self-shadow frame");
+        }
+
+        // Show/IK frames: each key carries the model-visible flag (ignored) plus per-IK-bone on/off.
+        var ikTracks = new Dictionary<string, List<VmdIkFrame>>(StringComparer.Ordinal);
+        if (stream.Position < stream.Length)
+        {
+            var ikFrameCount = ReadCount(r, "show-ik-frame");
+            for (var i = 0; i < ikFrameCount; i++)
+            {
+                var frame = r.ReadUInt32();
+                _ = r.ReadByte(); // model visible
+                var ikCount = ReadCount(r, "ik-state");
+                for (var k = 0; k < ikCount; k++)
+                {
+                    var boneName = ReadFixedString(r, 20, shiftJis);
+                    var enabled = r.ReadByte() != 0;
+                    if (!ikTracks.TryGetValue(boneName, out var track))
+                        ikTracks[boneName] = track = [];
+                    track.Add(new VmdIkFrame(frame, enabled));
+                }
+
+                lastFrame = Math.Max(lastFrame, frame);
+            }
+
+            foreach (var track in ikTracks.Values)
+                track.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
+        }
+
         return new VmdDocument
         {
             ModelName = modelName,
@@ -135,6 +186,8 @@ public sealed class VmdDocument
             MorphTracks = morphTracks.ToDictionary(
                 kv => kv.Key, IReadOnlyList<VmdMorphFrame> (kv) => kv.Value, StringComparer.Ordinal),
             CameraTrack = camera,
+            IkEnableTracks = ikTracks.ToDictionary(
+                kv => kv.Key, IReadOnlyList<VmdIkFrame> (kv) => kv.Value, StringComparer.Ordinal),
             LastFrame = lastFrame,
         };
     }

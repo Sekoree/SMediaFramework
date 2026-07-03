@@ -81,6 +81,10 @@ public sealed record PmxBone(
     /// <summary>Fixed rotation axis (PMX flag 0x0400 — the 腕捩/手捩 twist bones): sampled rotation is
     /// projected onto this axis. Null when the bone rotates freely.</summary>
     public Vector3? FixedAxis { get; init; }
+
+    /// <summary>Append reads the donor's LOCAL (world-deformation) state instead of its animated local
+    /// pose (PMX flag 0x0080) — rare, but authored on some accessory rigs.</summary>
+    public bool LocalAppend { get; init; }
 }
 
 /// <summary>Rigid-body collision shape (PMX byte values).</summary>
@@ -142,7 +146,22 @@ public sealed record PmxJoint(
 /// <summary>One vertex-morph offset.</summary>
 public readonly record struct PmxVertexMorphOffset(int VertexIndex, Vector3 Offset);
 
-public sealed record PmxMorph(string Name, int Panel, IReadOnlyList<PmxVertexMorphOffset> VertexOffsets);
+/// <summary>One bone-morph offset: at weight w the bone gains w·<paramref name="Translation"/> and
+/// slerp(identity, <paramref name="Rotation"/>, w) on top of its animated pose.</summary>
+public readonly record struct PmxBoneMorphOffset(int BoneIndex, Vector3 Translation, Quaternion Rotation);
+
+/// <summary>One group-morph member: the group's weight fans out as weight·<paramref name="Ratio"/>
+/// onto the referenced morph.</summary>
+public readonly record struct PmxGroupMorphOffset(int MorphIndex, float Ratio);
+
+public sealed record PmxMorph(string Name, int Panel, IReadOnlyList<PmxVertexMorphOffset> VertexOffsets)
+{
+    /// <summary>Bone offsets (morph type 2); empty for other morph kinds.</summary>
+    public IReadOnlyList<PmxBoneMorphOffset> BoneOffsets { get; init; } = [];
+
+    /// <summary>Group members (morph type 0); empty for other morph kinds.</summary>
+    public IReadOnlyList<PmxGroupMorphOffset> GroupOffsets { get; init; } = [];
+}
 
 /// <summary>
 /// Parsed PMX 2.0/2.1 model (review Gate-6 stage 1). Faithfully parses the sections this prototype
@@ -375,6 +394,7 @@ public sealed class PmxDocument
                 DeformLayer = deformLayer,
                 TransformAfterPhysics = (flags & 0x1000) != 0,
                 FixedAxis = fixedAxis,
+                LocalAppend = (flags & 0x0080) != 0,
             };
         }
 
@@ -402,16 +422,25 @@ public sealed class PmxDocument
 
                     morphs.Add(new PmxMorph(name, panel, offsets));
                     break;
-                case 0: // group: (morph index, weight) — kept as empty; evaluation follows the referenced morphs later
+                case 0: // group: the group's sampled weight fans out ratio-scaled onto its members
+                    var members = new PmxGroupMorphOffset[offsetCount];
+                    for (var o = 0; o < offsetCount; o++)
+                        members[o] = new PmxGroupMorphOffset(reader.Index(morphIndexSize), reader.F32());
+                    morphs.Add(new PmxMorph(name, panel, []) { GroupOffsets = members });
+                    break;
+                case 2: // bone: per-bone translation + rotation offsets blended by the sampled weight
+                    var boneOffsets = new PmxBoneMorphOffset[offsetCount];
                     for (var o = 0; o < offsetCount; o++)
                     {
-                        _ = reader.Index(morphIndexSize);
-                        reader.Skip(4);
+                        var morphBone = reader.Index(boneIndexSize);
+                        var morphTranslation = reader.Vec3();
+                        var q = reader.Vec4();
+                        boneOffsets[o] = new PmxBoneMorphOffset(
+                            morphBone, morphTranslation, new Quaternion(q.X, q.Y, q.Z, q.W));
                     }
 
-                    morphs.Add(new PmxMorph(name, panel, []));
+                    morphs.Add(new PmxMorph(name, panel, []) { BoneOffsets = boneOffsets });
                     break;
-                case 2: reader.SkipPer(offsetCount, boneIndexSize + 12 + 16); morphs.Add(new PmxMorph(name, panel, [])); break; // bone
                 case 3: case 4: case 5: case 6: case 7: // UV / additional UV1-4
                     reader.SkipPer(offsetCount, vertexIndexSize + 16); morphs.Add(new PmxMorph(name, panel, [])); break;
                 case 8: reader.SkipPer(offsetCount, materialIndexSize + 1 + 112); morphs.Add(new PmxMorph(name, panel, [])); break; // material

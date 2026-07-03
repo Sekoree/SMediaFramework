@@ -35,7 +35,10 @@ public sealed class MmdPhysics
     private const int PositionIterations = 10;
     private const float MaxLinearCorrection = 0.2f;   // per NGS iteration (Box2D's caps)
     private const float MaxAngularCorrection = 0.15f;
-    private const float ContactPositionFactor = 0.2f; // gentle depenetration fraction per iteration
+    private const float ContactErp = 0.2f;            // Bullet-style Baumgarte in the CONTACT rows only:
+                                                      // depenetration must act at the contact arm (torque)
+                                                      // or a plate pinned by a locked joint can never
+                                                      // rotate out of a static overlap
     private const float ContactSlop = 0.005f;         // penetration allowance before correction kicks in
     private const float RestitutionThreshold = 1f;    // approach speed below which contacts don't bounce
 
@@ -50,6 +53,7 @@ public sealed class MmdPhysics
         public int BoneIndex;
         public bool Dynamic;
         public bool AlignBonePosition;   // PhysicsWithBonePosition: rotation from physics, position from bone
+        public bool IsBox;               // boxes get real OBB contacts (vs sphere/capsule)
         public ushort Group;             // bit (1 << group)
         public ushort Mask;
         public float InvMass;
@@ -58,8 +62,10 @@ public sealed class MmdPhysics
         public float Restitution;
         public float LinearDamping;
         public float AngularDamping;
-        public float Radius;             // collision radius (sphere/capsule; box approximated)
+        public float Radius;             // collision radius (sphere/capsule; box fallback approximation)
         public float HalfHeight;         // capsule half-length along local Y (0 ⇒ sphere)
+        public Vector3 HalfExtents;      // box half-extents (zero for sphere/capsule)
+        public float BoundingRadius;     // broad-phase early-out
         public Matrix4x4 BoneToBody;     // bind: bodyWorld = BoneToBody · boneWorld (row-vector)
         public Matrix4x4 BodyToBone;
         public Vector3 Position;
@@ -80,6 +86,8 @@ public sealed class MmdPhysics
         public Vector3 AngularLower, AngularUpper;
         public Vector3 LinearSpring, AngularSpring;
         public bool AngularAllLocked;    // all three axes locked at 0 — the MMD chain-segment default
+        public bool IsChainLink;         // boneA is an ancestor of boneB (structural chain, not a ring/lattice link)
+        public bool LinearAllLocked;     // linear DOF locked at 0 — MMD's inextensible chain default
     }
 
     /// <summary>One velocity-constraint row (a joint axis), built once per substep and iterated.</summary>
@@ -91,7 +99,6 @@ public sealed class MmdPhysics
         public Vector3 Axis;             // world-space solve direction
         public Vector3 ArmA, ArmB;       // anchor arms (linear rows)
         public float InvEffectiveMass;
-        public float Bias;               // target-velocity term (zero for joints; kept for symmetry)
         public float MinImpulse, MaxImpulse;
         public float Impulse;            // accumulated (warm-started from the previous substep)
         public int AccumulatorIndex;     // slot in _jointAccumulators persisted across substeps
@@ -164,9 +171,13 @@ public sealed class MmdPhysics
             var dynamic = spec.Mode != PmxPhysicsMode.FollowBone && spec.Mass > 0f;
             var mass = MathF.Max(spec.Mass, 1e-4f);
 
-            // Collision primitive: sphere/capsule as authored; a box becomes a capsule along its longest
-            // axis with the SMALLEST half-extent as radius (thin radius keeps skirt rest contacts clear).
+            // Collision primitive: sphere/capsule as authored; BOXES collide as real OBBs (the skirt
+            // plates are wide thin boxes — a capsule approximation has no collision across the wide
+            // face and legs pass straight through, then trap the plate inside the torso). A capsule
+            // fallback along the longest axis remains only for the box-box case, which the authored
+            // collision masks make irrelevant in practice.
             float radius, halfHeight;
+            var halfExtents = Vector3.Zero;
             switch (spec.Shape)
             {
                 case PmxRigidShape.Sphere:
@@ -179,6 +190,7 @@ public sealed class MmdPhysics
                     break;
                 default: // Box
                     var s = spec.Size;
+                    halfExtents = Vector3.Max(s, new Vector3(0.01f));
                     if (s.Y >= s.X && s.Y >= s.Z) { halfHeight = s.Y; radius = MathF.Min(s.X, s.Z); }
                     else if (s.X >= s.Z) { halfHeight = s.X; radius = MathF.Min(s.Y, s.Z); }
                     else { halfHeight = s.Z; radius = MathF.Min(s.X, s.Y); }
@@ -190,6 +202,7 @@ public sealed class MmdPhysics
                 BoneIndex = spec.BoneIndex,
                 Dynamic = dynamic,
                 AlignBonePosition = spec.Mode == PmxPhysicsMode.PhysicsWithBonePosition,
+                IsBox = spec.Shape == PmxRigidShape.Box,
                 Group = (ushort)(1 << (spec.Group & 0x0F)),
                 Mask = spec.CollisionMask,
                 InvMass = dynamic ? 1f / mass : 0f,
@@ -200,6 +213,10 @@ public sealed class MmdPhysics
                 AngularDamping = Math.Clamp(spec.AngularDamping, 0f, 1f),
                 Radius = MathF.Max(radius, 0.01f),
                 HalfHeight = MathF.Max(halfHeight, 0f),
+                HalfExtents = halfExtents,
+                BoundingRadius = spec.Shape == PmxRigidShape.Box
+                    ? halfExtents.Length()
+                    : MathF.Max(radius, 0.01f) + MathF.Max(halfHeight, 0f),
                 BoneToBody = bindBody * boneBindInv,   // row-vector: body = (body·bone⁻¹)·bone
                 BodyToBone = boneBind * bindBodyInv,
                 Position = spec.Position,
@@ -234,6 +251,8 @@ public sealed class MmdPhysics
                 LinearSpring = joint.LinearSpring,
                 AngularSpring = joint.AngularSpring,
                 AngularAllLocked = angularLower == Vector3.Zero && angularUpper == Vector3.Zero,
+                IsChainLink = IsAncestorBone(model, a.BoneIndex, b.BoneIndex),
+                LinearAllLocked = joint.LinearLowerLimit == Vector3.Zero && joint.LinearUpperLimit == Vector3.Zero,
             });
             jointedPairs.Add(PairKey(joint.RigidBodyA, joint.RigidBodyB));
 
@@ -264,6 +283,21 @@ public sealed class MmdPhysics
             (uint)boneIndex < (uint)model.Bones.Count && model.Bones[boneIndex].ParentIndex >= 0
                 ? model.Bones[boneIndex].ParentIndex
                 : null;
+
+        // Structural chain joint (waist→plate, hair segment→segment) vs a ring/lattice link between
+        // siblings — the inextensibility snap must only follow real parent→child joints.
+        static bool IsAncestorBone(PmxDocument model, int ancestor, int descendant)
+        {
+            if ((uint)ancestor >= (uint)model.Bones.Count || (uint)descendant >= (uint)model.Bones.Count)
+                return false;
+            var guard = model.Bones.Count;
+            for (var walk = model.Bones[descendant].ParentIndex;
+                 walk >= 0 && walk < model.Bones.Count && guard-- > 0;
+                 walk = model.Bones[walk].ParentIndex)
+                if (walk == ancestor)
+                    return true;
+            return false;
+        }
     }
 
     private static long PairKey(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
@@ -656,37 +690,29 @@ public sealed class MmdPhysics
                 }
             }
 
-            // Contact depenetration — geometry recomputed live, gentle fraction per iteration.
-            foreach (var contact in _contacts)
-            {
-                ref var a = ref _bodies[contact.A];
-                ref var b = ref _bodies[contact.B];
-                var (pa, pb) = ClosestSegmentPoints(SegmentOf(a), SegmentOf(b));
-                var delta = pb - pa;
-                var distance = delta.Length();
-                var minDistance = a.Radius + b.Radius;
-                if (distance >= minDistance - ContactSlop || distance < 1e-6f)
-                    continue;
-
-                var n = delta / distance;
-                var invMassSum = a.InvMass + b.InvMass;
-                if (invMassSum <= 0f)
-                    continue;
-
-                var depth = minDistance - distance;
-                worst = MathF.Max(worst, depth);
-                var correction = MathF.Min(ContactPositionFactor * (depth - ContactSlop), MaxLinearCorrection);
-                if (correction <= 0f)
-                    continue;
-
-                // Translate-only, like the joint fix above (split-impulse depenetration).
-                var move = n * (correction / invMassSum);
-                a.Position -= move * a.InvMass;
-                b.Position += move * b.InvMass;
-            }
-
             if (worst < 1e-4f)
                 break;
+        }
+
+        // Inextensibility sweep: MMD authors chain joints root→tip with the linear DOF locked, but
+        // whatever residual the iterative passes leave concentrates at the far end of long chains —
+        // visibly, hair tips stretching during fast head moves. One final in-order sweep snaps each
+        // CHAIN child's anchor exactly (translate-only, so rotations are untouched); ring/lattice
+        // joints between siblings are excluded, or they would fight the chains they brace.
+        for (var j = 0; j < _joints.Length; j++)
+        {
+            ref var joint = ref _joints[j];
+            if (!joint.IsChainLink || !joint.LinearAllLocked)
+                continue;
+
+            ref var a = ref _bodies[joint.A];
+            ref var b = ref _bodies[joint.B];
+            var error = b.Position + Vector3.Transform(joint.PivotB, b.Rotation)
+                        - (a.Position + Vector3.Transform(joint.PivotA, a.Rotation));
+            if (b.Dynamic)
+                b.Position -= error;
+            else if (a.Dynamic)
+                a.Position += error;
         }
 
         static void RotateAboutAnchor(ref Body body, Vector3 theta, Vector3 anchor)
@@ -735,7 +761,7 @@ public sealed class MmdPhysics
                 - a.LinearVelocity - Vector3.Cross(a.AngularVelocity, row.ArmA), row.Axis);
         }
 
-        var impulse = -(velocity + row.Bias) * row.InvEffectiveMass;
+        var impulse = -velocity * row.InvEffectiveMass;
         var accumulated = Math.Clamp(row.Impulse + impulse, row.MinImpulse, row.MaxImpulse);
         impulse = accumulated - row.Impulse;
         row.Impulse = accumulated;
@@ -846,15 +872,9 @@ public sealed class MmdPhysics
                 if (_jointedPairs.Contains(PairKey(i, j)))
                     continue; // Bullet: constrained pairs don't collide
 
-                var (pa, pb) = ClosestSegmentPoints(SegmentOf(a), SegmentOf(b));
-                var delta = pb - pa;
-                var distance = delta.Length();
-                var minDistance = a.Radius + b.Radius;
-                if (distance >= minDistance || distance < 1e-6f)
+                if (!TryContactGeometry(a, b, out var normal, out var point, out var depth))
                     continue;
 
-                var normal = delta / distance;
-                var point = (pa + pb) * 0.5f;
                 var rA = point - a.Position;
                 var rB = point - b.Position;
 
@@ -863,8 +883,8 @@ public sealed class MmdPhysics
                     b.LinearVelocity + Vector3.Cross(b.AngularVelocity, rB)
                     - a.LinearVelocity - Vector3.Cross(a.AngularVelocity, rA), normal);
                 var restitution = a.Restitution * b.Restitution;
-                // Velocity-level target is the bounce only — penetration is fixed by the position pass.
-                var bias = approach < -RestitutionThreshold ? -restitution * approach : 0f;
+                var bounce = approach < -RestitutionThreshold ? -restitution * approach : 0f;
+                var bias = ContactErp * MathF.Max(depth - ContactSlop, 0f) / SubstepSeconds + bounce;
 
                 var tangent1 = Vector3.Cross(normal, MathF.Abs(normal.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX);
                 tangent1 = Vector3.Normalize(tangent1);
@@ -984,6 +1004,103 @@ public sealed class MmdPhysics
         return sin < 1e-6f
             ? v * 2f // small-angle: q ≈ (axis·θ/2, 1)
             : v / sin * (2f * MathF.Acos(w));
+    }
+
+    /// <summary>Narrow-phase contact: normal points A → B, <paramref name="depth"/> &gt; 0 is the
+    /// penetration. Sphere/capsule pairs use segment-segment; a box against a round body uses the real
+    /// OBB with interior handling; box-box keeps the capsule fallback (the authored masks keep skirt
+    /// plates from colliding with each other).</summary>
+    private static bool TryContactGeometry(in Body a, in Body b, out Vector3 normal, out Vector3 point, out float depth)
+    {
+        normal = default;
+        point = default;
+        depth = 0f;
+        var reach = a.BoundingRadius + b.BoundingRadius;
+        if (Vector3.DistanceSquared(a.Position, b.Position) > reach * reach)
+            return false;
+
+        if (a.IsBox != b.IsBox)
+        {
+            if (a.IsBox)
+                return TryBoxRound(a, b, out normal, out point, out depth); // normal box→round = A→B
+
+            if (!TryBoxRound(b, a, out normal, out point, out depth))
+                return false;
+            normal = -normal; // computed box(B)→round(A); flip to A→B
+            return true;
+        }
+
+        var (pa, pb) = ClosestSegmentPoints(SegmentOf(a), SegmentOf(b));
+        var delta = pb - pa;
+        var distance = delta.Length();
+        var minDistance = a.Radius + b.Radius;
+        if (distance >= minDistance || distance < 1e-6f)
+            return false;
+
+        normal = delta / distance;
+        point = (pa + pb) * 0.5f;
+        depth = minDistance - distance;
+        return true;
+    }
+
+    /// <summary>Box vs sphere/capsule: closest point between the round body's core segment and the OBB
+    /// (iterative point clamping — exact for spheres, converges fast for our short capsules). A core
+    /// point INSIDE the box exits through the NEAREST face — this is what lets a plate that a leg
+    /// tunnelled through pop back out instead of being wedged deeper. Normal points box → round.</summary>
+    private static bool TryBoxRound(in Body box, in Body round, out Vector3 normal, out Vector3 point, out float depth)
+    {
+        normal = default;
+        point = default;
+        depth = 0f;
+        var invRotation = Quaternion.Conjugate(box.Rotation);
+        var (w0, w1) = SegmentOf(round);
+        var s0 = Vector3.Transform(w0 - box.Position, invRotation);
+        var s1 = Vector3.Transform(w1 - box.Position, invRotation);
+        var half = box.HalfExtents;
+
+        var p = (s0 + s1) * 0.5f;
+        var c = Vector3.Clamp(p, -half, half);
+        for (var i = 0; i < 4; i++)
+        {
+            p = ClosestOnSegment(s0, s1, c);
+            c = Vector3.Clamp(p, -half, half);
+        }
+
+        var delta = p - c;
+        var distanceSquared = delta.LengthSquared();
+        if (distanceSquared > 1e-10f)
+        {
+            var distance = MathF.Sqrt(distanceSquared);
+            if (distance >= round.Radius)
+                return false;
+
+            normal = Vector3.Transform(delta / distance, box.Rotation);
+            point = box.Position + Vector3.Transform(c, box.Rotation);
+            depth = round.Radius - distance;
+            return true;
+        }
+
+        // Interior: pick the cheapest exit face.
+        var exit = half - Vector3.Abs(p);
+        Vector3 local;
+        float face;
+        if (exit.X <= exit.Y && exit.X <= exit.Z) { local = new Vector3(p.X >= 0 ? 1f : -1f, 0f, 0f); face = exit.X; }
+        else if (exit.Y <= exit.Z) { local = new Vector3(0f, p.Y >= 0 ? 1f : -1f, 0f); face = exit.Y; }
+        else { local = new Vector3(0f, 0f, p.Z >= 0 ? 1f : -1f); face = exit.Z; }
+        normal = Vector3.Transform(local, box.Rotation);
+        point = box.Position + Vector3.Transform(p, box.Rotation);
+        depth = face + round.Radius;
+        return true;
+    }
+
+    private static Vector3 ClosestOnSegment(Vector3 s0, Vector3 s1, Vector3 target)
+    {
+        var d = s1 - s0;
+        var lengthSquared = d.LengthSquared();
+        if (lengthSquared < 1e-12f)
+            return s0;
+        var t = Math.Clamp(Vector3.Dot(target - s0, d) / lengthSquared, 0f, 1f);
+        return s0 + d * t;
     }
 
     private static (Vector3 Start, Vector3 End) SegmentOf(in Body body)

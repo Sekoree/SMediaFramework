@@ -142,6 +142,130 @@ public sealed class MmdPhysicsTests
             $"backward seek did not re-base the chain (tip={tip}, expected near bind (1,10,0))");
     }
 
+    /// <summary>Hair chains are authored with the linear DOF locked — no matter how hard the anchor is
+    /// whipped around, the segments must never stretch apart (the operator-visible "hair ends stretch"
+    /// regression: iterative-solver residual concentrates at the tips of long chains).</summary>
+    [Fact]
+    public void LockedChain_DoesNotStretch_UnderFastAnchorMotion()
+    {
+        const int links = 8;
+        var bones = new List<PmxBone> { Bone("root", new Vector3(0, 10, 0), parent: -1) };
+        var rigids = new List<PmxRigidBody>
+        {
+            new("anchor", 0, Group: 0, CollisionMask: 0, PmxRigidShape.Sphere,
+                new Vector3(0.1f, 0, 0), new Vector3(0, 10, 0), Vector3.Zero,
+                1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.FollowBone),
+        };
+        var joints = new List<PmxJoint>();
+        for (var k = 1; k <= links; k++)
+        {
+            var position = new Vector3(0, 10 - k, 0);
+            bones.Add(Bone($"seg{k}", position, parent: k - 1));
+            rigids.Add(new PmxRigidBody($"seg{k}", k, Group: 0, CollisionMask: 0, PmxRigidShape.Sphere,
+                new Vector3(0.1f, 0, 0), position, Vector3.Zero,
+                0.05f, 0.99f, 0.99f, 0f, 0.5f, PmxPhysicsMode.Physics));
+            // Locked linear + near-locked angular — the YYB tail authoring.
+            joints.Add(new PmxJoint($"j{k}", Type: 0, RigidBodyA: k - 1, RigidBodyB: k,
+                new Vector3(0, 10 - k + 0.5f, 0), Vector3.Zero,
+                Vector3.Zero, Vector3.Zero,
+                new Vector3(-0.0017f), new Vector3(0.0017f),
+                Vector3.Zero, Vector3.Zero));
+        }
+
+        var model = new PmxDocument
+        {
+            Version = 2.0f,
+            ModelName = "chain",
+            ModelNameEnglish = "chain",
+            Vertices = [],
+            Indices = [],
+            Textures = [],
+            Materials = [],
+            Bones = bones,
+            Morphs = [],
+            RigidBodies = rigids,
+            Joints = joints,
+        };
+        var physics = MmdPhysics.TryCreate(model)!;
+        var world = BindWorlds(model);
+        physics.Reset(world);
+
+        // Whip the anchor: teleport the root 1.5 units per frame, alternating direction.
+        for (var frame = 0; frame < 90; frame++)
+        {
+            var x = MathF.Sin(frame * 0.4f) * 6f;
+            world[0] = Matrix4x4.CreateTranslation(new Vector3(x, 10, 0));
+            physics.Step(world, 1f / 60f);
+
+            for (var k = 1; k <= links; k++)
+            {
+                var spacing = Vector3.Distance(world[k - 1].Translation, world[k].Translation);
+                Assert.True(spacing < 1.05f,
+                    $"chain stretched at frame {frame}, segment {k}: spacing {spacing:F3} (bind 1.0)");
+            }
+        }
+    }
+
+    /// <summary>Skirt plates are wide thin BOXES: a capsule sweeping into the flat face must collide
+    /// (the old capsule approximation only collided along the thin edge — legs passed through the face
+    /// and trapped the plate inside the body).</summary>
+    [Fact]
+    public void BoxPlate_IsPushedByACapsule_AcrossItsWideFace()
+    {
+        var model = new PmxDocument
+        {
+            Version = 2.0f,
+            ModelName = "plate",
+            ModelNameEnglish = "plate",
+            Vertices = [],
+            Indices = [],
+            Textures = [],
+            Materials = [],
+            Bones =
+            [
+                Bone("anchor", new Vector3(0, 12, 0), parent: -1),
+                Bone("plate", new Vector3(0, 10, 0), parent: 0),
+                Bone("leg", new Vector3(0, 9.2f, 0.3f), parent: -1),
+            ],
+            Morphs = [],
+            RigidBodies =
+            [
+                new PmxRigidBody("anchor", 0, Group: 0, CollisionMask: 0, PmxRigidShape.Sphere,
+                    new Vector3(0.1f, 0, 0), new Vector3(0, 12, 0), Vector3.Zero,
+                    1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.FollowBone),
+                // Wide thin plate hanging from the anchor on a free swing joint; the capsule overlaps
+                // the LOWER HALF of its wide XY face (offset 0.3 in front, radius 0.5) so the contact
+                // torque swings the plate about its anchor.
+                new PmxRigidBody("plate", 1, Group: 1, CollisionMask: 0xFFFF, PmxRigidShape.Box,
+                    new Vector3(1.0f, 1.0f, 0.05f), new Vector3(0, 10, 0), Vector3.Zero,
+                    1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.Physics),
+                new PmxRigidBody("leg", 2, Group: 2, CollisionMask: 0xFFFF, PmxRigidShape.Capsule,
+                    new Vector3(0.5f, 1f, 0), new Vector3(0, 9.2f, 0.3f), Vector3.Zero,
+                    1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.FollowBone),
+            ],
+            Joints =
+            [
+                new PmxJoint("swing", Type: 0, RigidBodyA: 0, RigidBodyB: 1,
+                    new Vector3(0, 12, 0), Vector3.Zero,
+                    Vector3.Zero, Vector3.Zero,
+                    new Vector3(-MathF.PI, -MathF.PI, -MathF.PI), new Vector3(MathF.PI, MathF.PI, MathF.PI),
+                    Vector3.Zero, Vector3.Zero),
+            ],
+        };
+        var physics = MmdPhysics.TryCreate(model)!;
+        var world = BindWorlds(model);
+        physics.Reset(world);
+        for (var i = 0; i < 90; i++)
+            physics.Step(world, 1f / 60f);
+
+        // The leg capsule (radius 0.5 at z=0.3) overlaps the plate's face (z extent ±0.05): the plate
+        // must be pushed AWAY along −Z. With the old capsule approximation no contact fires at all.
+        var plateZ = world[1].Translation.Z;
+        Assert.True(plateZ < -0.1f,
+            $"plate was not pushed out of the capsule across its wide face (z={plateZ:F3}, expected < -0.1)");
+        Assert.True(float.IsFinite(plateZ) && MathF.Abs(plateZ) < 5f, $"plate exploded (z={plateZ:F3})");
+    }
+
     [Fact]
     public void ModelWithoutDynamicBodies_HasNoSimulation()
     {

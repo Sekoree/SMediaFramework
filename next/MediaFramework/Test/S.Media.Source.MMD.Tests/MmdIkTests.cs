@@ -53,8 +53,8 @@ public sealed class MmdIkTests
     };
 
     /// <summary>Motion that moves ONLY the IK goal bone to <paramref name="goal"/> (single keyframe —
-    /// no interpolation in play).</summary>
-    private static VmdDocument GoalAt(Vector3 goal) => new()
+    /// no interpolation in play). <paramref name="ikEnabled"/> adds a frame-0 IK on/off key.</summary>
+    private static VmdDocument GoalAt(Vector3 goal, bool? ikEnabled = null) => new()
     {
         ModelName = "ik-leg",
         BoneTracks = new Dictionary<string, IReadOnlyList<VmdBoneFrame>>(StringComparer.Ordinal)
@@ -64,6 +64,12 @@ public sealed class MmdIkTests
         },
         MorphTracks = new Dictionary<string, IReadOnlyList<VmdMorphFrame>>(StringComparer.Ordinal),
         CameraTrack = [],
+        IkEnableTracks = ikEnabled is { } enabled
+            ? new Dictionary<string, IReadOnlyList<VmdIkFrame>>(StringComparer.Ordinal)
+            {
+                ["ik"] = [new VmdIkFrame(0, enabled)],
+            }
+            : new Dictionary<string, IReadOnlyList<VmdIkFrame>>(StringComparer.Ordinal),
     };
 
     private static readonly PmxIkLink KneeFree = new(Knee, HasLimit: false, Vector3.Zero, Vector3.Zero);
@@ -201,6 +207,29 @@ public sealed class MmdIkTests
             $"D-chain detached from the IK-solved chain: ankle={ankle} ankleD={ankleD}");
         Assert.True(Vector3.Distance(positions[0], ankleD) < 1e-4f,
             $"skinned vertex {positions[0]} detached from ankleD {ankleD}");
+    }
+
+    /// <summary>VMD show/IK keys can switch a solver off — the chain must then hold its FK pose even
+    /// though the goal bone is animated elsewhere.</summary>
+    [Fact]
+    public void IkToggle_DisabledSolver_LeavesTheChainAtItsFkPose()
+    {
+        var model = Leg([KneeFree, HipFree]);
+        var goal = new Vector3(0.6f, 0.9f, 0.4f);
+
+        var animator = new MmdAnimator(model, GoalAt(goal, ikEnabled: false));
+        var positions = new Vector3[model.Vertices.Count];
+        animator.Evaluate(TimeSpan.Zero, positions);
+        var ankle = animator.TryGetBoneWorldPosition("ankle")!.Value;
+        Assert.True(Vector3.Distance(ankle, Vector3.Zero) < 1e-4f,
+            $"disabled IK still moved the chain (ankle={ankle}, expected bind (0,0,0))");
+
+        // Sanity: the same motion with the toggle ON reaches the goal.
+        animator = new MmdAnimator(model, GoalAt(goal, ikEnabled: true));
+        animator.Evaluate(TimeSpan.Zero, positions);
+        ankle = animator.TryGetBoneWorldPosition("ankle")!.Value;
+        Assert.True(Vector3.Distance(ankle, goal) < 0.05f,
+            $"enabled IK did not reach the goal (ankle={ankle})");
     }
 
     [Fact]

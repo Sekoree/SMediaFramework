@@ -829,6 +829,42 @@ SessionSmoke exit 0; headless app launch clean):
    skip on this runner's asset-root resolution).
    Remaining known simplifications: boxes still collide as capsules (inertia is exact now), group
    morphs/bone morphs unparsed, local-append flag unhandled, IK-toggle VMD frames unread.
+   → ALL of these closed by item 33.
+
+33. **MMD FOLLOW-UPS — SKIRT/HAIR FIXES + FEATURE CLOSURE (operator report 2026-07-03: "skirt still
+   glitches into the body and stays there; hair ends stretch a lot").**
+   (a) **Skirt-into-body root cause: boxes collided as thin sticks.** Skirt plates are wide thin boxes
+   (0.47×0.67×0.10 half-extents); the capsule approximation (radius = smallest extent along longest
+   axis) had NO collision across the wide face — legs passed straight through, and once inside, the
+   closest-point normal flipped and pinned the plate. Boxes now collide as real OBBs vs sphere/capsule
+   (iterative segment-vs-OBB closest point) with INTERIOR handling: a core point inside the box exits
+   through the nearest face, so tunnelled plates pop back out. Box-box keeps the capsule fallback (the
+   authored masks make skirt plates non-self-colliding). Bounding-radius broad-phase added.
+   (b) **Static depenetration needed torque:** with bias-free contact rows + translate-only NGS, a
+   plate pinned by its locked joint could never rotate out of a static overlap (contact force through
+   the pivot, translation undone by the joint) — Baumgarte/ERP (0.2) restored in the CONTACT velocity
+   rows only (Bullet's actual split: contacts penalty-corrected at the arm, joints split-impulse);
+   contacts removed from the NGS pass.
+   (c) **Hair-end stretch: iterative residual concentrates at chain tips.** New inextensibility sweep
+   at the end of the position pass: chain joints (bone A an ancestor of bone B — ring/lattice links
+   excluded by the ancestry test) with the linear DOF locked snap the CHILD's anchor exactly, in file
+   order (root→tip), translate-only. Measured: max tail segment stretch over 60 s of Rolling Girl
+   1.000× (was visibly stretching); min skirt-bone distance from the hip axis 0.853 (bind range) across
+   the violent 56–65 s section.
+   (d) **Feature closure:** PMX bone morphs (type 2, morph ⊗ anim composition per babylon) + group
+   morphs (type 0, ratio-scaled weight fan-out, nested-group guarded) parsed AND evaluated — YYB Miku
+   carries 9 bone morphs that were silently dead; local-append flag (0x0080) parsed and implemented
+   (donor world rotation/displacement, babylon's isLocal branch); VMD show/IK section parsed
+   (light/self-shadow skipped structurally) and IK solvers gated per-bone by the step-sampled toggle —
+   the Rolling Girl VMD carries enable keys for all four IK bones.
+   *Verification*: new tests — LockedChain_DoesNotStretch_UnderFastAnchorMotion,
+   BoxPlate_IsPushedByACapsule_AcrossItsWideFace (fails under the old capsule approximation),
+   BoneMorph_RotatesAndTranslatesTheBone_ScaledByWeight, GroupMorph_FansItsWeightOntoMembers,
+   IkToggle_DisabledSolver_LeavesTheChainAtItsFkPose. MMD tests 27/27; full sln 1,494/0; 60 s
+   real-asset run non-finite-free at 152 fps; software renders at t=47/60 match the MMD reference
+   (continuous tails, skirt riding the hips); MmdGlSmoke green under xvfb.
+   Remaining known simplification: box-box contacts (masked off in real rigs) still use the capsule
+   fallback; VMD camera interpolation is linear.
 
 ## Verification appendix
 
@@ -850,6 +886,7 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 #   /home/seko + MMDTest-vs-MMD_Test path and is repo-root-resolved now)
 # post-physics-tuning (item 31, 2026-07-03): 1,487 passed / 0 failed / 2 skipped (network-gated)
 # post-reference-aligned rewrite (item 32, 2026-07-03): 1,489 passed / 0 failed / 2 skipped
+# post-skirt/hair fixes + feature closure (item 33, 2026-07-03): 1,494 passed / 0 failed / 2 skipped
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4
