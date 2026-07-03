@@ -114,6 +114,11 @@ that surface reviewed hard before tagging v1.
 shows load headless and via the C ABI. HaPlay layers only view-state (window/panel placement) on top.
 Today's `ProjectIO`/`HaPlayProject`: runtime/data moves down into Session, view-state stays in the UI.
 *Reflected in:* [02](02-Project-Structure.md) Tier 5.
+*Resolution (2026-07-02, post lift-and-shift pivot):* the promise ("shows load headless and via the C
+ABI") is delivered by `ShowDocumentSidecar` — every full project save writes the mapped+validated
+`ShowDocument` per cue list next to the project file. The full descent of `HaPlayProject` into Session
+was NOT done: decks/soundboards/control are app-domain (the convergence architecture builds their
+sessions from app state at runtime), and UI layout already lived in a per-machine sidecar.
 
 ## D11 — Per-group master output; mix at its rate
 Each transport group designates one master output (default: first clocked device); the group mixes
