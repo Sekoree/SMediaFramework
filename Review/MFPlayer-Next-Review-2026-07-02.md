@@ -786,6 +786,50 @@ SessionSmoke exit 0; headless app launch clean):
    sln 1,487/0. Remaining known simplifications: no twist, boxes-as-capsules for FAT boxes, no
    restitution/friction, ring links positional-only.
 
+32. **MMD ANIMATOR + PHYSICS — REFERENCE-ALIGNED REWRITE (operator report 2026-07-03: "physics very
+   stiff, knees aren't moving"; references added: `Reference/MMDTest/babylon-mmd-main`,
+   `SystemAnimatorOnline-master`, ground-truth `mmdTest.mp4`).** Item 31's diagnosis ("knees exonerated")
+   was WRONG about the visible mesh: IK solved correctly but the YYB rig skins the legs to D-bones
+   (左ひざD append-inherits from 左ひざ, ratio 1, deform layer 1) and the animator folded append BEFORE
+   the IK pass from sampled FK only — the knee's rotation exists ONLY as an IK result (1 VMD key), so
+   the visible leg never bent (左足首D measured 4.1 units from the solved ankle; 0 vertices weighted to
+   IK-driven leg bones, 580 to 左ひざD).
+   (a) **Animator restructured to MMD's transform order** (babylon-mmd/Saba semantics): bones process
+   ONE AT A TIME stable-sorted by (deform layer, index), split before/after-physics; append reads the
+   donor's CURRENT state INCLUDING its IK rotation (`ikRot * animRot`, recursion via in-order folding,
+   own-first composition `anim * append` per `appendTransformSolver.ts`); IK solves in place when the
+   IK bone's turn comes; already-processed bones re-chain after each solve (the toe-IK chain).
+   Parser now reads deform layer, transformAfterPhysics (0x1000), fixed axis (0x0400 — projected at
+   runtime like babylon's axis-limit path, twist bones 腕捩/手捩).
+   (b) **IK solver ported from babylon-mmd `ikSolver.ts`** (System.Numerics ops map 1:1 — verified
+   empirically): limit REFLECTION during the first half of iterations (the straight-knee bootstrap),
+   per-link step scale `unitAngle·(chainIndex+1)`, limit-adaptive Euler order (YXZ/ZYX/XZY + 88° clamp),
+   fully-locked links skipped, hinge axis snapped by parent-frame sign.
+   (c) **Physics rewritten as a sequential-impulse rigid-body solver** (replaces the heuristic PBD whose
+   hard per-substep limit clamps were the "very stiff" root cause): real inertia tensors, linear+angular
+   velocities, uniform 6-DOF joints in Bullet's Euler-XYZ convention with per-axis linear/angular limits
+   AND authored springs, contacts with friction/restitution and warm starting, jointed pairs excluded
+   from collision (Bullet's disableCollisionsBetweenLinkedBodies), babylon's 5° angular-limit clamp
+   (tiny ranges → locked equality rows), katwat PhysicsWithBone→Physics adjustment, type-2 bodies
+   re-seeded from the bone each frame (three.js `_setPositionFromBone`). Solver architecture is
+   split-impulse: BIAS-FREE warm-started velocity rows + post-integration NGS position pass — angular
+   corrections rotate each body ABOUT ITS OWN JOINT ANCHOR (all-locked joints correct the FULL relative
+   rotation, no Euler decomposition), linear/contact corrections are translate-only; both choices are
+   load-bearing (centre-rotations + rotational linear fixes ping-pong divergently through I⁻¹r² ≫ m⁻¹
+   on light chains — found via staged instrumentation, NGS was AMPLIFYING error 0.005→0.30 rad/substep).
+   Item 31's invented tuning (swing caps, damping⁴ shape restore, driver-vs-lattice split) is deleted;
+   stiffness now comes from the authored joints themselves.
+   *Verification*: knee probe ankleD→ankle 4.1→0.0000 at 8 timestamps; IK convergence ≤0.009 units;
+   static hang settles (tail 2.4 units of authored ±10° root sag, stationary from t=2s); 40 s dance run
+   no NaN/explosion, tail tip tracks head with up to 15-unit flowing lag, 130 fps for full
+   evaluate+physics+skin; locked-pendulum test lands EXACTLY on the rigid solution (0.707,10.707);
+   software renders at t=20/47 match `mmdTest.mp4` posing (bent-knee wide stance) with flowing tails;
+   `MmdGlSmoke` green under xvfb. New tests: D-chain append/IK inheritance, LimitAngle reflection,
+   ProjectToAxis. MMD tests 22/22; full sln 1,489/0 (2 skips: network-gated YouTube live + MmdRealAsset
+   skip on this runner's asset-root resolution).
+   Remaining known simplifications: boxes still collide as capsules (inertia is exact now), group
+   morphs/bone morphs unparsed, local-append flag unhandled, IK-toggle VMD frames unread.
+
 ## Verification appendix
 
 ```bash
@@ -805,6 +849,7 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 #   network-gated YouTube live test; the MMD real-asset test now RUNS — its AssetRoot was a stale
 #   /home/seko + MMDTest-vs-MMD_Test path and is repo-root-resolved now)
 # post-physics-tuning (item 31, 2026-07-03): 1,487 passed / 0 failed / 2 skipped (network-gated)
+# post-reference-aligned rewrite (item 32, 2026-07-03): 1,489 passed / 0 failed / 2 skipped
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

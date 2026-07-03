@@ -19,10 +19,14 @@ public sealed class MmdIkTests
     private static PmxBone Bone(
         string name, Vector3 position, int parent,
         bool isIk = false, int ikTarget = -1, int ikLoop = 0, float ikLimit = 2f,
-        IReadOnlyList<PmxIkLink>? links = null) =>
+        IReadOnlyList<PmxIkLink>? links = null,
+        int appendParent = -1, float appendRatio = 0f, int layer = 0) =>
         new(name, name, position, parent,
-            AppendRotation: false, AppendTranslation: false, AppendParentIndex: -1, AppendRatio: 0f,
-            isIk, ikTarget, ikLoop, ikLimit, links ?? []);
+            AppendRotation: appendParent >= 0, AppendTranslation: false, appendParent, appendRatio,
+            isIk, ikTarget, ikLoop, ikLimit, links ?? [])
+        {
+            DeformLayer = layer,
+        };
 
     /// <summary>A vertex rigidly bound to one bone (to satisfy Evaluate's buffer contract).</summary>
     private static PmxVertex Vertex(Vector3 position, int bone) =>
@@ -155,6 +159,79 @@ public sealed class MmdIkTests
         var ankleBone = animator.TryGetBoneWorldPosition("ankle")!.Value;
         Assert.True(Vector3.Distance(positions[0], ankleBone) < 1e-4f,
             $"skinned vertex {positions[0]} detached from the solved ankle {ankleBone}");
+    }
+
+    /// <summary>The YYB-style D-bone rig: a parallel chain on a LATER deform layer whose bones inherit
+    /// rotation (ratio 1) from the IK-solved chain and carry the skin weights. The append fold must see
+    /// the donors' IK rotations — the "knees don't bend" regression.</summary>
+    [Fact]
+    public void AppendBones_InheritIkRotation_DChainTracksTheSolvedChain()
+    {
+        var model = new PmxDocument
+        {
+            Version = 2.0f,
+            ModelName = "ik-leg-d",
+            ModelNameEnglish = "ik-leg-d",
+            Vertices = [Vertex(new Vector3(0, 0, 0), bone: 6)], // skinned to ankleD, like real rigs
+            Indices = [],
+            Textures = [],
+            Materials = [],
+            Bones =
+            [
+                Bone("hip", new Vector3(0, 2, 0), parent: -1),
+                Bone("knee", new Vector3(0, 1, 0), parent: Hip),
+                Bone("ankle", new Vector3(0, 0, 0), parent: Knee),
+                Bone("ik", new Vector3(0, 0, 0), parent: -1,
+                    isIk: true, ikTarget: Ankle, ikLoop: 60, ikLimit: 2f, links: [KneeFree, HipFree]),
+                Bone("hipD", new Vector3(0, 2, 0), parent: -1, appendParent: Hip, appendRatio: 1f, layer: 1),
+                Bone("kneeD", new Vector3(0, 1, 0), parent: 4, appendParent: Knee, appendRatio: 1f, layer: 1),
+                Bone("ankleD", new Vector3(0, 0, 0), parent: 5, appendParent: Ankle, appendRatio: 1f, layer: 1),
+            ],
+            Morphs = [],
+        };
+
+        var goal = new Vector3(0.6f, 0.9f, 0.4f);
+        var animator = new MmdAnimator(model, GoalAt(goal));
+        var positions = new Vector3[model.Vertices.Count];
+        animator.Evaluate(TimeSpan.Zero, positions);
+
+        var ankle = animator.TryGetBoneWorldPosition("ankle")!.Value;
+        var ankleD = animator.TryGetBoneWorldPosition("ankleD")!.Value;
+        Assert.True(Vector3.Distance(ankle, ankleD) < 1e-3f,
+            $"D-chain detached from the IK-solved chain: ankle={ankle} ankleD={ankleD}");
+        Assert.True(Vector3.Distance(positions[0], ankleD) < 1e-4f,
+            $"skinned vertex {positions[0]} detached from ankleD {ankleD}");
+    }
+
+    [Fact]
+    public void LimitAngle_ReflectsPastLimits_OnlyDuringTheAxisPhase()
+    {
+        // MMD's knee bootstrap: past-limit angles bounce to their in-range mirror image during the
+        // first half of the iterations, and clamp plainly afterwards.
+        Assert.Equal(-0.3f, MmdAnimator.LimitAngle(0.3f, -MathF.PI, 0f, useAxis: true), 5);
+        Assert.Equal(0f, MmdAnimator.LimitAngle(0.3f, -MathF.PI, 0f, useAxis: false), 5);
+        // Below the minimum: reflected up into the range (2·min − angle).
+        Assert.Equal(4f - 2f * MathF.PI, MmdAnimator.LimitAngle(-4f, -MathF.PI, 0f, useAxis: true), 5);
+        // Mirror image itself out of range → plain clamp even in the axis phase.
+        Assert.Equal(0.2f, MmdAnimator.LimitAngle(0.5f, -0.05f, 0.2f, useAxis: true), 5);
+        // In range: untouched.
+        Assert.Equal(-1f, MmdAnimator.LimitAngle(-1f, -MathF.PI, 0f, useAxis: true), 5);
+    }
+
+    [Fact]
+    public void ProjectToAxis_KeepsTheFullAngleAboutTheFixedAxis()
+    {
+        // A twist bone's sampled rotation is rebuilt about its authored axis with the SAME angle,
+        // signed by the rotation axis' alignment (babylon-mmd runtime axis-limit semantics).
+        var aligned = MmdAnimator.ProjectToAxis(
+            Quaternion.CreateFromAxisAngle(Vector3.Normalize(new Vector3(1f, 0.2f, 0f)), 0.5f), Vector3.UnitX);
+        AssertSameRotation(Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.5f), aligned);
+
+        var opposed = MmdAnimator.ProjectToAxis(
+            Quaternion.CreateFromAxisAngle(-Vector3.UnitX, 0.4f), Vector3.UnitX);
+        AssertSameRotation(Quaternion.CreateFromAxisAngle(Vector3.UnitX, -0.4f), opposed);
+
+        AssertSameRotation(Quaternion.Identity, MmdAnimator.ProjectToAxis(Quaternion.Identity, Vector3.UnitX));
     }
 
     [Fact]

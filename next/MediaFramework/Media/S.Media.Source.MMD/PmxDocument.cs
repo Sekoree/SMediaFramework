@@ -69,7 +69,19 @@ public sealed record PmxBone(
     int IkTargetIndex,
     int IkLoopCount,
     float IkLimitRadians,
-    IReadOnlyList<PmxIkLink> IkLinks);
+    IReadOnlyList<PmxIkLink> IkLinks)
+{
+    /// <summary>PMX deform layer — MMD evaluates bones sorted by (layer, index). The D-bone rigs that
+    /// carry the leg skin weights sit on a later layer than the IK bones whose result they inherit.</summary>
+    public int DeformLayer { get; init; }
+
+    /// <summary>Bone evaluates AFTER the physics step (PMX flag 0x1000).</summary>
+    public bool TransformAfterPhysics { get; init; }
+
+    /// <summary>Fixed rotation axis (PMX flag 0x0400 — the 腕捩/手捩 twist bones): sampled rotation is
+    /// projected onto this axis. Null when the bone rotates freely.</summary>
+    public Vector3? FixedAxis { get; init; }
+}
 
 /// <summary>Rigid-body collision shape (PMX byte values).</summary>
 public enum PmxRigidShape : byte
@@ -303,7 +315,7 @@ public sealed class PmxDocument
             var nameEn = Text();
             var position = reader.Vec3();
             var parent = reader.Index(boneIndexSize);
-            reader.Skip(4); // deform layer
+            var deformLayer = reader.I32();
             var flags = reader.U16();
 
             if ((flags & 0x0001) != 0) // tail = bone index
@@ -321,7 +333,8 @@ public sealed class PmxDocument
                 appendRatio = reader.F32();
             }
 
-            if ((flags & 0x0400) != 0) reader.Skip(12);      // fixed axis
+            Vector3? fixedAxis = null;
+            if ((flags & 0x0400) != 0) fixedAxis = reader.Vec3();
             if ((flags & 0x0800) != 0) reader.Skip(24);      // local axes
             if ((flags & 0x2000) != 0) reader.Skip(4);       // external parent key
 
@@ -357,7 +370,12 @@ public sealed class PmxDocument
             bones[i] = new PmxBone(
                 name, nameEn, position, parent,
                 appendRotation, appendTranslation, appendParent, appendRatio,
-                isIk, ikTarget, ikLoop, ikLimit, ikLinks);
+                isIk, ikTarget, ikLoop, ikLimit, ikLinks)
+            {
+                DeformLayer = deformLayer,
+                TransformAfterPhysics = (flags & 0x1000) != 0,
+                FixedAxis = fixedAxis,
+            };
         }
 
         // Morphs — vertex (and group→vertex) offsets are evaluated; other types are structurally skipped.
