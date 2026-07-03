@@ -9,7 +9,7 @@ namespace S.Media.Source.MMD;
 /// and runs its IK solve in place when it is an IK bone. The IK solver is a faithful port of
 /// babylon-mmd's <c>ikSolver.ts</c> (Saba lineage): per-link step scaling, limit-adaptive Euler order,
 /// the first-half-iterations limit REFLECTION that bootstraps knee bends, and fixed-link skipping.
-/// Vertex morphs and linear-blend CPU skinning follow (SDEF/QDEF approximated as linear blends).
+/// Vertex/UV/material morphs and BDEF/SDEF/QDEF CPU skinning follow.
 /// </summary>
 public sealed class MmdAnimator
 {
@@ -20,6 +20,9 @@ public sealed class MmdAnimator
     private readonly Matrix4x4[] _world;          // per-bone world transform (bind-relative animation applied)
     private readonly Matrix4x4[] _skin;           // world * inverse-bind — what vertices multiply by
     private readonly Vector3[] _morphedPositions; // bind positions + active vertex-morph offsets
+    private readonly Vector2[] _morphedUvs;
+    private readonly Vector4[] _morphedAdditionalUv1;
+    private readonly MmdMaterialState[] _materialStates;
     private readonly Quaternion[] _ikRotations;   // per-bone IK delta (identity outside solved chains), reset per Evaluate
     private readonly Quaternion[] _animRotations; // folded local rotation (sample + fixed axis + append), EXCLUDING the IK delta
     private readonly Vector3[] _animTranslations; // folded local translation (sample + append)
@@ -31,6 +34,7 @@ public sealed class MmdAnimator
     private readonly Quaternion[] _boneMorphRotations;   // accumulated bone-morph deltas (empty when unused)
     private readonly Vector3[] _boneMorphTranslations;
     private readonly IReadOnlyList<VmdIkFrame>?[] _ikEnableTracks; // per-IK-bone on/off keys (null = always on)
+    private readonly bool[] _bonePhysicsEnabled;
 
     public MmdAnimator(PmxDocument model, VmdDocument motion)
     {
@@ -40,6 +44,18 @@ public sealed class MmdAnimator
         _world = new Matrix4x4[count];
         _skin = new Matrix4x4[count];
         _morphedPositions = new Vector3[model.Vertices.Count];
+        _morphedUvs = new Vector2[model.Vertices.Count];
+        _morphedAdditionalUv1 = new Vector4[model.Vertices.Count];
+        _materialStates = new MmdMaterialState[model.Materials.Count];
+        for (var i = 0; i < _morphedUvs.Length; i++)
+        {
+            _morphedUvs[i] = model.Vertices[i].Uv;
+            _morphedAdditionalUv1[i] = model.Vertices[i].AdditionalUvs.Count > 0
+                ? model.Vertices[i].AdditionalUvs[0]
+                : Vector4.Zero;
+        }
+        for (var i = 0; i < _materialStates.Length; i++)
+            _materialStates[i] = MmdMaterialState.From(model.Materials[i]);
         _ikRotations = new Quaternion[count];
         _animRotations = new Quaternion[count];
         _animTranslations = new Vector3[count];
@@ -79,6 +95,7 @@ public sealed class MmdAnimator
         _boneMorphTranslations = new Vector3[_hasBoneMorphs ? count : 0];
 
         _ikEnableTracks = new IReadOnlyList<VmdIkFrame>?[count];
+        _bonePhysicsEnabled = new bool[count];
         for (var i = 0; i < count; i++)
             if (_ikSetups[i] is not null
                 && motion.IkEnableTracks.TryGetValue(model.Bones[i].Name, out var ikTrack) && ikTrack.Count > 0)
@@ -99,6 +116,12 @@ public sealed class MmdAnimator
     public PmxDocument Model => _model;
 
     public TimeSpan Duration => _motion.Duration;
+
+    public IReadOnlyList<Vector2> CurrentUvs => _morphedUvs;
+
+    public IReadOnlyList<Vector4> CurrentAdditionalUv1 => _morphedAdditionalUv1;
+
+    public IReadOnlyList<MmdMaterialState> MaterialStates => _materialStates;
 
     /// <summary>Per-bone LOCAL animation (sampled rotation/translation) captured for pose queries.</summary>
     private readonly record struct LocalPose(Quaternion Rotation, Vector3 Translation);
@@ -130,6 +153,7 @@ public sealed class MmdAnimator
 
         // Morph weights first — bone morphs feed the transform passes below, vertex morphs the skinning.
         SampleMorphWeights(frame);
+        AccumulateUvAndMaterialMorphs();
         if (_hasBoneMorphs)
             AccumulateBoneMorphs();
 
@@ -141,6 +165,9 @@ public sealed class MmdAnimator
 
         if (physics is not null)
         {
+            for (var i = 0; i < _bonePhysicsEnabled.Length; i++)
+                _bonePhysicsEnabled[i] = PhysicsEnabledAt(_model.Bones[i].Name, frame);
+            physics.SetBonePhysicsEnabled(_bonePhysicsEnabled);
             physics.Step(_world, physicsDeltaSeconds);
             // Re-chain the non-physics bones under their (possibly physics-moved) parents — tip/hem
             // bones carry skin weights and would otherwise stay at the rigid FK pose where a chain ends.
@@ -174,6 +201,23 @@ public sealed class MmdAnimator
         {
             var vertex = vertices[v];
             var p = _morphedPositions[v];
+            if (vertex.DeformType == PmxDeformType.Sdef
+                && IsValidBone(vertex.Bone0) && IsValidBone(vertex.Bone1))
+            {
+                SkinSdef(vertex, p, out positions[v], out var sdefNormal);
+                if (normals is not null)
+                    normals[v] = sdefNormal;
+                continue;
+            }
+
+            if (vertex.DeformType == PmxDeformType.Qdef)
+            {
+                SkinQdef(vertex, p, out positions[v], out var qdefNormal);
+                if (normals is not null)
+                    normals[v] = qdefNormal;
+                continue;
+            }
+
             var result = Vector3.Zero;
             var total = 0f;
             Accumulate(vertex.Bone0, vertex.Weight0, p, ref result, ref total);
@@ -196,6 +240,95 @@ public sealed class MmdAnimator
                 normals[v] = len > 1e-6f ? skinned / len : n;
             }
         }
+
+        bool IsValidBone(int bone) => (uint)bone < (uint)_skin.Length;
+    }
+
+    /// <summary>SDEF as implemented by Saba/babylon-mmd: slerped bone rotation around the authored
+    /// center plus the two corrected radius points transformed by their respective skin matrices.</summary>
+    private void SkinSdef(in PmxVertex vertex, Vector3 position, out Vector3 result, out Vector3 normal)
+    {
+        var w0 = vertex.Weight0;
+        var w1 = vertex.Weight1;
+        var m0 = _skin[vertex.Bone0];
+        var m1 = _skin[vertex.Bone1];
+        var q0 = RotationPartOf(m0);
+        var q1 = RotationPartOf(m1);
+        if (Quaternion.Dot(q0, q1) < 0f)
+            q1 = Negated(q1);
+        var rotation = Quaternion.Normalize(Quaternion.Slerp(q0, q1, w1));
+
+        var rw = vertex.SdefR0 * w0 + vertex.SdefR1 * w1;
+        var correctedR0 = vertex.SdefC + (vertex.SdefR0 - rw) * 0.5f;
+        var correctedR1 = vertex.SdefC + (vertex.SdefR1 - rw) * 0.5f;
+        result = Vector3.Transform(position - vertex.SdefC, rotation)
+                 + Vector3.Transform(correctedR0, m0) * w0
+                 + Vector3.Transform(correctedR1, m1) * w1;
+        normal = SafeNormal(Vector3.Transform(vertex.Normal, rotation), vertex.Normal);
+    }
+
+    /// <summary>PMX 2.1 QDEF dual-quaternion blending. MMD itself does not author QDEF, but evaluating
+    /// it here avoids collapsing third-party PMX 2.1 models back to linear skinning.</summary>
+    private void SkinQdef(in PmxVertex vertex, Vector3 position, out Vector3 result, out Vector3 normal)
+    {
+        Quaternion real = default, dual = default, reference = default;
+        var hasReference = false;
+        AccumulateDual(vertex.Bone0, vertex.Weight0);
+        AccumulateDual(vertex.Bone1, vertex.Weight1);
+        AccumulateDual(vertex.Bone2, vertex.Weight2);
+        AccumulateDual(vertex.Bone3, vertex.Weight3);
+
+        var length = MathF.Sqrt(Quaternion.Dot(real, real));
+        if (length < 1e-7f)
+        {
+            result = position;
+            normal = vertex.Normal;
+            return;
+        }
+
+        real = Scale(real, 1f / length);
+        dual = Scale(dual, 1f / length);
+        // Keep the dual part orthogonal to the normalized real part before extracting translation.
+        dual = Add(dual, Scale(real, -Quaternion.Dot(real, dual)));
+        var translationQ = dual * Quaternion.Conjugate(real);
+        var translation = new Vector3(translationQ.X, translationQ.Y, translationQ.Z) * 2f;
+        result = Vector3.Transform(position, real) + translation;
+        normal = SafeNormal(Vector3.Transform(vertex.Normal, real), vertex.Normal);
+
+        void AccumulateDual(int bone, float weight)
+        {
+            if ((uint)bone >= (uint)_skin.Length || weight <= 0f)
+                return;
+            var matrix = _skin[bone];
+            var qr = RotationPartOf(matrix);
+            if (!hasReference)
+            {
+                reference = qr;
+                hasReference = true;
+            }
+            else if (Quaternion.Dot(reference, qr) < 0f)
+            {
+                qr = Negated(qr);
+            }
+            var t = matrix.Translation;
+            var qd = Scale(new Quaternion(t, 0f) * qr, 0.5f);
+            real = Add(real, Scale(qr, weight));
+            dual = Add(dual, Scale(qd, weight));
+        }
+    }
+
+    private static Quaternion Add(Quaternion a, Quaternion b) =>
+        new(a.X + b.X, a.Y + b.Y, a.Z + b.Z, a.W + b.W);
+
+    private static Quaternion Scale(Quaternion q, float scale) =>
+        new(q.X * scale, q.Y * scale, q.Z * scale, q.W * scale);
+
+    private static Quaternion Negated(Quaternion q) => new(-q.X, -q.Y, -q.Z, -q.W);
+
+    private static Vector3 SafeNormal(Vector3 value, Vector3 fallback)
+    {
+        var length = value.Length();
+        return length > 1e-7f ? value / length : fallback;
     }
 
     /// <summary>One bone's turn in transform order: sample FK, project onto a fixed axis, fold append
@@ -264,14 +397,25 @@ public sealed class MmdAnimator
         }
     }
 
-    /// <summary>Step-samples the VMD IK-enable track for a bone (no keys, or none yet ⇒ IK on).</summary>
+    /// <summary>Step-samples the VMD IK-enable track for a bone. As MMD does for every keyed track,
+    /// times before its first key clamp to that first value; a bone with no track remains enabled.</summary>
     private bool IkEnabledAt(int bone, float frame)
     {
         if (_ikEnableTracks[bone] is not { } track)
             return true;
-        var enabled = true;
+        var enabled = track[0].Enabled;
         for (var k = 0; k < track.Count && track[k].Frame <= frame; k++)
             enabled = track[k].Enabled;
+        return enabled;
+    }
+
+    private bool PhysicsEnabledAt(string boneName, float frame)
+    {
+        if (!_motion.BoneTracks.TryGetValue(boneName, out var track) || track.Count == 0)
+            return true;
+        var enabled = track[0].PhysicsEnabled;
+        for (var i = 1; i < track.Count && track[i].Frame <= frame; i++)
+            enabled = track[i].PhysicsEnabled;
         return enabled;
     }
 
@@ -317,6 +461,93 @@ public sealed class MmdAnimator
                     Quaternion.Normalize(delta * _boneMorphRotations[offset.BoneIndex]);
             }
         }
+    }
+
+    private void AccumulateUvAndMaterialMorphs()
+    {
+        for (var i = 0; i < _morphedUvs.Length; i++)
+        {
+            _morphedUvs[i] = _model.Vertices[i].Uv;
+            _morphedAdditionalUv1[i] = _model.Vertices[i].AdditionalUvs.Count > 0
+                ? _model.Vertices[i].AdditionalUvs[0]
+                : Vector4.Zero;
+        }
+        for (var i = 0; i < _materialStates.Length; i++)
+            _materialStates[i] = MmdMaterialState.From(_model.Materials[i]);
+
+        for (var m = 0; m < _morphWeights.Length; m++)
+        {
+            var weight = _morphWeights[m];
+            if (weight == 0f)
+                continue;
+            var morph = _model.Morphs[m];
+            if (morph.Type == 3)
+            {
+                foreach (var offset in morph.UvOffsets)
+                    if ((uint)offset.VertexIndex < (uint)_morphedUvs.Length)
+                        _morphedUvs[offset.VertexIndex] += new Vector2(offset.Offset.X, offset.Offset.Y) * weight;
+            }
+            else if (morph.Type == 4)
+            {
+                foreach (var offset in morph.UvOffsets)
+                    if ((uint)offset.VertexIndex < (uint)_morphedAdditionalUv1.Length)
+                        _morphedAdditionalUv1[offset.VertexIndex] += offset.Offset * weight;
+            }
+
+            foreach (var offset in morph.MaterialOffsets)
+            {
+                if (offset.MaterialIndex < 0)
+                {
+                    for (var material = 0; material < _materialStates.Length; material++)
+                        ApplyMaterialMorph(material, offset, weight);
+                }
+                else if ((uint)offset.MaterialIndex < (uint)_materialStates.Length)
+                {
+                    ApplyMaterialMorph(offset.MaterialIndex, offset, weight);
+                }
+            }
+        }
+    }
+
+    private void ApplyMaterialMorph(int index, in PmxMaterialMorphOffset offset, float weight)
+    {
+        var state = _materialStates[index];
+        if (offset.Operation == PmxMaterialMorphOperation.Multiply)
+        {
+            state = state with
+            {
+                Diffuse = MultiplyTowards(state.Diffuse, offset.Diffuse, weight),
+                Specular = MultiplyTowards3(state.Specular, offset.Specular, weight),
+                SpecularPower = float.Lerp(state.SpecularPower, state.SpecularPower * offset.SpecularPower, weight),
+                Ambient = MultiplyTowards3(state.Ambient, offset.Ambient, weight),
+                EdgeColor = MultiplyTowards(state.EdgeColor, offset.EdgeColor, weight),
+                EdgeSize = float.Lerp(state.EdgeSize, state.EdgeSize * offset.EdgeSize, weight),
+                TextureMultiply = MultiplyTowards(state.TextureMultiply, offset.TextureColor, weight),
+                SphereMultiply = MultiplyTowards(state.SphereMultiply, offset.SphereTextureColor, weight),
+                ToonMultiply = MultiplyTowards(state.ToonMultiply, offset.ToonTextureColor, weight),
+            };
+        }
+        else
+        {
+            state = state with
+            {
+                Diffuse = state.Diffuse + offset.Diffuse * weight,
+                Specular = state.Specular + offset.Specular * weight,
+                SpecularPower = state.SpecularPower + offset.SpecularPower * weight,
+                Ambient = state.Ambient + offset.Ambient * weight,
+                EdgeColor = state.EdgeColor + offset.EdgeColor * weight,
+                EdgeSize = state.EdgeSize + offset.EdgeSize * weight,
+                TextureAdd = state.TextureAdd + offset.TextureColor * weight,
+                SphereAdd = state.SphereAdd + offset.SphereTextureColor * weight,
+                ToonAdd = state.ToonAdd + offset.ToonTextureColor * weight,
+            };
+        }
+        _materialStates[index] = state;
+
+        static Vector4 MultiplyTowards(Vector4 value, Vector4 factor, float amount) =>
+            Vector4.Lerp(value, value * factor, amount);
+        static Vector3 MultiplyTowards3(Vector3 value, Vector3 factor, float amount) =>
+            Vector3.Lerp(value, value * factor, amount);
     }
 
     private static Quaternion RotationPartOf(in Matrix4x4 world) =>
@@ -693,11 +924,11 @@ public sealed class MmdAnimator
             return new LocalPose(Quaternion.Normalize(previous.Rotation), previous.Translation);
 
         var n = next.Value;
-        // Per-channel MMD Bezier easing between the two keyframes.
-        var tx = Bezier(previous.XInterp0, previous.XInterp1, previous.XInterp2, previous.XInterp3, t);
-        var ty = Bezier(previous.YInterp0, previous.YInterp1, previous.YInterp2, previous.YInterp3, t);
-        var tz = Bezier(previous.ZInterp0, previous.ZInterp1, previous.ZInterp2, previous.ZInterp3, t);
-        var tr = Bezier(previous.RInterp0, previous.RInterp1, previous.RInterp2, previous.RInterp3, t);
+        // VMD stores the Bezier handles on the destination keyframe for the segment leading into it.
+        var tx = Bezier(n.XInterp0, n.XInterp1, n.XInterp2, n.XInterp3, t);
+        var ty = Bezier(n.YInterp0, n.YInterp1, n.YInterp2, n.YInterp3, t);
+        var tz = Bezier(n.ZInterp0, n.ZInterp1, n.ZInterp2, n.ZInterp3, t);
+        var tr = Bezier(n.RInterp0, n.RInterp1, n.RInterp2, n.RInterp3, t);
         var translation = new Vector3(
             float.Lerp(previous.Translation.X, n.Translation.X, tx),
             float.Lerp(previous.Translation.Y, n.Translation.Y, ty),
@@ -713,7 +944,8 @@ public sealed class MmdAnimator
         return next is null ? previous.Weight : float.Lerp(previous.Weight, next.Value.Weight, t);
     }
 
-    /// <summary>Camera parameters at <paramref name="time"/> (linear between keyframes; identity default).</summary>
+    /// <summary>Camera parameters at <paramref name="time"/>, using all six authored VMD Bezier
+    /// channels (target XYZ, rotation, distance and FOV).</summary>
     public static VmdCameraFrame SampleCamera(VmdDocument motion, TimeSpan time)
     {
         var track = motion.CameraTrack;
@@ -725,13 +957,56 @@ public sealed class MmdAnimator
         if (next is null)
             return previous;
         var n = next.Value;
+        var interpolation = n.Interpolation;
+        float Ease(int channel) => interpolation.Count == 24
+            ? Bezier(
+                interpolation[channel * 4], interpolation[channel * 4 + 2],
+                interpolation[channel * 4 + 1], interpolation[channel * 4 + 3], t)
+            : t;
         return new VmdCameraFrame(
             previous.Frame,
-            float.Lerp(previous.Distance, n.Distance, t),
-            Vector3.Lerp(previous.Target, n.Target, t),
-            Vector3.Lerp(previous.RotationRadians, n.RotationRadians, t),
-            float.Lerp(previous.FovDegrees, n.FovDegrees, t),
-            previous.Perspective);
+            float.Lerp(previous.Distance, n.Distance, Ease(4)),
+            new Vector3(
+                float.Lerp(previous.Target.X, n.Target.X, Ease(0)),
+                float.Lerp(previous.Target.Y, n.Target.Y, Ease(1)),
+                float.Lerp(previous.Target.Z, n.Target.Z, Ease(2))),
+            Vector3.Lerp(previous.RotationRadians, n.RotationRadians, Ease(3)),
+            float.Lerp(previous.FovDegrees, n.FovDegrees, Ease(5)),
+            t >= 1f ? n.Perspective : previous.Perspective);
+    }
+
+    public static VmdLightFrame SampleLight(VmdDocument motion, TimeSpan time)
+    {
+        var track = motion.LightTrack;
+        if (track.Count == 0)
+            return new VmdLightFrame(0, Vector3.One, new Vector3(-0.5f, -1f, -0.5f));
+        var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
+        var (previous, next, t) = Locate(track, frame, static f => f.Frame);
+        return next is null
+            ? previous
+            : new VmdLightFrame(previous.Frame,
+                Vector3.Lerp(previous.Color, next.Value.Color, t),
+                Vector3.Lerp(previous.Direction, next.Value.Direction, t));
+    }
+
+    public static VmdSelfShadowFrame SampleSelfShadow(VmdDocument motion, TimeSpan time)
+    {
+        var track = motion.SelfShadowTrack;
+        if (track.Count == 0)
+            return new VmdSelfShadowFrame(0, 0, 0f);
+        var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
+        var (previous, next, t) = Locate(track, frame, static f => f.Frame);
+        return next is not null && t >= 1f ? next.Value : previous;
+    }
+
+    public static bool SampleVisibility(VmdDocument motion, TimeSpan time)
+    {
+        var track = motion.VisibilityTrack;
+        if (track.Count == 0)
+            return true;
+        var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
+        var (previous, next, t) = Locate(track, frame, static f => f.Frame);
+        return next is not null && t >= 1f ? next.Value.Visible : previous.Visible;
     }
 
     /// <summary>Finds the keyframe pair bracketing <paramref name="frame"/> (binary search).</summary>

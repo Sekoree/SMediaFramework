@@ -130,7 +130,7 @@ public static class MmdSourceUri
 /// Pull-based BGRA video source rendering the animated MMD scene at 30 fps (the VMD timeline rate)
 /// through the software renderer. Finite when a motion is present (its duration), else a 1-hour
 /// hold of the bind pose for camera placement. Seekable — frames are pure functions of time, so a
-/// seek is just a playhead move (deterministic; no physics in the prototype).
+/// seeks reset and re-simulate physics from the requested pose.
 ///
 /// <para>NXT-10: also an <see cref="S.Media.Compositor.ILayerSurfaceVideoSource"/> — on a surface-hosting
 /// (GL) compositor the session asks for an <see cref="MmdGlLayerSurface"/> and the scene renders GPU-side
@@ -188,7 +188,7 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
     public void SelectOutputFormat(PixelFormat format)
     {
         if (format != PixelFormat.Bgra32)
-            throw new NotSupportedException("MMD prototype renders BGRA32 only");
+            throw new NotSupportedException("MMD software rendering outputs BGRA32 only");
     }
 
     public void Seek(TimeSpan position)
@@ -216,7 +216,9 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
         _animator?.Evaluate(time, _positions, normals: null, _physics, PhysicsDelta(time));
         var camera = ResolveCamera(time);
         EnsureCpuTextures();
-        _renderer.Render(_model, _positions, camera, _pixels);
+        _renderer.Render(
+            _model, _positions, camera, _pixels, ResolveLight(time), ResolveVisibility(time),
+            _animator?.CurrentUvs, _animator?.MaterialStates);
         _frameIndex++;
 
         // Copy out: the renderer's buffer is reused per frame, the emitted frame must own its pixels.
@@ -235,6 +237,9 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
             _model,
             _motion,
             ResolveCamera,
+            ResolveLight,
+            ResolveSelfShadow,
+            ResolveVisibility,
             Path.GetDirectoryName(Path.GetFullPath(_request.ModelPath)) ?? ".",
             _request.Width,
             _request.Height,
@@ -307,6 +312,25 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
             rotation * (MathF.PI / 180f),
             _request.CameraFovDegrees ?? 30f,
             true);
+    }
+
+    private VmdLightFrame ResolveLight(TimeSpan time)
+    {
+        var motion = _cameraMotion?.LightTrack.Count > 0 ? _cameraMotion : _motion;
+        return motion is not null
+            ? MmdAnimator.SampleLight(motion, time)
+            : new VmdLightFrame(0, Vector3.One, new Vector3(-0.5f, -1f, 0.5f));
+    }
+
+    private bool ResolveVisibility(TimeSpan time) =>
+        _motion is null || MmdAnimator.SampleVisibility(_motion, time);
+
+    private VmdSelfShadowFrame ResolveSelfShadow(TimeSpan time)
+    {
+        var motion = _cameraMotion?.SelfShadowTrack.Count > 0 ? _cameraMotion : _motion;
+        return motion is not null
+            ? MmdAnimator.SampleSelfShadow(motion, time)
+            : new VmdSelfShadowFrame(0, 0, 0f);
     }
 
     public void Dispose()

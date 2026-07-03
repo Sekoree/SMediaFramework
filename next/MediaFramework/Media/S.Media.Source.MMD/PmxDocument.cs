@@ -2,14 +2,30 @@ using System.Text;
 
 namespace S.Media.Source.MMD;
 
-/// <summary>One PMX vertex with its skinning influences (up to 4 bones; SDEF/QDEF read but evaluated as
-/// their linear-blend equivalents in this prototype).</summary>
+public enum PmxDeformType : byte
+{
+    Bdef1 = 0,
+    Bdef2 = 1,
+    Bdef4 = 2,
+    Sdef = 3,
+    Qdef = 4,
+}
+
+/// <summary>One PMX vertex with its skinning influences and optional SDEF/additional-UV data.</summary>
 public readonly record struct PmxVertex(
     Vector3 Position,
     Vector3 Normal,
     Vector2 Uv,
     int Bone0, int Bone1, int Bone2, int Bone3,
-    float Weight0, float Weight1, float Weight2, float Weight3);
+    float Weight0, float Weight1, float Weight2, float Weight3)
+{
+    public PmxDeformType DeformType { get; init; }
+    public Vector3 SdefC { get; init; }
+    public Vector3 SdefR0 { get; init; }
+    public Vector3 SdefR1 { get; init; }
+    public float EdgeScale { get; init; } = 1f;
+    public IReadOnlyList<Vector4> AdditionalUvs { get; init; } = [];
+}
 
 /// <summary>How a material's sphere (environment) texture combines with the base color (MMD .sph/.spa).</summary>
 public enum PmxSphereMode : byte
@@ -32,6 +48,12 @@ public sealed record PmxMaterial(
 {
     /// <summary>Draw the inverted-hull outline for this material (PMX flag 0x10).</summary>
     public bool HasEdge { get; init; }
+
+    public bool HasGroundShadow { get; init; }
+
+    public bool CastsSelfShadow { get; init; }
+
+    public bool ReceivesSelfShadow { get; init; }
 
     /// <summary>Outline color (RGBA) for the edge pass.</summary>
     public Vector4 EdgeColor { get; init; } = new(0, 0, 0, 1);
@@ -154,21 +176,71 @@ public readonly record struct PmxBoneMorphOffset(int BoneIndex, Vector3 Translat
 /// onto the referenced morph.</summary>
 public readonly record struct PmxGroupMorphOffset(int MorphIndex, float Ratio);
 
+public readonly record struct PmxUvMorphOffset(int VertexIndex, Vector4 Offset);
+
+public enum PmxMaterialMorphOperation : byte
+{
+    Multiply = 0,
+    Add = 1,
+}
+
+public readonly record struct PmxMaterialMorphOffset(
+    int MaterialIndex,
+    PmxMaterialMorphOperation Operation,
+    Vector4 Diffuse,
+    Vector3 Specular,
+    float SpecularPower,
+    Vector3 Ambient,
+    Vector4 EdgeColor,
+    float EdgeSize,
+    Vector4 TextureColor,
+    Vector4 SphereTextureColor,
+    Vector4 ToonTextureColor);
+
+/// <summary>Per-frame material values after PMX material morphs. Texture colors keep separate
+/// multiplicative/additive channels because MMD applies them to sampled texels differently.</summary>
+public readonly record struct MmdMaterialState(
+    Vector4 Diffuse,
+    Vector3 Specular,
+    float SpecularPower,
+    Vector3 Ambient,
+    Vector4 EdgeColor,
+    float EdgeSize,
+    Vector4 TextureMultiply,
+    Vector4 TextureAdd,
+    Vector4 SphereMultiply,
+    Vector4 SphereAdd,
+    Vector4 ToonMultiply,
+    Vector4 ToonAdd)
+{
+    public static MmdMaterialState From(PmxMaterial material) => new(
+        material.Diffuse, material.Specular, material.SpecularPower, material.Ambient,
+        material.EdgeColor, material.EdgeSize,
+        Vector4.One, Vector4.Zero, Vector4.One, Vector4.Zero, Vector4.One, Vector4.Zero);
+}
+
 public sealed record PmxMorph(string Name, int Panel, IReadOnlyList<PmxVertexMorphOffset> VertexOffsets)
 {
+    public byte Type { get; init; } = VertexOffsets.Count > 0 ? (byte)1 : (byte)0;
+
     /// <summary>Bone offsets (morph type 2); empty for other morph kinds.</summary>
     public IReadOnlyList<PmxBoneMorphOffset> BoneOffsets { get; init; } = [];
 
     /// <summary>Group members (morph type 0); empty for other morph kinds.</summary>
     public IReadOnlyList<PmxGroupMorphOffset> GroupOffsets { get; init; } = [];
+
+    /// <summary>Base UV (type 3) or additional UV1–4 (types 4–7) offsets.</summary>
+    public IReadOnlyList<PmxUvMorphOffset> UvOffsets { get; init; } = [];
+
+    public IReadOnlyList<PmxMaterialMorphOffset> MaterialOffsets { get; init; } = [];
 }
 
 /// <summary>
-/// Parsed PMX 2.0/2.1 model (review Gate-6 stage 1). Faithfully parses the sections this prototype
-/// evaluates (vertices + skinning, faces, materials, bones incl. IK data, vertex/group morphs) and
-/// structurally skips the rest (display frames, rigid bodies, joints, soft bodies) so any valid file
-/// loads. All reads are bounds-checked — a malformed count/index throws <see cref="PmxFormatException"/>
-/// instead of corrupting memory (review: parser bounds tests are an acceptance gate).
+/// Parsed PMX 2.0/2.1 model. Faithfully parses the sections this renderer evaluates (vertices +
+/// skinning, faces, materials, bones including IK, vertex/group/bone/UV/material morphs, rigid bodies
+/// and joints). Cosmetic display frames and MMD-unsupported PMX 2.1 impulse payloads are structurally
+/// skipped; PMX 2.1 soft bodies remain outside MMD playback parity. All reads are bounds-checked — a malformed count/index throws
+/// <see cref="PmxFormatException"/> instead of corrupting memory.
 /// </summary>
 public sealed class PmxDocument
 {
@@ -232,11 +304,13 @@ public sealed class PmxDocument
             var pos = reader.Vec3();
             var normal = reader.Vec3();
             var uv = new Vector2(reader.F32(), reader.F32());
+            var additionalUvs = new Vector4[addVec4Count];
             for (var a = 0; a < addVec4Count; a++)
-                reader.Skip(16);
+                additionalUvs[a] = reader.Vec4();
             var deformType = reader.U8();
             int b0 = -1, b1 = -1, b2 = -1, b3 = -1;
             float w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+            Vector3 sdefC = default, sdefR0 = default, sdefR1 = default;
             switch (deformType)
             {
                 case 0: // BDEF1
@@ -247,22 +321,32 @@ public sealed class PmxDocument
                     w0 = reader.F32(); w1 = 1f - w0;
                     break;
                 case 2: // BDEF4
-                case 4: // QDEF (dual-quaternion in MMD; linear-blend approximated here)
+                case 4: // QDEF is a PMX 2.1 extension (not produced by MMD itself)
                     b0 = reader.Index(boneIndexSize); b1 = reader.Index(boneIndexSize);
                     b2 = reader.Index(boneIndexSize); b3 = reader.Index(boneIndexSize);
                     w0 = reader.F32(); w1 = reader.F32(); w2 = reader.F32(); w3 = reader.F32();
                     break;
-                case 3: // SDEF (spherical blend; C/R0/R1 read and dropped — evaluated as BDEF2)
+                case 3: // SDEF (spherical blend)
                     b0 = reader.Index(boneIndexSize); b1 = reader.Index(boneIndexSize);
                     w0 = reader.F32(); w1 = 1f - w0;
-                    reader.Skip(3 * 12);
+                    sdefC = reader.Vec3();
+                    sdefR0 = reader.Vec3();
+                    sdefR1 = reader.Vec3();
                     break;
                 default:
                     throw new PmxFormatException($"unknown vertex deform type {deformType}");
             }
 
-            reader.Skip(4); // edge scale
-            vertices[i] = new PmxVertex(pos, normal, uv, b0, b1, b2, b3, w0, w1, w2, w3);
+            var edgeScale = reader.F32();
+            vertices[i] = new PmxVertex(pos, normal, uv, b0, b1, b2, b3, w0, w1, w2, w3)
+            {
+                DeformType = (PmxDeformType)deformType,
+                SdefC = sdefC,
+                SdefR0 = sdefR0,
+                SdefR1 = sdefR1,
+                EdgeScale = edgeScale,
+                AdditionalUvs = additionalUvs,
+            };
         }
 
         // Faces (stored as face-vertex indices; count is divisible by 3)
@@ -316,6 +400,9 @@ public sealed class PmxDocument
                 DoubleSided: (flags & 0x01) != 0, textureIndex, faceVertexCount)
             {
                 HasEdge = (flags & 0x10) != 0,
+                HasGroundShadow = (flags & 0x02) != 0,
+                CastsSelfShadow = (flags & 0x04) != 0,
+                ReceivesSelfShadow = (flags & 0x08) != 0,
                 EdgeColor = edgeColor,
                 EdgeSize = edgeSize,
                 SphereTextureIndex = sphereTexture,
@@ -420,13 +507,13 @@ public sealed class PmxDocument
                         offsets[o] = new PmxVertexMorphOffset(v, reader.Vec3());
                     }
 
-                    morphs.Add(new PmxMorph(name, panel, offsets));
+                    morphs.Add(new PmxMorph(name, panel, offsets) { Type = type });
                     break;
                 case 0: // group: the group's sampled weight fans out ratio-scaled onto its members
                     var members = new PmxGroupMorphOffset[offsetCount];
                     for (var o = 0; o < offsetCount; o++)
                         members[o] = new PmxGroupMorphOffset(reader.Index(morphIndexSize), reader.F32());
-                    morphs.Add(new PmxMorph(name, panel, []) { GroupOffsets = members });
+                    morphs.Add(new PmxMorph(name, panel, []) { Type = type, GroupOffsets = members });
                     break;
                 case 2: // bone: per-bone translation + rotation offsets blended by the sampled weight
                     var boneOffsets = new PmxBoneMorphOffset[offsetCount];
@@ -439,13 +526,47 @@ public sealed class PmxDocument
                             morphBone, morphTranslation, new Quaternion(q.X, q.Y, q.Z, q.W));
                     }
 
-                    morphs.Add(new PmxMorph(name, panel, []) { BoneOffsets = boneOffsets });
+                    morphs.Add(new PmxMorph(name, panel, []) { Type = type, BoneOffsets = boneOffsets });
                     break;
                 case 3: case 4: case 5: case 6: case 7: // UV / additional UV1-4
-                    reader.SkipPer(offsetCount, vertexIndexSize + 16); morphs.Add(new PmxMorph(name, panel, [])); break;
-                case 8: reader.SkipPer(offsetCount, materialIndexSize + 1 + 112); morphs.Add(new PmxMorph(name, panel, [])); break; // material
-                case 9: reader.SkipPer(offsetCount, morphIndexSize + 4); morphs.Add(new PmxMorph(name, panel, [])); break; // flip (2.1)
-                case 10: reader.SkipPer(offsetCount, rigidIndexSize + 1 + 24); morphs.Add(new PmxMorph(name, panel, [])); break; // impulse (2.1)
+                    var uvOffsets = new PmxUvMorphOffset[offsetCount];
+                    for (var o = 0; o < offsetCount; o++)
+                    {
+                        var vertex = reader.UnsignedIndex(vertexIndexSize);
+                        if (vertex < 0 || vertex >= vertexCount)
+                            throw new PmxFormatException($"morph '{name}' UV vertex index {vertex} out of range");
+                        uvOffsets[o] = new PmxUvMorphOffset(vertex, reader.Vec4());
+                    }
+                    morphs.Add(new PmxMorph(name, panel, []) { Type = type, UvOffsets = uvOffsets });
+                    break;
+                case 8: // material
+                    var materialOffsets = new PmxMaterialMorphOffset[offsetCount];
+                    for (var o = 0; o < offsetCount; o++)
+                    {
+                        var material = reader.Index(materialIndexSize);
+                        if (material < -1 || material >= materialCount)
+                            throw new PmxFormatException($"morph '{name}' material index {material} out of range");
+                        var operation = reader.U8();
+                        if (operation > 1)
+                            throw new PmxFormatException($"morph '{name}' material operation {operation} invalid");
+                        materialOffsets[o] = new PmxMaterialMorphOffset(
+                            material,
+                            operation == 0 ? PmxMaterialMorphOperation.Multiply : PmxMaterialMorphOperation.Add,
+                            reader.Vec4(), reader.Vec3(), reader.F32(), reader.Vec3(),
+                            reader.Vec4(), reader.F32(), reader.Vec4(), reader.Vec4(), reader.Vec4());
+                    }
+                    morphs.Add(new PmxMorph(name, panel, []) { Type = type, MaterialOffsets = materialOffsets });
+                    break;
+                case 9:
+                    var flips = new PmxGroupMorphOffset[offsetCount];
+                    for (var o = 0; o < offsetCount; o++)
+                        flips[o] = new PmxGroupMorphOffset(reader.Index(morphIndexSize), reader.F32());
+                    morphs.Add(new PmxMorph(name, panel, []) { Type = type, GroupOffsets = flips });
+                    break;
+                case 10:
+                    reader.SkipPer(offsetCount, rigidIndexSize + 1 + 24);
+                    morphs.Add(new PmxMorph(name, panel, []) { Type = type });
+                    break; // impulse morph is not supported by MMD itself
                 default:
                     throw new PmxFormatException($"unknown morph type {type}");
             }

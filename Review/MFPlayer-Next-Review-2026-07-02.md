@@ -866,6 +866,26 @@ SessionSmoke exit 0; headless app launch clean):
    Remaining known simplification: box-box contacts (masked off in real rigs) still use the capsule
    fallback; VMD camera interpolation is linear.
 
+34. **MMD COMPLIANCE — LOCKED JOINTS MUST STAY SOFT (operator re-test 2026-07-03: "skirt still glitches
+   into the body and stays; everything very stiff; hair barely moves").** Root cause: item 32/33's NGS
+   position pass resolved locked angular joints EXACTLY every substep — a rigidity Bullet never
+   achieves, and the rigs are authored against Bullet's softness. Evidence from the file itself: the
+   YYB skirt hangs its 16 plates on FREE (±500°) vertical joints and braces them with FULLY LOCKED
+   (0,0,0) ring joints — in Bullet the locked ring is elastically compliant (stop-ERP ≈ 0.475 at 10
+   iterations) and deforms around legs like cloth; resolved exactly it is ONE RIGID CAGE that legs
+   tunnel into and that reads as "stiff". Same story for the tails: exact locks turned each strand
+   into a rigid curved rod (measured strand bend ≈ authored bind curvature, avg 43.8° vs bind ~40°).
+   Fix: angular position corrections (both the all-locked exact-rotation branch and the per-axis
+   limits) now run in the FIRST NGS iteration only, scaled by AngularErp = 0.475 — the error survives
+   partially into the next substep, which IS the hair/cloth compliance — and VelocityIterations
+   10 (Bullet's default). Linear anchors stay exact (chain snap unchanged — no re-stretching).
+   *Measured*: strand bend avg 43.8°→65.2° / max 123°→157° (≈25° of living flex over the bind
+   curvature); tail stretch still exactly 1.000×; skirt-hip distance still in bind range through the
+   violent section; burst renders at t=46.0/46.5 show the tails flung horizontal then fallen back
+   (motion between half-second frames), t=58/59 crouch shows the skirt riding the hips. MMD tests
+   27/27; full sln 1,494/0. Tuning knob if the operator still wants looser: AngularErp (lower =
+   softer), then VelocityIterations.
+
 ## Verification appendix
 
 ```bash
@@ -887,6 +907,7 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-physics-tuning (item 31, 2026-07-03): 1,487 passed / 0 failed / 2 skipped (network-gated)
 # post-reference-aligned rewrite (item 32, 2026-07-03): 1,489 passed / 0 failed / 2 skipped
 # post-skirt/hair fixes + feature closure (item 33, 2026-07-03): 1,494 passed / 0 failed / 2 skipped
+# post-compliance fix (item 34, 2026-07-03): 1,494 passed / 0 failed / 2 skipped
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

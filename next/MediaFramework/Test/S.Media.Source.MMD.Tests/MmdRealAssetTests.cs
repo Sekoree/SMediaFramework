@@ -17,21 +17,26 @@ public sealed class MmdRealAssetTests
     private static string FindAssetRoot()
     {
         for (var dir = AppContext.BaseDirectory; dir is not null; dir = Path.GetDirectoryName(dir))
-            if (Directory.Exists(Path.Combine(dir, "Reference", "MMD_Test")))
-                return Path.Combine(dir, "Reference", "MMD_Test");
-        return "/nonexistent/Reference/MMD_Test";
+            if (Directory.Exists(Path.Combine(dir, "Reference", "MMDTest")))
+                return Path.Combine(dir, "Reference", "MMDTest");
+        return "/nonexistent/Reference/MMDTest";
     }
 
-    private static string? FindPmx() =>
-        Directory.Exists(AssetRoot)
-            ? Directory.EnumerateFiles(AssetRoot, "*.pmx", SearchOption.AllDirectories).FirstOrDefault()
+    private static string? FindPmx()
+    {
+        var root = Path.Combine(AssetRoot, "Model_YYB-Miku-ver1.02");
+        return Directory.Exists(root)
+            ? Directory.EnumerateFiles(root, "*.pmx", SearchOption.TopDirectoryOnly).FirstOrDefault()
             : null;
+    }
 
-    private static string? FindVmd() =>
-        Directory.Exists(AssetRoot)
-            ? Directory.EnumerateFiles(AssetRoot, "*.vmd", SearchOption.AllDirectories)
-                .FirstOrDefault(p => !p.Contains("Model_View_Implementations", StringComparison.Ordinal))
+    private static string? FindVmd()
+    {
+        var root = Path.Combine(AssetRoot, "Motion_Rolling Girl ");
+        return Directory.Exists(root)
+            ? Directory.EnumerateFiles(root, "*.vmd", SearchOption.TopDirectoryOnly).FirstOrDefault()
             : null;
+    }
 
     private sealed class LocalAssetFactAttribute : FactAttribute
     {

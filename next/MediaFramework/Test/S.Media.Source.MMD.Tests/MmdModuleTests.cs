@@ -95,7 +95,8 @@ public sealed class MmdModuleTests
         return ms.ToArray();
     }
 
-    /// <summary>Tiny VMD: bone "b1" translates 0→(5,0,0) over 30 frames; one camera key.</summary>
+    /// <summary>Tiny VMD: bone "b1" translates 0→(5,0,0) over 30 frames, plus one key for
+    /// every scene-level VMD track.</summary>
     private static byte[] TinyVmd()
     {
         using var ms = new MemoryStream();
@@ -112,18 +113,20 @@ public sealed class MmdModuleTests
         Fixed("tiny", 20);
 
         w.Write(2u); // bone frames
-        void BoneFrame(uint frame, float x)
+        void BoneFrame(uint frame, float x, bool physicsEnabled)
         {
             Fixed("b1", 15);
             w.Write(frame);
             w.Write(x); w.Write(0f); w.Write(0f);              // translation
             w.Write(0f); w.Write(0f); w.Write(0f); w.Write(1f); // identity quaternion
-            for (var i = 0; i < 64; i++)
-                w.Write((byte)((i % 4 == 0) ? 64 : 64));       // linear-ish interpolation block
+            var interpolation = Enumerable.Repeat((byte)64, 64).ToArray();
+            interpolation[2] = physicsEnabled ? (byte)0 : (byte)0x63;
+            interpolation[3] = physicsEnabled ? (byte)0 : (byte)0x0f;
+            w.Write(interpolation);                            // linear-ish interpolation + physics toggle
         }
 
-        BoneFrame(0, 0f);
-        BoneFrame(30, 5f);
+        BoneFrame(0, 0f, physicsEnabled: true);
+        BoneFrame(30, 5f, physicsEnabled: false);
 
         w.Write(0u); // morph frames
 
@@ -136,6 +139,23 @@ public sealed class MmdModuleTests
             w.Write((byte)64);
         w.Write(30u);         // fov
         w.Write((byte)0);     // perspective
+
+        w.Write(1u);          // light frames
+        w.Write(12u);
+        w.Write(0.8f); w.Write(0.7f); w.Write(0.6f);
+        w.Write(-0.2f); w.Write(-1f); w.Write(0.4f);
+
+        w.Write(1u);          // self-shadow frames
+        w.Write(13u);
+        w.Write((byte)1);
+        w.Write((10000f - 42f) / 100000f); // packed VMD distance
+
+        w.Write(1u);          // show/IK frames
+        w.Write(14u);
+        w.Write((byte)1);     // visible
+        w.Write(1u);          // one IK state
+        Fixed("leg IK", 20);
+        w.Write((byte)0);
         return ms.ToArray();
     }
 
@@ -173,11 +193,21 @@ public sealed class MmdModuleTests
         Assert.Equal("tiny", motion.ModelName);
         var track = motion.BoneTracks["b1"];
         Assert.Equal(2, track.Count);
+        Assert.True(track[0].PhysicsEnabled);
+        Assert.False(track[1].PhysicsEnabled);
         Assert.Equal(30u, motion.LastFrame);
         Assert.Equal(TimeSpan.FromSeconds(1), motion.Duration);
         var camera = Assert.Single(motion.CameraTrack);
         Assert.Equal(-20f, camera.Distance);
         Assert.True(camera.Perspective);
+        var light = Assert.Single(motion.LightTrack);
+        Assert.Equal(12u, light.Frame);
+        Assert.Equal(new Vector3(0.8f, 0.7f, 0.6f), light.Color);
+        var shadow = Assert.Single(motion.SelfShadowTrack);
+        Assert.Equal((byte)1, shadow.Mode);
+        Assert.Equal(42f, shadow.Distance);
+        Assert.True(Assert.Single(motion.VisibilityTrack).Visible);
+        Assert.False(Assert.Single(motion.IkEnableTracks["leg IK"]).Enabled);
     }
 
     // ---- animation ---------------------------------------------------------------------------------
@@ -211,6 +241,52 @@ public sealed class MmdModuleTests
         Assert.InRange(mid, 0.4f, 0.6f);
         // A strong ease-in curve stays below linear early on.
         Assert.True(MmdAnimator.Bezier(100, 10, 120, 30, 0.3f) < 0.3f);
+    }
+
+    [Fact]
+    public void Animator_UsesDestinationKeyBezier_ForBoneAndCameraSegments()
+    {
+        static VmdBoneFrame BoneKey(uint frame, float x, byte x1, byte y1, byte x2, byte y2) =>
+            new(frame, new Vector3(x, 0, 0), Quaternion.Identity,
+                x1, y1, x2, y2,
+                20, 20, 107, 107, 20, 20, 107, 107, 20, 20, 107, 107);
+
+        var destinationCameraInterpolation = Enumerable.Repeat((byte)64, 24).ToArray();
+        destinationCameraInterpolation[0] = 100; // x1,x2,y1,y2 packed per camera channel
+        destinationCameraInterpolation[1] = 120;
+        destinationCameraInterpolation[2] = 10;
+        destinationCameraInterpolation[3] = 30;
+        var motion = new VmdDocument
+        {
+            ModelName = "destination-curve",
+            BoneTracks = new Dictionary<string, IReadOnlyList<VmdBoneFrame>>(StringComparer.Ordinal)
+            {
+                ["b1"] =
+                [
+                    BoneKey(0, 0, 20, 20, 107, 107),
+                    BoneKey(30, 10, 100, 10, 120, 30),
+                ],
+            },
+            MorphTracks = new Dictionary<string, IReadOnlyList<VmdMorphFrame>>(StringComparer.Ordinal),
+            CameraTrack =
+            [
+                new VmdCameraFrame(0, -20, Vector3.Zero, Vector3.Zero, 30, true),
+                new VmdCameraFrame(30, -20, new Vector3(10, 0, 0), Vector3.Zero, 30, true)
+                {
+                    Interpolation = destinationCameraInterpolation,
+                },
+            ],
+        };
+
+        var animator = new MmdAnimator(PmxDocument.Load(new MemoryStream(TinyPmx())), motion);
+        var positions = new Vector3[3];
+        animator.Evaluate(TimeSpan.FromSeconds(0.3), positions); // frame 9 / t=.3
+        Assert.True(positions[0].X < 2f,
+            $"destination ease-in was not used for bone X: {positions[0].X:F3}");
+
+        var camera = MmdAnimator.SampleCamera(motion, TimeSpan.FromSeconds(0.3));
+        Assert.True(camera.Target.X < 2f,
+            $"destination ease-in was not used for camera X: {camera.Target.X:F3}");
     }
 
     // ---- rendering + source -----------------------------------------------------------------------

@@ -80,6 +80,26 @@ public sealed class MmdPhysicsTests
         Assert.True(float.IsFinite(tip.X) && float.IsFinite(tip.Y) && float.IsFinite(tip.Z));
     }
 
+    [Fact]
+    public void VmdPhysicsToggle_MakesDynamicBodyFollowItsBoneUntilReenabled()
+    {
+        var model = PendulumRig();
+        var physics = MmdPhysics.TryCreate(model)!;
+        var world = BindWorlds(model);
+        physics.SetBonePhysicsEnabled([true, false]);
+        physics.Reset(world);
+        for (var i = 0; i < 60; i++)
+            physics.Step(world, 1f / 60f);
+        Assert.True(Vector3.Distance(world[TipBone].Translation, new Vector3(1, 10, 0)) < 1e-4f,
+            $"physics-off body did not follow the animated bone: {world[TipBone].Translation}");
+
+        physics.SetBonePhysicsEnabled([true, true]);
+        for (var i = 0; i < 60; i++)
+            physics.Step(world, 1f / 60f);
+        Assert.True(world[TipBone].Translation.Y < 9.7f,
+            $"re-enabled body did not resume simulation: {world[TipBone].Translation}");
+    }
+
     /// <summary>YYB-style tails lock their inner joints to ±0.1°: the link must FOLLOW the parent bone
     /// rigidly (authored stiffness) instead of dangling under gravity like a free pendulum.</summary>
     [Fact]
@@ -264,6 +284,84 @@ public sealed class MmdPhysicsTests
         Assert.True(plateZ < -0.1f,
             $"plate was not pushed out of the capsule across its wide face (z={plateZ:F3}, expected < -0.1)");
         Assert.True(float.IsFinite(plateZ) && MathF.Abs(plateZ) < 5f, $"plate exploded (z={plateZ:F3})");
+    }
+
+    /// <summary>The YYB tie and skirt plates are boxes and several of their body colliders are boxes too.
+    /// A box-box contact must use the authored wide faces, not a thin capsule through each box centre.</summary>
+    [Fact]
+    public void BoxPlate_IsPushedByABox_AcrossItsWideFace()
+    {
+        var model = new PmxDocument
+        {
+            Version = 2.0f,
+            ModelName = "box contact",
+            ModelNameEnglish = "box contact",
+            Vertices = [],
+            Indices = [],
+            Textures = [],
+            Materials = [],
+            Bones =
+            [
+                Bone("anchor", new Vector3(0, 12, 0), parent: -1),
+                Bone("plate", new Vector3(0, 10, 0), parent: 0),
+                Bone("body", new Vector3(0.75f, 9.2f, 0.3f), parent: -1),
+            ],
+            Morphs = [],
+            RigidBodies =
+            [
+                new PmxRigidBody("anchor", 0, 0, 0, PmxRigidShape.Sphere,
+                    new Vector3(0.1f, 0, 0), new Vector3(0, 12, 0), Vector3.Zero,
+                    1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.FollowBone),
+                new PmxRigidBody("plate", 1, 1, 0xFFFF, PmxRigidShape.Box,
+                    new Vector3(1.0f, 1.0f, 0.05f), new Vector3(0, 10, 0), Vector3.Zero,
+                    1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.Physics),
+                // Overlaps the plate near its lower-right wide face. The old box→capsule fallback
+                // misses because both replacement capsules run along Y and their thin radii are apart.
+                new PmxRigidBody("body", 2, 2, 0xFFFF, PmxRigidShape.Box,
+                    new Vector3(0.5f, 0.5f, 0.35f), new Vector3(0.75f, 9.2f, 0.3f), Vector3.Zero,
+                    1f, 0.5f, 0.5f, 0f, 0.5f, PmxPhysicsMode.FollowBone),
+            ],
+            Joints =
+            [
+                new PmxJoint("swing", 0, 0, 1, new Vector3(0, 12, 0), Vector3.Zero,
+                    Vector3.Zero, Vector3.Zero,
+                    new Vector3(-MathF.PI), new Vector3(MathF.PI), Vector3.Zero, Vector3.Zero),
+            ],
+        };
+        var physics = MmdPhysics.TryCreate(model)!;
+        var world = BindWorlds(model);
+        physics.Reset(world);
+        for (var i = 0; i < 90; i++)
+            physics.Step(world, 1f / 60f);
+
+        var plate = world[1];
+        Assert.True(plate.Translation.Z < -0.1f || MathF.Abs(plate.M13) > 0.2f,
+            $"plate neither moved nor rotated away from its wide-face contact (z={plate.Translation.Z:F3}, matrix={plate})");
+    }
+
+    [Fact]
+    public void KinematicDrive_IsConsistentAtThirtyAndSixtyRenderFps()
+    {
+        var at30 = Simulate(30);
+        var at60 = Simulate(60);
+        Assert.True(Vector3.Distance(at30, at60) < 0.2f,
+            $"30 fps fixed-step drive diverged from 60 fps (30={at30}, 60={at60})");
+
+        static Vector3 Simulate(int renderFps)
+        {
+            var model = PendulumRig();
+            var physics = MmdPhysics.TryCreate(model)!;
+            var world = BindWorlds(model);
+            physics.Reset(world);
+            for (var frame = 1; frame <= renderFps; frame++)
+            {
+                var time = frame / (float)renderFps;
+                var x = MathF.Sin(2f * MathF.PI * 0.5f * time);
+                world[RootBone] = Matrix4x4.CreateTranslation(x, 10f, 0f);
+                physics.Step(world, 1f / renderFps);
+            }
+            return world[TipBone].Translation;
+        }
     }
 
     [Fact]

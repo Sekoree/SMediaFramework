@@ -10,7 +10,11 @@ public readonly record struct VmdBoneFrame(
     byte XInterp0, byte XInterp1, byte XInterp2, byte XInterp3,
     byte YInterp0, byte YInterp1, byte YInterp2, byte YInterp3,
     byte ZInterp0, byte ZInterp1, byte ZInterp2, byte ZInterp3,
-    byte RInterp0, byte RInterp1, byte RInterp2, byte RInterp3);
+    byte RInterp0, byte RInterp1, byte RInterp2, byte RInterp3)
+{
+    /// <summary>MMD's per-bone physics toggle hidden in bytes 2/3 of the interpolation block.</summary>
+    public bool PhysicsEnabled { get; init; } = true;
+}
 
 public readonly record struct VmdMorphFrame(uint Frame, float Weight);
 
@@ -25,13 +29,24 @@ public readonly record struct VmdCameraFrame(
     Vector3 Target,
     Vector3 RotationRadians,
     float FovDegrees,
-    bool Perspective);
+    bool Perspective)
+{
+    /// <summary>Six Bezier channels × (x1,x2,y1,y2): target XYZ, rotation, distance, FOV.</summary>
+    public IReadOnlyList<byte> Interpolation { get; init; } = [];
+}
+
+public readonly record struct VmdLightFrame(uint Frame, Vector3 Color, Vector3 Direction);
+
+/// <summary>VMD self-shadow key. Mode 0 disables shadows; modes 1/2 select MMD's two shadow-map
+/// variants. Distance is exposed in MMD scene units (the packed VMD value is converted on load).</summary>
+public readonly record struct VmdSelfShadowFrame(uint Frame, byte Mode, float Distance);
+
+public readonly record struct VmdVisibilityFrame(uint Frame, bool Visible);
 
 /// <summary>
 /// Parsed VMD motion (review Gate-6 stage 1): bone tracks (grouped by Shift-JIS bone name), morph
-/// tracks, the camera track, and per-IK-bone enable tracks (the show/IK section). Light/self-shadow
-/// sections are structurally skipped. Frames are the MMD 30 fps timeline; conversion to session time
-/// is the animator's job.
+/// tracks, camera/light/self-shadow tracks, and visibility/per-IK enable tracks from the show/IK
+/// section. Frames are the MMD 30 fps timeline; conversion to session time is the animator's job.
 /// </summary>
 public sealed class VmdDocument
 {
@@ -41,6 +56,9 @@ public sealed class VmdDocument
     public required IReadOnlyDictionary<string, IReadOnlyList<VmdBoneFrame>> BoneTracks { get; init; }
     public required IReadOnlyDictionary<string, IReadOnlyList<VmdMorphFrame>> MorphTracks { get; init; }
     public required IReadOnlyList<VmdCameraFrame> CameraTrack { get; init; }
+    public IReadOnlyList<VmdLightFrame> LightTrack { get; init; } = [];
+    public IReadOnlyList<VmdSelfShadowFrame> SelfShadowTrack { get; init; } = [];
+    public IReadOnlyList<VmdVisibilityFrame> VisibilityTrack { get; init; } = [];
 
     /// <summary>IK on/off keys per IK bone name (step-sampled; a bone with no track is always on).</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<VmdIkFrame>> IkEnableTracks { get; init; } =
@@ -91,7 +109,11 @@ public sealed class VmdDocument
                 interp[0], interp[4], interp[8], interp[12],
                 interp[1], interp[5], interp[9], interp[13],
                 interp[2], interp[6], interp[10], interp[14],
-                interp[3], interp[7], interp[11], interp[15]));
+                interp[3], interp[7], interp[11], interp[15])
+            {
+                // 0x0000 = on; 0x630f = off. Unknown/non-MMD blocks retain the compatible default on.
+                PhysicsEnabled = interp[2] != 0x63 || interp[3] != 0x0f,
+            });
         }
 
         foreach (var track in boneTracks.Values)
@@ -125,42 +147,63 @@ public sealed class VmdDocument
                 var distance = r.ReadSingle();
                 var target = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
                 var rotation = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
-                _ = r.ReadBytes(24); // interpolation (linear evaluation in the prototype)
+                var interpolation = r.ReadBytes(24);
+                if (interpolation.Length != 24)
+                    throw new PmxFormatException("truncated VMD camera interpolation");
                 var fov = r.ReadUInt32();
                 var perspective = r.ReadByte() == 0; // 0 = perspective on in VMD
                 lastFrame = Math.Max(lastFrame, frame);
-                camera.Add(new VmdCameraFrame(frame, distance, target, rotation, fov, perspective));
+                camera.Add(new VmdCameraFrame(frame, distance, target, rotation, fov, perspective)
+                {
+                    Interpolation = interpolation,
+                });
             }
 
             camera.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
         }
 
-        // Light frames (28 bytes each) and self-shadow frames (9 bytes each) — structurally skipped.
+        var lights = new List<VmdLightFrame>();
         if (stream.Position < stream.Length)
         {
             var lightCount = ReadCount(r, "light-frame");
             for (var i = 0; i < lightCount; i++)
-                if (r.ReadBytes(28).Length != 28)
-                    throw new PmxFormatException("truncated VMD light frame");
+            {
+                var frame = r.ReadUInt32();
+                var color = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                var direction = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                lights.Add(new VmdLightFrame(frame, color, direction));
+                lastFrame = Math.Max(lastFrame, frame);
+            }
+            lights.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
         }
 
+        var shadows = new List<VmdSelfShadowFrame>();
         if (stream.Position < stream.Length)
         {
             var shadowCount = ReadCount(r, "self-shadow-frame");
             for (var i = 0; i < shadowCount; i++)
-                if (r.ReadBytes(9).Length != 9)
-                    throw new PmxFormatException("truncated VMD self-shadow frame");
+            {
+                var frame = r.ReadUInt32();
+                var mode = r.ReadByte();
+                if (mode > 2)
+                    throw new PmxFormatException($"invalid VMD self-shadow mode {mode}");
+                var packedDistance = r.ReadSingle();
+                shadows.Add(new VmdSelfShadowFrame(frame, mode, 10000f - packedDistance * 100000f));
+                lastFrame = Math.Max(lastFrame, frame);
+            }
+            shadows.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
         }
 
-        // Show/IK frames: each key carries the model-visible flag (ignored) plus per-IK-bone on/off.
+        // Show/IK frames: each key carries the model-visible flag plus per-IK-bone on/off.
         var ikTracks = new Dictionary<string, List<VmdIkFrame>>(StringComparer.Ordinal);
+        var visibility = new List<VmdVisibilityFrame>();
         if (stream.Position < stream.Length)
         {
             var ikFrameCount = ReadCount(r, "show-ik-frame");
             for (var i = 0; i < ikFrameCount; i++)
             {
                 var frame = r.ReadUInt32();
-                _ = r.ReadByte(); // model visible
+                visibility.Add(new VmdVisibilityFrame(frame, r.ReadByte() != 0));
                 var ikCount = ReadCount(r, "ik-state");
                 for (var k = 0; k < ikCount; k++)
                 {
@@ -176,6 +219,7 @@ public sealed class VmdDocument
 
             foreach (var track in ikTracks.Values)
                 track.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
+            visibility.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
         }
 
         return new VmdDocument
@@ -186,6 +230,9 @@ public sealed class VmdDocument
             MorphTracks = morphTracks.ToDictionary(
                 kv => kv.Key, IReadOnlyList<VmdMorphFrame> (kv) => kv.Value, StringComparer.Ordinal),
             CameraTrack = camera,
+            LightTrack = lights,
+            SelfShadowTrack = shadows,
+            VisibilityTrack = visibility,
             IkEnableTracks = ikTracks.ToDictionary(
                 kv => kv.Key, IReadOnlyList<VmdIkFrame> (kv) => kv.Value, StringComparer.Ordinal),
             LastFrame = lastFrame,

@@ -5,12 +5,10 @@ using StbImageSharp;
 namespace S.Media.Source.MMD;
 
 /// <summary>
-/// GPU renderer for an MMD scene as a compositor layer surface (Gate-6 stage: "real MMD materials via
-/// NXT-10"). Renders the skinned model into its OWN color+depth FBO (the compositor's canvas FBO has no
-/// depth), then draws that as a textured quad into the canvas applying the layer transform + opacity.
-/// Material model v1: per-material diffuse texture (StbImageSharp — png/jpg/bmp/tga), procedural two-tone
-/// toon ramp, MMD inverted-hull edge pass (edge flag/color/size), double-sided flag, material-order alpha
-/// blending. Sphere maps and per-material toon ramp textures are the known next slice.
+/// GPU renderer for an MMD scene as a compositor layer surface. Renders the skinned model into its own
+/// color/depth FBO, then draws that into the canvas with the layer transform and opacity. Implements
+/// diffuse/sphere/toon textures, shared toon ramps, material and UV morphs, specular light, per-vertex
+/// edges, ordered alpha blending, and PMX/VMD-controlled directional self shadows.
 ///
 /// <para>Threading: everything GL runs on the compositor thread (<see cref="ConfigureGl"/>/<see cref="Render"/>
 /// per the <see cref="IVideoCompositorLayerSurface"/> contract). The surface owns a PRIVATE
@@ -28,6 +26,9 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
     private readonly MmdPhysics? _physics;
     private TimeSpan _lastPhysicsTime = TimeSpan.MinValue;
     private readonly Func<TimeSpan, VmdCameraFrame> _camera;
+    private readonly Func<TimeSpan, VmdLightFrame> _light;
+    private readonly Func<TimeSpan, VmdSelfShadowFrame> _selfShadow;
+    private readonly Func<TimeSpan, bool> _visibility;
     private readonly string _modelDirectory;
     private readonly int _sceneWidth;
     private readonly int _sceneHeight;
@@ -36,13 +37,16 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
     private readonly Vector3[] _normals;
     private readonly float[] _vertexUpload;   // interleaved pos(3) + normal(3)
     private readonly float[] _uvUpload;       // static uv(2)
+    private readonly float[] _additionalUv1Upload;
+    private readonly float[] _edgeScaleUpload;
 
     private GL? _gl;
     private uint _fbo, _colorTex, _depthRbo;
+    private uint _shadowFbo, _shadowDepthTex, _shadowColorRbo;
     private uint _msaaFbo, _msaaColorRbo, _msaaDepthRbo; // multisampled scene target (resolved into _fbo)
-    private uint _vao, _dynamicVbo, _uvVbo, _ebo;
+    private uint _vao, _dynamicVbo, _uvVbo, _additionalUv1Vbo, _edgeScaleVbo, _ebo;
     private uint _blitVao; // attribute-less quad still needs a bound VAO in core profile
-    private uint _mainProgram, _edgeProgram, _blitProgram;
+    private uint _mainProgram, _edgeProgram, _shadowProgram, _blitProgram;
     private uint _whiteTex, _blackTex;
     private uint[] _materialTextures = [];
     private uint[] _sphereTextures = [];
@@ -55,6 +59,9 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         PmxDocument model,
         VmdDocument? motion,
         Func<TimeSpan, VmdCameraFrame> camera,
+        Func<TimeSpan, VmdLightFrame> light,
+        Func<TimeSpan, VmdSelfShadowFrame> selfShadow,
+        Func<TimeSpan, bool> visibility,
         string modelDirectory,
         int sceneWidth,
         int sceneHeight,
@@ -66,6 +73,9 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         _animator = motion is not null ? new MmdAnimator(model, motion) : null;
         _physics = physics && _animator is not null ? MmdPhysics.TryCreate(model) : null;
         _camera = camera;
+        _light = light;
+        _selfShadow = selfShadow;
+        _visibility = visibility;
         _modelDirectory = modelDirectory;
         _sceneWidth = Math.Max(sceneWidth, 16);
         _sceneHeight = Math.Max(sceneHeight, 16);
@@ -74,12 +84,22 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         _normals = new Vector3[model.Vertices.Count];
         _vertexUpload = new float[model.Vertices.Count * 6];
         _uvUpload = new float[model.Vertices.Count * 2];
+        _additionalUv1Upload = new float[model.Vertices.Count * 4];
+        _edgeScaleUpload = new float[model.Vertices.Count];
         for (var i = 0; i < model.Vertices.Count; i++)
         {
             _positions[i] = model.Vertices[i].Position; // bind pose until the first Evaluate
             _normals[i] = model.Vertices[i].Normal;
             _uvUpload[i * 2] = model.Vertices[i].Uv.X;
             _uvUpload[i * 2 + 1] = model.Vertices[i].Uv.Y;
+            var additionalUv = model.Vertices[i].AdditionalUvs.Count > 0
+                ? model.Vertices[i].AdditionalUvs[0]
+                : Vector4.Zero;
+            _additionalUv1Upload[i * 4] = additionalUv.X;
+            _additionalUv1Upload[i * 4 + 1] = additionalUv.Y;
+            _additionalUv1Upload[i * 4 + 2] = additionalUv.Z;
+            _additionalUv1Upload[i * 4 + 3] = additionalUv.W;
+            _edgeScaleUpload[i] = model.Vertices[i].EdgeScale;
         }
     }
 
@@ -133,6 +153,29 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
                 _msaaFbo = 0; // MSAA unsupported here — fall back to the aliased path silently
         }
 
+        // Directional self-shadow map. A tiny color renderbuffer keeps the FBO portable across core
+        // drivers that require an explicit draw attachment; only the sampled depth texture matters.
+        const uint shadowSize = 1024;
+        _shadowDepthTex = gl.GenTexture();
+        gl.BindTexture(TextureTarget.Texture2D, _shadowDepthTex);
+        gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent24,
+            shadowSize, shadowSize, 0, GLEnum.DepthComponent, GLEnum.UnsignedInt, null);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        _shadowColorRbo = gl.GenRenderbuffer();
+        gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _shadowColorRbo);
+        gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.R8, shadowSize, shadowSize);
+        _shadowFbo = gl.GenFramebuffer();
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+        gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+            TextureTarget.Texture2D, _shadowDepthTex, 0);
+        gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            RenderbufferTarget.Renderbuffer, _shadowColorRbo);
+        if (gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete)
+            _shadowFbo = 0;
+
         // Geometry: interleaved dynamic pos+normal, static uv, uint indices.
         _vao = gl.GenVertexArray();
         gl.BindVertexArray(_vao);
@@ -149,6 +192,18 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
             gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_uvUpload.Length * sizeof(float)), uv, BufferUsageARB.StaticDraw);
         gl.EnableVertexAttribArray(2);
         gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        _additionalUv1Vbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, _additionalUv1Vbo);
+        fixed (float* uv = _additionalUv1Upload)
+            gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_additionalUv1Upload.Length * sizeof(float)), uv, BufferUsageARB.StreamDraw);
+        gl.EnableVertexAttribArray(3);
+        gl.VertexAttribPointer(3, 4, VertexAttribPointerType.Float, false, 4 * sizeof(float), (void*)0);
+        _edgeScaleVbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, _edgeScaleVbo);
+        fixed (float* scale = _edgeScaleUpload)
+            gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_edgeScaleUpload.Length * sizeof(float)), scale, BufferUsageARB.StaticDraw);
+        gl.EnableVertexAttribArray(4);
+        gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, sizeof(float), (void*)0);
         _ebo = gl.GenBuffer();
         gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
         var indices = new uint[_model.Indices.Count];
@@ -160,6 +215,7 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
 
         _mainProgram = CompileProgram(gl, MainVs, MainFs);
         _edgeProgram = CompileProgram(gl, EdgeVs, EdgeFs);
+        _shadowProgram = CompileProgram(gl, ShadowVs, ShadowFs);
         _blitProgram = CompileProgram(gl, BlitVs, BlitFs);
         _blitVao = gl.GenVertexArray();
 
@@ -190,7 +246,51 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
                 ? 0
                 : LoadMaterialTexture(gl, material.SphereTextureIndex, fallback: 0);
             _toonTextures[m] = LoadMaterialTexture(gl, material.ToonTextureIndex, fallback: 0);
+            if (_toonTextures[m] == 0 && material.SharedToonIndex >= 0)
+                _toonTextures[m] = CreateSharedToonTexture(gl, material.SharedToonIndex);
         }
+    }
+
+    /// <summary>MMD's ten built-in shared toon slots. Slots 1-4 are hard two-tone ramps, 5-6 use
+    /// a softer skin/gold transition, and 7-10 are neutral white. Keeping these in code avoids an
+    /// external MMD installation just to render PMX materials that select a shared toon.</summary>
+    private static unsafe uint CreateSharedToonTexture(GL gl, int index)
+    {
+        var dark = index switch
+        {
+            0 => new byte[] { 205, 205, 205 },
+            1 => new byte[] { 245, 225, 225 },
+            2 => new byte[] { 154, 154, 154 },
+            3 => new byte[] { 248, 239, 235 },
+            4 => new byte[] { 254, 231, 222 },
+            5 => new byte[] { 195, 172, 3 },
+            _ => new byte[] { 255, 255, 255 },
+        };
+        var pixels = new byte[32 * 4];
+        for (var y = 0; y < 32; y++)
+        {
+            var transition = index switch
+            {
+                4 => Math.Clamp((y - 16f) / 12f, 0f, 1f),
+                5 => Math.Clamp((y - 19f) / 7f, 0f, 1f),
+                _ => y < 15 ? 0f : 1f,
+            };
+            var bright = index == 5 ? new Vector3(255, 237, 97) : new Vector3(255);
+            pixels[y * 4] = (byte)float.Lerp(bright.X, dark[0], transition);
+            pixels[y * 4 + 1] = (byte)float.Lerp(bright.Y, dark[1], transition);
+            pixels[y * 4 + 2] = (byte)float.Lerp(bright.Z, dark[2], transition);
+            pixels[y * 4 + 3] = 255;
+        }
+        var texture = gl.GenTexture();
+        gl.BindTexture(TextureTarget.Texture2D, texture);
+        fixed (byte* data = pixels)
+            gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, 1, 32, 0,
+                GLEnum.Rgba, GLEnum.UnsignedByte, data);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        return texture;
     }
 
     private unsafe uint LoadMaterialTexture(GL gl, int textureIndex) =>
@@ -287,8 +387,12 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         }
 
         var camera = _camera(masterTime);
+        var light = _light(masterTime);
+        var selfShadow = _selfShadow(masterTime);
+        var visible = _visibility(masterTime);
         var view = SceneView(camera);
         var viewProjection = view * SceneProjection(camera, (float)_sceneWidth / _sceneHeight);
+        var lightViewProjection = SceneShadowMatrix(light, selfShadow);
 
         // --- scene pass (own FBO with depth; multisampled target when MSAA is on) --------------------
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaFbo != 0 ? _msaaFbo : _fbo);
@@ -305,6 +409,76 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, _dynamicVbo);
         fixed (float* v = _vertexUpload)
             gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_vertexUpload.Length * sizeof(float)), v, BufferUsageARB.StreamDraw);
+        if (_animator is not null)
+        {
+            var uvs = _animator.CurrentUvs;
+            for (var i = 0; i < uvs.Count; i++)
+            {
+                _uvUpload[i * 2] = uvs[i].X;
+                _uvUpload[i * 2 + 1] = uvs[i].Y;
+            }
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, _uvVbo);
+            fixed (float* uv = _uvUpload)
+                gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_uvUpload.Length * sizeof(float)), uv, BufferUsageARB.StreamDraw);
+            var additionalUvs = _animator.CurrentAdditionalUv1;
+            for (var i = 0; i < additionalUvs.Count; i++)
+            {
+                _additionalUv1Upload[i * 4] = additionalUvs[i].X;
+                _additionalUv1Upload[i * 4 + 1] = additionalUvs[i].Y;
+                _additionalUv1Upload[i * 4 + 2] = additionalUvs[i].Z;
+                _additionalUv1Upload[i * 4 + 3] = additionalUvs[i].W;
+            }
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, _additionalUv1Vbo);
+            fixed (float* uv = _additionalUv1Upload)
+                gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_additionalUv1Upload.Length * sizeof(float)), uv, BufferUsageARB.StreamDraw);
+        }
+
+        var shadowEnabled = visible && selfShadow.Mode != 0 && _shadowFbo != 0;
+        if (shadowEnabled)
+        {
+            gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+            gl.Viewport(0, 0, 1024, 1024);
+            gl.ClearDepth(1.0);
+            gl.Enable(EnableCap.DepthTest);
+            gl.DepthMask(true);
+            gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+            gl.UseProgram(_shadowProgram);
+            gl.UniformMatrix4(gl.GetUniformLocation(_shadowProgram, "uLightViewProj"), 1, false,
+                (float*)&lightViewProjection);
+            gl.Uniform1(gl.GetUniformLocation(_shadowProgram, "uTexture"), 0);
+            gl.Enable(EnableCap.CullFace);
+            gl.CullFace(TriangleFace.Back);
+            var shadowOffset = 0;
+            for (var m = 0; m < _model.Materials.Count; m++)
+            {
+                var material = _model.Materials[m];
+                var state = _animator is not null
+                    ? _animator.MaterialStates[m]
+                    : MmdMaterialState.From(material);
+                if (material.CastsSelfShadow && material.FaceVertexCount > 0 && state.Diffuse.W > 0f)
+                {
+                    if (material.DoubleSided) gl.Disable(EnableCap.CullFace);
+                    else gl.Enable(EnableCap.CullFace);
+                    gl.ActiveTexture(TextureUnit.Texture0);
+                    gl.BindTexture(TextureTarget.Texture2D,
+                        m < _materialTextures.Length && _materialTextures[m] != 0
+                            ? _materialTextures[m]
+                            : _whiteTex);
+                    gl.Uniform1(gl.GetUniformLocation(_shadowProgram, "uAlpha"), state.Diffuse.W);
+                    gl.DrawElements(PrimitiveType.Triangles, (uint)material.FaceVertexCount,
+                        DrawElementsType.UnsignedInt, (void*)(shadowOffset * sizeof(uint)));
+                }
+                shadowOffset += material.FaceVertexCount;
+            }
+        }
+
+        // The shadow pass temporarily owns the framebuffer and viewport; restore the already-cleared
+        // scene target before regular material rendering.
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaFbo != 0 ? _msaaFbo : _fbo);
+        gl.Viewport(0, 0, (uint)_sceneWidth, (uint)_sceneHeight);
+        gl.Enable(EnableCap.DepthTest);
+        gl.DepthFunc(DepthFunction.Lequal);
+        gl.DepthMask(true);
 
         gl.Enable(EnableCap.Blend);
         gl.BlendFuncSeparate(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha,
@@ -320,12 +494,25 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uTexture"), 0);
         gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uSphere"), 1);
         gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uToon"), 2);
+        gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uShadowMap"), 3);
+        gl.UniformMatrix4(gl.GetUniformLocation(_mainProgram, "uLightViewProj"), 1, false,
+            (float*)&lightViewProjection);
+        gl.ActiveTexture(TextureUnit.Texture3);
+        gl.BindTexture(TextureTarget.Texture2D, _shadowDepthTex);
+        var lightDirection = light.Direction;
+        gl.Uniform3(gl.GetUniformLocation(_mainProgram, "uLightDirection"),
+            lightDirection.X, lightDirection.Y, -lightDirection.Z);
+        gl.Uniform3(gl.GetUniformLocation(_mainProgram, "uLightColor"),
+            light.Color.X, light.Color.Y, light.Color.Z);
         gl.CullFace(TriangleFace.Back);
         var offset = 0;
-        for (var m = 0; m < _model.Materials.Count; m++)
+        for (var m = 0; visible && m < _model.Materials.Count; m++)
         {
             var material = _model.Materials[m];
-            if (material.FaceVertexCount <= 0 || material.Diffuse.W <= 0f)
+            var materialState = _animator is not null
+                ? _animator.MaterialStates[m]
+                : MmdMaterialState.From(material);
+            if (material.FaceVertexCount <= 0 || materialState.Diffuse.W <= 0f)
             {
                 offset += material.FaceVertexCount;
                 continue;
@@ -346,6 +533,7 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
             {
                 PmxSphereMode.Multiply => _sphereTextures[m],
                 PmxSphereMode.Add => _sphereTextures[m],
+                PmxSphereMode.SubTexture => _sphereTextures[m],
                 _ => _whiteTex,
             });
             gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uSphereMode"), (int)sphereMode);
@@ -354,13 +542,30 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
             gl.ActiveTexture(TextureUnit.Texture2);
             gl.BindTexture(TextureTarget.Texture2D, hasToon ? _toonTextures[m] : _whiteTex);
             gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uHasToon"), hasToon ? 1 : 0);
-            var d = material.Diffuse;
+            SetColorPair("uTextureMultiply", "uTextureAdd", materialState.TextureMultiply, materialState.TextureAdd);
+            SetColorPair("uSphereMultiply", "uSphereAdd", materialState.SphereMultiply, materialState.SphereAdd);
+            SetColorPair("uToonMultiply", "uToonAdd", materialState.ToonMultiply, materialState.ToonAdd);
+            var d = materialState.Diffuse;
             gl.Uniform4(gl.GetUniformLocation(_mainProgram, "uDiffuse"), d.X, d.Y, d.Z, d.W);
-            var a = material.Ambient;
+            var a = materialState.Ambient;
             gl.Uniform3(gl.GetUniformLocation(_mainProgram, "uAmbient"), a.X, a.Y, a.Z);
+            gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uShadowEnabled"),
+                shadowEnabled && material.ReceivesSelfShadow ? 1 : 0);
+            gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uShadowStrength"),
+                selfShadow.Mode == 2 ? 0.72f : 0.55f);
+            var specular = materialState.Specular;
+            gl.Uniform3(gl.GetUniformLocation(_mainProgram, "uSpecular"), specular.X, specular.Y, specular.Z);
+            gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uSpecularPower"), Math.Max(materialState.SpecularPower, 0.001f));
             gl.DrawElements(PrimitiveType.Triangles, (uint)material.FaceVertexCount,
                 DrawElementsType.UnsignedInt, (void*)(offset * sizeof(uint)));
             offset += material.FaceVertexCount;
+
+            void SetColorPair(string multiplyName, string addName, Vector4 multiply, Vector4 add)
+            {
+                gl.Uniform4(gl.GetUniformLocation(_mainProgram, multiplyName),
+                    multiply.X, multiply.Y, multiply.Z, multiply.W);
+                gl.Uniform4(gl.GetUniformLocation(_mainProgram, addName), add.X, add.Y, add.Z, add.W);
+            }
         }
         gl.ActiveTexture(TextureUnit.Texture0);
 
@@ -369,7 +574,7 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         // so away-facing here means culling GL-BACK faces (culling FRONT kept the camera-facing shell and
         // painted it OVER the model — the 2026-07-03 "see-through, wrong colors" report).
         // (MFP_MMD_GL_NOEDGE=1 skips the pass — a render-debug knob.)
-        if (Environment.GetEnvironmentVariable("MFP_MMD_GL_NOEDGE") != "1")
+        if (visible && Environment.GetEnvironmentVariable("MFP_MMD_GL_NOEDGE") != "1")
         {
             gl.UseProgram(_edgeProgram);
             gl.UniformMatrix4(gl.GetUniformLocation(_edgeProgram, "uViewProj"), 1, false, (float*)&viewProjection);
@@ -379,10 +584,13 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
             for (var m = 0; m < _model.Materials.Count; m++)
             {
                 var material = _model.Materials[m];
-                if (material.HasEdge && material.EdgeSize > 0f && material.EdgeColor.W > 0f)
+                var materialState = _animator is not null
+                    ? _animator.MaterialStates[m]
+                    : MmdMaterialState.From(material);
+                if (material.HasEdge && materialState.EdgeSize > 0f && materialState.EdgeColor.W > 0f)
                 {
-                    gl.Uniform1(gl.GetUniformLocation(_edgeProgram, "uEdgeScale"), material.EdgeSize * 0.03f);
-                    var edge = material.EdgeColor;
+                    gl.Uniform1(gl.GetUniformLocation(_edgeProgram, "uEdgeScale"), materialState.EdgeSize * 0.03f);
+                    var edge = materialState.EdgeColor;
                     gl.Uniform4(gl.GetUniformLocation(_edgeProgram, "uEdgeColor"), edge.X, edge.Y, edge.Z, edge.W);
                     gl.DrawElements(PrimitiveType.Triangles, (uint)material.FaceVertexCount,
                         DrawElementsType.UnsignedInt, (void*)(offset * sizeof(uint)));
@@ -467,6 +675,36 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
     internal static Matrix4x4 SceneViewProjection(VmdCameraFrame camera, float aspect) =>
         SceneView(camera) * SceneProjection(camera, aspect);
 
+    private Matrix4x4 SceneShadowMatrix(VmdLightFrame light, VmdSelfShadowFrame shadow)
+    {
+        if (_positions.Length == 0)
+            return Matrix4x4.Identity;
+        var first = _positions[0];
+        var min = new Vector3(first.X, first.Y, -first.Z);
+        var max = min;
+        for (var i = 1; i < _positions.Length; i++)
+        {
+            var p = new Vector3(_positions[i].X, _positions[i].Y, -_positions[i].Z);
+            min = Vector3.Min(min, p);
+            max = Vector3.Max(max, p);
+        }
+        var center = (min + max) * 0.5f;
+        var radius = Math.Max((max - min).Length() * 0.6f, 5f);
+        var direction = new Vector3(light.Direction.X, light.Direction.Y, -light.Direction.Z);
+        direction = direction.LengthSquared() > 1e-8f
+            ? Vector3.Normalize(direction)
+            : Vector3.Normalize(new Vector3(-0.5f, -1f, -0.5f));
+        var depthRange = Math.Clamp(shadow.Distance, radius * 3f, 20_000f);
+        var eye = center - direction * (depthRange * 0.5f + radius);
+        var up = MathF.Abs(Vector3.Dot(direction, Vector3.UnitY)) > 0.98f
+            ? Vector3.UnitZ
+            : Vector3.UnitY;
+        var view = Matrix4x4.CreateLookAt(eye, center, up);
+        var projection = Matrix4x4.CreateOrthographic(radius * 2.4f, radius * 2.4f,
+            0.1f, depthRange + radius * 3f);
+        return view * projection;
+    }
+
     private static uint CompileProgram(GL gl, string vsSource, string fsSource)
     {
         var vs = CompileShader(gl, ShaderType.VertexShader, vsSource);
@@ -503,17 +741,26 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aNormal;
         layout(location = 2) in vec2 aUv;
+        layout(location = 3) in vec4 aAdditionalUv1;
         uniform mat4 uViewProj;
         uniform mat4 uView;
+        uniform mat4 uLightViewProj;
         out vec3 vNormal;
         out vec3 vNormalView;
         out vec2 vUv;
+        out vec2 vAdditionalUv1;
+        out vec3 vPositionView;
+        out vec4 vShadowCoord;
         void main()
         {
-            gl_Position = uViewProj * vec4(aPos.x, aPos.y, -aPos.z, 1.0);
+            vec4 worldPosition = vec4(aPos.x, aPos.y, -aPos.z, 1.0);
+            gl_Position = uViewProj * worldPosition;
             vNormal = vec3(aNormal.x, aNormal.y, -aNormal.z);
             vNormalView = mat3(uView) * vNormal;
             vUv = aUv;
+            vAdditionalUv1 = aAdditionalUv1.xy;
+            vPositionView = (uView * worldPosition).xyz;
+            vShadowCoord = uLightViewProj * worldPosition;
         }
         """;
 
@@ -522,36 +769,116 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         in vec3 vNormal;
         in vec3 vNormalView;
         in vec2 vUv;
+        in vec2 vAdditionalUv1;
+        in vec3 vPositionView;
+        in vec4 vShadowCoord;
         uniform sampler2D uTexture;
         uniform sampler2D uSphere;
         uniform sampler2D uToon;
-        uniform int uSphereMode; // 0 none, 1 multiply, 2 add, 3 sub-texture (treated as multiply)
+        uniform sampler2D uShadowMap;
+        uniform int uSphereMode; // 0 none, 1 multiply, 2 add, 3 sub-texture via additional UV1
         uniform int uHasToon;
         uniform vec4 uDiffuse;
         uniform vec3 uAmbient;
+        uniform vec3 uSpecular;
+        uniform float uSpecularPower;
+        uniform vec4 uTextureMultiply;
+        uniform vec4 uTextureAdd;
+        uniform vec4 uSphereMultiply;
+        uniform vec4 uSphereAdd;
+        uniform vec4 uToonMultiply;
+        uniform vec4 uToonAdd;
+        uniform vec3 uLightDirection;
+        uniform vec3 uLightColor;
+        uniform mat4 uView;
+        uniform int uShadowEnabled;
+        uniform float uShadowStrength;
         out vec4 fragColor;
+        vec3 applyTextureColor(vec3 sampled, vec4 multiplyColor, vec4 additiveColor)
+        {
+            sampled = mix(vec3(1.0), sampled * multiplyColor.rgb, multiplyColor.a);
+            return clamp(sampled + (sampled - vec3(1.0)) * additiveColor.a, 0.0, 1.0)
+                + additiveColor.rgb;
+        }
+        float sampleShadow()
+        {
+            if (uShadowEnabled == 0) return 1.0;
+            vec3 projected = vShadowCoord.xyz / vShadowCoord.w;
+            projected = projected * 0.5 + 0.5;
+            if (projected.x < 0.0 || projected.x > 1.0 || projected.y < 0.0 ||
+                projected.y > 1.0 || projected.z < 0.0 || projected.z > 1.0)
+                return 1.0;
+            vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+            float visibility = 0.0;
+            float bias = 0.0012;
+            for (int y = -1; y <= 1; ++y)
+                for (int x = -1; x <= 1; ++x)
+                    visibility += projected.z - bias <= texture(uShadowMap,
+                        projected.xy + vec2(x, y) * texel).r ? 1.0 : 0.0;
+            return mix(1.0 - uShadowStrength, 1.0, visibility / 9.0);
+        }
         void main()
         {
-            vec4 tex = texture(uTexture, vUv);
-            // MMD default key light, direction in the flipped (RH) space.
-            vec3 light = normalize(vec3(-0.5, -1.0, -0.5));
-            float ndl = dot(normalize(vNormal), -light);
+            vec4 rawTex = texture(uTexture, vUv);
+            vec4 tex = vec4(applyTextureColor(rawTex.rgb, uTextureMultiply, uTextureAdd), rawTex.a);
+            vec3 light = normalize(uLightDirection);
+            vec3 normal = normalize(vNormal);
+            float ndl = dot(normal, -light);
             vec3 base = clamp(uDiffuse.rgb * 0.8 + uAmbient * 0.6, 0.0, 1.0);
-            vec3 color = tex.rgb * base;
+            vec3 color = tex.rgb * base * uLightColor;
             // Toon: the ramp texture's V axis encodes lit(0) → shadow(1); procedural two-tone fallback.
             if (uHasToon == 1)
-                color *= texture(uToon, vec2(0.5, clamp(0.5 - 0.5 * ndl, 0.01, 0.99))).rgb;
+                color *= applyTextureColor(
+                    texture(uToon, vec2(0.5, clamp(0.5 - 0.5 * ndl, 0.01, 0.99))).rgb,
+                    uToonMultiply, uToonAdd);
             else
                 color *= mix(0.62, 1.0, smoothstep(0.02, 0.28, ndl));
+            color *= sampleShadow();
             // Sphere map (matcap): view-space normal xy → texture coords. Multiply (.sph) darkens/tints,
             // Add (.spa) is the highlight/iris detail layer.
             vec2 sphereUv = normalize(vNormalView).xy * 0.5 + 0.5;
-            vec3 sphere = texture(uSphere, vec2(sphereUv.x, 1.0 - sphereUv.y)).rgb;
+            vec2 sphereSampleUv = uSphereMode == 3
+                ? vAdditionalUv1
+                : vec2(sphereUv.x, 1.0 - sphereUv.y);
+            vec3 sphere = applyTextureColor(texture(uSphere, sphereSampleUv).rgb,
+                uSphereMultiply, uSphereAdd);
             if (uSphereMode == 1 || uSphereMode == 3) color *= sphere;
             else if (uSphereMode == 2) color += sphere;
+            vec3 lightView = normalize(mat3(uView) * light);
+            vec3 normalView = normalize(vNormalView);
+            vec3 viewDirection = normalize(-vPositionView);
+            float specular = pow(max(dot(reflect(lightView, normalView), viewDirection), 0.0),
+                max(uSpecularPower, 0.001));
+            color += uSpecular * specular * uLightColor;
             float alpha = tex.a * uDiffuse.a;
             if (alpha < 0.005) discard;
             fragColor = vec4(clamp(color, 0.0, 1.0), alpha);
+        }
+        """;
+
+    private const string ShadowVs = """
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+        layout(location = 2) in vec2 aUv;
+        uniform mat4 uLightViewProj;
+        out vec2 vUv;
+        void main()
+        {
+            gl_Position = uLightViewProj * vec4(aPos.x, aPos.y, -aPos.z, 1.0);
+            vUv = aUv;
+        }
+        """;
+
+    private const string ShadowFs = """
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uTexture;
+        uniform float uAlpha;
+        out vec4 fragColor;
+        void main()
+        {
+            if (texture(uTexture, vUv).a * uAlpha < 0.005) discard;
+            fragColor = vec4(1.0);
         }
         """;
 
@@ -559,11 +886,12 @@ internal sealed class MmdGlLayerSurface : IVideoCompositorLayerSurface
         #version 330 core
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aNormal;
+        layout(location = 4) in float aEdgeScale;
         uniform mat4 uViewProj;
         uniform float uEdgeScale;
         void main()
         {
-            vec3 p = aPos + aNormal * uEdgeScale;
+            vec3 p = aPos + aNormal * uEdgeScale * aEdgeScale;
             gl_Position = uViewProj * vec4(p.x, p.y, -p.z, 1.0);
         }
         """;

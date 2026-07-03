@@ -24,7 +24,11 @@ public sealed class MmdSoftwareRenderer(int width, int height)
     /// then shows the real model textures instead of a grayscale raster (operator request).</summary>
     public void SetTextures(MmdCpuTexture?[]? materialTextures) => _materialTextures = materialTextures;
 
-    public void Render(PmxDocument model, Vector3[] positions, VmdCameraFrame camera, byte[] bgra)
+    public void Render(
+        PmxDocument model, Vector3[] positions, VmdCameraFrame camera, byte[] bgra,
+        VmdLightFrame? lightFrame = null, bool visible = true,
+        IReadOnlyList<Vector2>? posedUvs = null,
+        IReadOnlyList<MmdMaterialState>? materialStates = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(positions);
@@ -35,6 +39,8 @@ public sealed class MmdSoftwareRenderer(int width, int height)
         Array.Clear(bgra);
         for (var i = 3; i < Width * Height * 4; i += 4)
             bgra[i] = 255; // opaque
+        if (!visible)
+            return;
 
         // MMD is left-handed with +Z into the screen; VMD camera distance is negative toward the viewer.
         // View: orbit around Target by euler (x pitch, y yaw, z roll), then push out by |distance|.
@@ -49,7 +55,10 @@ public sealed class MmdSoftwareRenderer(int width, int height)
         var fov = Math.Clamp(camera.FovDegrees, 1f, 175f) * MathF.PI / 180f;
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(fov, (float)Width / Height, 0.5f, 2000f);
         var viewProjection = view * projection;
-        var light = Vector3.Normalize(new Vector3(-0.3f, -1f, 0.6f));
+        var lightState = lightFrame ?? new VmdLightFrame(0, Vector3.One, new Vector3(-0.3f, -1f, 0.6f));
+        var light = lightState.Direction.LengthSquared() > 1e-8f
+            ? Vector3.Normalize(lightState.Direction)
+            : Vector3.Normalize(new Vector3(-0.3f, -1f, 0.6f));
 
         // Project all vertices once (positions are already posed/skinned, in MMD space: flip Z for RH).
         var screen = new Vector4[positions.Length];
@@ -67,7 +76,13 @@ public sealed class MmdSoftwareRenderer(int width, int height)
         for (var mi = 0; mi < model.Materials.Count; mi++)
         {
             var material = model.Materials[mi];
-            var color = material.Diffuse;
+            var materialState = materialStates is not null && mi < materialStates.Count
+                ? materialStates[mi]
+                : MmdMaterialState.From(material);
+            var color = materialState.Diffuse;
+            color.X *= lightState.Color.X;
+            color.Y *= lightState.Color.Y;
+            color.Z *= lightState.Color.Z;
             var texture = _materialTextures is { } set && mi < set.Length ? set[mi] : null;
             var end = Math.Min(faceCursor + material.FaceVertexCount, indices.Count);
             for (var i = faceCursor; i + 2 < end + 0; i += 3)
@@ -76,8 +91,11 @@ public sealed class MmdSoftwareRenderer(int width, int height)
                 RasterizeTriangle(
                     screen[i0], screen[i1], screen[i2],
                     positions[i0], positions[i1], positions[i2],
-                    vertices[i0].Uv, vertices[i1].Uv, vertices[i2].Uv,
-                    color, light, material.DoubleSided, texture, bgra);
+                    posedUvs is not null ? posedUvs[i0] : vertices[i0].Uv,
+                    posedUvs is not null ? posedUvs[i1] : vertices[i1].Uv,
+                    posedUvs is not null ? posedUvs[i2] : vertices[i2].Uv,
+                    color, materialState.TextureMultiply, materialState.TextureAdd,
+                    light, material.DoubleSided, texture, bgra);
             }
 
             faceCursor = end;
@@ -88,7 +106,8 @@ public sealed class MmdSoftwareRenderer(int width, int height)
         Vector4 c0, Vector4 c1, Vector4 c2,
         Vector3 w0, Vector3 w1, Vector3 w2,
         Vector2 uv0, Vector2 uv1, Vector2 uv2,
-        Vector4 diffuse, Vector3 light, bool doubleSided, MmdCpuTexture? texture, byte[] bgra)
+        Vector4 diffuse, Vector4 textureMultiply, Vector4 textureAdd,
+        Vector3 light, bool doubleSided, MmdCpuTexture? texture, byte[] bgra)
     {
         // Reject triangles behind the near plane entirely (no clipping in the prototype).
         if (c0.W <= 0.01f || c1.W <= 0.01f || c2.W <= 0.01f)
@@ -152,12 +171,19 @@ public sealed class MmdSoftwareRenderer(int width, int height)
                     var tx = Math.Clamp((int)(u * texture.Width), 0, texture.Width - 1);
                     var ty = Math.Clamp((int)(v * texture.Height), 0, texture.Height - 1);
                     var t = (ty * texture.Width + tx) * 4;
-                    if (texture.Rgba[t + 3] < 8)
+                    var tr = ApplyTextureMorph(texture.Rgba[t] / 255f, textureMultiply.X,
+                        textureMultiply.W, textureAdd.X, textureAdd.W);
+                    var tg = ApplyTextureMorph(texture.Rgba[t + 1] / 255f, textureMultiply.Y,
+                        textureMultiply.W, textureAdd.Y, textureAdd.W);
+                    var tb = ApplyTextureMorph(texture.Rgba[t + 2] / 255f, textureMultiply.Z,
+                        textureMultiply.W, textureAdd.Z, textureAdd.W);
+                    var ta = texture.Rgba[t + 3] / 255f;
+                    if (ta * diffuse.W < 8f / 255f)
                         continue; // fully transparent texel — leave what is behind
-                    bgra[offset] = (byte)(texture.Rgba[t + 2] * intensity);     // B
-                    bgra[offset + 1] = (byte)(texture.Rgba[t + 1] * intensity); // G
-                    bgra[offset + 2] = (byte)(texture.Rgba[t] * intensity);     // R
-                    bgra[offset + 3] = 255;
+                    bgra[offset] = ToByte(tb * diffuse.Z * intensity);
+                    bgra[offset + 1] = ToByte(tg * diffuse.Y * intensity);
+                    bgra[offset + 2] = ToByte(tr * diffuse.X * intensity);
+                    bgra[offset + 3] = ToByte(ta * diffuse.W);
                     continue;
                 }
 
@@ -166,6 +192,15 @@ public sealed class MmdSoftwareRenderer(int width, int height)
                 bgra[offset + 2] = r;
                 bgra[offset + 3] = 255;
             }
+        }
+
+        static byte ToByte(float value) =>
+            (byte)Math.Clamp((int)MathF.Round(value * 255f), 0, 255);
+        static float ApplyTextureMorph(float sampled, float multiply, float multiplyBlend,
+            float add, float addBlend)
+        {
+            sampled = float.Lerp(1f, sampled * multiply, multiplyBlend);
+            return Math.Clamp(sampled + (sampled - 1f) * addBlend, 0f, 1f) + add;
         }
     }
 

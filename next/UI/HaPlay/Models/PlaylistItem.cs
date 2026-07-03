@@ -165,8 +165,8 @@ public sealed record TextPlaylistItem : PlaylistItem
     public override string KindGlyph => "🅣";
 }
 
-/// <summary>An MMD scene (Gate-6 prototype): a PMX model + optional VMD motion + optional VMD camera
-/// motion, rendered by the rudimentary software 3D renderer behind an <c>mmd://</c> URI. When no camera
+/// <summary>An MMD scene: a PMX model + optional VMD motion + optional VMD camera
+/// motion, rendered through the MMD compositor surface behind an <c>mmd://</c> URI. When no camera
 /// VMD is set, the manual placement fields below drive the camera — the deck preview IS the
 /// camera-placement view (tweak → replay → see the framing).</summary>
 public sealed record MmdPlaylistItem(string ModelPath) : PlaylistItem

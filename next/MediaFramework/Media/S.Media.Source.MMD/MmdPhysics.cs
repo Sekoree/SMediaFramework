@@ -12,10 +12,9 @@ namespace S.Media.Source.MMD;
 /// real velocities so they drag the dynamic chains; dynamic bodies write their transforms back to
 /// their bones between IK and skinning.
 ///
-/// <para>Deliberate approximation: BOX shapes collide as capsules along their longest axis with the
-/// smallest half-extent as radius (their inertia is exact, only the contact shape is approximated) —
-/// skirt plates are thin boxes riding just off the leg capsules and the thin radius keeps rest
-/// contacts clear.</para>
+/// <para>Sphere/capsule pairs use segment contacts; boxes retain their authored OBB shape for both
+/// round-body and box-body contacts. This matters for thin, wide skirt and necktie plates, whose broad
+/// collision faces disappear if they are reduced to capsules.</para>
 ///
 /// <para>STATEFUL by nature (unlike the pure-function-of-time animator): the owner steps it
 /// monotonically once per rendered frame. Backward seeks or large jumps reset the chain to the
@@ -31,10 +30,17 @@ public sealed class MmdPhysics
     // and position errors are corrected AFTER integration by a nonlinear Gauss-Seidel pass that moves
     // poses directly without adding energy. This is what keeps the file's Bullet-tuned near-locked
     // chains rigid under load without the ERP limit-cycle wobble.
-    private const int VelocityIterations = 16;
+    private const int VelocityIterations = 10;        // Bullet's default — part of the authored compliance
     private const int PositionIterations = 10;
     private const float MaxLinearCorrection = 0.2f;   // per NGS iteration (Box2D's caps)
     private const float MaxAngularCorrection = 0.15f;
+
+    /// <summary>Fraction of an ANGULAR joint error corrected per substep (Bullet's MMD stop-ERP, per
+    /// the three.js reference). Deliberately NOT iterated to convergence: locked joints resolved
+    /// exactly turn the YYB tail strands into rigid rods and the skirt's locked plate ring into a
+    /// rigid cage that legs tunnel into — the transient violation under load IS the cloth/hair
+    /// compliance every MMD rig is authored against.</summary>
+    private const float AngularErp = 0.475f;
     private const float ContactErp = 0.2f;            // Bullet-style Baumgarte in the CONTACT rows only:
                                                       // depenetration must act at the contact arm (torque)
                                                       // or a plate pinned by a locked joint can never
@@ -51,18 +57,20 @@ public sealed class MmdPhysics
     private struct Body
     {
         public int BoneIndex;
+        public bool AuthoredDynamic;
         public bool Dynamic;
         public bool AlignBonePosition;   // PhysicsWithBonePosition: rotation from physics, position from bone
         public bool IsBox;               // boxes get real OBB contacts (vs sphere/capsule)
         public ushort Group;             // bit (1 << group)
         public ushort Mask;
         public float InvMass;
+        public float DynamicInvMass;
         public Vector3 InvInertiaLocal;  // inverse diagonal inertia in the body frame (zero when kinematic)
         public float Friction;
         public float Restitution;
         public float LinearDamping;
         public float AngularDamping;
-        public float Radius;             // collision radius (sphere/capsule; box fallback approximation)
+        public float Radius;             // collision radius (sphere/capsule)
         public float HalfHeight;         // capsule half-length along local Y (0 ⇒ sphere)
         public Vector3 HalfExtents;      // box half-extents (zero for sphere/capsule)
         public float BoundingRadius;     // broad-phase early-out
@@ -118,6 +126,9 @@ public sealed class MmdPhysics
         public float TangentImpulse1, TangentImpulse2;
     }
 
+    private readonly record struct CachedContact(
+        Vector3 Normal, Vector3 Point, float NormalImpulse, float TangentImpulse1, float TangentImpulse2);
+
     private readonly PmxDocument _model;
     private readonly Body[] _bodies;
     private readonly Joint[] _joints;
@@ -125,10 +136,14 @@ public sealed class MmdPhysics
     private readonly HashSet<long> _jointedPairs;  // constrained pairs never collide (Bullet's disableCollisionsBetweenLinkedBodies)
     private readonly List<Contact> _contacts = [];
     private readonly List<SolverRow> _rows = [];
+    private readonly Vector3[] _kinematicStartPositions;
+    private readonly Vector3[] _kinematicTargetPositions;
+    private readonly Quaternion[] _kinematicStartRotations;
+    private readonly Quaternion[] _kinematicTargetRotations;
     private readonly float[] _jointAccumulators;   // 6 per joint — Bullet-style warm starting: last
                                                    // substep's impulses re-applied up front so ERP only
                                                    // corrects drift, not the standing gravity load
-    private readonly Dictionary<long, (float Normal, float Tangent1, float Tangent2)> _contactCache = [];
+    private readonly Dictionary<long, CachedContact> _contactCache = [];
     private float _pendingSeconds;
     private bool _primed;
 
@@ -139,6 +154,10 @@ public sealed class MmdPhysics
         _joints = joints;
         _jointAccumulators = new float[joints.Length * 6];
         _jointedPairs = jointedPairs;
+        _kinematicStartPositions = new Vector3[bodies.Length];
+        _kinematicTargetPositions = new Vector3[bodies.Length];
+        _kinematicStartRotations = new Quaternion[bodies.Length];
+        _kinematicTargetRotations = new Quaternion[bodies.Length];
         _drivenBones = new bool[model.Bones.Count];
         foreach (var body in bodies)
             if (body.Dynamic && (uint)body.BoneIndex < (uint)_drivenBones.Length)
@@ -172,10 +191,8 @@ public sealed class MmdPhysics
             var mass = MathF.Max(spec.Mass, 1e-4f);
 
             // Collision primitive: sphere/capsule as authored; BOXES collide as real OBBs (the skirt
-            // plates are wide thin boxes — a capsule approximation has no collision across the wide
-            // face and legs pass straight through, then trap the plate inside the torso). A capsule
-            // fallback along the longest axis remains only for the box-box case, which the authored
-            // collision masks make irrelevant in practice.
+            // and necktie plates are wide and thin, so reducing them to capsules removes the faces
+            // that must collide with legs, helper boxes and the torso).
             float radius, halfHeight;
             var halfExtents = Vector3.Zero;
             switch (spec.Shape)
@@ -200,12 +217,14 @@ public sealed class MmdPhysics
             bodies[i] = new Body
             {
                 BoneIndex = spec.BoneIndex,
+                AuthoredDynamic = dynamic,
                 Dynamic = dynamic,
                 AlignBonePosition = spec.Mode == PmxPhysicsMode.PhysicsWithBonePosition,
                 IsBox = spec.Shape == PmxRigidShape.Box,
                 Group = (ushort)(1 << (spec.Group & 0x0F)),
                 Mask = spec.CollisionMask,
                 InvMass = dynamic ? 1f / mass : 0f,
+                DynamicInvMass = dynamic ? 1f / mass : 0f,
                 InvInertiaLocal = dynamic ? InverseInertiaOf(spec, mass) : Vector3.Zero,
                 Friction = MathF.Max(spec.Friction, 0f),
                 Restitution = Math.Clamp(spec.Restitution, 0f, 1f),
@@ -302,6 +321,30 @@ public sealed class MmdPhysics
 
     private static long PairKey(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
+    /// <summary>Applies the VMD per-bone physics toggle. Disabled dynamic bodies become kinematic and
+    /// follow the sampled bone until a later key enables physics again.</summary>
+    public void SetBonePhysicsEnabled(ReadOnlySpan<bool> enabledBones)
+    {
+        Array.Clear(_drivenBones);
+        for (var i = 0; i < _bodies.Length; i++)
+        {
+            ref var body = ref _bodies[i];
+            var enabled = (uint)body.BoneIndex >= (uint)enabledBones.Length || enabledBones[body.BoneIndex];
+            var dynamic = body.AuthoredDynamic && enabled;
+            if (body.Dynamic != dynamic)
+            {
+                body.Dynamic = dynamic;
+                body.InvMass = dynamic ? body.DynamicInvMass : 0f;
+                body.LinearVelocity = Vector3.Zero;
+                body.AngularVelocity = Vector3.Zero;
+                Array.Clear(_jointAccumulators);
+                _contactCache.Clear();
+            }
+            if (dynamic && (uint)body.BoneIndex < (uint)_drivenBones.Length)
+                _drivenBones[body.BoneIndex] = true;
+        }
+    }
+
     /// <summary>Inverse diagonal inertia in the body frame — Bullet's shape formulas (a capsule uses the
     /// enclosing-box approximation Bullet itself uses).</summary>
     private static Vector3 InverseInertiaOf(PmxRigidBody spec, float mass)
@@ -373,16 +416,43 @@ public sealed class MmdPhysics
         }
 
         _pendingSeconds = MathF.Min(_pendingSeconds + deltaSeconds, MaxSubstepsPerFrame * SubstepSeconds);
-        while (_pendingSeconds >= SubstepSeconds)
+        var remaining = _pendingSeconds;
+        var substeps = 0;
+        while (remaining >= SubstepSeconds)
         {
-            _pendingSeconds -= SubstepSeconds;
-            Substep(world, SubstepSeconds);
+            remaining -= SubstepSeconds;
+            substeps++;
+        }
+        _pendingSeconds = remaining;
+
+        // A 30 fps render frame normally contains two 60 Hz physics steps. Move kinematic colliders
+        // through an intermediate pose instead of teleporting them to the frame endpoint in step one
+        // (which doubles the first drive velocity and makes step two stationary). This also prevents
+        // fast limbs from skipping thin skirt/tie bodies between fixed steps.
+        if (substeps > 0)
+        {
+            for (var i = 0; i < _bodies.Length; i++)
+            {
+                ref var body = ref _bodies[i];
+                if (body.Dynamic)
+                    continue;
+                var target = TargetFromBone(body, world);
+                _kinematicStartPositions[i] = body.Position;
+                _kinematicTargetPositions[i] = target.Translation;
+                _kinematicStartRotations[i] = body.Rotation;
+                _kinematicTargetRotations[i] = RotationOf(target);
+            }
+
+            for (var step = 0; step < substeps; step++)
+            {
+                Substep(SubstepSeconds, (step + 1f) / substeps);
+            }
         }
 
         WriteBack(world);
     }
 
-    private void Substep(Matrix4x4[] world, float h)
+    private void Substep(float h, float kinematicAlpha)
     {
         // Kinematic bodies snap to their bones carrying REAL velocities (they drag chains through
         // contacts and joints); dynamic bodies integrate gravity + Bullet-style per-second damping.
@@ -392,12 +462,14 @@ public sealed class MmdPhysics
             ref var body = ref _bodies[i];
             if (!body.Dynamic)
             {
-                var target = TargetFromBone(body, world);
-                var targetRotation = RotationOf(target);
-                body.LinearVelocity = (target.Translation - body.Position) * invH;
+                var targetPosition = Vector3.Lerp(
+                    _kinematicStartPositions[i], _kinematicTargetPositions[i], kinematicAlpha);
+                var targetRotation = Quaternion.Normalize(Quaternion.Slerp(
+                    _kinematicStartRotations[i], _kinematicTargetRotations[i], kinematicAlpha));
+                body.LinearVelocity = (targetPosition - body.Position) * invH;
                 body.AngularVelocity = ToScaledAxis(
                     Quaternion.Normalize(targetRotation * Quaternion.Inverse(body.Rotation))) * invH;
-                body.Position = target.Translation;
+                body.Position = targetPosition;
                 body.Rotation = targetRotation;
                 continue;
             }
@@ -433,7 +505,9 @@ public sealed class MmdPhysics
         _contactCache.Clear();
         foreach (var contact in _contacts)
             _contactCache[PairKey(contact.A, contact.B)] =
-                (contact.NormalImpulse, contact.TangentImpulse1, contact.TangentImpulse2);
+                new CachedContact(contact.Normal,
+                    _bodies[contact.A].Position + contact.ArmA,
+                    contact.NormalImpulse, contact.TangentImpulse1, contact.TangentImpulse2);
 
         // Integrate dynamic bodies (semi-implicit Euler; quaternion derivative for the rotation).
         for (var i = 0; i < _bodies.Length; i++)
@@ -457,6 +531,7 @@ public sealed class MmdPhysics
         }
 
         SolvePositions();
+        SolveContactPositions();
     }
 
     /// <summary>Builds the substep's constraint rows from every joint: springs applied as pre-solve
@@ -600,18 +675,19 @@ public sealed class MmdPhysics
                 if (a.InvMass + b.InvMass <= 0f)
                     continue;
 
-                // Angular first — each body's share of the correction rotates it ABOUT ITS OWN JOINT
-                // ANCHOR (orientation and position together), so the anchors stay put and the linear
-                // fix below never has to undo the rotation (rotating about the centre instead makes the
-                // two fixes fight through the inertia coupling and convergence crawls).
+                // Angular — FIRST ITERATION ONLY, scaled by AngularErp: the error must survive
+                // partially into the next substep (Bullet-style compliance) or every locked chain
+                // becomes a rigid rod. Each body's share of the correction rotates it ABOUT ITS OWN
+                // JOINT ANCHOR (orientation and position together), so the anchors stay put and the
+                // linear fix below never has to undo the rotation (rotating about the centre instead
+                // makes the two fixes fight through the inertia coupling and convergence crawls).
                 var rotationA = Quaternion.Normalize(a.Rotation * joint.FrameA);
                 var rotationB = Quaternion.Normalize(b.Rotation * joint.FrameB);
-                if (joint.AngularAllLocked)
+                if (iteration == 0 && joint.AngularAllLocked)
                 {
-                    // The MMD chain-segment default (all axes locked at 0): correct the FULL relative
-                    // rotation exactly — no per-axis Euler decomposition, whose alternating capped
-                    // corrections thrash long tail chains once relative rotations grow. A root→tip
-                    // sweep then rigidifies a locked chain like FK chaining.
+                    // The MMD chain/ring default (all axes locked at 0): correct the FULL relative
+                    // rotation — no per-axis Euler decomposition, whose alternating capped corrections
+                    // thrash long tail chains once relative rotations grow.
                     var mismatch = ToScaledAxis(Quaternion.Normalize(rotationA * Quaternion.Inverse(rotationB)));
                     var magnitude = mismatch.Length();
                     if (magnitude > 1e-6f)
@@ -623,7 +699,7 @@ public sealed class MmdPhysics
                         if (effective > 1e-9f)
                         {
                             worst = MathF.Max(worst, magnitude);
-                            var correction = MathF.Min(magnitude, MaxAngularCorrection);
+                            var correction = MathF.Min(AngularErp * magnitude, MaxAngularCorrection);
                             if (inertiaB > 0f)
                                 RotateAboutAnchor(ref b, n * (correction * inertiaB / effective),
                                     b.Position + Vector3.Transform(joint.PivotB, b.Rotation));
@@ -633,7 +709,7 @@ public sealed class MmdPhysics
                         }
                     }
                 }
-                else
+                else if (iteration == 0)
                 {
                     var euler = EulerXyzOf(Quaternion.Normalize(Quaternion.Inverse(rotationA) * rotationB));
                     AngularAxes(rotationA, rotationB, axes);
@@ -654,7 +730,7 @@ public sealed class MmdPhysics
                             continue;
 
                         worst = MathF.Max(worst, MathF.Abs(error));
-                        var correction = Math.Clamp(-error, -MaxAngularCorrection, MaxAngularCorrection);
+                        var correction = Math.Clamp(-AngularErp * error, -MaxAngularCorrection, MaxAngularCorrection);
                         if (inertiaB > 0f)
                             RotateAboutAnchor(ref b, n * (correction * inertiaB / effective),
                                 b.Position + Vector3.Transform(joint.PivotB, b.Rotation));
@@ -884,7 +960,10 @@ public sealed class MmdPhysics
                     - a.LinearVelocity - Vector3.Cross(a.AngularVelocity, rA), normal);
                 var restitution = a.Restitution * b.Restitution;
                 var bounce = approach < -RestitutionThreshold ? -restitution * approach : 0f;
-                var bias = ContactErp * MathF.Max(depth - ContactSlop, 0f) / SubstepSeconds + bounce;
+                // Restitution belongs in the velocity solve. Penetration is handled separately as a
+                // split position impulse after integration, so a resting skirt plate is not given an
+                // artificial separating velocity every substep (a major source of jitter/sticking).
+                var bias = bounce;
 
                 var tangent1 = Vector3.Cross(normal, MathF.Abs(normal.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX);
                 tangent1 = Vector3.Normalize(tangent1);
@@ -903,12 +982,16 @@ public sealed class MmdPhysics
                 };
 
                 // Warm start from the pair's previous-substep impulses (resting contacts stop sinking).
-                if (_contactCache.TryGetValue(PairKey(i, j), out var cached))
+                var cacheRadius = MathF.Max(ContactSlop * 4f,
+                    MathF.Min(a.BoundingRadius, b.BoundingRadius) * 0.25f);
+                if (_contactCache.TryGetValue(PairKey(i, j), out var cached)
+                    && Vector3.Dot(cached.Normal, normal) > 0.8f
+                    && Vector3.DistanceSquared(cached.Point, point) <= cacheRadius * cacheRadius)
                 {
-                    contact.NormalImpulse = MathF.Max(cached.Normal, 0f);
+                    contact.NormalImpulse = MathF.Max(cached.NormalImpulse, 0f);
                     var maxFriction = contact.Friction * contact.NormalImpulse;
-                    contact.TangentImpulse1 = Math.Clamp(cached.Tangent1, -maxFriction, maxFriction);
-                    contact.TangentImpulse2 = Math.Clamp(cached.Tangent2, -maxFriction, maxFriction);
+                    contact.TangentImpulse1 = Math.Clamp(cached.TangentImpulse1, -maxFriction, maxFriction);
+                    contact.TangentImpulse2 = Math.Clamp(cached.TangentImpulse2, -maxFriction, maxFriction);
                     var warm = normal * contact.NormalImpulse
                                + contact.Tangent1 * contact.TangentImpulse1
                                + contact.Tangent2 * contact.TangentImpulse2;
@@ -917,6 +1000,66 @@ public sealed class MmdPhysics
 
                 _contacts.Add(contact);
             }
+        }
+    }
+
+    /// <summary>Bullet-style split penetration correction: refresh contacts after integration and move
+    /// poses directly at the contact arm. No velocity is added, so cloth can slide free instead of
+    /// retaining depenetration energy and friction-locking inside a torso or leg collider.</summary>
+    private void SolveContactPositions()
+    {
+        for (var iteration = 0; iteration < PositionIterations; iteration++)
+        {
+            var worst = 0f;
+            for (var i = 0; i < _bodies.Length; i++)
+            {
+                ref var a = ref _bodies[i];
+                for (var j = i + 1; j < _bodies.Length; j++)
+                {
+                    ref var b = ref _bodies[j];
+                    if (a.InvMass + b.InvMass <= 0f
+                        || (a.Mask & b.Group) == 0 || (b.Mask & a.Group) == 0
+                        || _jointedPairs.Contains(PairKey(i, j))
+                        || !TryContactGeometry(a, b, out var normal, out var point, out var depth))
+                        continue;
+                    var penetration = depth - ContactSlop;
+                    if (penetration <= 0f)
+                        continue;
+                    worst = MathF.Max(worst, penetration);
+                    var rA = point - a.Position;
+                    var rB = point - b.Position;
+                    var effective = EffectiveMassLinear(a, b, rA, rB, normal);
+                    if (effective <= 1e-9f)
+                        continue;
+                    var correction = MathF.Min(ContactErp * penetration, MaxLinearCorrection);
+                    ApplyPositionImpulse(ref a, ref b, rA, rB, normal * (correction / effective));
+                }
+            }
+            if (worst < ContactSlop)
+                break;
+        }
+    }
+
+    private static void ApplyPositionImpulse(
+        ref Body a, ref Body b, Vector3 rA, Vector3 rB, Vector3 impulse)
+    {
+        a.Position -= impulse * a.InvMass;
+        b.Position += impulse * b.InvMass;
+        Rotate(ref a, -InvInertiaWorld(a, Vector3.Cross(rA, impulse)));
+        Rotate(ref b, InvInertiaWorld(b, Vector3.Cross(rB, impulse)));
+
+        static void Rotate(ref Body body, Vector3 theta)
+        {
+            var angle = theta.Length();
+            if (angle < 1e-8f)
+                return;
+            if (angle > MaxAngularCorrection)
+            {
+                theta *= MaxAngularCorrection / angle;
+                angle = MaxAngularCorrection;
+            }
+            body.Rotation = Quaternion.Normalize(
+                Quaternion.CreateFromAxisAngle(theta / angle, angle) * body.Rotation);
         }
     }
 
@@ -1008,8 +1151,7 @@ public sealed class MmdPhysics
 
     /// <summary>Narrow-phase contact: normal points A → B, <paramref name="depth"/> &gt; 0 is the
     /// penetration. Sphere/capsule pairs use segment-segment; a box against a round body uses the real
-    /// OBB with interior handling; box-box keeps the capsule fallback (the authored masks keep skirt
-    /// plates from colliding with each other).</summary>
+    /// OBB with interior handling; box-box uses a 15-axis OBB SAT.</summary>
     private static bool TryContactGeometry(in Body a, in Body b, out Vector3 normal, out Vector3 point, out float depth)
     {
         normal = default;
@@ -1030,18 +1172,106 @@ public sealed class MmdPhysics
             return true;
         }
 
+        if (a.IsBox)
+            return TryBoxBox(a, b, out normal, out point, out depth);
+
         var (pa, pb) = ClosestSegmentPoints(SegmentOf(a), SegmentOf(b));
         var delta = pb - pa;
         var distance = delta.Length();
         var minDistance = a.Radius + b.Radius;
-        if (distance >= minDistance || distance < 1e-6f)
+        if (distance >= minDistance)
             return false;
-
-        normal = delta / distance;
+        if (distance < 1e-6f)
+        {
+            var fallback = b.Position - a.Position;
+            if (fallback.LengthSquared() < 1e-10f)
+                fallback = b.LinearVelocity - a.LinearVelocity;
+            normal = fallback.LengthSquared() > 1e-10f ? Vector3.Normalize(fallback) : Vector3.UnitX;
+        }
+        else
+        {
+            normal = delta / distance;
+        }
         point = (pa + pb) * 0.5f;
         depth = minDistance - distance;
         return true;
     }
+
+    /// <summary>Full OBB-vs-OBB separating-axis test (three face axes from each box plus nine edge
+    /// crosses). The minimum-overlap axis is the contact normal. A central point between the two
+    /// support planes avoids the arbitrary-corner torque produced by a one-point support mapping.</summary>
+    private static bool TryBoxBox(in Body a, in Body b, out Vector3 normal, out Vector3 point, out float depth)
+    {
+        normal = default;
+        point = default;
+        depth = float.PositiveInfinity;
+
+        Span<Vector3> axesA = stackalloc Vector3[3]
+        {
+            Vector3.Transform(Vector3.UnitX, a.Rotation),
+            Vector3.Transform(Vector3.UnitY, a.Rotation),
+            Vector3.Transform(Vector3.UnitZ, a.Rotation),
+        };
+        Span<Vector3> axesB = stackalloc Vector3[3]
+        {
+            Vector3.Transform(Vector3.UnitX, b.Rotation),
+            Vector3.Transform(Vector3.UnitY, b.Rotation),
+            Vector3.Transform(Vector3.UnitZ, b.Rotation),
+        };
+        var delta = b.Position - a.Position;
+
+        for (var i = 0; i < 3; i++)
+            if (!TestObbAxis(a, b, axesA, axesB, delta, axesA[i], ref normal, ref depth))
+                return false;
+        for (var i = 0; i < 3; i++)
+            if (!TestObbAxis(a, b, axesA, axesB, delta, axesB[i], ref normal, ref depth))
+                return false;
+        for (var i = 0; i < 3; i++)
+        for (var j = 0; j < 3; j++)
+        {
+            var cross = Vector3.Cross(axesA[i], axesB[j]);
+            var lengthSquared = cross.LengthSquared();
+            if (lengthSquared > 1e-10f
+                && !TestObbAxis(a, b, axesA, axesB, delta, cross / MathF.Sqrt(lengthSquared), ref normal, ref depth))
+                return false;
+        }
+
+        if (!float.IsFinite(depth))
+            return false;
+
+        var radiusA = ProjectionRadius(a.HalfExtents, axesA, normal);
+        var radiusB = ProjectionRadius(b.HalfExtents, axesB, normal);
+        var middle = (a.Position + b.Position) * 0.5f;
+        var planeA = Vector3.Dot(a.Position, normal) + radiusA;
+        var planeB = Vector3.Dot(b.Position, normal) - radiusB;
+        point = middle + normal * ((planeA + planeB) * 0.5f - Vector3.Dot(middle, normal));
+        return true;
+    }
+
+    private static bool TestObbAxis(
+        in Body a, in Body b,
+        ReadOnlySpan<Vector3> axesA, ReadOnlySpan<Vector3> axesB,
+        Vector3 delta, Vector3 axis,
+        ref Vector3 normal, ref float depth)
+    {
+        var radiusA = ProjectionRadius(a.HalfExtents, axesA, axis);
+        var radiusB = ProjectionRadius(b.HalfExtents, axesB, axis);
+        var separation = MathF.Abs(Vector3.Dot(delta, axis));
+        var overlap = radiusA + radiusB - separation;
+        if (overlap <= 0f)
+            return false;
+        if (overlap < depth)
+        {
+            depth = overlap;
+            normal = Vector3.Dot(delta, axis) >= 0f ? axis : -axis;
+        }
+        return true;
+    }
+
+    private static float ProjectionRadius(Vector3 half, ReadOnlySpan<Vector3> axes, Vector3 axis) =>
+        half.X * MathF.Abs(Vector3.Dot(axes[0], axis))
+        + half.Y * MathF.Abs(Vector3.Dot(axes[1], axis))
+        + half.Z * MathF.Abs(Vector3.Dot(axes[2], axis));
 
     /// <summary>Box vs sphere/capsule: closest point between the round body's core segment and the OBB
     /// (iterative point clamping — exact for spheres, converges fast for our short capsules). A core

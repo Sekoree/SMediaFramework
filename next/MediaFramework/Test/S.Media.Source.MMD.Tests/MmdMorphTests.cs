@@ -27,6 +27,33 @@ public sealed class MmdMorphTests
         CameraTrack = [],
     };
 
+    private static VmdDocument MorphMotion(params (string Name, float Weight)[] morphs) => new()
+    {
+        ModelName = "morphs",
+        BoneTracks = new Dictionary<string, IReadOnlyList<VmdBoneFrame>>(StringComparer.Ordinal),
+        MorphTracks = morphs.ToDictionary(
+            m => m.Name,
+            m => (IReadOnlyList<VmdMorphFrame>)[new VmdMorphFrame(0, m.Weight)],
+            StringComparer.Ordinal),
+        CameraTrack = [],
+    };
+
+    private static PmxDocument Model(
+        PmxVertex vertex,
+        IReadOnlyList<PmxMorph> morphs,
+        IReadOnlyList<PmxMaterial>? materials = null) => new()
+    {
+        Version = 2.1f,
+        ModelName = "morph-test",
+        ModelNameEnglish = "morph-test",
+        Vertices = [vertex],
+        Indices = [],
+        Textures = [],
+        Materials = materials ?? [],
+        Bones = [Bone("left", Vector3.Zero), Bone("right", Vector3.Zero)],
+        Morphs = morphs,
+    };
+
     [Fact]
     public void BoneMorph_RotatesAndTranslatesTheBone_ScaledByWeight()
     {
@@ -94,5 +121,88 @@ public sealed class MmdMorphTests
         animator.Evaluate(TimeSpan.Zero, positions);
         Assert.True(MathF.Abs(positions[0].Z - 0.4f) < 1e-4f,
             $"group fan-out: expected z=0.4, got {positions[0].Z:F4}");
+    }
+
+    [Theory]
+    [InlineData(PmxDeformType.Sdef)]
+    [InlineData(PmxDeformType.Qdef)]
+    public void SphericalSkinning_DoesNotCollapseOpposingBoneRotations(PmxDeformType deformType)
+    {
+        var vertex = new PmxVertex(
+            Vector3.UnitX, Vector3.UnitY, Vector2.Zero,
+            0, 1, -1, -1, 0.5f, 0.5f, 0f, 0f)
+        {
+            DeformType = deformType,
+            SdefC = Vector3.Zero,
+            SdefR0 = Vector3.Zero,
+            SdefR1 = Vector3.Zero,
+        };
+        var rotations = new PmxMorph("opposed", 0, [])
+        {
+            Type = 2,
+            BoneOffsets =
+            [
+                new PmxBoneMorphOffset(0, Vector3.Zero,
+                    Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 3)),
+                new PmxBoneMorphOffset(1, Vector3.Zero,
+                    Quaternion.CreateFromAxisAngle(Vector3.UnitZ, -MathF.PI / 3)),
+            ],
+        };
+        var animator = new MmdAnimator(Model(vertex, [rotations]), MorphMotion("opposed", 1f));
+        var positions = new Vector3[1];
+        animator.Evaluate(TimeSpan.Zero, positions);
+
+        Assert.True(Vector3.Distance(positions[0], Vector3.UnitX) < 1e-4f,
+            $"{deformType} collapsed the opposed rotations to {positions[0]}");
+    }
+
+    [Fact]
+    public void UvAndMaterialMorphs_UpdateRuntimeRenderState()
+    {
+        var vertex = Vertex(Vector3.Zero, bone: 0) with
+        {
+            AdditionalUvs = [new Vector4(0.1f, 0.2f, 0.3f, 0.4f)],
+        };
+        var uv = new PmxMorph("uv", 0, [])
+        {
+            Type = 3,
+            UvOffsets = [new PmxUvMorphOffset(0, new Vector4(0.4f, 0.2f, 0, 0))],
+        };
+        var additionalUv = new PmxMorph("uv1", 0, [])
+        {
+            Type = 4,
+            UvOffsets = [new PmxUvMorphOffset(0, new Vector4(0.2f, 0.4f, 0.6f, 0.8f))],
+        };
+        var materialMorph = new PmxMorph("material", 0, [])
+        {
+            Type = 8,
+            MaterialOffsets =
+            [
+                new PmxMaterialMorphOffset(
+                    0, PmxMaterialMorphOperation.Multiply,
+                    new Vector4(2, 1, 1, 1), new Vector3(0.5f), 2,
+                    Vector3.One, Vector4.One, 2,
+                    new Vector4(0.5f), Vector4.One, Vector4.One),
+            ],
+        };
+        var material = new PmxMaterial(
+            "m", new Vector4(0.5f, 0.4f, 0.3f, 1), Vector3.One, 4,
+            Vector3.One, true, -1, 0)
+        {
+            EdgeSize = 1f,
+        };
+        var animator = new MmdAnimator(
+            Model(vertex, [uv, additionalUv, materialMorph], [material]),
+            MorphMotion(("uv", 0.5f), ("uv1", 0.5f), ("material", 0.5f)));
+
+        animator.Evaluate(TimeSpan.Zero, new Vector3[1]);
+
+        Assert.Equal(new Vector2(0.2f, 0.1f), animator.CurrentUvs[0]);
+        Assert.Equal(new Vector4(0.2f, 0.4f, 0.6f, 0.8f), animator.CurrentAdditionalUv1[0]);
+        var state = Assert.Single(animator.MaterialStates);
+        Assert.Equal(0.75f, state.Diffuse.X, precision: 4);
+        Assert.Equal(6f, state.SpecularPower, precision: 4);
+        Assert.Equal(1.5f, state.EdgeSize, precision: 4);
+        Assert.Equal(new Vector4(0.75f), state.TextureMultiply);
     }
 }

@@ -163,7 +163,7 @@ internal static class MediaRuntime
             // the add/edit dialogs (Playback.YouTubeRuntime).
             TryUse(b, static () => Playback.YouTubeRuntime.Module, "YouTube");
 
-            // MMD (Gate-6 prototype): PMX/VMD scenes behind mmd:// URIs — pure managed software render.
+            // PMX/VMD scenes behind mmd:// URIs; GL material surface with a managed CPU fallback.
             TryUse(b, static () => new S.Media.Source.MMD.MmdSourceModule(), "MMD");
 
             // Dynamic plugin capabilities register LAST so a plugin can extend but not silently pre-empt a

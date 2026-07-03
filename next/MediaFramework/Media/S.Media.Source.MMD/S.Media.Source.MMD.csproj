@@ -1,13 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Source.MMD — Gate-6 prototype (review stages 1–2 + 6): pure managed PMX/VMD parsing, bone/
-         morph/camera evaluation at cue time with CCD IK solving (per-link Euler limits, hinge-axis
-         knees), and a RUDIMENTARY software 3D renderer behind an mmd://
-         video source, so MMD content plays through the normal registry/session path and the operator can
-         place the camera against a live preview. Deliberately NO physics and no full MMD material model
-         yet (staged per the review); this module exists to exercise the layer-surface/plugin questions
-         (NXT-09/10) with a real consumer before the ABI freezes. Reference implementations consulted:
-         Reference/MMDTest (yoMMD, mmd-viewer-js; blender_mmd_tools is GPL — behavioral reference only). -->
+    <!-- S.Media.Source.MMD: managed PMX/VMD parsing and playback with BDEF/SDEF/QDEF skinning,
+         morphs, CCD IK, secondary physics, VMD scene tracks, and an MMD material/shadow GL surface.
+         The software rasterizer remains the CPU fallback. Reference implementations consulted under
+         Reference/MMDTest (behavioral reference only). -->
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
