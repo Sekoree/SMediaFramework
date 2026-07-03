@@ -233,7 +233,13 @@ public partial class MediaPlayerViewModel
                 // but the ShowSession path returns before that, and OnMediaFilePathChanged bails while a transport
                 // is busy — so without this the waveform intermittently never loads on the deck. Safe/idempotent:
                 // StartWaveformExtraction cancels any in-flight run and no-ops for a null/NDI (non-file) path.
-                StartWaveformExtraction((item as FilePlaylistItem)?.Path);
+                // A prepared YouTube item's cached asset IS a local file, so the scrubber waveform works there too.
+                StartWaveformExtraction(item switch
+                {
+                    FilePlaylistItem f => f.Path,
+                    YouTubePlaylistItem yt => HaPlayPlaybackHelpers.TryGetPreparedYouTubeAssetPath(yt),
+                    _ => null,
+                });
                 UpdateNoOutputWarning(); // opened with no output routed → play to nothing + warn
                 // HOLD survives track changes: the new document replaced the composition (and with it the
                 // hold top-layer), so re-cover the fresh canvas when the toggle is on.

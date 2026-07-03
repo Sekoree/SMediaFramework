@@ -1,7 +1,10 @@
 namespace S.Media.Session.Tests;
 
-/// <summary>A registry decoder that opens any URI as a short synthetic silent audio clip (no FFmpeg/device).</summary>
-internal sealed class FakeAudioDecoderProvider : IMediaDecoderProvider
+/// <summary>A registry decoder that opens any URI as a short synthetic silent audio clip (no FFmpeg/device).
+/// <paramref name="chunks"/> sizes the source (default 8 reads ≈ instant EOF — tests that need the clip to
+/// STAY ALIVE through pauses/fades must pass a large count, since natural EOF now legitimately flips the
+/// player to not-running).</summary>
+internal sealed class FakeAudioDecoderProvider(int chunks = 8) : IMediaDecoderProvider
 {
     public string Name => "fake-audio";
 
@@ -10,9 +13,10 @@ internal sealed class FakeAudioDecoderProvider : IMediaDecoderProvider
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
         throw new NotSupportedException("fake provider is audio-only");
 
-    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => new SyntheticSilentSource();
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => new SyntheticSilentSource(chunks);
 
-    public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new FakeAudioDecoderProvider()));
+    public static IMediaRegistry Registry(int chunks = 8) =>
+        MediaRegistry.Build(b => b.AddDecoder(new FakeAudioDecoderProvider(chunks)));
 }
 
 /// <summary>A provider whose atomic open BLOCKS until the token is cancelled — to verify a STOP/abort preempts
@@ -36,9 +40,9 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
 
 /// <summary>A finite stereo source that yields a few chunks of silence then exhausts — enough for a clip
 /// to open and Play() without a real decoder or device.</summary>
-internal sealed class SyntheticSilentSource : IAudioSource, ISeekableSource
+internal sealed class SyntheticSilentSource(int chunks = 8) : IAudioSource, ISeekableSource
 {
-    private int _remaining = 8;
+    private int _remaining = chunks;
     private TimeSpan _position;
 
     public AudioFormat Format { get; } = new(48_000, 2);

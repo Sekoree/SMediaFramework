@@ -10,7 +10,17 @@ namespace S.Media.Source.MMD.Tests;
 /// </summary>
 public sealed class MmdRealAssetTests
 {
-    private const string AssetRoot = "/home/seko/RiderProjects/MFPlayer/Reference/MMDTest";
+    // Resolved from the repo checkout (walk up to the repo root, then the non-redistributable local
+    // asset folder) so the test runs on any dev box that has the assets, not one hardcoded home.
+    private static readonly string AssetRoot = FindAssetRoot();
+
+    private static string FindAssetRoot()
+    {
+        for (var dir = AppContext.BaseDirectory; dir is not null; dir = Path.GetDirectoryName(dir))
+            if (Directory.Exists(Path.Combine(dir, "Reference", "MMD_Test")))
+                return Path.Combine(dir, "Reference", "MMD_Test");
+        return "/nonexistent/Reference/MMD_Test";
+    }
 
     private static string? FindPmx() =>
         Directory.Exists(AssetRoot)
@@ -55,6 +65,29 @@ public sealed class MmdRealAssetTests
             if (Vector3.DistanceSquared(rest[i], posed[i]) > 0.01f)
                 moved++;
         Assert.True(moved > rest.Length / 10, $"20s into the dance most vertices should have moved (moved={moved}/{rest.Length})");
+
+        // Stage-5 physics over the full 136-body/125-joint chain: simulate ~2s of the dance and require
+        // (a) every vertex stays finite/bounded (no explosion) and (b) physics actually diverges from the
+        // rigid FK pose (the hair moved on its own).
+        Assert.True(model.RigidBodies.Count > 50, $"YYB should carry a full physics rig (got {model.RigidBodies.Count})");
+        var physics = MmdPhysics.TryCreate(model);
+        Assert.NotNull(physics);
+        var withPhysics = new Vector3[model.Vertices.Count];
+        var physicsAnimator = new MmdAnimator(model, motion);
+        for (var f = 0; f <= 60; f++)
+            physicsAnimator.Evaluate(TimeSpan.FromSeconds(18) + TimeSpan.FromSeconds(f / 30.0), withPhysics,
+                normals: null, physics, physicsDeltaSeconds: f == 0 ? -1f : 1f / 30f);
+        animator.Evaluate(TimeSpan.FromSeconds(20), posed); // rigid reference at the same instant
+        var diverged = 0;
+        for (var i = 0; i < withPhysics.Length; i++)
+        {
+            Assert.True(float.IsFinite(withPhysics[i].X) && float.IsFinite(withPhysics[i].Y) && float.IsFinite(withPhysics[i].Z),
+                $"vertex {i} exploded under physics");
+            Assert.True(withPhysics[i].Length() < 500f, $"vertex {i} flew away ({withPhysics[i]})");
+            if (Vector3.DistanceSquared(withPhysics[i], posed[i]) > 0.05f)
+                diverged++;
+        }
+        Assert.True(diverged > 100, $"physics changed almost nothing ({diverged} vertices diverged from FK)");
 
         // Render one frame through the video source; the model must land on screen with the default framing.
         var sw = Stopwatch.StartNew();

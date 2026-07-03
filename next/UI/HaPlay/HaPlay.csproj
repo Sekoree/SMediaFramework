@@ -45,6 +45,7 @@
              so like S.Media.Interop it may reference both Decode.FFmpeg and Subtitles. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Subtitles\S.Media.Subtitles.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Interop\S.Media.Interop\S.Media.Interop.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Interop\S.Abi\S.Abi.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.YouTube\S.Media.Source.YouTube.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.MMD\S.Media.Source.MMD.csproj" />

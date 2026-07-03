@@ -51,6 +51,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     private readonly List<Slot> _snapshotScratch = [];
     private readonly List<CompositorLayer> _layerScratch = [];
     private readonly List<Slot> _acquiredScratch = [];
+    // Surface layers (NXT-10): rendered by the compositor on top of the frame layers when it is an
+    // IVideoCompositorSurfaceHost. Guarded by _slotsGate like _slots; snapshotted per composite.
+    private readonly List<SurfaceSlot> _surfaceSlots = [];
+    private readonly List<CompositorSurfaceLayer> _surfaceScratch = [];
     private TimeSpan _nextPts = TimeSpan.Zero;
     private long _compositesEmitted;
     private bool _disposed;
@@ -113,6 +117,66 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         }
     }
 
+    /// <summary>Whether the compositor behind this mixer can host surface layers (NXT-10).</summary>
+    public bool SupportsSurfaceLayers => _compositor is IVideoCompositorSurfaceHost;
+
+    /// <summary>Whether any surface slot is currently registered (integrated multi-warp callers must
+    /// route through the plain composite path while surfaces are present).</summary>
+    public bool HasSurfaceSlots
+    {
+        get
+        {
+            lock (_slotsGate)
+                return _surfaceSlots.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// Adds a surface layer (NXT-10): the compositor renders <paramref name="surface"/> directly into the
+    /// canvas ON TOP of every frame layer, in surface-slot list order. The returned slot carries the
+    /// mutable placement (<see cref="SurfaceSlot.Transform"/>/<see cref="SurfaceSlot.Opacity"/>); the
+    /// SURFACE's lifetime stays with the caller (removing the slot does not dispose it). Throws when the
+    /// compositor is not an <see cref="IVideoCompositorSurfaceHost"/> — gate on
+    /// <see cref="SupportsSurfaceLayers"/> and fall back to the source's frame path.
+    /// </summary>
+    public SurfaceSlot AddSurfaceSlot(IVideoCompositorLayerSurface surface, string? id = null)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_compositor is not IVideoCompositorSurfaceHost)
+            throw new InvalidOperationException(
+                $"compositor '{_compositor.GetType().Name}' cannot host surface layers — check SupportsSurfaceLayers and use the source's frame path instead.");
+        lock (_slotsGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var slotId = id ?? $"surface_{_surfaceSlots.Count + 1}";
+            foreach (var s in _surfaceSlots)
+            {
+                if (s.Id == slotId)
+                    throw new ArgumentException($"surface slot id '{slotId}' is already registered", nameof(id));
+            }
+            var slot = new SurfaceSlot(slotId, surface);
+            _surfaceSlots.Add(slot);
+            return slot;
+        }
+    }
+
+    /// <summary>Removes a surface slot. The surface itself is NOT disposed (caller-owned).</summary>
+    public bool RemoveSurfaceSlot(SurfaceSlot slot)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+        lock (_slotsGate)
+            return _surfaceSlots.Remove(slot);
+    }
+
+    /// <summary>Reorders surface slots in-place — the compositor's on-top draw order.</summary>
+    public void SortSurfaceSlots(Comparison<SurfaceSlot> comparison)
+    {
+        ArgumentNullException.ThrowIfNull(comparison);
+        lock (_slotsGate)
+            _surfaceSlots.Sort(comparison);
+    }
+
     /// <summary>
     /// Reorders slots in-place. The list order is the compositor's back-to-front draw order.
     /// </summary>
@@ -168,6 +232,18 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         ArgumentNullException.ThrowIfNull(outputs);
         if (_compositor is not IWarpPassVideoCompositor warpCompositor)
             throw new InvalidOperationException("The configured compositor does not support multi-output warp composition.");
+
+        // Surface layers don't participate in the integrated multi-warp pass (v1 scope) — report
+        // "not handled" so the caller falls back to the plain composite path, where
+        // CompositeWithSurfaces renders them (per-lease chained mapping still applies there).
+        lock (_slotsGate)
+        {
+            if (_surfaceSlots.Count > 0)
+            {
+                frames = Array.Empty<VideoFrame>();
+                return false;
+            }
+        }
 
         // Single-consumer read (class contract): serialize so the reused scratch below is exclusive.
         lock (_readGate)
@@ -295,6 +371,29 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                     _nextPts += _ptsStep;
                 }
 
+                // Surface layers (NXT-10) ride the same composite: snapshot under _slotsGate, then let
+                // the surface-hosting compositor render them on top of the frame layers.
+                _surfaceScratch.Clear();
+                if (_compositor is IVideoCompositorSurfaceHost surfaceHost)
+                {
+                    lock (_slotsGate)
+                    {
+                        foreach (var s in _surfaceSlots)
+                        {
+                            var placed = s.Placement;
+                            if (placed.Opacity > 0f)
+                                _surfaceScratch.Add(placed);
+                        }
+                    }
+
+                    if (_surfaceScratch.Count > 0)
+                    {
+                        frame = surfaceHost.CompositeWithSurfaces(_layerScratch, _surfaceScratch, pts);
+                        Interlocked.Increment(ref _compositesEmitted);
+                        return true;
+                    }
+                }
+
                 frame = _compositor.Composite(_layerScratch, pts);
                 Interlocked.Increment(ref _compositesEmitted);
                 return true;
@@ -306,6 +405,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 _acquiredScratch.Clear();
                 _layerScratch.Clear();
                 _snapshotScratch.Clear();
+                _surfaceScratch.Clear();
             }
         }
     }
@@ -366,6 +466,47 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     }
 
     /// <summary>One input slot — combines an <see cref="IVideoOutput"/> target with mutable composite parameters.</summary>
+    /// <summary>
+    /// One surface layer registered on the mixer (NXT-10): the GL-rendering surface plus its mutable
+    /// placement. Thread-safe like <see cref="Slot"/> — placement writes come from control threads while
+    /// the composite thread snapshots. Removing the slot never disposes the surface (caller-owned).
+    /// </summary>
+    public sealed class SurfaceSlot
+    {
+        private readonly Lock _gate = new();
+        private LayerTransform2D _transform = LayerTransform2D.Identity;
+        private float _opacity = 1f;
+
+        internal SurfaceSlot(string id, IVideoCompositorLayerSurface surface)
+        {
+            Id = id;
+            Surface = surface;
+        }
+
+        public string Id { get; }
+
+        public IVideoCompositorLayerSurface Surface { get; }
+
+        /// <summary>Maps the surface's canvas-sized output into the destination canvas (pixels).</summary>
+        public LayerTransform2D Transform
+        {
+            get { lock (_gate) return _transform; }
+            set { lock (_gate) _transform = value; }
+        }
+
+        public float Opacity
+        {
+            get { lock (_gate) return _opacity; }
+            set { lock (_gate) _opacity = Math.Clamp(value, 0f, 1f); }
+        }
+
+        /// <summary>Atomic placement snapshot for the composite thread.</summary>
+        internal CompositorSurfaceLayer Placement
+        {
+            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity); }
+        }
+    }
+
     public sealed class Slot
     {
         private readonly Lock _gate = new();

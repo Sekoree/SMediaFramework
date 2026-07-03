@@ -2219,6 +2219,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             return true;
         if (_currentPlaylistItem is FilePlaylistItem f && File.Exists(f.Path))
             return true;
+        // Registry-URI items (youtube:// prepared-cache assets, mmd:// scenes): accepted unconditionally —
+        // the open path surfaces its own actionable error (reliable-mode "not prepared", missing model
+        // file). Gating them here silently no-ops the play with nothing in the log (the 2026-07-03
+        // "YouTube item is instantly done" report: this gate predated both item kinds).
+        if (_currentPlaylistItem is YouTubePlaylistItem or MmdPlaylistItem)
+            return true;
         return _currentPlaylistItem is null
                && !string.IsNullOrWhiteSpace(MediaFilePath)
                && File.Exists(MediaFilePath!);

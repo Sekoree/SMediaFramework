@@ -171,6 +171,12 @@ public sealed record TextPlaylistItem : PlaylistItem
 /// camera-placement view (tweak → replay → see the framing).</summary>
 public sealed record MmdPlaylistItem(string ModelPath) : PlaylistItem
 {
+    /// <summary>MSAA in the GL renderer (the add-dialog toggle).</summary>
+    public bool Antialias { get; init; } = true;
+
+    /// <summary>Stage-5 physics — hair/skirt secondary motion (the add-dialog toggle).</summary>
+    public bool Physics { get; init; } = true;
+
     public string? MotionPath { get; init; }
 
     /// <summary>Camera VMD; when set it overrides the manual placement below.</summary>

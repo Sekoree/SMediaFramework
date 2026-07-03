@@ -22,7 +22,29 @@ internal static class MediaRuntime
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.MediaRuntime");
     private static readonly object Gate = new();
     private static MediaHost? _host;
+    private static S.Abi.MediaPluginDirectory? _plugins;
+    private static S.Media.Compositor.ICompositorRegistry _compositorSurfaces =
+        new S.Media.Compositor.CompositorRegistryBuilder().Build();
     private static bool _shutdown;
+
+    /// <summary>The plugins directory (NXT-09): <c>HAPLAY_PLUGINS_DIR</c>, else <c>&lt;app&gt;/plugins</c>.
+    /// Native libraries exporting <c>mfp_plugin_register</c> found there register their capabilities into the
+    /// media registry (decoders, audio backends) and <see cref="CompositorSurfaces"/> (layer-surface kinds).</summary>
+    internal static string PluginsDirectory =>
+        Environment.GetEnvironmentVariable("HAPLAY_PLUGINS_DIR") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(AppContext.BaseDirectory, "plugins");
+
+    /// <summary>Layer-surface kinds contributed by native plugins (NXT-09/10) — resolve by kind + config
+    /// JSON to place a plugin-rendered GPU layer on a composition. Populated when the host builds.</summary>
+    public static S.Media.Compositor.ICompositorRegistry CompositorSurfaces
+    {
+        get
+        {
+            _ = Host; // surface kinds register during the host build
+            return _compositorSurfaces;
+        }
+    }
 
     /// <summary>The owning host (NXT-05): builds the registry and, when disposed on app shutdown, releases the
     /// modules' native runtime holds (PortAudio <c>Pa_Terminate</c>, NDI runtime) instead of leaking them. Lazily
@@ -88,10 +110,38 @@ internal static class MediaRuntime
         {
             Trace.LogWarning(ex, "MediaRuntime: host disposal during shutdown");
         }
+
+        // AFTER the registry (its plugin-backed adapters hold the unload-gating leases): request plugin
+        // unload — a library with still-live adapters simply stays loaded until process exit.
+        S.Abi.MediaPluginDirectory? plugins;
+        lock (Gate)
+        {
+            plugins = _plugins;
+            _plugins = null;
+        }
+        plugins?.Dispose();
     }
 
     private static MediaHost Build()
     {
+        // Dynamic native plugins (NXT-09): fail-soft like every module — a broken plugin is a log line,
+        // not a startup failure. Loaded before the registry build so capabilities register inside it.
+        S.Abi.MediaPluginDirectory? plugins = null;
+        try
+        {
+            plugins = S.Abi.MediaPluginDirectory.Load(PluginsDirectory);
+            foreach (var plugin in plugins.Plugins)
+                Trace.LogInformation("MediaRuntime: plugin '{Id}' ({Name}) loaded from {Dir}",
+                    plugin.Id, plugin.DisplayName, PluginsDirectory);
+            foreach (var (path, error) in plugins.Failures)
+                Trace.LogWarning("MediaRuntime: plugin '{Path}' failed to load — {Error}", path, error);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "MediaRuntime: plugin directory scan failed — continuing without plugins");
+        }
+
+        var surfaceBuilder = new S.Media.Compositor.CompositorRegistryBuilder();
         var host = MediaHost.Build(b =>
         {
             TryUse(b, static () => new FFmpegModule(), "FFmpeg");
@@ -115,7 +165,27 @@ internal static class MediaRuntime
 
             // MMD (Gate-6 prototype): PMX/VMD scenes behind mmd:// URIs — pure managed software render.
             TryUse(b, static () => new S.Media.Source.MMD.MmdSourceModule(), "MMD");
+
+            // Dynamic plugin capabilities register LAST so a plugin can extend but not silently pre-empt a
+            // built-in for the same probe (registry probe scoring still decides the winner per open).
+            if (plugins is not null)
+            {
+                try
+                {
+                    plugins.RegisterInto(media: b, compositor: surfaceBuilder);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "MediaRuntime: plugin capability registration failed — continuing");
+                }
+            }
         });
+
+        lock (Gate)
+        {
+            _plugins = plugins;
+            _compositorSurfaces = surfaceBuilder.Build();
+        }
 
         Trace.LogInformation("MediaRuntime ready — audio backends: {Backends}",
             string.Join(", ", host.Registry.AudioBackends.Select(x => x.Name)));

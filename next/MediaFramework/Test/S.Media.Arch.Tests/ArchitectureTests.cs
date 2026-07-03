@@ -31,8 +31,11 @@ public sealed class ArchitectureTests
         // (Reference/YoutubeExplode-6.6) and deliberately not part of the layering table.
         ["S.Media.Source.YouTube"] =
             ["S.Media.Core", "S.Media.FFmpeg.Common", "S.Media.Decode.FFmpeg", "S.Media.Time", "YoutubeExplode"],
-        // MMD prototype (Gate 6): pure managed PMX/VMD + software render — Core/Time only.
-        ["S.Media.Source.MMD"] = ["S.Media.Core", "S.Media.Time"],
+        // MMD prototype (Gate 6): pure managed PMX/VMD + software render, plus the NXT-10 GL
+        // layer-surface renderer (Compositor for the surface contract; Silk.NET bindings and
+        // StbImageSharp are pure managed — a GL context only ever comes from the hosting compositor,
+        // so the module still ships no native runtime of its own).
+        ["S.Media.Source.MMD"] = ["S.Media.Core", "S.Media.Time", "S.Media.Compositor"],
         ["S.Media.Encode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
         ["S.Media.Audio.PortAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "PALib"],
         ["S.Media.Audio.MiniAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "MALib"],

@@ -308,4 +308,30 @@ public sealed class MmdModuleTests
             catch { /* best effort */ }
         }
     }
+
+    [Fact]
+    public void ResolveTexturePath_FallsBackToCaseInsensitiveSegments()
+    {
+        // MMD models are authored on Windows: `spa\\A1.bmp` in the PMX happily matches `spa/a1.bmp` on
+        // disk there — on Linux the exact path misses and the material used to silently render white
+        // (the 2026-07-03 "black and white model" report).
+        var root = Directory.CreateTempSubdirectory("mmd-tex-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "Tex"));
+            File.WriteAllBytes(Path.Combine(root, "Tex", "Body01.PNG"), [1, 2, 3]);
+
+            var exact = MmdGlLayerSurface.ResolveTexturePath(root, Path.Combine("Tex", "Body01.PNG"));
+            Assert.NotNull(exact);
+
+            var folded = MmdGlLayerSurface.ResolveTexturePath(root, Path.Combine("tex", "body01.png"));
+            Assert.Equal(exact, folded);
+
+            Assert.Null(MmdGlLayerSurface.ResolveTexturePath(root, Path.Combine("tex", "missing.png")));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
 }

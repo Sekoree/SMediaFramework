@@ -11,6 +11,15 @@ public readonly record struct PmxVertex(
     int Bone0, int Bone1, int Bone2, int Bone3,
     float Weight0, float Weight1, float Weight2, float Weight3);
 
+/// <summary>How a material's sphere (environment) texture combines with the base color (MMD .sph/.spa).</summary>
+public enum PmxSphereMode : byte
+{
+    None = 0,
+    Multiply = 1,
+    Add = 2,
+    SubTexture = 3,
+}
+
 public sealed record PmxMaterial(
     string Name,
     Vector4 Diffuse,
@@ -19,7 +28,30 @@ public sealed record PmxMaterial(
     Vector3 Ambient,
     bool DoubleSided,
     int TextureIndex,
-    int FaceVertexCount);
+    int FaceVertexCount)
+{
+    /// <summary>Draw the inverted-hull outline for this material (PMX flag 0x10).</summary>
+    public bool HasEdge { get; init; }
+
+    /// <summary>Outline color (RGBA) for the edge pass.</summary>
+    public Vector4 EdgeColor { get; init; } = new(0, 0, 0, 1);
+
+    /// <summary>Outline thickness in MMD edge units (scaled by the renderer).</summary>
+    public float EdgeSize { get; init; }
+
+    /// <summary>Sphere-map texture index into <see cref="PmxDocument.Textures"/>, or −1.</summary>
+    public int SphereTextureIndex { get; init; } = -1;
+
+    public PmxSphereMode SphereMode { get; init; }
+
+    /// <summary>Per-material toon texture index into <see cref="PmxDocument.Textures"/> (−1 when the
+    /// material uses a SHARED toon — see <see cref="SharedToonIndex"/> — or none).</summary>
+    public int ToonTextureIndex { get; init; } = -1;
+
+    /// <summary>Shared toon slot 0–9 (the classic toon01–toon10 ramps), or −1 when a per-material
+    /// texture (<see cref="ToonTextureIndex"/>) or none applies.</summary>
+    public int SharedToonIndex { get; init; } = -1;
+}
 
 /// <summary>IK link inside a bone's IK chain (angle limits in radians, MMD conventions).</summary>
 public sealed record PmxIkLink(int BoneIndex, bool HasLimit, Vector3 LimitMin, Vector3 LimitMax);
@@ -38,6 +70,62 @@ public sealed record PmxBone(
     int IkLoopCount,
     float IkLimitRadians,
     IReadOnlyList<PmxIkLink> IkLinks);
+
+/// <summary>Rigid-body collision shape (PMX byte values).</summary>
+public enum PmxRigidShape : byte
+{
+    Sphere = 0,
+    Box = 1,
+    Capsule = 2,
+}
+
+/// <summary>How a rigid body couples to its bone (PMX byte values).</summary>
+public enum PmxPhysicsMode : byte
+{
+    /// <summary>Kinematic: the body follows the animated bone (collider only).</summary>
+    FollowBone = 0,
+
+    /// <summary>Dynamic: physics drives the bone (hair/skirt links).</summary>
+    Physics = 1,
+
+    /// <summary>Dynamic rotation, but the bone keeps its animated position (root links).</summary>
+    PhysicsWithBonePosition = 2,
+}
+
+/// <summary>One PMX rigid body (stage-5 physics). Position/rotation are the body's BIND placement in
+/// model space; <see cref="Group"/> is the 0–15 collision group and <see cref="CollisionMask"/> the
+/// bitmask of groups it collides WITH.</summary>
+public sealed record PmxRigidBody(
+    string Name,
+    int BoneIndex,
+    byte Group,
+    ushort CollisionMask,
+    PmxRigidShape Shape,
+    Vector3 Size,
+    Vector3 Position,
+    Vector3 RotationRadians,
+    float Mass,
+    float LinearDamping,
+    float AngularDamping,
+    float Restitution,
+    float Friction,
+    PmxPhysicsMode Mode);
+
+/// <summary>One PMX joint (spring six-DOF, type 0 — the only kind MMD emits) connecting two rigid
+/// bodies with per-axis linear/angular limits and spring constants.</summary>
+public sealed record PmxJoint(
+    string Name,
+    byte Type,
+    int RigidBodyA,
+    int RigidBodyB,
+    Vector3 Position,
+    Vector3 RotationRadians,
+    Vector3 LinearLowerLimit,
+    Vector3 LinearUpperLimit,
+    Vector3 AngularLowerLimit,
+    Vector3 AngularUpperLimit,
+    Vector3 LinearSpring,
+    Vector3 AngularSpring);
 
 /// <summary>One vertex-morph offset.</summary>
 public readonly record struct PmxVertexMorphOffset(int VertexIndex, Vector3 Offset);
@@ -62,6 +150,12 @@ public sealed class PmxDocument
     public required IReadOnlyList<PmxMaterial> Materials { get; init; }
     public required IReadOnlyList<PmxBone> Bones { get; init; }
     public required IReadOnlyList<PmxMorph> Morphs { get; init; }
+
+    /// <summary>Rigid bodies (stage-5 physics); empty when the file carries none.</summary>
+    public IReadOnlyList<PmxRigidBody> RigidBodies { get; init; } = [];
+
+    /// <summary>Spring six-DOF joints between rigid bodies; empty when the file carries none.</summary>
+    public IReadOnlyList<PmxJoint> Joints { get; init; } = [];
 
     public static PmxDocument Load(string path)
     {
@@ -171,22 +265,33 @@ public sealed class PmxDocument
             var specularPower = reader.F32();
             var ambient = reader.Vec3();
             var flags = reader.U8();
-            reader.Skip(16 + 4); // edge color + edge size
+            var edgeColor = reader.Vec4();
+            var edgeSize = reader.F32();
             var textureIndex = reader.Index(textureIndexSize);
-            _ = reader.Index(textureIndexSize); // sphere texture
-            reader.Skip(1); // sphere mode
+            var sphereTexture = reader.Index(textureIndexSize);
+            var sphereMode = reader.U8();
             var sharedToon = reader.U8();
+            int toonTexture = -1, sharedToonIndex = -1;
             if (sharedToon == 0)
-                _ = reader.Index(textureIndexSize);
+                toonTexture = reader.Index(textureIndexSize);
             else
-                reader.Skip(1);
+                sharedToonIndex = reader.U8();
             _ = Text(); // memo
             var faceVertexCount = reader.I32();
             if (faceVertexCount < 0 || faceVertexCount % 3 != 0)
                 throw new PmxFormatException($"material '{name}' face-vertex count {faceVertexCount} invalid");
             materials[i] = new PmxMaterial(
                 name, diffuse, specular, specularPower, ambient,
-                DoubleSided: (flags & 0x01) != 0, textureIndex, faceVertexCount);
+                DoubleSided: (flags & 0x01) != 0, textureIndex, faceVertexCount)
+            {
+                HasEdge = (flags & 0x10) != 0,
+                EdgeColor = edgeColor,
+                EdgeSize = edgeSize,
+                SphereTextureIndex = sphereTexture,
+                SphereMode = sphereMode <= 3 ? (PmxSphereMode)sphereMode : PmxSphereMode.None,
+                ToonTextureIndex = toonTexture,
+                SharedToonIndex = sharedToonIndex,
+            };
         }
 
         // Bones
@@ -299,8 +404,82 @@ public sealed class PmxDocument
             }
         }
 
-        // Remaining sections (display frames / rigid bodies / joints / soft bodies) are not needed by the
-        // prototype and are not read — the parser stops here by design.
+        // Display frames (cosmetic — skipped), then rigid bodies + joints (stage-5 physics). A file that
+        // ends after the morphs (our tiny test fixtures) simply carries no physics. Soft bodies (2.1,
+        // rare) remain unread.
+        var rigidBodies = Array.Empty<PmxRigidBody>();
+        var joints = Array.Empty<PmxJoint>();
+        if (reader.HasMore)
+        {
+            var frameCount = reader.Count("display frame");
+            for (var i = 0; i < frameCount; i++)
+            {
+                _ = Text();
+                _ = Text();
+                reader.Skip(1); // special-frame flag
+                var elements = reader.Count("display element");
+                for (var e = 0; e < elements; e++)
+                {
+                    var kind = reader.U8();
+                    _ = reader.Index(kind == 0 ? boneIndexSize : morphIndexSize);
+                }
+            }
+        }
+
+        if (reader.HasMore)
+        {
+            var rigidCount = reader.Count("rigid body");
+            var bodies = new PmxRigidBody[rigidCount];
+            for (var i = 0; i < rigidCount; i++)
+            {
+                var name = Text();
+                _ = Text();
+                var bone = reader.Index(boneIndexSize);
+                var group = reader.U8();
+                var mask = reader.U16();
+                var shape = reader.U8();
+                var size = reader.Vec3();
+                var position = reader.Vec3();
+                var rotationRad = reader.Vec3();
+                var mass = reader.F32();
+                var linearDamping = reader.F32();
+                var angularDamping = reader.F32();
+                var restitution = reader.F32();
+                var friction = reader.F32();
+                var mode = reader.U8();
+                bodies[i] = new PmxRigidBody(
+                    name, bone, group, mask,
+                    shape <= 2 ? (PmxRigidShape)shape : PmxRigidShape.Sphere,
+                    size, position, rotationRad,
+                    mass, linearDamping, angularDamping, restitution, friction,
+                    mode <= 2 ? (PmxPhysicsMode)mode : PmxPhysicsMode.FollowBone);
+            }
+
+            rigidBodies = bodies;
+        }
+
+        if (reader.HasMore)
+        {
+            var jointCount = reader.Count("joint");
+            var parsed = new PmxJoint[jointCount];
+            for (var i = 0; i < jointCount; i++)
+            {
+                var name = Text();
+                _ = Text();
+                var type = reader.U8();
+                var a = reader.Index(rigidIndexSize);
+                var b = reader.Index(rigidIndexSize);
+                parsed[i] = new PmxJoint(
+                    name, type, a, b,
+                    reader.Vec3(), reader.Vec3(),
+                    reader.Vec3(), reader.Vec3(),
+                    reader.Vec3(), reader.Vec3(),
+                    reader.Vec3(), reader.Vec3());
+            }
+
+            joints = parsed;
+        }
+
         return new PmxDocument
         {
             Version = version,
@@ -312,6 +491,8 @@ public sealed class PmxDocument
             Materials = materials,
             Bones = bones,
             Morphs = morphs,
+            RigidBodies = rigidBodies,
+            Joints = joints,
         };
     }
 
@@ -331,6 +512,10 @@ public sealed class PmxDocument
             : throw new PmxFormatException("unexpected end of file");
 
         public void Skip(int count) => Bytes(count);
+
+        /// <summary>Whether any bytes remain — trailing sections (rigid bodies/joints) are optional for
+        /// minimal files (test fixtures end after the morphs).</summary>
+        public bool HasMore => stream.Position < stream.Length;
 
         public void SkipPer(int count, int stride)
         {

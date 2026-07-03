@@ -410,11 +410,21 @@ public sealed class MediaPlayer : IDisposable
     /// <summary>The mix sample rate (the audio router's rate), or 0 when there is no audio router.</summary>
     public int SampleRate => _liveAudioRouter?.SampleRate ?? 0;
 
-    /// <summary>The master playhead position.</summary>
-    public TimeSpan Position => PlayClock.CurrentPosition;
+    /// <summary>The master playhead position. Once playback COMPLETED NATURALLY (every routed audio
+    /// source exhausted) this clamps to <see cref="Duration"/>: the natural-EOF output flush rewinds the
+    /// hardware clock's epoch, so the raw playhead would read ~0:00 — the "deck shows playing, stuck at
+    /// the beginning" report (2026-07-03). A restart (seek + play) clears the completion and reads live again.</summary>
+    public TimeSpan Position =>
+        _liveAudioRouter is { CompletedNaturally: true } && Duration > TimeSpan.Zero
+            ? Duration
+            : PlayClock.CurrentPosition;
 
-    /// <summary>True while the active playback clock is advancing.</summary>
-    public bool IsRunning => _liveClock?.IsRunning ?? false;
+    /// <summary>True while the active playback clock is advancing. Reports false once the audio router
+    /// completed naturally — the clock OBJECT keeps its running flag at EOF, so without this every
+    /// end-of-media consumer (the deck's auto-advance/loop poll, the session's natural-end and voice
+    /// monitors) waited forever on a "running" clip that had already exhausted.</summary>
+    public bool IsRunning =>
+        _liveAudioRouter is not { CompletedNaturally: true } && (_liveClock?.IsRunning ?? false);
 
     /// <summary>
     /// Opens <paramref name="uri"/> through <paramref name="registry"/>: the highest-confidence decoder

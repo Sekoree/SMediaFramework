@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using S.Media.Compositor;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
@@ -54,8 +55,13 @@ namespace S.Media.Compositor.OpenGL;
 /// be embedded inside another output's render path without trashing host state.
 /// </para>
 /// </remarks>
-public sealed class GlVideoCompositor : IWarpPassVideoCompositor
+public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost
 {
+    // Surfaces this compositor has ConfigureGl'd, stamped with the canvas format they were configured
+    // for — CompositeWithSurfaces (re)configures a surface on first sight and after a canvas change,
+    // always on the GL thread (NXT-10: the host owns the configure contract, not the caller). Weak so
+    // an abandoned surface never pins.
+    private readonly ConditionalWeakTable<IVideoCompositorLayerSurface, StrongBox<VideoFormat>> _configuredSurfaces = new();
     /// <summary>Immutable warp-pass snapshot (swapped atomically by <see cref="SetWarpPass"/>;
     /// read once per <see cref="Composite"/> so a mid-frame swap can't tear).</summary>
     private sealed record WarpPassState(VideoFormat Output, WarpSection[] Sections);
@@ -539,6 +545,15 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
                 var opacity = Math.Clamp(surfaceLayer.Opacity, 0f, 1f);
                 if (opacity <= 0f)
                     continue;
+
+                // First sight (or the canvas changed since): configure here, on the GL thread with the
+                // context current — the IVideoCompositorSurfaceHost contract.
+                var configured = _configuredSurfaces.GetOrCreateValue(surfaceLayer.Surface);
+                if (configured.Value != _output)
+                {
+                    surfaceLayer.Surface.ConfigureGl(_gl, _output);
+                    configured.Value = _output;
+                }
 
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
                 _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);

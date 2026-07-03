@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <!-- S.Media.Source.YouTube — Tier-A managed external-source module (Gate 5). Resolves YouTube
-         video/audio stream manifests through YoutubeExplode (LOCAL SOURCE reference:
-         Reference/YoutubeExplode-6.6, declares 0.0.0-dev / net10.0 / IsAotCompatible — pinned by
-         checkout, not by the folder's version-suggesting name), downloads the SELECTED separate
+         video/audio stream manifests through YoutubeExplode (NuGet package, version pinned centrally
+         in Directory.Packages.props — switched from the Reference/ local-source checkout once the
+         package proved equivalent), downloads the SELECTED separate
          video-only + audio-only streams to a content-addressed cache, stream-copy remuxes them into one
          local MKV (FFmpegStreamCopyRemuxer — no transcode, no shelled ffmpeg), and serves playback from
          that local asset through the normal FFmpeg open path. Reliable mode only: an unprepared
@@ -11,13 +11,13 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="YoutubeExplode" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../S.Media.FFmpeg.Common/S.Media.FFmpeg.Common.csproj" />
         <ProjectReference Include="../S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
-        <ProjectReference Include="../../../../Reference/YoutubeExplode-6.6/YoutubeExplode/YoutubeExplode.csproj" />
     </ItemGroup>
 
     <ItemGroup>

@@ -677,6 +677,9 @@ public static class Strings
     public static string MmdDistanceLabel => Get(nameof(MmdDistanceLabel));
     public static string MmdTargetLabel => Get(nameof(MmdTargetLabel));
     public static string MmdRotationLabel => Get(nameof(MmdRotationLabel));
+    public static string MmdCameraPositionLabel => Get(nameof(MmdCameraPositionLabel));
+    public static string MmdAntialiasLabel => Get(nameof(MmdAntialiasLabel));
+    public static string MmdPhysicsLabel => Get(nameof(MmdPhysicsLabel));
     public static string MmdFovLabel => Get(nameof(MmdFovLabel));
     public static string MmdRenderSizeLabel => Get(nameof(MmdRenderSizeLabel));
     public static string ProjectSaveFailedFormat => Get(nameof(ProjectSaveFailedFormat));

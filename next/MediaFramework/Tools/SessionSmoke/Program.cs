@@ -26,6 +26,16 @@ var videoFile = args.Length > 1 ? args[1] : args[0];
 // frame canvas allocation (MiB-scale) always does.
 const double AllocBudgetKiB = 512;
 
+// Debug builds composite markedly slower (unoptimized CPU compositor + libass — ~7 fps at 720p on the
+// reference box vs the declared 24), so the sync-gate SAMPLE WINDOWS scale up to keep the minimum-count
+// clauses meaningful; the skew tolerances themselves are identical across configs. Without this a Debug
+// run false-fails purely on sample count (n<10/n<8) — especially on a loaded box.
+#if DEBUG
+const double SyncWindowScale = 3.0;
+#else
+const double SyncWindowScale = 1.0;
+#endif
+
 // A sidecar SRT shown over the video cue's composition — a non-ASS format, so it exercises the full
 // FFmpeg-decode → ASS events → libass path through the unified factory, end-to-end.
 var subPath = Path.Combine(Path.GetTempPath(), "sessionsmoke-subs.srt");
@@ -208,13 +218,18 @@ if (log.Count != 2 || log.Any(e => e.Status != CueExecutionStatus.Fired))
 var syncBefore = (await session.SnapshotAsync())[0];
 if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + TimeSpan.FromSeconds(14))
 {
-    var steady = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.5));
+    if (SyncWindowScale > 1.0)
+        Console.WriteLine($"SYNC windows ×{SyncWindowScale:F0} (Debug build — slower CPU compositing needs longer windows for the same sample counts)");
+    var steady = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.5 * SyncWindowScale));
     Console.WriteLine(
         $"SYNC steady: n={steady.Count} median={steady.MedianMs:F0}ms p95(|skew|)={steady.P95AbsMs:F0}ms jitter={steady.JitterMs:F0}ms");
     if (steady.Count < 10 || Math.Abs(steady.MedianMs) > 250 || steady.JitterMs > 120)
     {
         Console.Error.WriteLine(
-            $"FAIL: steady-state A/V skew out of tolerance (n={steady.Count}, |median|={Math.Abs(steady.MedianMs):F0}ms > 250ms or jitter={steady.JitterMs:F0}ms > 120ms)");
+            "FAIL: steady-state A/V skew gate — " + FailedClauses(
+                (steady.Count < 10, $"n={steady.Count} < 10 samples"),
+                (Math.Abs(steady.MedianMs) > 250, $"|median|={Math.Abs(steady.MedianMs):F0}ms > 250ms"),
+                (steady.JitterMs > 120, $"jitter={steady.JitterMs:F0}ms > 120ms")));
         return 17;
     }
 
@@ -224,13 +239,16 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     var target = (await session.SnapshotAsync())[0].ClipPosition + TimeSpan.FromSeconds(6);
     await session.SeekAsync(target);
     await Task.Delay(700); // settle: pipeline flush + refill + resume
-    var postSeek = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.0));
+    var postSeek = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.0 * SyncWindowScale));
     Console.WriteLine(
         $"SYNC post-seek: n={postSeek.Count} median={postSeek.MedianMs:F0}ms shift={postSeek.MedianMs - steady.MedianMs:F0}ms minPts={postSeek.MinPts.TotalSeconds:F2}s (target {target.TotalSeconds:F2}s)");
     if (postSeek.Count < 8 || Math.Abs(postSeek.MedianMs - steady.MedianMs) > 150 || postSeek.JitterMs > 150)
     {
         Console.Error.WriteLine(
-            $"FAIL: post-seek A/V skew shifted/degraded (n={postSeek.Count}, shift={postSeek.MedianMs - steady.MedianMs:F0}ms > 150ms or jitter={postSeek.JitterMs:F0}ms > 150ms)");
+            "FAIL: post-seek A/V skew gate — " + FailedClauses(
+                (postSeek.Count < 8, $"n={postSeek.Count} < 8 samples"),
+                (Math.Abs(postSeek.MedianMs - steady.MedianMs) > 150, $"shift={postSeek.MedianMs - steady.MedianMs:F0}ms > 150ms"),
+                (postSeek.JitterMs > 150, $"jitter={postSeek.JitterMs:F0}ms > 150ms")));
         return 18;
     }
 
@@ -245,7 +263,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     // submissions, or re-sent frames whose PTS no longer advances.
     await session.SetPausedAsync(true);
     await Task.Delay(300); // let the pause transient drain
-    var paused = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromMilliseconds(500));
+    var paused = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromMilliseconds(500 * SyncWindowScale));
     Console.WriteLine($"SYNC paused: n={paused.Count} ptsAdvance={paused.PtsSpreadMs:F0}ms");
     if (paused.Count > 0 && paused.PtsSpreadMs > 100)
     {
@@ -258,13 +276,17 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     // the pause/resume desync class of the playback-clock freeze contract).
     await session.SetPausedAsync(false);
     await Task.Delay(400);
-    var resumed = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.0));
+    var resumed = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.0 * SyncWindowScale));
     Console.WriteLine(
         $"SYNC resumed: n={resumed.Count} median={resumed.MedianMs:F0}ms shift={resumed.MedianMs - steady.MedianMs:F0}ms ptsAdvance={resumed.PtsSpreadMs:F0}ms");
-    if (resumed.Count < 8 || Math.Abs(resumed.MedianMs - steady.MedianMs) > 150 || resumed.PtsSpreadMs < 500)
+    var minPtsAdvanceMs = 500 * SyncWindowScale; // frames must span most of the (scaled) capture window
+    if (resumed.Count < 8 || Math.Abs(resumed.MedianMs - steady.MedianMs) > 150 || resumed.PtsSpreadMs < minPtsAdvanceMs)
     {
         Console.Error.WriteLine(
-            $"FAIL: post-resume playback degraded (n={resumed.Count}, shift={resumed.MedianMs - steady.MedianMs:F0}ms > 150ms or ptsAdvance={resumed.PtsSpreadMs:F0}ms < 500ms)");
+            "FAIL: post-resume playback gate — " + FailedClauses(
+                (resumed.Count < 8, $"n={resumed.Count} < 8 samples"),
+                (Math.Abs(resumed.MedianMs - steady.MedianMs) > 150, $"shift={resumed.MedianMs - steady.MedianMs:F0}ms > 150ms"),
+                (resumed.PtsSpreadMs < minPtsAdvanceMs, $"ptsAdvance={resumed.PtsSpreadMs:F0}ms < {minPtsAdvanceMs:F0}ms")));
         return 21;
     }
 
@@ -368,6 +390,11 @@ await using (var fadeSession = new ShowSession(registry, backend))
 
 Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in + host video-output fan-out).");
 return 0;
+
+// Names exactly the clause(s) that tripped a multi-clause gate — a FAIL that prints thresholds the run
+// actually met (e.g. blaming jitter when the sample COUNT was short) sends the reader down the wrong path.
+static string FailedClauses(params (bool Failed, string Text)[] clauses) =>
+    string.Join(" and ", clauses.Where(c => c.Failed).Select(c => c.Text));
 
 // Counts the composited frames a composition fans out to a host-provided video-output lease, and — for the
 // NXT-04 measured sync gates — captures (frame media PTS, playhead at submit) pairs over a sample window.

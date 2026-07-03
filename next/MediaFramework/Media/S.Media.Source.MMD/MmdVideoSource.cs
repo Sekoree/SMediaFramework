@@ -14,7 +14,14 @@ public sealed record MmdSourceRequest(
     float? CameraDistance,
     Vector3? CameraTarget,
     Vector3? CameraRotationDegrees,
-    float? CameraFovDegrees);
+    float? CameraFovDegrees)
+{
+    /// <summary>MSAA for the GL renderer (URI <c>aa=0</c> disables — the operator toggle).</summary>
+    public bool Antialias { get; init; } = true;
+
+    /// <summary>Stage-5 physics (hair/skirt secondary motion; URI <c>phys=0</c> disables).</summary>
+    public bool Physics { get; init; } = true;
+}
 
 /// <summary>
 /// URI codec for MMD sources: <c>mmd://?model=…&amp;motion=…&amp;camera=…&amp;w=…&amp;h=…</c> plus manual
@@ -49,6 +56,8 @@ public static class MmdSourceUri
         }
 
         if (request.CameraFovDegrees is { } f) query.Add($"fov={f:R}");
+        if (!request.Antialias) query.Add("aa=0");
+        if (!request.Physics) query.Add("phys=0");
         return $"{Scheme}://?{string.Join('&', query)}";
     }
 
@@ -66,6 +75,8 @@ public static class MmdSourceUri
         var width = 1280;
         var height = 720;
         float? dist = null, fov = null;
+        var antialias = true;
+        var physics = true;
         float? tx = null, ty = null, tz = null, rx = null, ry = null, rz = null;
         foreach (var pair in uri[(q + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -89,6 +100,8 @@ public static class MmdSourceUri
                 case "rx": rx = ParseF(value); break;
                 case "ry": ry = ParseF(value); break;
                 case "rz": rz = ParseF(value); break;
+                case "aa": antialias = value != "0"; break;
+                case "phys": physics = value != "0"; break;
             }
         }
 
@@ -101,7 +114,11 @@ public static class MmdSourceUri
             dist,
             tx is not null && ty is not null && tz is not null ? new Vector3(tx.Value, ty.Value, tz.Value) : null,
             rx is not null && ry is not null && rz is not null ? new Vector3(rx.Value, ry.Value, rz.Value) : null,
-            fov);
+            fov)
+        {
+            Antialias = antialias,
+            Physics = physics,
+        };
         return true;
 
         static float? ParseF(string s) =>
@@ -114,26 +131,39 @@ public static class MmdSourceUri
 /// through the software renderer. Finite when a motion is present (its duration), else a 1-hour
 /// hold of the bind pose for camera placement. Seekable — frames are pure functions of time, so a
 /// seek is just a playhead move (deterministic; no physics in the prototype).
+///
+/// <para>NXT-10: also an <see cref="S.Media.Compositor.ILayerSurfaceVideoSource"/> — on a surface-hosting
+/// (GL) compositor the session asks for an <see cref="MmdGlLayerSurface"/> and the scene renders GPU-side
+/// with real materials/toon/edges; this source then stops software-rasterizing (its frames become a cheap
+/// cached transparent buffer so priming/clock plumbing stays alive). On a CPU compositor the software
+/// raster below remains the playback path.</para>
 /// </summary>
-public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable
+public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable,
+    S.Media.Compositor.ILayerSurfaceVideoSource
 {
     private readonly MmdAnimator? _animator;
     private readonly PmxDocument _model;
+    private readonly VmdDocument? _motion;
     private readonly VmdDocument? _cameraMotion;
     private readonly MmdSourceRequest _request;
     private readonly MmdSoftwareRenderer _renderer;
     private readonly Vector3[] _positions;
     private readonly byte[] _pixels;
+    private byte[]? _surfaceModeFrame; // cached transparent frame while the GL surface renders the scene
+    private bool _cpuTexturesLoaded;
+    private MmdPhysics? _physics;
+    private TimeSpan _lastPhysicsTime = TimeSpan.MinValue;
     private long _frameIndex;
 
     public MmdVideoSource(MmdSourceRequest request)
     {
         _request = request ?? throw new ArgumentNullException(nameof(request));
         _model = PmxDocument.Load(request.ModelPath);
-        var motion = request.MotionPath is { Length: > 0 } m ? VmdDocument.Load(m) : null;
+        _motion = request.MotionPath is { Length: > 0 } m ? VmdDocument.Load(m) : null;
         _cameraMotion = request.CameraMotionPath is { Length: > 0 } c ? VmdDocument.Load(c) : null;
-        _animator = motion is not null ? new MmdAnimator(_model, motion) : null;
-        Duration = motion?.Duration ?? TimeSpan.FromHours(1);
+        _animator = _motion is not null ? new MmdAnimator(_model, _motion) : null;
+        _physics = request.Physics ? MmdPhysics.TryCreate(_model) : null;
+        Duration = _motion?.Duration ?? TimeSpan.FromHours(1);
         _renderer = new MmdSoftwareRenderer(request.Width, request.Height);
         _positions = new Vector3[_model.Vertices.Count];
         _pixels = new byte[request.Width * request.Height * 4];
@@ -174,8 +204,18 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable
         if (time >= Duration)
             return false;
 
-        _animator?.Evaluate(time, _positions);
+        // Surface mode (NXT-10): the GL layer surface renders the scene; keep the frame stream alive for
+        // priming/clock plumbing without rasterizing — one cached transparent buffer, correct PTS cadence.
+        if (Volatile.Read(ref _surfaceModeFrame) is { } transparent)
+        {
+            _frameIndex++;
+            frame = new VideoFrame(time, Format, transparent, _request.Width * 4);
+            return true;
+        }
+
+        _animator?.Evaluate(time, _positions, normals: null, _physics, PhysicsDelta(time));
         var camera = ResolveCamera(time);
+        EnsureCpuTextures();
         _renderer.Render(_model, _positions, camera, _pixels);
         _frameIndex++;
 
@@ -186,17 +226,84 @@ public sealed class MmdVideoSource : IVideoSource, ISeekableSource, IDisposable
         return true;
     }
 
+    /// <summary>NXT-10: mint the GL renderer for this scene (its own animator over the same documents —
+    /// never shares this source's mutable animator across threads) and switch this source's frame stream
+    /// to the cheap surface-mode path.</summary>
+    public S.Media.Compositor.IVideoCompositorLayerSurface CreateLayerSurface()
+    {
+        var surface = new MmdGlLayerSurface(
+            _model,
+            _motion,
+            ResolveCamera,
+            Path.GetDirectoryName(Path.GetFullPath(_request.ModelPath)) ?? ".",
+            _request.Width,
+            _request.Height,
+            msaaSamples: _request.Antialias ? 4 : 0,
+            physics: _request.Physics);
+        Volatile.Write(ref _surfaceModeFrame, new byte[_pixels.Length]); // all-zero BGRA = transparent
+        return surface;
+    }
+
+    /// <summary>Elapsed simulation time since the previous rendered frame (negative/huge values make the
+    /// physics reset — the seek/jump contract).</summary>
+    private float PhysicsDelta(TimeSpan time)
+    {
+        var delta = _lastPhysicsTime == TimeSpan.MinValue ? -1f : (float)(time - _lastPhysicsTime).TotalSeconds;
+        _lastPhysicsTime = time;
+        return delta;
+    }
+
+    /// <summary>Loads the per-material diffuse textures for the CPU raster path once (preview dialog +
+    /// CPU-compositor fallback) — shares the GL renderer's case-insensitive path resolution.</summary>
+    private void EnsureCpuTextures()
+    {
+        if (_cpuTexturesLoaded)
+            return;
+        _cpuTexturesLoaded = true;
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(_request.ModelPath)) ?? ".";
+            var set = new MmdSoftwareRenderer.MmdCpuTexture?[_model.Materials.Count];
+            for (var m = 0; m < _model.Materials.Count; m++)
+            {
+                var texIndex = _model.Materials[m].TextureIndex;
+                if (texIndex < 0 || texIndex >= _model.Textures.Count)
+                    continue;
+                var relative = _model.Textures[texIndex].Replace('\\', Path.DirectorySeparatorChar);
+                if (MmdGlLayerSurface.ResolveTexturePath(dir, relative) is not { } path)
+                    continue;
+                try
+                {
+                    var image = StbImageSharp.ImageResult.FromMemory(
+                        File.ReadAllBytes(path), StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                    set[m] = new MmdSoftwareRenderer.MmdCpuTexture(image.Width, image.Height, image.Data);
+                }
+                catch
+                {
+                    // undecodable → flat diffuse color for that material
+                }
+            }
+
+            _renderer.SetTextures(set);
+        }
+        catch
+        {
+            // texture loading is best-effort — the flat-shaded raster is still a valid preview
+        }
+    }
+
     private VmdCameraFrame ResolveCamera(TimeSpan time)
     {
         if (_cameraMotion is not null && _cameraMotion.CameraTrack.Count > 0)
             return MmdAnimator.SampleCamera(_cameraMotion, time);
 
-        // Manual placement (HaPlay's rudimentary camera controls) or a sensible default framing.
+        // Manual placement (HaPlay's rudimentary camera controls) or the MMD editor's default framing
+        // (distance 45, target (0,10,0), fov 30 — operator feedback: the old −35/(0,12,0) sat too close).
         var rotation = _request.CameraRotationDegrees ?? Vector3.Zero;
         return new VmdCameraFrame(
             0,
-            _request.CameraDistance ?? -35f,
-            _request.CameraTarget ?? new Vector3(0, 12, 0),
+            _request.CameraDistance ?? -45f,
+            _request.CameraTarget ?? new Vector3(0, 10, 0),
             rotation * (MathF.PI / 180f),
             _request.CameraFovDegrees ?? 30f,
             true);

@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using Xunit;
 
 namespace S.Media.Source.YouTube.Tests;
@@ -19,7 +20,9 @@ public sealed class YouTubeLiveIntegrationTests
     }
 
     // "Me at the zoo" — the first YouTube upload; short (19 s), stable, and safe to assume it stays up.
-    private const string VideoId = "jNQXAC9IVRw";
+    // Override with MFP_YOUTUBE_LIVE_VIDEO to reproduce a report against a specific video.
+    private static readonly string VideoId =
+        Environment.GetEnvironmentVariable("MFP_YOUTUBE_LIVE_VIDEO") is { Length: > 0 } id ? id : "jNQXAC9IVRw";
 
     [LiveFact]
     public async Task Prepare_RealVideo_ProducesAPlayableLocalAsset()
@@ -48,6 +51,56 @@ public sealed class YouTubeLiveIntegrationTests
             (audio as IDisposable)?.Dispose();
             Assert.True(registry.TryOpenVideo(uri, options: null, out var video), "prepared video must open");
             (video as IDisposable)?.Dispose();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>The operator's exact case (2026-07-03 bug report): an AUDIO-ONLY selection, played from
+    /// the prepared asset — the clip must report a real duration and actually DECODE (the original live
+    /// test only proved the sources open, which lets a zero-length/duration-less remux through as an
+    /// "instantly done" clip).</summary>
+    [LiveFact]
+    public async Task PrepareAudioOnly_AssetHasDuration_AndDecodes()
+    {
+        var dir = Directory.CreateTempSubdirectory("yt-live-audio-").FullName;
+        try
+        {
+            var gateway = new YoutubeExplodeGateway();
+            var preparer = new YouTubePreparer(gateway, dir);
+            var prepared = await preparer.PrepareAsync(
+                VideoId, YouTubeStreamSelection.Best with { IncludeVideo = false }, progress: null);
+
+            var registry = MediaRegistry.Build(b => b.Use(new YouTubeSourceModule(preparer)));
+            var uri = YouTubeSourceUri.Build(VideoId, prepared.ResolvedSelection);
+            Assert.True(registry.TryOpenAudio(uri, options: null, out var audio), "prepared audio must open");
+            try
+            {
+                var seekable = Assert.IsAssignableFrom<ISeekableSource>(audio);
+                Assert.True(seekable.Duration > TimeSpan.FromSeconds(5),
+                    $"audio-only asset reports duration {seekable.Duration} — the clip would end instantly");
+
+                // Decode ~1 second of samples — proves the remuxed stream actually plays, not just probes.
+                var buffer = new float[audio.Format.SampleRate * audio.Format.Channels];
+                var total = 0;
+                while (total < buffer.Length)
+                {
+                    var read = audio.ReadInto(buffer.AsSpan(total));
+                    if (read <= 0)
+                        break;
+                    total += read;
+                }
+
+                Assert.True(total >= buffer.Length / 2,
+                    $"audio-only asset decoded only {total} samples of the first second");
+            }
+            finally
+            {
+                (audio as IDisposable)?.Dispose();
+            }
         }
         finally
         {

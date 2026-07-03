@@ -3,6 +3,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Numerics;
 using HaPlay.Models;
 using HaPlay.Resources;
 using S.Media.Source.MMD;
@@ -27,16 +28,25 @@ public sealed partial class AddMmdDialogViewModel : ObservableObject
     [ObservableProperty] private string _motionPath = string.Empty;
     [ObservableProperty] private string _cameraMotionPath = string.Empty;
     [ObservableProperty] private string? _validationMessage;
-    [ObservableProperty] private double _cameraDistance = -35;
+    [ObservableProperty] private double _cameraDistance = -45;
     [ObservableProperty] private double _cameraTargetX;
-    [ObservableProperty] private double _cameraTargetY = 12;
+    [ObservableProperty] private double _cameraTargetY = 10;
     [ObservableProperty] private double _cameraTargetZ;
+    // Direct camera-EYE placement (operator request): kept in two-way sync with the orbit fields
+    // (distance/rotation/target) — the persisted item stays in MMD's orbit form, so nothing downstream
+    // changes. Position = target + orbitBack(rotation)·|distance|.
+    [ObservableProperty] private double _cameraPositionX;
+    [ObservableProperty] private double _cameraPositionY = 10;
+    [ObservableProperty] private double _cameraPositionZ = 45;
+    private bool _syncingCamera;
     [ObservableProperty] private double _cameraRotationXDeg;
     [ObservableProperty] private double _cameraRotationYDeg;
     [ObservableProperty] private double _cameraRotationZDeg;
     [ObservableProperty] private double _cameraFovDeg = 30;
     [ObservableProperty] private double _previewTimeSeconds;
     [ObservableProperty] private double _previewDurationSeconds = 10;
+    [ObservableProperty] private bool _renderAntialias = true;
+    [ObservableProperty] private bool _renderPhysics = true;
     [ObservableProperty] private int _renderWidth = 1280;
     [ObservableProperty] private int _renderHeight = 720;
     [ObservableProperty] private WriteableBitmap? _previewImage;
@@ -59,6 +69,8 @@ public sealed partial class AddMmdDialogViewModel : ObservableObject
         CameraRotationYDeg = item.CameraRotationYDeg;
         CameraRotationZDeg = item.CameraRotationZDeg;
         CameraFovDeg = item.CameraFovDeg;
+        RenderAntialias = item.Antialias;
+        RenderPhysics = item.Physics;
         RenderWidth = item.RenderWidth;
         RenderHeight = item.RenderHeight;
         OnPropertyChanged(nameof(DialogTitle));
@@ -89,6 +101,8 @@ public sealed partial class AddMmdDialogViewModel : ObservableObject
             CameraRotationYDeg = CameraRotationYDeg,
             CameraRotationZDeg = CameraRotationZDeg,
             CameraFovDeg = CameraFovDeg,
+            Antialias = RenderAntialias,
+            Physics = RenderPhysics,
         };
     }
 
@@ -101,15 +115,71 @@ public sealed partial class AddMmdDialogViewModel : ObservableObject
         ScheduleRender();
     }
 
-    partial void OnCameraDistanceChanged(double value) => ScheduleRender();
-    partial void OnCameraTargetXChanged(double value) => ScheduleRender();
-    partial void OnCameraTargetYChanged(double value) => ScheduleRender();
-    partial void OnCameraTargetZChanged(double value) => ScheduleRender();
-    partial void OnCameraRotationXDegChanged(double value) => ScheduleRender();
-    partial void OnCameraRotationYDegChanged(double value) => ScheduleRender();
-    partial void OnCameraRotationZDegChanged(double value) => ScheduleRender();
+    partial void OnCameraDistanceChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
+    partial void OnCameraTargetXChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
+    partial void OnCameraTargetYChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
+    partial void OnCameraTargetZChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
+    partial void OnCameraRotationXDegChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
+    partial void OnCameraRotationYDegChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
+    partial void OnCameraRotationZDegChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
     partial void OnCameraFovDegChanged(double value) => ScheduleRender();
     partial void OnPreviewTimeSecondsChanged(double value) => ScheduleRender();
+    partial void OnCameraPositionXChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
+    partial void OnCameraPositionYChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
+    partial void OnCameraPositionZChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
+
+    /// <summary>Orbit → eye-position: position = target + back(rotation)·|distance| — the exact vector the
+    /// renderer places the camera at (roll does not move the eye, only the horizon).</summary>
+    private void SyncPositionFromOrbit()
+    {
+        if (_syncingCamera) return;
+        _syncingCamera = true;
+        try
+        {
+            var rotation =
+                Matrix4x4.CreateRotationY((float)(CameraRotationYDeg * Math.PI / 180.0)) *
+                Matrix4x4.CreateRotationX((float)(-CameraRotationXDeg * Math.PI / 180.0)) *
+                Matrix4x4.CreateRotationZ((float)(-CameraRotationZDeg * Math.PI / 180.0));
+            var back = Vector3.TransformNormal(new Vector3(0, 0, 1), rotation);
+            var eye = new Vector3((float)CameraTargetX, (float)CameraTargetY, (float)CameraTargetZ)
+                      + back * MathF.Abs((float)CameraDistance);
+            CameraPositionX = Math.Round(eye.X, 2);
+            CameraPositionY = Math.Round(eye.Y, 2);
+            CameraPositionZ = Math.Round(eye.Z, 2);
+        }
+        finally
+        {
+            _syncingCamera = false;
+        }
+    }
+
+    /// <summary>Eye-position → orbit: distance = |eye − target|, pitch = atan2(dy, dz),
+    /// yaw = atan2(dx, √(dy² + dz²)) — the closed-form inverse of the renderer's
+    /// back = (sin yaw, cos yaw·sin pitch, cos yaw·cos pitch). Roll is left untouched.</summary>
+    private void SyncOrbitFromPosition()
+    {
+        if (_syncingCamera) return;
+        _syncingCamera = true;
+        try
+        {
+            var d = new Vector3(
+                (float)(CameraPositionX - CameraTargetX),
+                (float)(CameraPositionY - CameraTargetY),
+                (float)(CameraPositionZ - CameraTargetZ));
+            var distance = d.Length();
+            if (distance < 0.01f)
+                return; // eye on the target — orbit undefined, keep the current fields
+            var pitch = Math.Atan2(d.Y, d.Z);
+            var yaw = Math.Atan2(d.X, Math.Sqrt((double)d.Y * d.Y + (double)d.Z * d.Z));
+            CameraDistance = -Math.Round(distance, 2);
+            CameraRotationXDeg = Math.Round(pitch * 180.0 / Math.PI, 1);
+            CameraRotationYDeg = Math.Round(yaw * 180.0 / Math.PI, 1);
+        }
+        finally
+        {
+            _syncingCamera = false;
+        }
+    }
 
     [RelayCommand]
     private void RefreshPreview() => ScheduleRender();
@@ -167,7 +237,7 @@ public sealed partial class AddMmdDialogViewModel : ObservableObject
                 await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     var bitmap = new WriteableBitmap(
-                        new PixelSize(previewWidth, previewHeight), new Vector(96, 96),
+                        new PixelSize(previewWidth, previewHeight), new Avalonia.Vector(96, 96),
                         Avalonia.Platform.PixelFormat.Bgra8888, AlphaFormat.Opaque);
                     using (var locked = bitmap.Lock())
                         System.Runtime.InteropServices.Marshal.Copy(pixels, 0, locked.Address, pixels.Length);

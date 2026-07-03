@@ -1,3 +1,4 @@
+using S.Media.Compositor;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Registry;
@@ -216,7 +217,7 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
     /// so a live placement edit can target the right one when a clip is placed onto more than one layer.</summary>
     private readonly record struct PlacedLayer(
-        string CompositionId, int LayerIndex, ClipCompositionRuntime.LayerSlot Slot);
+        string CompositionId, int LayerIndex, ClipCompositionRuntime.IPlacedClipLayer Slot);
 
     // Fire sequencing (NXT-03): the fire-lock + in-flight fire cancellation live on the orchestrator (split
     // along its ownership seam — review Part-5 #2); this session's public fire/GO API delegates to it.
@@ -538,17 +539,43 @@ public sealed class ShowSession : IAsyncDisposable
                 // against that contract rather than using an unrelated latest-frame clock.
                 var mastered = new HashSet<string>(StringComparer.Ordinal);
                 var fanoutIndex = 0;
-                foreach (var placement in binding.GetPlacements())
+                var placements = binding.GetPlacements();
+
+                // GPU surface path (NXT-10): a single-placement clip whose source can render itself as a
+                // compositor layer surface, on a surface-hosting compositor, composites GPU-side — no CPU
+                // frame fan-out at all. The surface renders at the pump's SOURCE-time coordinate (the same
+                // TransportTimeline that selects decoded frames), so transport (seek/pause/trim/end
+                // monitoring) behaves identically to the frame path. Multi-placement clips keep the frame
+                // path: one decoded stream fans out cheaply, N independent GPU renders would not.
+                if (player.VideoSource is ILayerSurfaceVideoSource surfaceSource
+                    && placements.Count == 1
+                    && _compositions.TryGetValue(placements[0].CompositionId, out var surfaceComp)
+                    && surfaceComp.SupportsSurfaceLayers)
                 {
-                    if (!_compositions.TryGetValue(placement.CompositionId, out var comp))
-                        continue;
-                    var slot = comp.AddLayer(
-                        videoSource.Format,
+                    var placement = placements[0];
+                    var surfaceSlot = surfaceComp.AddSurfaceLayer(
+                        surfaceSource.CreateLayerSurface(),
                         BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
-                    player.AttachVideoOutput(slot.Output, id: $"comp{fanoutIndex++}"); // unique id ⇒ router fans out
-                    if (mastered.Add(placement.CompositionId))
-                        comp.SetTransportTimeline(group.Timeline);
-                    layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
+                    surfaceComp.SetTransportTimeline(group.Timeline);
+                    layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
+                    MediaDiagnostics.LogInformation(
+                        "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
+                        binding.CueId, placement.CompositionId);
+                }
+                else
+                {
+                    foreach (var placement in placements)
+                    {
+                        if (!_compositions.TryGetValue(placement.CompositionId, out var comp))
+                            continue;
+                        var slot = comp.AddLayer(
+                            videoSource.Format,
+                            BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
+                        player.AttachVideoOutput(slot.Output, id: $"comp{fanoutIndex++}"); // unique id ⇒ router fans out
+                        if (mastered.Add(placement.CompositionId))
+                            comp.SetTransportTimeline(group.Timeline);
+                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
+                    }
                 }
             }
 
@@ -1959,7 +1986,7 @@ public sealed class ShowSession : IAsyncDisposable
             _activeRouteTargets = routeTargets.ToArray();
         // Every placement fades on one ramp, so the primary (first) layer's opacity is representative for the
         // cross-fade opacity readback.
-        public ClipCompositionRuntime.LayerSlot? ActiveLayer => _layers.Count > 0 ? _layers[0].Slot : null;
+        public ClipCompositionRuntime.IPlacedClipLayer? ActiveLayer => _layers.Count > 0 ? _layers[0].Slot : null;
         public IReadOnlyList<AudioRouteTarget> ActiveRouteTargets => _activeRouteTargets;
         public float ActiveAudioScale => _activeAudioScale;
 

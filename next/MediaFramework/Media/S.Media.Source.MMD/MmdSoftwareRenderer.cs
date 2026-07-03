@@ -14,6 +14,16 @@ public sealed class MmdSoftwareRenderer(int width, int height)
     public int Height { get; } = height > 0 ? height : throw new ArgumentOutOfRangeException(nameof(height));
 
     /// <summary>Renders the posed model into a BGRA32 buffer (opaque black background).</summary>
+    /// <summary>One decoded RGBA texture for the CPU rasterizer (nearest-neighbor sampling).</summary>
+    public sealed record MmdCpuTexture(int Width, int Height, byte[] Rgba);
+
+    private MmdCpuTexture?[]? _materialTextures;
+
+    /// <summary>Per-material diffuse textures (index-aligned with the model's materials; null entries
+    /// render with the flat diffuse color). Loaded once by the host — the preview/CPU-fallback path
+    /// then shows the real model textures instead of a grayscale raster (operator request).</summary>
+    public void SetTextures(MmdCpuTexture?[]? materialTextures) => _materialTextures = materialTextures;
+
     public void Render(PmxDocument model, Vector3[] positions, VmdCameraFrame camera, byte[] bgra)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -53,16 +63,21 @@ public sealed class MmdSoftwareRenderer(int width, int height)
         // Materials own consecutive face-vertex ranges, in order.
         var indices = model.Indices;
         var faceCursor = 0;
-        foreach (var material in model.Materials)
+        var vertices = model.Vertices;
+        for (var mi = 0; mi < model.Materials.Count; mi++)
         {
+            var material = model.Materials[mi];
             var color = material.Diffuse;
+            var texture = _materialTextures is { } set && mi < set.Length ? set[mi] : null;
             var end = Math.Min(faceCursor + material.FaceVertexCount, indices.Count);
             for (var i = faceCursor; i + 2 < end + 0; i += 3)
             {
+                int i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
                 RasterizeTriangle(
-                    screen[indices[i]], screen[indices[i + 1]], screen[indices[i + 2]],
-                    positions[indices[i]], positions[indices[i + 1]], positions[indices[i + 2]],
-                    color, light, material.DoubleSided, bgra);
+                    screen[i0], screen[i1], screen[i2],
+                    positions[i0], positions[i1], positions[i2],
+                    vertices[i0].Uv, vertices[i1].Uv, vertices[i2].Uv,
+                    color, light, material.DoubleSided, texture, bgra);
             }
 
             faceCursor = end;
@@ -72,7 +87,8 @@ public sealed class MmdSoftwareRenderer(int width, int height)
     private void RasterizeTriangle(
         Vector4 c0, Vector4 c1, Vector4 c2,
         Vector3 w0, Vector3 w1, Vector3 w2,
-        Vector4 diffuse, Vector3 light, bool doubleSided, byte[] bgra)
+        Vector2 uv0, Vector2 uv1, Vector2 uv2,
+        Vector4 diffuse, Vector3 light, bool doubleSided, MmdCpuTexture? texture, byte[] bgra)
     {
         // Reject triangles behind the near plane entirely (no clipping in the prototype).
         if (c0.W <= 0.01f || c1.W <= 0.01f || c2.W <= 0.01f)
@@ -128,6 +144,23 @@ public sealed class MmdSoftwareRenderer(int width, int height)
                     continue;
                 _depth[index] = depth;
                 var offset = index * 4;
+                if (texture is not null)
+                {
+                    // Nearest-neighbor texel (screen-space barycentric UV — adequate for the preview).
+                    var u = b0 * uv0.X + b1 * uv1.X + b2 * uv2.X;
+                    var v = b0 * uv0.Y + b1 * uv1.Y + b2 * uv2.Y;
+                    var tx = Math.Clamp((int)(u * texture.Width), 0, texture.Width - 1);
+                    var ty = Math.Clamp((int)(v * texture.Height), 0, texture.Height - 1);
+                    var t = (ty * texture.Width + tx) * 4;
+                    if (texture.Rgba[t + 3] < 8)
+                        continue; // fully transparent texel — leave what is behind
+                    bgra[offset] = (byte)(texture.Rgba[t + 2] * intensity);     // B
+                    bgra[offset + 1] = (byte)(texture.Rgba[t + 1] * intensity); // G
+                    bgra[offset + 2] = (byte)(texture.Rgba[t] * intensity);     // R
+                    bgra[offset + 3] = 255;
+                    continue;
+                }
+
                 bgra[offset] = b;
                 bgra[offset + 1] = g;
                 bgra[offset + 2] = r;

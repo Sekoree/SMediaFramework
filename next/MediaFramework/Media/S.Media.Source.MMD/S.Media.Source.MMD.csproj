@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Source.MMD — Gate-6 prototype (review stages 1–2): pure managed PMX/VMD parsing, bone/
-         morph/camera evaluation at cue time, and a RUDIMENTARY software 3D renderer behind an mmd://
+    <!-- S.Media.Source.MMD — Gate-6 prototype (review stages 1–2 + 6): pure managed PMX/VMD parsing, bone/
+         morph/camera evaluation at cue time with CCD IK solving (per-link Euler limits, hinge-axis
+         knees), and a RUDIMENTARY software 3D renderer behind an mmd://
          video source, so MMD content plays through the normal registry/session path and the operator can
          place the camera against a live preview. Deliberately NO physics and no full MMD material model
          yet (staged per the review); this module exists to exercise the layer-surface/plugin questions
@@ -11,11 +12,17 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="System.Text.Encoding.CodePages" />
+        <!-- GL layer-surface renderer (NXT-10 consumer): bindings + image decode are pure managed;
+             a GL context only ever comes from the hosting compositor, so the module still carries no
+             native runtime of its own. -->
+        <PackageReference Include="Silk.NET.OpenGL" />
+        <PackageReference Include="StbImageSharp" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../S.Media.Compositor/S.Media.Compositor.csproj" />
     </ItemGroup>
 
     <ItemGroup>

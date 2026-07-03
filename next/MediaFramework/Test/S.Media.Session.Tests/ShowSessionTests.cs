@@ -382,7 +382,9 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task SetPausedAsync_FreezesSessionClock_ThenResumes()
     {
-        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        // A LONG-lived fake: natural EOF legitimately flips the player to not-running, so a pause/resume
+        // test must keep the source alive through its whole window.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
         await session.LoadDocumentAsync(TwoAudioCues());
         await session.GoAsync();
         await Task.Delay(50);
@@ -1470,6 +1472,39 @@ public sealed class ShowSessionTests
 
         Assert.False(snap.IsRunning, "clip should have stopped at its out-point");
         Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released → player detached
+    }
+
+    [Fact]
+    public async Task AudioExhaustionShortOfMetadataDuration_RaisesClipNaturallyEnded()
+    {
+        // The 2026-07-03 "loop/repeat stuck at the beginning" report, distilled: the synthetic audio
+        // source EXHAUSTS after ~40 ms while its metadata claims 10 s (the VBR-overshoot shape), so the
+        // position never reaches the out-point — natural end must come from the stall detection. That
+        // requires MediaPlayer.IsRunning to go FALSE at router natural-EOF and Position to clamp to the
+        // duration; before the fix the EOF flush rewound the clock epoch, the transport read
+        // "running at 0:00" forever, and every EOF consumer (deck loop/auto-advance, this event) hung.
+        var doc = ShowDocument.Empty with
+        {
+            Cues = [new CueDefinition("c", 1, "Audio")],
+            Clips =
+            [
+                new ShowClipBinding("c", "fake://clip")
+                {
+                    NotifyNaturalEnd = true,
+                    AudioRoutes = [new ShowClipAudioRoute("dev", [0, 1], 1f, 48_000)],
+                },
+            ],
+        };
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), new RecordingAudioBackend());
+        var naturallyEnded = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.ClipNaturallyEnded += cueId => naturallyEnded.TrySetResult(cueId);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+
+        Assert.Equal("c", await naturallyEnded.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        var snap = Assert.Single(await session.SnapshotAsync());
+        Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released, not stuck "running at 0:00"
     }
 
     private static ShowDocument TwoGroupAudioCues() => new(

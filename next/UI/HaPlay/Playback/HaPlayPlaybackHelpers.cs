@@ -71,11 +71,27 @@ internal static class HaPlayPlaybackHelpers
             (float)item.CameraDistance,
             new System.Numerics.Vector3((float)item.CameraTargetX, (float)item.CameraTargetY, (float)item.CameraTargetZ),
             new System.Numerics.Vector3((float)item.CameraRotationXDeg, (float)item.CameraRotationYDeg, (float)item.CameraRotationZDeg),
-            (float)item.CameraFovDeg));
+            (float)item.CameraFovDeg)
+        {
+            Antialias = item.Antialias,
+            Physics = item.Physics,
+        });
     }
 
     /// <summary>Builds the canonical <c>youtube://</c> URI for a prepared item — the provider maps it to the
     /// locally cached asset (reliable mode: an unprepared selection fails the open, never starts a download).</summary>
+    /// <summary>The prepared cache asset behind a YouTube item, when it exists — a real local file, so
+    /// file-path consumers (the deck's scrubber waveform) can use it directly.</summary>
+    internal static string? TryGetPreparedYouTubeAssetPath(YouTubePlaylistItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var path = YouTubeRuntime.Preparer.AssetPathFor(
+            item.VideoId,
+            item.AudioOnly ? null : item.VideoStreamDescriptor,
+            item.AudioStreamDescriptor);
+        return File.Exists(path) ? path : null;
+    }
+
     internal static string BuildYouTubeUri(YouTubePlaylistItem item)
     {
         ArgumentNullException.ThrowIfNull(item);

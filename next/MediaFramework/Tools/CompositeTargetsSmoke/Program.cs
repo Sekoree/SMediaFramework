@@ -87,9 +87,10 @@ else
 
 // Layer-surface seam: a surface that fills the centre quarter green renders ON TOP of a red frame layer,
 // directly into the compositor's canvas (proves IVideoCompositorLayerSurface runs in the GL context).
+// ConfigureGl is deliberately NOT called here — the surface-hosting compositor owns the configure
+// contract (NXT-10) and must invoke it on first sight, on its GL thread.
 var red2 = SolidBgra(W, H, b: 0, g: 0, r: 255);
 var surface = new GreenCentreSurface();
-surface.ConfigureGl(gl, output);
 gl.PixelStore(SilkGL.PixelStoreParameter.UnpackAlignment, 8);
 gl.PixelStore(SilkGL.PixelStoreParameter.UnpackRowLength, 7);
 var surfFrame = compositor.CompositeWithSurfaces(

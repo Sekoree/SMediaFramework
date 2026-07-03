@@ -63,6 +63,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     // _gate whenever _acquired changes, so PumpOneFrame reads a stable immutable view without a per-frame ToList.
     private volatile IReadOnlyList<AcquiredOutput> _acquiredSnapshot = [];
     private readonly List<LayerSlot> _slots = [];
+    private readonly List<SurfaceLayerSlot> _surfaceLayers = [];
     private readonly TimeSpan _canvasPeriod;
     private long _nextLayerSequence;
     private long _framesComposited;
@@ -490,6 +491,70 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
     }
 
+    /// <summary>Whether this composition's compositor can host GPU layer surfaces (NXT-10). When false,
+    /// surface-capable sources must be consumed through their normal CPU frame path.</summary>
+    public bool SupportsSurfaceLayers => _mixer.SupportsSurfaceLayers;
+
+    /// <summary>
+    /// Adds a GPU layer surface (NXT-10): <paramref name="surface"/> renders directly into the canvas on
+    /// the compositor's GL thread, ON TOP of every frame layer (surfaces don't z-interleave with frame
+    /// layers — v1 contract; they order among themselves by <see cref="VideoPlacementSpec.LayerIndex"/>).
+    /// The placement's destination rect/fit/opacity resolve exactly like a frame layer's (the surface's
+    /// nominal source size is the canvas). Integrated multi-output warp is bypassed while any surface is
+    /// present (the chained per-lease mapping path still applies). Disposing the returned slot removes
+    /// the layer AND disposes the surface (the runtime owns it — mirrors <see cref="LayerSlot"/> handing
+    /// its slot back). Throws when <see cref="SupportsSurfaceLayers"/> is false.
+    /// </summary>
+    public SurfaceLayerSlot AddSurfaceLayer(IVideoCompositorLayerSurface surface, VideoPlacementSpec placement)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+        ArgumentNullException.ThrowIfNull(placement);
+        SurfaceLayerSlot layer;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var rawSlot = _mixer.AddSurfaceSlot(surface);
+            layer = new SurfaceLayerSlot(this, rawSlot, placement);
+            try
+            {
+                layer.ApplyPlacement();
+            }
+            catch
+            {
+                _mixer.RemoveSurfaceSlot(rawSlot);
+                throw;
+            }
+            _surfaceLayers.Add(layer);
+            SortSurfaceLayersLocked();
+        }
+        EnsurePumpStarted();
+        Trace.LogInformation(
+            "ClipCompositionRuntime: composition {Composition} gained a GPU surface layer (z={LayerIndex})",
+            CompositionName, placement.LayerIndex);
+        return layer;
+    }
+
+    private void RemoveSurfaceLayer(SurfaceLayerSlot layer)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _surfaceLayers.Remove(layer);
+            _mixer.RemoveSurfaceSlot(layer.RawSlot);
+        }
+    }
+
+    private void SortSurfaceLayersLocked()
+    {
+        _surfaceLayers.Sort(static (a, b) =>
+        {
+            var byIndex = a.LayerIndex.CompareTo(b.LayerIndex);
+            return byIndex != 0 ? byIndex : a.Sequence.CompareTo(b.Sequence);
+        });
+        var order = _surfaceLayers.Select(l => l.RawSlot).ToList();
+        _mixer.SortSurfaceSlots((a, b) => order.IndexOf(a).CompareTo(order.IndexOf(b)));
+    }
+
     /// <summary>
     /// Attaches a subtitle/overlay source as a full-canvas, top-z-order layer. Each frame the runtime renders the
     /// source at the owning clip's position, copies its (borrowed) overlay into a pooled, slot-owned frame, and pushes it
@@ -878,7 +943,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (_compositionMappingStage is not null
             || _integratedWarpActive
             || _compositor is not IWarpPassVideoCompositor
-            || snapshot.Count < 2)
+            || snapshot.Count < 2
+            || _mixer.HasSurfaceSlots) // surfaces composite on the plain path (CompositeWithSurfaces)
             return false;
 
         var requests = new WarpOutputRequest[snapshot.Count];
@@ -1034,6 +1100,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         MediaClock? slaveClock;
         List<AcquiredOutput> acquiredToRetire;
         List<SubtitleLayerFeed> subtitleFeeds;
+        List<SurfaceLayerSlot> surfaceLayers;
         lock (_gate)
         {
             if (_disposed) return;
@@ -1042,6 +1109,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             acquiredToRetire = _acquired.ToList();
             subtitleFeeds = _subtitleFeeds.ToList();
             _subtitleFeeds.Clear();
+            surfaceLayers = _surfaceLayers.ToList();
+            _surfaceLayers.Clear();
             RepublishSubtitleFeedsSnapshot();
 
             // Retire mapping stages up front so the driver-thread dispose window below (and the
@@ -1055,6 +1124,8 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         foreach (var feed in subtitleFeeds)
             feed.Dispose();
+        foreach (var surfaceLayer in surfaceLayers)
+            surfaceLayer.Dispose();
 
         foreach (var acquired in acquiredToRetire)
         {
@@ -1369,7 +1440,113 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
     }
 
-    public sealed class LayerSlot : IDisposable
+    /// <summary>
+    /// The placement surface a clip's composition layer exposes regardless of HOW it renders — a decoded
+    /// frame slot (<see cref="LayerSlot"/>) or a GPU layer surface (<see cref="SurfaceLayerSlot"/>, NXT-10).
+    /// The session's fade rides, live placement edits, and teardown all go through this contract, so a
+    /// surface-backed clip behaves exactly like a frame-backed one for transport purposes.
+    /// </summary>
+    public interface IPlacedClipLayer : IDisposable
+    {
+        int LayerIndex { get; }
+        float Opacity { get; set; }
+        void UpdatePlacement(VideoPlacementSpec placement);
+    }
+
+    /// <summary>
+    /// One GPU layer surface placed on this composition (NXT-10). Mirrors <see cref="LayerSlot"/>'s
+    /// placement semantics (dest rect/fit/rotation/opacity resolve identically; the surface's nominal
+    /// source size is the canvas). Disposing removes the layer and disposes the SURFACE — the runtime
+    /// owns surface lifetime once placed.
+    /// </summary>
+    public sealed class SurfaceLayerSlot : IPlacedClipLayer
+    {
+        private readonly ClipCompositionRuntime _owner;
+        internal VideoCompositorSource.SurfaceSlot RawSlot { get; }
+        private VideoPlacementSpec _placement;
+        private int _disposed;
+
+        internal SurfaceLayerSlot(
+            ClipCompositionRuntime owner,
+            VideoCompositorSource.SurfaceSlot slot,
+            VideoPlacementSpec placement)
+        {
+            _owner = owner;
+            RawSlot = slot;
+            _placement = placement;
+            Sequence = Interlocked.Increment(ref owner._nextLayerSequence);
+        }
+
+        public IVideoCompositorLayerSurface Surface => RawSlot.Surface;
+
+        public int LayerIndex => _placement.LayerIndex;
+
+        public long Sequence { get; }
+
+        public float Opacity
+        {
+            get => RawSlot.Opacity;
+            set => RawSlot.Opacity = value;
+        }
+
+        public void UpdatePlacement(VideoPlacementSpec placement)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            ArgumentNullException.ThrowIfNull(placement);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                var resort = placement.LayerIndex != _placement.LayerIndex;
+                _placement = placement;
+                ApplyPlacement();
+                if (resort)
+                    _owner.SortSurfaceLayersLocked();
+            }
+        }
+
+        /// <summary>Resolves the placement to the surface's canvas transform — the same
+        /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
+        /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity).</summary>
+        internal void ApplyPlacement()
+        {
+            var destRect = new RectNormalized(
+                (float)_placement.DestX,
+                (float)_placement.DestY,
+                (float)(_placement.DestX + _placement.DestWidth),
+                (float)(_placement.DestY + _placement.DestHeight));
+            var (transform, _) = PlacementResolver.Resolve(
+                destRect,
+                LayerSlot.MapFit(_placement.Placement),
+                0f, 0f, 0f, 0f,
+                _owner._canvasFormat,
+                _owner._canvasFormat);
+
+            if (_placement.RotationDegrees != 0)
+            {
+                var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
+                var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
+                var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
+                transform = LayerTransform2D.Compose(
+                    LayerTransform2D.Translate(cx, cy),
+                    LayerTransform2D.Compose(
+                        LayerTransform2D.Rotate(rad),
+                        LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
+            }
+
+            RawSlot.Transform = transform;
+            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            _owner.RemoveSurfaceLayer(this);
+            Surface.Dispose();
+        }
+    }
+
+    public sealed class LayerSlot : IDisposable, IPlacedClipLayer
     {
         private readonly ClipCompositionRuntime _owner;
         internal VideoCompositorSource.Slot RawSlot { get; }
@@ -1544,7 +1721,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _owner.RemoveLayer(this);
         }
 
-        private static PlacementFit MapFit(string? placement) => placement?.ToLowerInvariant() switch
+        internal static PlacementFit MapFit(string? placement) => placement?.ToLowerInvariant() switch
         {
             "letterbox" or "contain" or "center" => PlacementFit.Contain,
             "stretch" => PlacementFit.Stretch,

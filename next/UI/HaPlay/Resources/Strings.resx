@@ -1642,6 +1642,15 @@
   <data name="MmdRotationLabel" xml:space="preserve">
     <value>Rotation X/Y/Z (°)</value>
   </data>
+  <data name="MmdCameraPositionLabel" xml:space="preserve">
+    <value>Camera X/Y/Z</value>
+  </data>
+  <data name="MmdAntialiasLabel" xml:space="preserve">
+    <value>Anti-aliasing (MSAA)</value>
+  </data>
+  <data name="MmdPhysicsLabel" xml:space="preserve">
+    <value>Physics (hair/skirt)</value>
+  </data>
   <data name="MmdFovLabel" xml:space="preserve">
     <value>FOV (°)</value>
   </data>

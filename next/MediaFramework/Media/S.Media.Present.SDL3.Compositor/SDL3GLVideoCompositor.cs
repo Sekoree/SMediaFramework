@@ -24,7 +24,7 @@ namespace S.Media.Present.SDL3;
 /// NDI can consume the BGRA32 path through its existing sender.
 /// </para>
 /// </remarks>
-public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
+public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Present.SDL3.SDL3GLVideoCompositor");
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
@@ -165,6 +165,22 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         EnsureInitialized();
         EnsureContextCurrent();
         return _inner!.CompositeMulti(layersBackToFront, outputs, presentationTime);
+    }
+
+    /// <summary>Surface-host capability (NXT-10) — delegates to the inner <see cref="GlVideoCompositor"/>
+    /// with this host's context current, exactly like <see cref="Composite"/>. Without this the app's
+    /// SDL3-driven compositions (the deck/cue default) reported no surface support, and surface-capable
+    /// sources (MMD) silently fell back to their CPU frame path (the 2026-07-03 grayscale-MMD report).</summary>
+    public VideoFrame CompositeWithSurfaces(
+        IReadOnlyList<CompositorLayer> frameLayers,
+        IReadOnlyList<CompositorSurfaceLayer> surfaceLayers,
+        TimeSpan presentationTime)
+    {
+        if (_disposeRequested)
+            throw new ObjectDisposedException(nameof(SDL3GLVideoCompositor));
+        EnsureInitialized();
+        EnsureContextCurrent();
+        return _inner!.CompositeWithSurfaces(frameLayers, surfaceLayers, presentationTime);
     }
 
     public void CompositeMultiToTargets(

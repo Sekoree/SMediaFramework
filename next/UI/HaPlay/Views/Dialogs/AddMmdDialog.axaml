@@ -59,11 +59,24 @@
                 <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraTargetZ}" Width="100" />
               </StackPanel>
 
+              <!-- Direct camera-EYE placement (XYZ), two-way synced with distance/rotation. -->
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MmdCameraPositionLabel}" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraPositionX}" Width="100" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraPositionY}" Width="100" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraPositionZ}" Width="100" />
+              </StackPanel>
+
               <StackPanel Orientation="Horizontal" Spacing="6">
                 <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MmdRotationLabel}" />
                 <NumericUpDown Minimum="-180" Maximum="180" Increment="1" Value="{Binding CameraRotationXDeg}" Width="100" />
                 <NumericUpDown Minimum="-180" Maximum="180" Increment="1" Value="{Binding CameraRotationYDeg}" Width="100" />
                 <NumericUpDown Minimum="-180" Maximum="180" Increment="1" Value="{Binding CameraRotationZDeg}" Width="100" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="16">
+                <CheckBox IsChecked="{Binding RenderAntialias}" Content="{x:Static res:Strings.MmdAntialiasLabel}" />
+                <CheckBox IsChecked="{Binding RenderPhysics}" Content="{x:Static res:Strings.MmdPhysicsLabel}" />
               </StackPanel>
 
               <StackPanel Orientation="Horizontal" Spacing="6">

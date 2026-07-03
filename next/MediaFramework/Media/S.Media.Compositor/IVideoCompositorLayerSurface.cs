@@ -31,3 +31,40 @@ public readonly record struct CompositorSurfaceLayer(
     IVideoCompositorLayerSurface Surface,
     LayerTransform2D Transform,
     float Opacity);
+
+/// <summary>
+/// Capability interface for compositors that can host <see cref="CompositorSurfaceLayer"/>s (NXT-10 —
+/// layer surfaces as a first-class compositor citizen). Callers discover support with a type test instead
+/// of hard-coding a backend; the CPU compositor deliberately does NOT implement it (the surface contract
+/// renders through a live GL context), so a surface-producing source falls back to its CPU frame path
+/// there. The host is responsible for calling <see cref="IVideoCompositorLayerSurface.ConfigureGl"/> on
+/// its render thread before a surface's first <see cref="IVideoCompositorLayerSurface.Render"/> and again
+/// after every canvas reconfigure.
+/// </summary>
+public interface IVideoCompositorSurfaceHost : IVideoCompositor
+{
+    /// <summary>
+    /// Composite <paramref name="frameLayers"/> (back-to-front), then render
+    /// <paramref name="surfaceLayers"/> on top (list order) directly into the canvas, and return the
+    /// finished frame at <paramref name="presentationTime"/>.
+    /// </summary>
+    VideoFrame CompositeWithSurfaces(
+        IReadOnlyList<CompositorLayer> frameLayers,
+        IReadOnlyList<CompositorSurfaceLayer> surfaceLayers,
+        TimeSpan presentationTime);
+}
+
+/// <summary>
+/// A video source that can ALSO render itself as a compositor layer surface (GPU-side, no CPU frame) —
+/// e.g. a 3D renderer whose software raster is only a fallback. When the target composition's compositor
+/// is an <see cref="IVideoCompositorSurfaceHost"/>, the session asks for a surface via
+/// <see cref="CreateLayerSurface"/> and does NOT attach a frame output for the placement; the source may
+/// then skip full-frame rasterization (its <c>TryReadNextFrame</c> should stay cheap — transport/priming
+/// may still pull frames). On a CPU-only compositor the source is consumed through its normal frame path.
+/// </summary>
+public interface ILayerSurfaceVideoSource
+{
+    /// <summary>Creates the surface that will render this source's content. Called at most once per
+    /// playback; the caller owns the surface's lifetime (disposed with the layer).</summary>
+    IVideoCompositorLayerSurface CreateLayerSurface();
+}

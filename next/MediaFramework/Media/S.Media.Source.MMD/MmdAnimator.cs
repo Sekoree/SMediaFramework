@@ -3,9 +3,10 @@ namespace S.Media.Source.MMD;
 /// <summary>
 /// Evaluates a PMX model's pose at a point in time from a VMD motion (review Gate-6 stage 2): bone
 /// tracks sampled with the MMD Bezier curves, FK world transforms with append/inherit rotation and
-/// translation, vertex morphs, and linear-blend CPU skinning. Deliberately NOT evaluated in the
-/// prototype: IK solving (feet/skirt bones show artifacts on dance motions), SDEF-exact skinning,
-/// and physics (rigid bodies stay at their bind pose) — the review's staged plan defers all three.
+/// translation, CCD IK solving with per-link Euler angle limits (stage 6 — the dance-feet artifact
+/// source), vertex morphs, and linear-blend CPU skinning. Deliberately NOT evaluated in the
+/// prototype: SDEF-exact skinning and physics (rigid bodies stay at their bind pose) — the review's
+/// staged plan defers both.
 /// </summary>
 public sealed class MmdAnimator
 {
@@ -15,6 +16,8 @@ public sealed class MmdAnimator
     private readonly Matrix4x4[] _world;          // per-bone world transform (bind-relative animation applied)
     private readonly Matrix4x4[] _skin;           // world * inverse-bind — what vertices multiply by
     private readonly Vector3[] _morphedPositions; // bind positions + active vertex-morph offsets
+    private readonly Quaternion[] _ikRotations;   // per-bone IK delta (identity outside solved chains), reset per Evaluate
+    private readonly int[] _ikBones;              // bones with IsIk, in evaluation order (leg IK before dependent toe IK)
 
     public MmdAnimator(PmxDocument model, VmdDocument motion)
     {
@@ -51,6 +54,20 @@ public sealed class MmdAnimator
             if (!placed[i])
                 order.Add(i);
         _evaluationOrder = [.. order];
+
+        _ikRotations = new Quaternion[model.Bones.Count];
+        _ikBones = [.. _evaluationOrder.Where(i => IsSolvableIkBone(model, i))];
+    }
+
+    /// <summary>An IK bone this solver can run: a valid effector target and at least one valid link.</summary>
+    private static bool IsSolvableIkBone(PmxDocument model, int index)
+    {
+        var bone = model.Bones[index];
+        return bone.IsIk
+               && (uint)bone.IkTargetIndex < (uint)model.Bones.Count
+               && bone.IkLoopCount > 0
+               && bone.IkLinks.Count > 0
+               && bone.IkLinks.All(l => (uint)l.BoneIndex < (uint)model.Bones.Count);
     }
 
     public PmxDocument Model => _model;
@@ -62,11 +79,24 @@ public sealed class MmdAnimator
 
     /// <summary>Evaluates the skeleton + morphs at <paramref name="time"/> and returns skinned vertex
     /// positions (into <paramref name="positions"/>, sized to the vertex count).</summary>
-    public void Evaluate(TimeSpan time, Vector3[] positions)
+    public void Evaluate(TimeSpan time, Vector3[] positions) => Evaluate(time, positions, normals: null);
+
+    /// <summary>Evaluates like <see cref="Evaluate(TimeSpan, Vector3[])"/> and ALSO skins vertex normals
+    /// (same blended bone transform, linear part only, renormalized) — the GL renderer's lighting/edge
+    /// input. Pass <c>null</c> to skip the normal work.</summary>
+    public void Evaluate(TimeSpan time, Vector3[] positions, Vector3[]? normals) =>
+        Evaluate(time, positions, normals, physics: null, physicsDeltaSeconds: 0f);
+
+    /// <summary>Full evaluation with the optional stage-5 physics step: FK + IK pose first, then
+    /// <paramref name="physics"/> advances by <paramref name="physicsDeltaSeconds"/> and writes the
+    /// dynamic bodies' transforms back into the bone worlds, then morphs + skinning read the result.</summary>
+    public void Evaluate(TimeSpan time, Vector3[] positions, Vector3[]? normals, MmdPhysics? physics, float physicsDeltaSeconds)
     {
         ArgumentNullException.ThrowIfNull(positions);
         if (positions.Length < _model.Vertices.Count)
             throw new ArgumentException("positions buffer too small", nameof(positions));
+        if (normals is not null && normals.Length < _model.Vertices.Count)
+            throw new ArgumentException("normals buffer too small", nameof(normals));
 
         var frame = (float)(time.TotalSeconds * VmdDocument.FramesPerSecond);
         var locals = new LocalPose[_model.Bones.Count];
@@ -74,8 +104,10 @@ public sealed class MmdAnimator
             locals[i] = SampleBone(_model.Bones[i].Name, frame);
 
         // Append/inherit folds the append parent's SAMPLED local pose in (MMD semantics, ratio-scaled).
-        foreach (var i in _evaluationOrder)
+        // Folded once, before any world pass — the IK solver re-runs the world pass but not this.
+        for (var idx = 0; idx < _evaluationOrder.Length; idx++)
         {
+            var i = _evaluationOrder[idx];
             var bone = _model.Bones[i];
             var local = locals[i];
             if (bone.AppendParentIndex >= 0 && bone.AppendParentIndex < locals.Length)
@@ -91,22 +123,29 @@ public sealed class MmdAnimator
                     local = local with { Translation = local.Translation + source.Translation * bone.AppendRatio };
                 locals[i] = local;
             }
+        }
 
-            // World = local (about the bone's bind position) chained through the parent.
-            var bind = bone.Position;
-            var parentBind = bone.ParentIndex >= 0 && bone.ParentIndex < _model.Bones.Count
-                ? _model.Bones[bone.ParentIndex].Position
-                : Vector3.Zero;
-            var localMatrix =
-                Matrix4x4.CreateFromQuaternion(local.Rotation) with
-                {
-                    Translation = local.Translation + bind - parentBind,
-                };
-            _world[i] = bone.ParentIndex >= 0 && bone.ParentIndex < _model.Bones.Count
-                ? localMatrix * _world[bone.ParentIndex]
-                : localMatrix;
-            // Skin matrix maps a BIND-space point: subtract the bind position, then apply world.
-            _skin[i] = Matrix4x4.CreateTranslation(-bind) * _world[i];
+        // IK deltas reset every evaluation — the pose stays a pure function of time (seek-back determinism).
+        Array.Fill(_ikRotations, Quaternion.Identity);
+        ComputeWorldPass(locals);
+        foreach (var ikBone in _ikBones)
+            SolveIkChain(ikBone, locals);
+
+        // Stage-5 physics: hair/skirt bodies simulate against the posed skeleton and overwrite their
+        // bones' world transforms. The NON-physics bones then re-chain under their (possibly moved)
+        // parents — tip/hem bones carry skin weights and would otherwise stay at the rigid FK pose,
+        // tearing the mesh where a chain ends — and skin matrices rebuild from the final worlds.
+        if (physics is not null)
+        {
+            physics.Step(_world, physicsDeltaSeconds);
+            foreach (var i in _evaluationOrder)
+            {
+                var parent = _model.Bones[i].ParentIndex;
+                if (!physics.DrivesBone(i) && parent >= 0 && parent < _model.Bones.Count)
+                    _world[i] = LocalMatrix(i, locals) * _world[parent];
+            }
+
+            ComputeSkinFromWorld();
         }
 
         // Vertex morphs (weights sampled at the same time).
@@ -137,7 +176,30 @@ public sealed class MmdAnimator
             Accumulate(vertex.Bone2, vertex.Weight2, p, ref result, ref total);
             Accumulate(vertex.Bone3, vertex.Weight3, p, ref result, ref total);
             positions[v] = total > 0.0001f ? result / total : p;
+
+            if (normals is not null)
+            {
+                var n = vertex.Normal;
+                var blended = Vector3.Zero;
+                var nTotal = 0f;
+                AccumulateNormal(vertex.Bone0, vertex.Weight0, n, ref blended, ref nTotal);
+                AccumulateNormal(vertex.Bone1, vertex.Weight1, n, ref blended, ref nTotal);
+                AccumulateNormal(vertex.Bone2, vertex.Weight2, n, ref blended, ref nTotal);
+                AccumulateNormal(vertex.Bone3, vertex.Weight3, n, ref blended, ref nTotal);
+                var skinned = nTotal > 0.0001f ? blended : n;
+                var len = skinned.Length();
+                normals[v] = len > 1e-6f ? skinned / len : n;
+            }
         }
+    }
+
+    private void AccumulateNormal(int bone, float weight, Vector3 n, ref Vector3 result, ref float total)
+    {
+        if (bone < 0 || bone >= _skin.Length || weight <= 0f)
+            return;
+        // Linear part only (TransformNormal ignores translation); non-uniform scale is absent in MMD rigs.
+        result += Vector3.TransformNormal(n, _skin[bone]) * weight;
+        total += weight;
     }
 
     private void Accumulate(int bone, float weight, Vector3 p, ref Vector3 result, ref float total)
@@ -146,6 +208,211 @@ public sealed class MmdAnimator
             return;
         result += Vector3.Transform(p, _skin[bone]) * weight;
         total += weight;
+    }
+
+    /// <summary>Recomputes every bone's world + skin matrix from the folded locals, applying the current
+    /// IK deltas on top of the FK rotations. Cheap enough (one matrix chain per bone) that the IK solver
+    /// simply re-runs it after each link adjustment — correctness over micro-optimization in the prototype.</summary>
+    private void ComputeWorldPass(LocalPose[] locals)
+    {
+        foreach (var i in _evaluationOrder)
+        {
+            var bone = _model.Bones[i];
+            _world[i] = bone.ParentIndex >= 0 && bone.ParentIndex < _model.Bones.Count
+                ? LocalMatrix(i, locals) * _world[bone.ParentIndex]
+                : LocalMatrix(i, locals);
+            // Skin matrix maps a BIND-space point: subtract the bind position, then apply world.
+            _skin[i] = Matrix4x4.CreateTranslation(-bone.Position) * _world[i];
+        }
+    }
+
+    /// <summary>The bone's parent-relative matrix: sampled local pose (+ IK delta) about its bind offset.</summary>
+    private Matrix4x4 LocalMatrix(int i, LocalPose[] locals)
+    {
+        var bone = _model.Bones[i];
+        var local = locals[i];
+        var rotation = _ikRotations[i] == Quaternion.Identity
+            ? local.Rotation
+            : Quaternion.Normalize(_ikRotations[i] * local.Rotation);
+        var parentBind = bone.ParentIndex >= 0 && bone.ParentIndex < _model.Bones.Count
+            ? _model.Bones[bone.ParentIndex].Position
+            : Vector3.Zero;
+        return Matrix4x4.CreateFromQuaternion(rotation) with
+        {
+            Translation = local.Translation + bone.Position - parentBind,
+        };
+    }
+
+    /// <summary>Rebuilds every skin matrix from the CURRENT world transforms (after physics mutated them).</summary>
+    private void ComputeSkinFromWorld()
+    {
+        for (var i = 0; i < _model.Bones.Count; i++)
+            _skin[i] = Matrix4x4.CreateTranslation(-_model.Bones[i].Position) * _world[i];
+    }
+
+    /// <summary>Distance below which an IK chain counts as converged (MMD model units — 1 ≈ 8 cm).</summary>
+    private const float IkConvergenceEpsilon = 1e-3f;
+
+    /// <summary>
+    /// CCD IK for one IK bone (stage 6): rotate each link so the effector (<see cref="PmxBone.IkTargetIndex"/>,
+    /// e.g. the ankle) chases the IK bone's own world position (the goal the motion animates). Every step's
+    /// rotation is clamped to the bone's unit angle (<see cref="PmxBone.IkLimitRadians"/>) and limited links
+    /// clamp their COMBINED local rotation per-axis in Euler XYZ (the knee's X-only hinge), matching MMD
+    /// semantics. The solve mutates only <see cref="_ikRotations"/> and leaves the world pass consistent.
+    /// </summary>
+    private void SolveIkChain(int ikIndex, LocalPose[] locals)
+    {
+        var ik = _model.Bones[ikIndex];
+        var links = ik.IkLinks;
+        var effector = ik.IkTargetIndex;
+        var target = _world[ikIndex].Translation; // fixed during the solve — links never move the IK bone itself
+
+        // The bones whose worlds move during the solve: every link plus the effector's ancestor path up to
+        // the outermost link, in evaluation order — a chain-only refresh per adjustment instead of a full
+        // skeleton pass (an 800-bone model with loop count 40 would otherwise do ~100k matrix chains per
+        // solve). Everything downstream of the chain is settled by ONE full pass when the solve ends.
+        var chainSet = new HashSet<int>(links.Count + 4);
+        foreach (var link in links)
+            chainSet.Add(link.BoneIndex);
+        for (var walk = effector;
+             walk >= 0 && walk < _model.Bones.Count && chainSet.Count < _model.Bones.Count;
+             walk = _model.Bones[walk].ParentIndex)
+        {
+            chainSet.Add(walk);
+            if (walk == links[^1].BoneIndex)
+                break; // reached the outermost link — ancestors above it don't move
+        }
+        var chain = _evaluationOrder.Where(chainSet.Contains).ToArray();
+
+        var anyMoved = false;
+        try
+        {
+            for (var iteration = 0; iteration < ik.IkLoopCount; iteration++)
+            {
+                var moved = false;
+                for (var l = 0; l < links.Count; l++)
+                {
+                    var effectorPos = _world[effector].Translation;
+                    if (Vector3.DistanceSquared(effectorPos, target) < IkConvergenceEpsilon * IkConvergenceEpsilon)
+                        return;
+
+                    var link = links[l];
+                    var linkIndex = link.BoneIndex;
+                    if (!Matrix4x4.Invert(_world[linkIndex], out var toLocal))
+                        continue;
+
+                    var localEffector = Vector3.Transform(effectorPos, toLocal);
+                    var localTarget = Vector3.Transform(target, toLocal);
+                    if (localEffector.LengthSquared() < 1e-8f || localTarget.LengthSquared() < 1e-8f)
+                        continue;
+                    localEffector = Vector3.Normalize(localEffector);
+                    localTarget = Vector3.Normalize(localTarget);
+
+                    var dot = Math.Clamp(Vector3.Dot(localEffector, localTarget), -1f, 1f);
+                    var angle = MathF.Acos(dot);
+                    if (angle < 1e-5f)
+                        continue;
+                    angle = MathF.Min(angle, MathF.Max(ik.IkLimitRadians, 1e-3f)); // per-step unit angle
+
+                    var axis = Vector3.Cross(localEffector, localTarget);
+                    if (axis.LengthSquared() < 1e-10f)
+                        continue;
+                    axis = Vector3.Normalize(axis);
+
+                    // Single-axis hinge (the MMD knee: Y and Z pinned to 0) — project the corrective
+                    // rotation onto the hinge axis instead of letting the Euler clamp mangle an off-axis
+                    // turn. The classic knee treatment; keeps CCD progress ON the hinge.
+                    if (link.HasLimit
+                        && link.LimitMin.Y == 0 && link.LimitMax.Y == 0
+                        && link.LimitMin.Z == 0 && link.LimitMax.Z == 0)
+                        axis = new Vector3(axis.X >= 0 ? 1f : -1f, 0f, 0f);
+
+                    // The delta acts in the link's CURRENT local frame (world[link] already contains its
+                    // rotation), so it composes on the effective-rotation side: new = old-effective * delta.
+                    var delta = Quaternion.CreateFromAxisAngle(axis, angle);
+                    var fk = locals[linkIndex].Rotation;
+                    var effective = Quaternion.Normalize(
+                        Quaternion.Normalize(_ikRotations[linkIndex] * fk) * delta);
+                    if (link.HasLimit)
+                        effective = ClampEulerXyz(effective, link.LimitMin, link.LimitMax);
+                    _ikRotations[linkIndex] = Quaternion.Normalize(effective * Quaternion.Inverse(fk));
+                    moved = true;
+                    anyMoved = true;
+
+                    RefreshChainWorlds(chain, locals);
+                }
+
+                if (!moved)
+                    return; // every link hit its limit / degenerate geometry — more iterations change nothing
+            }
+        }
+        finally
+        {
+            // Settle the whole skeleton (the moved links' subtrees — toes, skirt children — plus skin
+            // matrices) exactly once per solve.
+            if (anyMoved)
+                ComputeWorldPass(locals);
+        }
+    }
+
+    /// <summary>Recomputes world matrices for the solve chain only (evaluation-ordered, parents first —
+    /// each member's parent world is either untouched or refreshed earlier in the same array).</summary>
+    private void RefreshChainWorlds(int[] chain, LocalPose[] locals)
+    {
+        foreach (var i in chain)
+        {
+            var bone = _model.Bones[i];
+            var local = locals[i];
+            var rotation = _ikRotations[i] == Quaternion.Identity
+                ? local.Rotation
+                : Quaternion.Normalize(_ikRotations[i] * local.Rotation);
+            var bind = bone.Position;
+            var parentBind = bone.ParentIndex >= 0 && bone.ParentIndex < _model.Bones.Count
+                ? _model.Bones[bone.ParentIndex].Position
+                : Vector3.Zero;
+            var localMatrix =
+                Matrix4x4.CreateFromQuaternion(rotation) with
+                {
+                    Translation = local.Translation + bind - parentBind,
+                };
+            _world[i] = bone.ParentIndex >= 0 && bone.ParentIndex < _model.Bones.Count
+                ? localMatrix * _world[bone.ParentIndex]
+                : localMatrix;
+        }
+    }
+
+    /// <summary>Clamps a rotation per-axis in Euler XYZ to the PMX link limits (radians). The knee's
+    /// canonical limit (X ∈ [-π, 0], Y = Z = 0) collapses this to a pure X hinge.</summary>
+    internal static Quaternion ClampEulerXyz(Quaternion rotation, Vector3 min, Vector3 max)
+    {
+        rotation = Quaternion.Normalize(rotation);
+        var m = Matrix4x4.CreateFromQuaternion(rotation);
+
+        // Decompose R = Rx·Ry·Rz (System.Numerics row-vector convention: v' = v·Rx·Ry·Rz, so Rx acts
+        // first). Expanding that product: M13 = −sinY, M23 = sinX·cosY, M33 = cosX·cosY,
+        // M12 = cosY·sinZ, M11 = cosY·cosZ — the extraction below inverts it.
+        float x, y, z;
+        var sinY = Math.Clamp(-m.M13, -1f, 1f);
+        y = MathF.Asin(sinY);
+        if (MathF.Abs(sinY) < 0.99999f)
+        {
+            x = MathF.Atan2(m.M23, m.M33);
+            z = MathF.Atan2(m.M12, m.M11);
+        }
+        else
+        {
+            // Gimbal lock (cosY = 0): with Z folded to 0, M22 = cosX and M32 = −sinX.
+            x = MathF.Atan2(-m.M32, m.M22);
+            z = 0f;
+        }
+
+        x = Math.Clamp(x, min.X, max.X);
+        y = Math.Clamp(y, min.Y, max.Y);
+        z = Math.Clamp(z, min.Z, max.Z);
+
+        return Quaternion.Normalize(
+            Quaternion.CreateFromRotationMatrix(
+                Matrix4x4.CreateRotationX(x) * Matrix4x4.CreateRotationY(y) * Matrix4x4.CreateRotationZ(z)));
     }
 
     /// <summary>World position of a named bone at the LAST evaluated pose (camera targets, tests).</summary>

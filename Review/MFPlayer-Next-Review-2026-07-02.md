@@ -567,6 +567,225 @@ SessionSmoke exit 0; headless app launch clean):
    NEXT (staged): GL renderer with real MMD materials/toon/outline via the first-class layer-surface work
    (NXT-10) — this module is the consumer that drives that ABI before v1 freezes; IK solving; physics.
 
+## Remaining-board closure (2026-07-03) — items 20–25
+
+20. **Sync-gate hardening.** Debug builds scale the SessionSmoke sync sample windows ×3 (`SyncWindowScale`
+   — unoptimized CPU compositing runs ~7 fps vs the declared 24, so the count minimums false-failed on
+   Debug runs, especially under load); every gate's FAIL message now names the exact tripped clause(s) via
+   `FailedClauses` (they used to print thresholds the run had met, sending diagnosis the wrong way).
+   Debug AND Release smoke green end-to-end.
+21. **MMD IK — SHIPPED (stage 6, the dance-feet artifact source).** CCD solver in `MmdAnimator`: per-step
+   unit-angle clamp (`IkLimitRadians`), single-axis hinge projection for knees (Y/Z limits pinned 0 →
+   correction forced onto ±X — the classic knee treatment), combined-rotation Euler-XYZ clamping
+   (`ClampEulerXyz`, row-vector Rx·Ry·Rz extraction), chain-only world refresh during the solve + ONE full
+   settle pass at the end (an 800-bone × loop-40 model stays 30 fps-able), IK deltas reset per Evaluate
+   (seek-back determinism preserved). 7 tests (`MmdIkTests`: reachable/unreachable/hinge-plane/hinge-bend/
+   determinism/skin-follow/Euler-clamp). The real-asset test (fixed path, see below) runs the solver over
+   the full Rolling Girl motion green.
+22. **NXT-10 first-class layer surfaces — SHIPPED.** `IVideoCompositorSurfaceHost` capability interface
+   (GlVideoCompositor implements it; the CPU compositor deliberately does not — surface-capable sources
+   fall back to their frame path); the GL host now OWNS the `ConfigureGl` contract (per-surface
+   ConditionalWeakTable, re-configures on canvas change — CompositeTargetsSmoke's manual call removed and
+   green on real GL); `VideoCompositorSource` surface slots (add/remove/sort/`HasSurfaceSlots`, locked
+   placement snapshots, surfaces composite ON TOP of frame layers — v1 contract); integrated multi-warp
+   bypassed while surfaces are present; `ClipCompositionRuntime.AddSurfaceLayer` + `SurfaceLayerSlot`
+   (PlacementResolver math with the canvas as source size; Dispose removes AND disposes the surface) +
+   `IPlacedClipLayer` unifying frame/surface slots (ShowSession fades + live placement edits work on
+   both); ShowSession commit: a single-placement clip whose source implements the new
+   `ILayerSurfaceVideoSource` on a surface-hosting composition composites GPU-side with NO frame fan-out,
+   rendering at the TransportTimeline's SOURCE time (transport for free). Tests: `SurfaceLayerTests`
+   (Compositor ×5) + `SurfaceLayerSessionTests` (Session end-to-end GPU path + CPU fallback ×2).
+23. **NXT-09 dynamic plugin host — PRODUCT FEATURE SHIPPED.** New `S.Abi.MediaPluginDirectory`: scans one
+   directory, loads every library exporting `mfp_plugin_register` (fail-soft per file: non-plugins skip
+   silently, broken ones record failures), `RegisterInto(media/control/compositor)` registries, reverse-
+   order refcounted unload (a still-referenced library stays loaded to process exit — never
+   unload-while-referenced). HaPlay `MediaRuntime` wires it: `HAPLAY_PLUGINS_DIR` (default
+   `<app>/plugins`) loads before the registry build, capabilities register LAST (built-ins keep probe
+   precedence), `MediaRuntime.CompositorSurfaces` exposes plugin layer-surface kinds, Shutdown disposes
+   plugins AFTER the host. New `S.Abi.Tests` project (×5, gcc-gated real-plugin tests compile the
+   canonical `test_plugin.c` at test time). END-TO-END VERIFIED: the app under HAPLAY_SMOKE loads
+   `com.example.testplugin` from the plugins dir and its `testaudio` backend appears in the registry
+   alongside PortAudio/miniaudio; clean teardown.
+24. **NXT-04 hardware tier — cross-output skew gate.** `MultiOutputSmoke` now instruments both fanned
+   outputs (per-Submit PTS→monotonic instant), reduces same-PTS pairs to a skew distribution and GATES it:
+   p95 ≤ one frame period, one-sided frames ≤ 5% (exit 17/18). `--headless` runs it displayless (CI tier).
+   Measured on this box: median 0.01 ms, p95 0.04–0.05 ms, 0 misses (headless AND windowed under xvfb) —
+   the fan-out is phase-locked as designed. The operator hardware run (two windows on physical displays)
+   is the remaining glass-level check.
+25. **MMD GL renderer — SHIPPED (the NXT-10 consumer).** `MmdGlLayerSurface` (in S.Media.Source.MMD, which
+   now references S.Media.Compositor — arch rule updated; Silk.NET bindings + StbImageSharp are pure
+   managed, the GL context only ever comes from the hosting compositor): renders the skinned scene into
+   its own color+depth FBO then quads into the canvas with the layer transform + opacity; real materials
+   v1 = per-material diffuse textures (StbImageSharp), procedural two-tone toon ramp, MMD inverted-hull
+   edge pass (parsed edge flag/color/size), double-sided flag, material-order alpha. `PmxMaterial` gained
+   the toon/sphere/edge fields (parser now reads what it skipped); `MmdAnimator.Evaluate` gained skinned
+   NORMALS; `MmdVideoSource` implements `ILayerSurfaceVideoSource` (surface mode switches its frame stream
+   to a cached transparent buffer — priming/clocks stay alive, no double render). New `MmdGlSmoke` tool
+   (real GL under xvfb, coverage gate + BMP dump for eyeballing): the real YYB Miku + Rolling Girl renders
+   correctly (textures/toon/edges visible, framing matches the software reference; one 180° orientation
+   quirk between the System.Numerics row-vector clip path and GL sampling is corrected in the blit and
+   documented there). Known next slices: sphere maps, per-material/shared toon ramp textures, physics.
+   ALSO fixed: `MmdRealAssetTests.AssetRoot` was a stale hardcoded `/home/seko/...MMDTest` path (wrong
+   home AND wrong folder name vs `Reference/MMD_Test`) — now repo-root-resolved, so the real-asset test
+   actually RUNS on this box (it had been silently skipping).
+
+   Post-closure gates: solution build 0 errors; **1,479/1,479** (the sole skip is the network-gated
+   YouTube live test); SessionSmoke Debug+Release green incl. sync/alloc gates; CompositeTargetsSmoke,
+   MmdGlSmoke, MultiOutputSmoke (both modes) green on real GL/xvfb; HAPLAY_SMOKE launch (JIT + with a
+   loaded plugin) exit 0 with clean teardown.
+
+26. **Operator report "YouTube deck item is instantly done" (2026-07-03) — ROOT-CAUSED + FIXED.**
+   Diagnosis path: the module layer was exonerated three ways (new live-gated audio-only test that
+   CHECKS DURATION AND DECODES — the old live test only proved the sources open — passes for the exact
+   reported video; the on-disk cache asset probes/decodes clean; a deck-shaped headless ShowSession fire
+   against the real cache plays perfectly). The operator's session log then showed the truth: playing
+   the item never touched the media layer AT ALL. Root cause: `MediaPlayerViewModel.CanLoadMedia()`
+   predated the registry-URI item kinds — it admits live items and existing `FilePlaylistItem`s only, so
+   a `YouTubePlaylistItem` (AND an `MmdPlaylistItem` — deck MMD playback was equally dead) made
+   `OpenOrReloadAsync` silently return: no open, no error, nothing logged. Fix: both kinds are accepted
+   unconditionally (the open path surfaces its own actionable errors — reliable-mode "not prepared",
+   missing model). Bonus: the deck scrubber waveform now analyses a prepared YouTube item's cached asset
+   (`HaPlayPlaybackHelpers.TryGetPreparedYouTubeAssetPath`) — it is a real local file. Tests:
+   `MediaPlayerRegistryItemLoadTests` ×2 (playing an unprepared youtube / missing-model mmd item must
+   reach the open path and surface ITS error, never sit silently idle) + the live audio-only decode test
+   (`MFP_YOUTUBE_LIVE_VIDEO` overrides the video id for reproducing reports). ALSO: the module now
+   references the YoutubeExplode NUGET package (operator switch; version pinned centrally) instead of the
+   Reference/ local-source checkout — 17 offline + 2 live tests green on the package. HaPlay 506/506.
+
+27. **Operator reports round 2 (2026-07-03) — loop/repeat "stuck at the beginning" + MMD see-through/
+   wrong colors/camera — ALL ROOT-CAUSED + FIXED.**
+   (a) **Deck loop/repeat/auto-advance never fired at end-of-media (framework bug).** The operator's
+   session log showed it plainly: `AudioRouter RunLoop: all sources exhausted, completed naturally` … and
+   then NOTHING for minutes. At natural EOF the router stops itself and FLUSHES the hardware output —
+   which rewinds the output clock's epoch — while nobody stops the `MediaClock`: the transport then reads
+   **IsRunning=true, position=0:00 forever** ("play button on, stuck at the beginning"). Every EOF
+   consumer was blind: the deck poll's end-confirm (loop/repeat/auto-advance), the session's
+   NotifyNaturalEnd stall detection, the voice monitor. Fix at the one choke point everything reads:
+   `MediaPlayer.IsRunning` reports false once the audio router `CompletedNaturally` (cleared on restart —
+   resume/loop relap works), and `MediaPlayer.Position` clamps to `Duration` there (the raw playhead
+   reads ~0 post-flush). Regression: `AudioExhaustionShortOfMetadataDuration_RaisesClipNaturallyEnded`
+   (Session — synthetic source exhausts at 40 ms with 10 s metadata; the event must fire). Two session
+   tests that silently RELIED on the never-stopping clock (pause/resume, 30 s stop-fade) got long-lived
+   fakes (`FakeAudioDecoderProvider.Registry(chunks:)` is now sizeable).
+   (b) **MMD "see-through + wrong colors": the inverted-hull edge pass.** Differential renders
+   (`MFP_MMD_GL_NOEDGE/NOBLEND` debug knobs, now permanent) isolated it in two frames: the scene's Z-flip
+   inverts winding, so the edge pass's front-face culling kept the CAMERA-FACING expanded shell and
+   painted it over the whole model (dark muddy tint + translucent look; teal hair read brown). Channel
+   order, Stb decode, UVs, alpha and the readback chain were each verified correct along the way (the
+   smoke's new `--diag` stage probes upload + full-chain channel order — note green stays green under an
+   R/B swap, so the old green-only check proved nothing there). Fix: edge pass AFTER the main pass,
+   opposite cull face, explicit `DepthMask(true)` (host 2D passes may leave depth writes off). Post-fix
+   render matches the operator's MMD-editor reference (teal hair, correct grays, opaque, thin outlines).
+   (c) **MMD default camera** now matches the MMD editor's default framing (distance 45, target (0,10,0),
+   fov 30 — was 35/(0,12,0), "too close"); lateral offsets stay manual (content-specific, dialog sliders).
+   Post-round gates: full sln **1,483/1,483** (parallel run, hang-blame armed, clean), Desktop rebuilt.
+
+28. **Operator reports round 3 (2026-07-03) — grayscale MMD in the APP + camera-position XYZ.**
+   (a) **In-app MMD rendered the grayscale SOFTWARE raster, not the GL renderer.** The session log showed
+   the deck composition using `SDL3GLVideoCompositor` — the app's default GL backend — which did NOT
+   implement `IVideoCompositorSurfaceHost` (only the inner `GlVideoCompositor` did), so
+   `SupportsSurfaceLayers` was false and the MMD source silently took its CPU frame fallback. Fix: the
+   SDL3 wrapper now implements the capability by delegation (EnsureInitialized + context-current + inner
+   call, exactly like `Composite`). LESSON: capability interfaces on an inner type are invisible through a
+   wrapper — audit every compositor DECORATOR when adding one.
+   (b) **Texture resolution hardened for Windows-authored models on Linux:** exact path first, then a
+   case-insensitive per-segment walk (`MmdGlLayerSurface.ResolveTexturePath`, tested); missing/undecodable
+   textures now log a WARNING naming the file instead of silently rendering white ("black and white"
+   diagnosis is one log read away now).
+   (c) **Camera-position XYZ (operator request):** the Add-MMD dialog gained direct camera-EYE XYZ fields,
+   two-way synced with the orbit form (position = target + back(rotation)·|distance|; inverse pitch =
+   atan2(dy,dz), yaw = atan2(dx,√(dy²+dz²))) — the persisted item/URI stay in MMD's orbit form. Dialog
+   defaults now match the source defaults (45/(0,10,0)).
+   (d) **Physics: confirmed NOT implemented** (deliberately staged — the review's stage 5; rigid-body/
+   spring dynamics for hair/skirt remain the known gap after IK).
+   Gates: MMD tests 16/16, HaPlay 506/506, MmdGlSmoke green; full sln green in parallel (one solo-pass
+   load-flake: `AudioRouterControlTests.Pause_WaitsForInFlightSubmitBeforeFlush`, pre-existing class).
+
+29. **Operator reports round 4 (2026-07-03) — MMD sphere maps + toon textures, MSAA, textured preview.**
+   (a) **Sphere maps (.sph multiply / .spa add) + per-material toon ramp textures SHIPPED** in the GL
+   renderer — the YYB eyes are almost entirely their ADDITIVE sphere maps ("the eyes have no textures"
+   report), and the toon ramps carry the shade tint. View matrix now uploads separately (view-space
+   normals → matcap UV `n.xy·0.5+0.5`); toon samples `v = 0.5 − 0.5·N·L` with the procedural two-tone as
+   fallback; neutral fallbacks (white/black 1×1) keep un-sphered materials unchanged. The `spa/` and
+   `toon/` model folders are now consumed as authored.
+   (b) **MSAA (4×) with a toggle**: multisampled scene renderbuffers resolved into the sampled color
+   texture; graceful fallback when unsupported; `mmd://…&aa=0` disables; persisted on `MmdPlaylistItem`
+   (`Antialias`), dialog checkbox added.
+   (c) **The dialog preview (and CPU-compositor fallback) is textured now**: `MmdSoftwareRenderer` gained
+   per-material nearest-neighbor diffuse sampling (`SetTextures`/`MmdCpuTexture`, barycentric UVs,
+   alpha-cutout texels skipped); `MmdVideoSource` loads the textures lazily via the same case-insensitive
+   path resolution as GL. The 320×180-era grayscale preview now shows the real model.
+   Gates: MMD 16/16, HaPlay 506/506, MmdGlSmoke (GL + software) renders verified visually — the GL frame
+   is near-parity with the MMD-editor reference. Remaining staged MMD work: physics (stage 5), shared
+   toon01–10 ramps, per-vertex (smooth) normals in the software raster.
+
+30. **MMD PHYSICS — SHIPPED (stage 5, operator go-ahead).**
+   (a) **Parser**: PMX rigid bodies + joints now read (display frames skipped properly to reach them;
+   files ending after the morphs — the tiny fixtures — legitimately carry no physics via `Reader.HasMore`).
+   `PmxRigidBody` (shape/group/mask/placement/mass/damping/mode) + `PmxJoint` (spring 6-DOF limits).
+   YYB probe: 136 bodies (27 kinematic colliders, 106 dynamic links, 3 pivoted), 125 joints.
+   (b) **Solver** (`MmdPhysics`): compact position-based (XPBD-style) — kinematic bodies snap to their
+   animated bones; dynamic bodies predict under gravity (−98 model-units/s²) with Bullet-style per-second
+   damping; joints solve as CHAIN PROJECTIONS (keep tangential motion = the swing, correct only arm-length
+   toward the pivot — a plain point-anchor correction freezes the pendulum outright, found by test), plus
+   swing orientation from the arm (bones BEND, not shear) and per-joint Euler angular limits (reuses
+   `ClampEulerXyz`); collisions = capsule/sphere closest-segment push-outs honoring group masks (boxes
+   approximated as capsules along their longest axis — documented); 1/120 s substeps, 4 iterations,
+   NaN/finite guards on write-back. STATEFUL by design: backward seeks / >0.5 s jumps reset onto the
+   animated pose (MMD's own seek behavior); the deterministic-animator property is explicitly scoped to
+   the FK/IK/morph layers.
+   (c) **Integration**: `MmdAnimator.Evaluate(..., MmdPhysics?, physicsDeltaSeconds)` steps physics
+   between IK and skinning and rebuilds skin matrices from the final worlds; both the GL surface and the
+   software source own an instance and track frame deltas; toggle plumbed end-to-end (`mmd://…&phys=0`,
+   `MmdPlaylistItem.Physics`, dialog "Physics (hair/skirt)" checkbox, default ON).
+   (d) **Tests ×3 + real-asset extension**: horizontal-pendulum swings down and stays bounded (this test
+   caught the frozen-pendulum bug), backward-jump re-bases, no-dynamic-bodies → no simulation; the
+   real-asset test now simulates ~2 s of Rolling Girl over the full 136-body chain asserting every vertex
+   finite/bounded AND visibly diverged from rigid FK. MmdGlSmoke warms 1.5 s at 30 fps before each capture
+   so eyeball frames carry momentum; the verification render shows the twin-tails hanging/draping
+   naturally instead of the rigid bind angle. MMD tests 19/19; full sln green (same solo-pass flake).
+   Known simplifications for later: no twist simulation, no spring constants (limits carry the shape),
+   box colliders as capsules, no restitution/friction response.
+
+31. **MMD PHYSICS TUNING — FIXED (operator report 2026-07-03: "hair/clothing way too loose, body parts
+   stiff / knees not bending").** Diagnosis first, then five solver defects fixed in `MmdPhysics` +
+   `MmdAnimator`:
+   *Diagnosis*: knees were exonerated by probe — IK bends to 111° and physics leaves leg bones
+   bit-identical (no dynamic bodies attach to core bones on YYB); the "stiff body" was the SKIRT
+   misbehaving around the legs, and "loose hair" was real. Collision-mask semantics were also probed and
+   confirmed CORRECT (the PMX ushort is the Bullet collides-with mask; head/hair values read sensibly).
+   (a) **Authored stiffness was ignored**: YYB tails lock their inner joints to ±0.1°, but the old chain
+   projection preserved all tangential motion — limits only clamped rotation while POSITION dangled like
+   rope. Joints now solve as swing→spring→HARD limit clamp→position DERIVED from the clamped frame (MMD
+   joints lock the linear DOF). New regression test: `NearLockedJoint_TracksTheParentRigidly`.
+   (b) **Lattice links vs chains**: skirt bodies carry a 2nd joint (horizontal ring, wrap 15→0); full
+   frame-snap per joint let the ring override its waist anchors and collapse the skirt. First-in-file
+   joint per body = structural driver (full solve); extra joints = soft anchor-coincidence links,
+   relaxation 0.5, CAPPED like contact recovery — uncapped, a flipped ring is collectively stable (each
+   plate holds its neighbor up, overpowering restoration; found by tracing t=57–65 with contacts disabled).
+   (c) **Contact realism**: thin boxes (skirt plates 0.47×0.665×0.1) now use their SMALLEST half-extent
+   as capsule radius (the old averaged radius kept plates permanently penetrating the hip capsule) and
+   penetration recovery is rate-capped at 8 units/s (Bullet split-impulse analogue) so a leg sweeping
+   through the ring can't blast plates into orbit in one substep.
+   (d) **Swing rate cap** (12 rad/s): short-armed plates read garbage arm directions for a few substeps
+   when their kinematic anchor teleports through a fast move; the cap blocks 180° single-substep flips.
+   The limit CLAMP is deliberately uncapped — near-locked tails must track a whipping head rigidly.
+   (e) **Shape restoration**: authored joint springs are now honored (bangs: 5/s toward bind) and every
+   free joint gets a baseline restore of 3/s × angularDamping⁴ — the stand-in for the shape-holding that
+   authored angular damping produces in Bullet (this solver carries no angular velocity). Skirt
+   (damping 0.99999) gets the full rate and holds its authored A-line (≈8° sag at rest); a lightly damped
+   0.5 test pendulum keeps true gravity dynamics (≈0.2/s). Damping clamp also raised 0.999→1.0 (hair tips
+   are authored 1.0 = velocity dies every step).
+   (f) **Re-chain after write-back** (`MmdAnimator`): non-physics descendants of physics-driven bones
+   (30 on YYB: tip/hem bones carrying skin weights) now re-chain under their moved parents via the
+   extracted `LocalMatrix` helper — they used to stay at the rigid FK pose and tear the mesh.
+   *Verification*: skirt vertices now track the authored silhouette (max dev 0.2–0.4 units at t=10/20/40
+   vs 4.6 before = flipped-over-the-waist); the violent 56–65 s section sways 8–35° with full recovery
+   (was wedged at 150–166° permanently); GL renders at t=10/20/60 match the MMD-editor reference
+   (skirt pleats + hanging tails present at all three). MMD tests 21/21 (new rigid-follow test); full
+   sln 1,487/0. Remaining known simplifications: no twist, boxes-as-capsules for FAT boxes, no
+   restitution/friction, ring links positional-only.
+
 ## Verification appendix
 
 ```bash
@@ -582,6 +801,10 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-Gate-5 framework slice (item 17, YouTube module): 1,446 passed / 0 failed
 # post-Gate-5 UI slice (item 18, YouTube in HaPlay): 1,449 passed / 0 failed
 # post-Gate-6 prototype (item 19, MMD module + camera preview): 1,460 passed / 0 failed
+# post-remaining-board closure (items 20–25 below, 2026-07-03): 1,479 passed / 0 failed (only skip = the
+#   network-gated YouTube live test; the MMD real-asset test now RUNS — its AssetRoot was a stale
+#   /home/seko + MMDTest-vs-MMD_Test path and is repo-root-resolved now)
+# post-physics-tuning (item 31, 2026-07-03): 1,487 passed / 0 failed / 2 skipped (network-gated)
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4
