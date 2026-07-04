@@ -401,7 +401,13 @@ public sealed class MmdModuleTests
             Assert.NotNull(exact);
 
             var folded = MmdGlLayerSurface.ResolveTexturePath(root, Path.Combine("tex", "body01.png"));
-            Assert.Equal(exact, folded);
+            // The regression guard: a miscased path MUST still resolve (on Linux it used to miss → white).
+            Assert.NotNull(folded);
+            // Compare modulo case. On a case-SENSITIVE FS (Linux CI) the resolver folds the miscased
+            // path to the real on-disk casing, so this is an exact match. On a case-INSENSITIVE FS
+            // (Windows CI, default macOS) the miscased path opens the file directly, so the resolver
+            // returns it verbatim — same file, different casing — which an ordinal Equal would wrongly reject.
+            Assert.Equal(exact, folded, StringComparer.OrdinalIgnoreCase);
 
             Assert.Null(MmdGlLayerSurface.ResolveTexturePath(root, Path.Combine("tex", "missing.png")));
         }
