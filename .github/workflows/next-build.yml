@@ -193,11 +193,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p natives-stage
-          sudo apt-get install -y libportaudio2 libportmidi0 libass9
-          for so in libportaudio.so.2 libportmidi.so.2 libass.so.9; do
+          # PortAudio + libass come from apt (ABI-stable at these sonames). PortMidi does NOT: Ubuntu's
+          # libportmidi0 is the legacy "release 217" (libportmidi.so.0), which predates the modern PortMidi 2.x
+          # ABI the binding targets (Pm_CreateVirtual* etc.) and the resolver only probes .so.2/.so — so it is
+          # built from source below instead. libasound2-dev is PortMidi's Linux (ALSA) build dep.
+          sudo apt-get install -y cmake libasound2-dev libportaudio2 libass9
+          for so in libportaudio.so.2 libass.so.9; do
             p="$(find /usr/lib /lib -name "$so" 2>/dev/null | head -1)"
             if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: $so not found"; fi
           done
+          # LibAssLib P/Invokes the bare name "ass" with no custom resolver, so the loader only finds an
+          # unversioned libass.so — stage the versioned lib under that name too.
+          [ -f natives-stage/libass.so.9 ] && cp -vL natives-stage/libass.so.9 natives-stage/libass.so
+
+          # PortMidi 2.0.7 from source -> libportmidi.so.2 (matches the resolver's first candidate + the 2.x ABI).
+          curl -fsSL https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz | tar xz
+          cmake -S portmidi-2.0.7 -B pm-build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_JAVA_NATIVE_INTERFACE=OFF
+          cmake --build pm-build --config Release
+          pm="$(find pm-build \( -name 'libportmidi.so' -o -name 'libportmidi.so.*' \) -type f | head -1)"
+          if [ -n "$pm" ]; then cp -vL "$pm" natives-stage/libportmidi.so.2; else echo "WARN: portmidi build produced no .so"; fi
 
           # miniaudio 0.11.25 — single-header, compiled to a vanilla shared lib (MALib mirrors 0.11.25).
           curl -fsSL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz | tar xz
@@ -251,36 +265,46 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          # ASIO SDK (Steinberg; downloaded fresh each run — not redistributed in-repo).
-          curl -fsSL https://www.steinberg.net/asiosdk -o asiosdk.zip
-          tar -xf asiosdk.zip   # bsdtar (ships with Windows) extracts zips; Git Bash has no unzip
-          ASIO_DIR="$(find . -maxdepth 1 -type d -iname '*asio*sdk*' | head -1)"
-          echo "ASIO SDK: $ASIO_DIR"
+          set -uo pipefail   # NOT -e: ASIO acquisition is best-effort and must not abort the PortAudio build.
+          # ASIO is an optional PortAudio host API needing Steinberg's SDK (not redistributable). Fetch it
+          # best-effort from the stable direct link; if it is unavailable PortAudio still builds with the
+          # always-present WASAPI/WDM-KS/WMME/DirectSound host APIs. (The old www.steinberg.net/asiosdk URL
+          # served an HTML consent page, not the zip — tar then failed and killed the whole step.)
+          PA_ASIO=(-DPA_USE_ASIO=OFF)
+          if curl -fsSL https://download.steinberg.net/sdk_downloads/asiosdk_2.3.3_2019-06-14.zip -o asiosdk.zip && tar -xf asiosdk.zip; then
+            asio="$(find . -maxdepth 1 -type d -iname 'asiosdk*' | head -1)"
+            if [ -n "$asio" ]; then PA_ASIO=(-DPA_USE_ASIO=ON "-DASIOSDK_ROOT_DIR=$PWD/$asio"); echo "ASIO SDK: $asio"; fi
+          fi
+          echo "PortAudio ASIO flags: ${PA_ASIO[*]}"
           curl -fsSL https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz | tar xz
-          cmake -S portaudio-19.7.0 -B pa-build -A x64 \
-            -DPA_BUILD_SHARED_LIBS=ON -DPA_USE_ASIO=ON -DASIOSDK_ROOT_DIR="$PWD/$ASIO_DIR"
+          # v19.7.0 options are PA_BUILD_SHARED / PA_BUILD_STATIC (not PA_BUILD_SHARED_LIBS).
+          cmake -S portaudio-19.7.0 -B pa-build -A x64 -DPA_BUILD_SHARED=ON -DPA_BUILD_STATIC=OFF "${PA_ASIO[@]}"
           cmake --build pa-build --config Release
           # Output name varies across versions (portaudio.dll / portaudio_x64.dll) — normalize to portaudio.dll.
-          cp -v "$(find pa-build -name 'portaudio*.dll' | head -1)" natives-stage/portaudio.dll
+          dll="$(find pa-build -name 'portaudio*.dll' | head -1)"
+          if [ -n "$dll" ]; then cp -v "$dll" natives-stage/portaudio.dll; else echo "ERROR: no portaudio dll produced"; exit 1; fi
 
-      - name: Stage Windows natives — libass 0.17.5 (meson + deps, DirectWrite so no fontconfig)
+      - name: Stage Windows natives — libass (vcpkg; pulls freetype/fribidi/harfbuzz)
         if: runner.os == 'Windows'
         continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          python -m pip install --quiet meson ninja
-          curl -fsSL https://github.com/libass/libass/archive/refs/tags/0.17.5.tar.gz | tar xz
-          cd libass-0.17.5
-          # forcefallback builds freetype/fribidi/harfbuzz from meson wraps; DirectWrite backend drops fontconfig.
-          meson setup build --default-library=shared -Dfontconfig=disabled --wrap-mode=forcefallback --buildtype=release
-          ninja -C build
-          cd ..
-          for dll in ass libass freetype fribidi harfbuzz; do
-            f="$(find libass-0.17.5/build -iname "*${dll}*.dll" | head -1)"
-            [ -n "$f" ] && cp -v "$f" natives-stage/ || true
-          done
+          set -uo pipefail
+          # Building libass from source on Windows needs the whole freetype/fribidi/harfbuzz tree; the meson
+          # forcefallback route failed (no wraps ship with libass, and Strawberry-Perl's MinGW gcc hijacked the
+          # toolchain). vcpkg (preinstalled on the runner) resolves that reliably with MSVC. vcpkg tracks
+          # libass 0.17.x — ABI-compatible with the ass_* binding (LibAssLib pins no exact version).
+          VCPKG="${VCPKG_INSTALLATION_ROOT:-/c/vcpkg}"; VCPKG="${VCPKG//\\//}"
+          "$VCPKG/vcpkg.exe" install libass:x64-windows
+          BIN="$VCPKG/installed/x64-windows/bin"
+          # Bundle ass.dll + its runtime deps (freetype/harfbuzz/fribidi/png/z/brotli/...); the deps resolve
+          # from the app dir. LibAssLib P/Invokes the bare name "ass", so guarantee an ass.dll is present.
+          cp -v "$BIN"/*.dll natives-stage/ 2>/dev/null || true
+          if [ ! -f natives-stage/ass.dll ]; then
+            cand="$(find "$BIN" -maxdepth 1 \( -iname 'ass*.dll' -o -iname 'libass*.dll' \) | head -1)"
+            [ -n "$cand" ] && cp -v "$cand" natives-stage/ass.dll
+          fi
+          ls -la natives-stage
 
       - name: Stage Windows natives — NDI v6 redist
         if: runner.os == 'Windows'
