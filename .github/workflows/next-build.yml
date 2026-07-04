@@ -149,3 +149,166 @@ jobs:
         env:
           HAPLAY_SMOKE: '1'
         run: ./haplay-publish/HaPlay.Desktop.exe --media-log-level information
+
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  # Runnable AOT artifacts: build/stage the native libs the app P/Invokes (that don't come from
+  # NuGet), AOT-publish HaPlay.Desktop, drop the natives next to the exe, and upload per platform.
+  # Kept OUT of the gate job so slow/iterating native builds never block tests. NuGet already
+  # provides SDL3, SkiaSharp, and (win-x64) FFmpeg via FFmpeg.GPL — those land in the publish for free.
+  # Native ↔ binding versions are matched to the P/Invoke layer: portmidi 2.0.7, portaudio 19.7.0,
+  # miniaudio 0.11.25, libass 0.17.5, NDI v6, FFmpeg 8.1/avcodec-62 (= FFmpeg.AutoGen 8.1.0).
+  # ─────────────────────────────────────────────────────────────────────────────────────────────
+  artifacts:
+    name: artifact-${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: linux-x64, os: ubuntu-latest,  rid: linux-x64 }
+          - { label: win-x64,   os: windows-latest, rid: win-x64 }
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Linux AOT prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev patchelf
+
+      # ─── Linux natives: apt (portaudio/portmidi/libass), compiled miniaudio, DistroAV NDI, BtbN FFmpeg ───
+      # apt libs go into the artifact so it's portable; their ubiquitous deps (freetype/fontconfig/alsa)
+      # are assumed present on the target. FFmpeg is bundled as a fallback with $ORIGIN rpath so its
+      # sibling libav* resolve from the app dir; a system FFmpeg (avcodec-62) is still preferred at load.
+      - name: Stage Linux natives
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p natives-stage
+          sudo apt-get install -y libportaudio2 libportmidi0 libass9
+          for so in libportaudio.so.2 libportmidi.so.2 libass.so.9; do
+            p="$(find /usr/lib /lib -name "$so" 2>/dev/null | head -1)"
+            if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: $so not found"; fi
+          done
+
+          # miniaudio 0.11.25 — single-header, compiled to a vanilla shared lib (MALib mirrors 0.11.25).
+          curl -fsSL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz | tar xz
+          printf '#define MINIAUDIO_IMPLEMENTATION\n#include "miniaudio.h"\n' > ma_impl.c
+          gcc -O2 -shared -fPIC -I miniaudio-0.11.25 -o natives-stage/libminiaudio.so ma_impl.c -lpthread -lm -ldl
+
+          # NDI v6 runtime via the DistroAV helper (accepts the NDI license non-interactively).
+          curl -fsSL https://raw.githubusercontent.com/DistroAV/DistroAV/master/CI/libndi-get.sh -o libndi-get.sh
+          chmod +x libndi-get.sh
+          sudo ./libndi-get.sh install
+          p="$(find /usr /usr/local -name 'libndi.so.6' 2>/dev/null | head -1)"
+          if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: libndi.so.6 not found"; fi
+
+          # FFmpeg 8.1 shared (avcodec-62), bundled as the fallback for hosts without a matching system FFmpeg.
+          curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
+          cp -vL ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib/lib*.so.* natives-stage/ 2>/dev/null || true
+          for f in natives-stage/libav*.so.* natives-stage/libsw*.so.*; do [ -e "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" || true; done
+          ls -la natives-stage
+
+      # ─── Windows natives (from source; iterate on CI — no Windows runner to pre-validate against) ───
+      - name: Stage Windows natives — miniaudio + portmidi (CMake/MSVC)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p natives-stage
+
+          # miniaudio 0.11.25 -> miniaudio.dll (MA_DLL exports ma_* by name).
+          curl -fsSL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz | tar xz
+          mkdir -p ma-proj && cd ma-proj
+          printf '#include "miniaudio.h"\n' > impl.c
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(miniaudio C)
+          add_library(miniaudio SHARED impl.c)
+          target_include_directories(miniaudio PRIVATE ${CMAKE_SOURCE_DIR}/../miniaudio-0.11.25)
+          target_compile_definitions(miniaudio PRIVATE MINIAUDIO_IMPLEMENTATION MA_DLL)
+          EOF
+          cmake -B build -A x64 . && cmake --build build --config Release
+          cp -v build/Release/miniaudio.dll ../natives-stage/
+          cd ..
+
+          # PortMidi 2.0.7 -> portmidi.dll
+          curl -fsSL https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz | tar xz
+          cmake -S portmidi-2.0.7 -B pm-build -A x64 -DBUILD_SHARED_LIBS=ON
+          cmake --build pm-build --config Release
+          cp -v "$(find pm-build -name 'portmidi.dll' | head -1)" natives-stage/
+
+      - name: Stage Windows natives — portaudio + ASIO (CMake/MSVC)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ASIO SDK (Steinberg; downloaded fresh each run — not redistributed in-repo).
+          curl -fsSL https://www.steinberg.net/asiosdk -o asiosdk.zip
+          tar -xf asiosdk.zip   # bsdtar (ships with Windows) extracts zips; Git Bash has no unzip
+          ASIO_DIR="$(find . -maxdepth 1 -type d -iname '*asio*sdk*' | head -1)"
+          echo "ASIO SDK: $ASIO_DIR"
+          curl -fsSL https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz | tar xz
+          cmake -S portaudio-19.7.0 -B pa-build -A x64 \
+            -DPA_BUILD_SHARED_LIBS=ON -DPA_USE_ASIO=ON -DASIOSDK_ROOT_DIR="$PWD/$ASIO_DIR"
+          cmake --build pa-build --config Release
+          # Output name varies across versions (portaudio.dll / portaudio_x64.dll) — normalize to portaudio.dll.
+          cp -v "$(find pa-build -name 'portaudio*.dll' | head -1)" natives-stage/portaudio.dll
+
+      - name: Stage Windows natives — libass 0.17.5 (meson + deps, DirectWrite so no fontconfig)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet meson ninja
+          curl -fsSL https://github.com/libass/libass/archive/refs/tags/0.17.5.tar.gz | tar xz
+          cd libass-0.17.5
+          # forcefallback builds freetype/fribidi/harfbuzz from meson wraps; DirectWrite backend drops fontconfig.
+          meson setup build --default-library=shared -Dfontconfig=disabled --wrap-mode=forcefallback --buildtype=release
+          ninja -C build
+          cd ..
+          for dll in ass libass freetype fribidi harfbuzz; do
+            f="$(find libass-0.17.5/build -iname "*${dll}*.dll" | head -1)"
+            [ -n "$f" ] && cp -v "$f" natives-stage/ || true
+          done
+
+      - name: Stage Windows natives — NDI v6 redist
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          curl.exe -fsSL https://ndi.link/NDIRedistV6 -o ndi.exe
+          Start-Process -FilePath .\ndi.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $dll = Get-ChildItem 'C:\Program Files\NDI' -Recurse -Filter 'Processing.NDI.Lib.x64.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName natives-stage\ -Verbose } else { Write-Host 'WARN: NDI DLL not found' }
+
+      - name: HaPlay.Desktop AOT publish
+        run: >
+          dotnet publish next/UI/HaPlay.Desktop/HaPlay.Desktop.csproj
+          -c Release -r ${{ matrix.rid }} -o haplay-publish
+
+      # Drop the staged natives next to the exe — the DllImport resolvers probe the app directory first.
+      - name: Bundle natives into the publish
+        shell: bash
+        run: |
+          if [ -d natives-stage ]; then cp -v natives-stage/* haplay-publish/ 2>/dev/null || true; fi
+          echo "--- native libs in the artifact ---"
+          ls haplay-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
+
+      - name: Upload HaPlay.Desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaPlay.Desktop-${{ matrix.rid }}
+          path: haplay-publish
+          if-no-files-found: error
+          retention-days: 14
