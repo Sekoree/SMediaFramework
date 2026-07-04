@@ -1290,7 +1290,7 @@ public sealed class ShowSessionTests
 
         // The first submitted frame can precede the opened-dimension scaling on a loaded runner (bottom-right
         // still 0); every full-canvas frame thereafter fills the 8x8 canvas, so poll a few frames for opaque.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (Array.IndexOf(output.Alphas, 255) < 0 && DateTime.UtcNow < deadline)
             await Task.Delay(20);
         Assert.Contains(255, output.Alphas);
@@ -1368,7 +1368,7 @@ public sealed class ShowSessionTests
         await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
         output.ClearAlphas();
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while ((await session.SnapshotAsync()).Single().IsRunning && DateTime.UtcNow < deadline)
             await Task.Delay(25);
 
@@ -1439,7 +1439,7 @@ public sealed class ShowSessionTests
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
         await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         TransportSnapshot snap;
         do
         {
@@ -1537,7 +1537,7 @@ public sealed class ShowSessionTests
         {
             // Poll WITH a yield: SnapshotAsync can complete synchronously, so a tight await-loop would hot-spin
             // and starve the pause/resume continuation on a 2-core runner (it then never settles). Delay yields.
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
             var s = await session.SnapshotAsync();
             while (!until(s) && DateTime.UtcNow < deadline)
             {
@@ -1634,7 +1634,7 @@ public sealed class ShowSessionTests
         await session.SeekManyAsync([("A", TimeSpan.FromMilliseconds(600)), ("B", TimeSpan.FromMilliseconds(600))]);
 
         static TimeSpan Pos(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).ClipPosition;
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         IReadOnlyList<TransportSnapshot> snap;
         do
         {

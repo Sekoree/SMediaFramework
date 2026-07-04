@@ -55,10 +55,16 @@ jobs:
       # actionable failure. 4 minutes ≈ 10x the slowest assembly's normal runtime — short enough that the
       # report fires before anyone cancels the job by hand (the 2026-07-02 HaPlay.Tests hang was canceled at
       # ~6 min, before the then-10m blame report could name the test).
+      # RunConfiguration.MaxCpuCount=1 serializes test-ASSEMBLY execution: `dotnet test <sln>` otherwise runs
+      # every test DLL in parallel, and the background composition/transport pumps in the concurrently-running
+      # assemblies CPU-starve the timing-sensitive Session/Core clock tests on a 2-4 core runner (the
+      # SetAllPausedAsync resume-lag + MediaClock rate flakes). Serializing gives each assembly uncontended
+      # cores — the cross-assembly extension of the in-assembly DisableTestParallelization already in place.
       - name: Tests (arch rules + Core/Time/Routing)
         run: >
           dotnet test MFPlayer.sln -c Release --no-build
           --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type none
+          -- RunConfiguration.MaxCpuCount=1
 
       - name: AOT-publish smoke
         run: >
