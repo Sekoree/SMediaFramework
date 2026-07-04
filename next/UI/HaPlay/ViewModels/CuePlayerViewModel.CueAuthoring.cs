@@ -107,8 +107,8 @@ public partial class CuePlayerViewModel
         return row;
     }
 
-    [RelayCommand(CanExecute = nameof(CanAddNdiInputCue))]
-    private async Task AddNdiInputCueAsync()
+    [RelayCommand(CanExecute = nameof(CanAddNDIInputCue))]
+    private async Task AddNDIInputCueAsync()
     {
         var owner = TryGetMainWindow();
         if (owner is null) return;
@@ -128,21 +128,21 @@ public partial class CuePlayerViewModel
         }
     }
 
-    private bool CanAddNdiInputCue() => IsNdiAvailable;
+    private bool CanAddNDIInputCue() => IsNDIAvailable;
 
     /// <summary>Gate 6 — adds an MMD scene cue through the camera-placement dialog. The scene renders
     /// like any video cue on its composition; audio pairs as a separate cue in the same group. The
     /// cue's duration comes from the motion VMD (0 = bind pose, holds until stopped) and the physics
     /// bake starts in the background immediately ("always pre-bake if possible").</summary>
     [RelayCommand]
-    private async Task AddMmdCueAsync()
+    private async Task AddMMDCueAsync()
     {
         var owner = TryGetMainWindow();
         if (owner is null) return;
 
-        var dialogVm = new Dialogs.AddMmdDialogViewModel();
-        var dialog = new Views.Dialogs.AddMmdDialog { DataContext = dialogVm };
-        var result = await dialog.ShowDialog<MmdPlaylistItem?>(owner);
+        var dialogVm = new Dialogs.AddMMDDialogViewModel();
+        var dialog = new Views.Dialogs.AddMMDDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MMDPlaylistItem?>(owner);
         if (result is null) return;
         var row = AddLiveInputCue(result, result.DisplayName);
         HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
@@ -151,7 +151,7 @@ public partial class CuePlayerViewModel
         {
             var duration = await Task.Run(() =>
             {
-                try { return S.Media.Source.MMD.VmdDocument.Load(motionPath).Duration; }
+                try { return S.Media.Source.MMD.VMDDocument.Load(motionPath).Duration; }
                 catch { return TimeSpan.Zero; }
             });
             if (duration > TimeSpan.Zero)
@@ -483,7 +483,7 @@ public partial class CuePlayerViewModel
         {
             Number = NextNumber(parent),
             Label = Strings.CueNodeDefaultActionLabel,
-            Extra = CueActionKind.OscOut.ToString(),
+            Extra = CueActionKind.OSCOut.ToString(),
         };
         if (SelectedActionEndpoint is not null)
             row.EndpointIdText = SelectedActionEndpoint.Id.ToString();

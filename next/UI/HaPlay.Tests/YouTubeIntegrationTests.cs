@@ -160,7 +160,7 @@ public sealed class YouTubeIntegrationTests : IDisposable
     }
 
     [Fact]
-    public void CueMapper_MapsMmdCue_ToMmdUri_WithManualCameraParams()
+    public void CueMapper_MapsMMDCue_ToMMDUri_WithManualCameraParams()
     {
         var compositionId = Guid.NewGuid();
         var cueList = new CueList
@@ -173,7 +173,7 @@ public sealed class YouTubeIntegrationTests : IDisposable
                 {
                     Number = "1",
                     Label = "mmd",
-                    Source = new MmdPlaylistItem("/tmp/model.pmx")
+                    Source = new MMDPlaylistItem("/tmp/model.pmx")
                     {
                         MotionPath = "/tmp/dance.vmd",
                         CameraDistance = -22,
@@ -187,7 +187,7 @@ public sealed class YouTubeIntegrationTests : IDisposable
 
         var document = HaPlayShowMapper.ToShowDocument(cueList);
         var clip = Assert.Single(document.Clips);
-        Assert.True(S.Media.Source.MMD.MmdSourceUri.TryParse(clip.MediaPath, out var request));
+        Assert.True(S.Media.Source.MMD.MMDSourceUri.TryParse(clip.MediaPath, out var request));
         Assert.Equal("/tmp/model.pmx", request!.ModelPath);
         Assert.Equal("/tmp/dance.vmd", request.MotionPath);
         Assert.Equal(-22f, request.CameraDistance);
@@ -200,7 +200,7 @@ public sealed class YouTubeIntegrationTests : IDisposable
             project, HaPlayProjectJsonContext.Default.HaPlayProject);
         var back = System.Text.Json.JsonSerializer.Deserialize(
             json, HaPlayProjectJsonContext.Default.HaPlayProject)!;
-        var restored = Assert.IsType<MmdPlaylistItem>(
+        var restored = Assert.IsType<MMDPlaylistItem>(
             Assert.IsType<MediaCueNode>(back.CueLists[0].Nodes[0]).Source);
         Assert.Equal(-22, restored.CameraDistance);
         Assert.Equal("/tmp/dance.vmd", restored.MotionPath);

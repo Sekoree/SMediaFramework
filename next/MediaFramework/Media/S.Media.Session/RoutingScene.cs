@@ -48,7 +48,7 @@ public sealed record SyncGroupDefinition(
     string MasterClockId,
     IReadOnlyList<string> MemberIds);
 
-public sealed record NdiEndpointPreset(
+public sealed record NDIEndpointPreset(
     string Id,
     string Name,
     bool IsInput);
@@ -65,7 +65,7 @@ public sealed record RoutingSceneSnapshot(
     IReadOnlyList<SceneLayerDefinition> Layers,
     IReadOnlyList<RoutingTransition> Transitions,
     IReadOnlyList<SyncGroupDefinition> SyncGroups,
-    IReadOnlyList<NdiEndpointPreset> NdiPresets,
+    IReadOnlyList<NDIEndpointPreset> NDIPresets,
     string? PreviewOutputId,
     string? ProgramOutputId,
     IReadOnlyList<OperatorEndpointMetrics> Metrics);
@@ -83,7 +83,7 @@ public sealed class RoutingScene
     private readonly Dictionary<string, SceneLayerDefinition> _layers = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RoutingTransition> _transitions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SyncGroupDefinition> _syncGroups = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, NdiEndpointPreset> _ndiPresets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NDIEndpointPreset> _ndiPresets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OperatorEndpointMetrics> _metrics = new(StringComparer.Ordinal);
     private string? _previewOutputId;
     private string? _programOutputId;
@@ -134,7 +134,7 @@ public sealed class RoutingScene
             _syncGroups[group.GroupId] = group;
     }
 
-    public void SetNdiPreset(NdiEndpointPreset preset)
+    public void SetNDIPreset(NDIEndpointPreset preset)
     {
         ArgumentException.ThrowIfNullOrEmpty(preset.Id);
         ArgumentException.ThrowIfNullOrEmpty(preset.Name);

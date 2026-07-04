@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace PMLib.Runtime;
 
 /// <summary>
-/// Automatically registers the PortMidi native library resolver before any
+/// Automatically registers the PortMIDI native library resolver before any
 /// <c>Native.*</c> P/Invoke call can fire.
 /// </summary>
 internal static class PMLibModuleInit
@@ -14,7 +14,7 @@ internal static class PMLibModuleInit
     // registration is an intentional, established pattern.
 #pragma warning disable CA2255
     [ModuleInitializer]
-    internal static void Initialize() => PortMidiLibraryResolver.Install();
+    internal static void Initialize() => PortMIDILibraryResolver.Install();
 #pragma warning restore CA2255
 }
 

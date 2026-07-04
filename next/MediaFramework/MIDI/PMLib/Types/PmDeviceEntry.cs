@@ -3,12 +3,12 @@ using System.Runtime.InteropServices;
 namespace PMLib.Types;
 
 /// <summary>
-/// A safe, fully managed snapshot of a PortMidi device's metadata.
+/// A safe, fully managed snapshot of a PortMIDI device's metadata.
 /// All string fields are eagerly copied from native memory at creation time
 /// and remain valid after <see cref="PMUtil.Terminate"/>.
 /// </summary>
-/// <param name="Id">PortMidi device ID (stable within a single <c>Pm_Initialize</c>/<c>Pm_Terminate</c> session).</param>
-/// <param name="Name">Human-readable device name (e.g. <c>"USB MidiSport 1x1"</c>).</param>
+/// <param name="Id">PortMIDI device ID (stable within a single <c>Pm_Initialize</c>/<c>Pm_Terminate</c> session).</param>
+/// <param name="Name">Human-readable device name (e.g. <c>"USB MIDISport 1x1"</c>).</param>
 /// <param name="Interface">Underlying MIDI API (e.g. <c>"ALSA"</c>, <c>"CoreMIDI"</c>, <c>"MMSystem"</c>).</param>
 /// <param name="IsInput"><see langword="true"/> if the device supports MIDI input.</param>
 /// <param name="IsOutput"><see langword="true"/> if the device supports MIDI output.</param>
@@ -24,7 +24,7 @@ public readonly record struct PmDeviceEntry(
     bool    IsOpen)
 {
     /// <summary>
-    /// Creates a <see cref="PmDeviceEntry"/> from a PortMidi device ID, marshalling the
+    /// Creates a <see cref="PmDeviceEntry"/> from a PortMIDI device ID, marshalling the
     /// device info pointer and eagerly copying the native string fields.
     /// Returns <see langword="null"/> if the device ID is out of range.
     /// </summary>

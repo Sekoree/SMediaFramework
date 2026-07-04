@@ -11,14 +11,14 @@ public sealed class ControlEventQueueTests
     {
         var midiId = Guid.NewGuid();
         var x32Id = Guid.NewGuid();
-        var sender = new BlockingOscSender();
+        var sender = new BlockingOSCSender();
         var config = new ControlSystemConfig
         {
             IsArmed = true,
             Devices =
             [
-                MidiDevice(midiId),
-                OscDevice(x32Id, "x32"),
+                MIDIDevice(midiId),
+                OSCDevice(x32Id, "x32"),
             ],
             Scripts =
             [
@@ -31,8 +31,8 @@ public sealed class ControlEventQueueTests
                     [
                         new ControlScriptTriggerConfig
                         {
-                            Kind = ControlScriptTriggerKind.MidiControlChange,
-                            FunctionName = "onMidi",
+                            Kind = ControlScriptTriggerKind.MIDIControlChange,
+                            FunctionName = "onMIDI",
                             DeviceInstanceId = midiId,
                         },
                     ],
@@ -45,7 +45,7 @@ public sealed class ControlEventQueueTests
             {
                 ["Scripts/midi.mnd"] =
                     """
-                    export fun onMidi(event, context) {
+                    export fun onMIDI(event, context) {
                         osc.send("x32", "/seen", osc.int32(event.midi.controller));
                     }
                     """,
@@ -53,9 +53,9 @@ public sealed class ControlEventQueueTests
             sender);
         await using var queue = new ControlEventQueue(session);
 
-        var first = queue.DispatchControlEventAsync(MidiCcEvent(midiId, controller: 16, value: 1)).AsTask();
+        var first = queue.DispatchControlEventAsync(MIDICcEvent(midiId, controller: 16, value: 1)).AsTask();
         await sender.FirstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var second = queue.DispatchControlEventAsync(MidiCcEvent(midiId, controller: 17, value: 2)).AsTask();
+        var second = queue.DispatchControlEventAsync(MIDICcEvent(midiId, controller: 17, value: 2)).AsTask();
 
         await Task.Delay(50);
         Assert.False(second.IsCompleted);
@@ -70,31 +70,31 @@ public sealed class ControlEventQueueTests
             sent => Assert.Equal(17, Assert.Single(sent.Arguments).AsInt32()));
     }
 
-    private static ControlDeviceInstanceConfig MidiDevice(Guid id) =>
+    private static ControlDeviceInstanceConfig MIDIDevice(Guid id) =>
         new()
         {
             Id = id,
             Name = "X-Touch Mini",
-            Protocol = ControlDeviceProtocol.Midi,
+            Protocol = ControlDeviceProtocol.MIDI,
             IsEnabled = true,
         };
 
-    private static ControlDeviceInstanceConfig OscDevice(Guid id, string alias) =>
+    private static ControlDeviceInstanceConfig OSCDevice(Guid id, string alias) =>
         new()
         {
             Id = id,
             Name = "X32",
-            Protocol = ControlDeviceProtocol.Osc,
+            Protocol = ControlDeviceProtocol.OSC,
             IsEnabled = true,
             Binding = new ControlDeviceBindingConfig
             {
                 Alias = alias,
-                OscHost = "127.0.0.1",
-                OscPort = 10023,
+                OSCHost = "127.0.0.1",
+                OSCPort = 10023,
             },
         };
 
-    private static MidiControlEvent MidiCcEvent(Guid deviceId, int controller, int value) =>
+    private static MIDIControlEvent MIDICcEvent(Guid deviceId, int controller, int value) =>
         new(
             DateTimeOffset.UtcNow,
             Guid.NewGuid(),
@@ -105,10 +105,10 @@ public sealed class ControlEventQueueTests
             Value: value,
             HighResolution14Bit: false);
 
-    private sealed class BlockingOscSender : IControlOscSender
+    private sealed class BlockingOSCSender : IControlOSCSender
     {
         private readonly object _gate = new();
-        private readonly List<SentOscMessage> _sent = new();
+        private readonly List<SentOSCMessage> _sent = new();
         private int _sendCount;
 
         public TaskCompletionSource FirstSendStarted { get; } =
@@ -117,7 +117,7 @@ public sealed class ControlEventQueueTests
         public TaskCompletionSource ReleaseFirstSend { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public IReadOnlyList<SentOscMessage> Sent
+        public IReadOnlyList<SentOSCMessage> Sent
         {
             get
             {
@@ -140,11 +140,11 @@ public sealed class ControlEventQueueTests
             }
 
             lock (_gate)
-                _sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+                _sent.Add(new SentOSCMessage(host, port, address, arguments.ToArray()));
         }
     }
 
-    private sealed record SentOscMessage(
+    private sealed record SentOSCMessage(
         string Host,
         int Port,
         string Address,

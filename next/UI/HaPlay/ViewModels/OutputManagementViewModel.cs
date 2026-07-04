@@ -27,7 +27,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
 
-    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+    public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     private volatile IReadOnlyList<OutputDefinition> _definitionsSnapshot = Array.Empty<OutputDefinition>();
 
@@ -637,8 +637,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         if (_localPreviews.ContainsKey(line))
             return;
 
-        ILocalVideoPreviewRuntime runtime = d.Engine == VideoOutputEngine.SdlOpenGl
-            ? new SdlLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow())
+        ILocalVideoPreviewRuntime runtime = d.Engine == VideoOutputEngine.SDLOpenGl
+            ? new SDLLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow())
             : new AvaloniaLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow());
 
         try
@@ -1100,7 +1100,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
-    private bool CanAddNDI() => IsNdiAvailable;
+    private bool CanAddNDI() => IsNDIAvailable;
 
     [RelayCommand]
     private void ClearHealth()

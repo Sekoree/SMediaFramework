@@ -4,7 +4,7 @@ using PMLib.Types;
 namespace PMLib.Runtime;
 
 /// <summary>
-/// Allocates a PortMidi 2.x <c>PmSysDepInfo</c> block for optional ALSA client/port names.
+/// Allocates a PortMIDI 2.x <c>PmSysDepInfo</c> block for optional ALSA client/port names.
 /// </summary>
 internal sealed class PmSysDepInfoHandle : IDisposable
 {

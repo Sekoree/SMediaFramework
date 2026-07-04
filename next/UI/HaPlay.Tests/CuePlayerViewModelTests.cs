@@ -10,7 +10,7 @@ namespace HaPlay.Tests;
 public sealed class CuePlayerViewModelTests
 {
     [Fact]
-    public void AvailableOutputBuckets_ClassifyNdiByStreamMode()
+    public void AvailableOutputBuckets_ClassifyNDIByStreamMode()
     {
         var vm = new CuePlayerViewModel();
         var videoAndAudio = Line(new NDIOutputDefinition(
@@ -37,7 +37,7 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void AddAudioRoute_UsesNdiChannelCount()
+    public void AddAudioRoute_UsesNDIChannelCount()
     {
         var vm = new CuePlayerViewModel();
         var ndi = Line(new NDIOutputDefinition(
@@ -202,7 +202,7 @@ public sealed class CuePlayerViewModelTests
                 {
                     Number = "2",
                     Label = "GO",
-                    ActionKind = CueActionKind.OscOut,
+                    ActionKind = CueActionKind.OSCOut,
                     AddressOrMessage = "/go",
                 },
             },
@@ -1217,7 +1217,7 @@ public sealed class CuePlayerViewModelTests
         var endpointId = Guid.NewGuid();
         action.EndpointIdText = endpointId.ToString();
         action.SourceOrAction = "/lighting/go";
-        action.Extra = CueActionKind.OscOut.ToString();
+        action.Extra = CueActionKind.OSCOut.ToString();
 
         var snapshot = vm.BuildCueListsSnapshot();
         var node = Assert.IsType<ActionCueNode>(Assert.Single(snapshot[0].Nodes));
@@ -1225,19 +1225,19 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void ActionCueBuilderDialogViewModel_Osc_ComposesCommandAndEndpoint()
+    public void ActionCueBuilderDialogViewModel_OSC_ComposesCommandAndEndpoint()
     {
         var vm = new ActionCueBuilderDialogViewModel();
-        var endpoint = new OscActionEndpoint { Name = "OSC A", Host = "127.0.0.1", Port = 9000 };
-        vm.Load("Action", CueActionKind.OscOut, null, endpoint.Id, [endpoint]);
-        vm.OscAddress = "/lights/go";
-        vm.OscArguments = "1 true";
+        var endpoint = new OSCActionEndpoint { Name = "OSC A", Host = "127.0.0.1", Port = 9000 };
+        vm.Load("Action", CueActionKind.OSCOut, null, endpoint.Id, [endpoint]);
+        vm.OSCAddress = "/lights/go";
+        vm.OSCArguments = "1 true";
 
         Assert.True(vm.TryBuild(out var endpointId, out var actionKind, out var commandText, out var error));
 
         Assert.Null(error);
         Assert.Equal(endpoint.Id, endpointId);
-        Assert.Equal(CueActionKind.OscOut, actionKind);
+        Assert.Equal(CueActionKind.OSCOut, actionKind);
         Assert.Equal("/lights/go 1 true", commandText);
     }
 
@@ -1374,7 +1374,7 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void GetNdiPreConnectTargets_IncludesNdiMediaFromStandby()
+    public void GetNDIPreConnectTargets_IncludesNDIMediaFromStandby()
     {
         var vm = new CuePlayerViewModel();
         vm.AddEmptyMediaCue();
@@ -1383,7 +1383,7 @@ public sealed class CuePlayerViewModelTests
         vm.SelectedCueNode = media;
         vm.StandbySelectedCommand.Execute(null);
 
-        var targets = vm.GetNdiPreConnectTargets();
+        var targets = vm.GetNDIPreConnectTargets();
         var t = Assert.Single(targets);
         Assert.Equal(media.Id, t.CueId);
         Assert.Equal("Studio-PC (Output 1)", t.Item.SourceName);
@@ -1462,7 +1462,7 @@ public sealed class CuePlayerViewModelTests
     {
         var missing = Guid.NewGuid();
         var vm = new CuePlayerViewModel();
-        vm.SetActionEndpoints([new OscActionEndpoint { Name = "Live", Host = "127.0.0.1", Port = 9000 }]);
+        vm.SetActionEndpoints([new OSCActionEndpoint { Name = "Live", Host = "127.0.0.1", Port = 9000 }]);
         vm.AddActionCueCommand.Execute(null);
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.EndpointIdText = missing.ToString();
@@ -1477,7 +1477,7 @@ public sealed class CuePlayerViewModelTests
     public void RemapActionEndpoints_UpdatesCueEndpointId()
     {
         var missing = Guid.NewGuid();
-        var replacement = new OscActionEndpoint { Name = "New", Host = "127.0.0.1", Port = 9001 };
+        var replacement = new OSCActionEndpoint { Name = "New", Host = "127.0.0.1", Port = 9001 };
         var vm = new CuePlayerViewModel();
         vm.SetActionEndpoints([replacement]);
         vm.AddActionCueCommand.Execute(null);
@@ -1732,21 +1732,21 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void ActionCueBuilderDialogViewModel_Midi_ComposesCommand()
+    public void ActionCueBuilderDialogViewModel_MIDI_ComposesCommand()
     {
         var vm = new ActionCueBuilderDialogViewModel();
-        var endpoint = new MidiActionEndpoint { Name = "MIDI A" };
-        vm.Load("Action", CueActionKind.MidiOut, null, endpoint.Id, [endpoint]);
-        vm.MidiCommandType = CueMidiCommandType.ControlChange;
-        vm.MidiChannel = 2;
-        vm.MidiData1 = 7;
-        vm.MidiData2 = 110;
+        var endpoint = new MIDIActionEndpoint { Name = "MIDI A" };
+        vm.Load("Action", CueActionKind.MIDIOut, null, endpoint.Id, [endpoint]);
+        vm.MIDICommandType = CueMIDICommandType.ControlChange;
+        vm.MIDIChannel = 2;
+        vm.MIDIData1 = 7;
+        vm.MIDIData2 = 110;
 
         Assert.True(vm.TryBuild(out var endpointId, out var actionKind, out var commandText, out var error));
 
         Assert.Null(error);
         Assert.Equal(endpoint.Id, endpointId);
-        Assert.Equal(CueActionKind.MidiOut, actionKind);
+        Assert.Equal(CueActionKind.MIDIOut, actionKind);
         Assert.Equal("ch2 cc 7 110", commandText);
     }
 }

@@ -60,10 +60,10 @@ public sealed class ControlScriptRuntime
 
         var kind = evt switch
         {
-            MidiControlEvent => ControlScriptTriggerKind.MidiControlChange,
-            MidiNoteControlEvent => ControlScriptTriggerKind.MidiNote,
-            MidiMessageControlEvent => ControlScriptTriggerKind.MidiMessage,
-            OscControlEvent => ControlScriptTriggerKind.OscMessage,
+            MIDIControlEvent => ControlScriptTriggerKind.MIDIControlChange,
+            MIDINoteControlEvent => ControlScriptTriggerKind.MIDINote,
+            MIDIMessageControlEvent => ControlScriptTriggerKind.MIDIMessage,
+            OSCControlEvent => ControlScriptTriggerKind.OSCMessage,
             _ => ControlScriptTriggerKind.Manual,
         };
 
@@ -78,7 +78,7 @@ public sealed class ControlScriptRuntime
         {
             var cacheEvent = ToCacheChangedEvent(evt, change);
             var cacheDispatch = Dispatch(
-                ControlScriptTriggerKind.OscCacheChanged,
+                ControlScriptTriggerKind.OSCCacheChanged,
                 cacheEvent,
                 evt.OriginId,
                 endpointId: evt.SourceNodeId,
@@ -96,7 +96,7 @@ public sealed class ControlScriptRuntime
 
     public ControlScriptDispatchResult DispatchDeviceDisabled(Guid deviceInstanceId)
     {
-        RuntimeServices.OscCache.MarkDeviceStale(deviceInstanceId.ToString());
+        RuntimeServices.OSCCache.MarkDeviceStale(deviceInstanceId.ToString());
         if (_devices.TryGetValue(deviceInstanceId, out var device))
         {
             MarkDeviceCacheAliasesStale(device);
@@ -377,12 +377,12 @@ public sealed class ControlScriptRuntime
 
         return evt switch
         {
-            MidiControlEvent midi => MidiTriggerMatches(trigger, kind, midi),
-            MidiNoteControlEvent midi => MidiTriggerMatches(trigger, kind, midi),
-            MidiMessageControlEvent midi => MidiTriggerMatches(trigger, kind, midi.Message),
-            OscControlEvent osc => OscTriggerMatches(trigger, osc),
-            OscCacheChangedControlEvent cacheChanged => kind == ControlScriptTriggerKind.OscCacheChanged
-                && OscAddressMatches(trigger.OscAddressPattern, cacheChanged.Address),
+            MIDIControlEvent midi => MIDITriggerMatches(trigger, kind, midi),
+            MIDINoteControlEvent midi => MIDITriggerMatches(trigger, kind, midi),
+            MIDIMessageControlEvent midi => MIDITriggerMatches(trigger, kind, midi.Message),
+            OSCControlEvent osc => OSCTriggerMatches(trigger, osc),
+            OSCCacheChangedControlEvent cacheChanged => kind == ControlScriptTriggerKind.OSCCacheChanged
+                && OSCAddressMatches(trigger.OSCAddressPattern, cacheChanged.Address),
             DeviceHealthChangedControlEvent => kind == ControlScriptTriggerKind.DeviceHealthChanged,
             null => true,
             _ => kind == ControlScriptTriggerKind.Manual,
@@ -397,108 +397,108 @@ public sealed class ControlScriptRuntime
         if (triggerKind == eventKind)
             return true;
 
-        if (triggerKind == ControlScriptTriggerKind.MidiMessage
-            && evt is MidiControlEvent or MidiNoteControlEvent or MidiMessageControlEvent)
+        if (triggerKind == ControlScriptTriggerKind.MIDIMessage
+            && evt is MIDIControlEvent or MIDINoteControlEvent or MIDIMessageControlEvent)
             return true;
 
         return triggerKind switch
         {
-            ControlScriptTriggerKind.MidiControlChange => evt is MidiMessageControlEvent
+            ControlScriptTriggerKind.MIDIControlChange => evt is MIDIMessageControlEvent
             {
-                Message.MessageType: ControlMidiMessageType.ControlChange
+                Message.MessageType: ControlMIDIMessageType.ControlChange
             },
-            ControlScriptTriggerKind.MidiNote => evt is MidiMessageControlEvent
+            ControlScriptTriggerKind.MIDINote => evt is MIDIMessageControlEvent
             {
-                Message.MessageType: ControlMidiMessageType.NoteOn or ControlMidiMessageType.NoteOff
+                Message.MessageType: ControlMIDIMessageType.NoteOn or ControlMIDIMessageType.NoteOff
             },
             _ => false,
         };
     }
 
-    private static bool MidiTriggerMatches(ControlScriptTriggerConfig trigger, ControlScriptTriggerKind kind, MidiControlEvent midi)
+    private static bool MIDITriggerMatches(ControlScriptTriggerConfig trigger, ControlScriptTriggerKind kind, MIDIControlEvent midi)
     {
-        if (kind is not (ControlScriptTriggerKind.MidiControlChange or ControlScriptTriggerKind.MidiMessage))
+        if (kind is not (ControlScriptTriggerKind.MIDIControlChange or ControlScriptTriggerKind.MIDIMessage))
             return false;
-        if (trigger.MidiMessageType.HasValue && trigger.MidiMessageType.Value != ControlMidiMessageType.ControlChange)
+        if (trigger.MIDIMessageType.HasValue && trigger.MIDIMessageType.Value != ControlMIDIMessageType.ControlChange)
             return false;
-        if (trigger.MidiChannel.HasValue && trigger.MidiChannel.Value != midi.Channel)
+        if (trigger.MIDIChannel.HasValue && trigger.MIDIChannel.Value != midi.Channel)
             return false;
-        if (trigger.MidiController.HasValue && trigger.MidiController.Value != midi.Controller)
+        if (trigger.MIDIController.HasValue && trigger.MIDIController.Value != midi.Controller)
             return false;
-        if (!MidiValueMatches(trigger, midi.Value))
+        if (!MIDIValueMatches(trigger, midi.Value))
             return false;
-        if (trigger.MidiParameter.HasValue)
+        if (trigger.MIDIParameter.HasValue)
             return false;
 
         return true;
     }
 
-    private static bool MidiTriggerMatches(ControlScriptTriggerConfig trigger, ControlScriptTriggerKind kind, MidiNoteControlEvent midi)
+    private static bool MIDITriggerMatches(ControlScriptTriggerConfig trigger, ControlScriptTriggerKind kind, MIDINoteControlEvent midi)
     {
-        if (kind is not (ControlScriptTriggerKind.MidiNote or ControlScriptTriggerKind.MidiMessage))
+        if (kind is not (ControlScriptTriggerKind.MIDINote or ControlScriptTriggerKind.MIDIMessage))
             return false;
-        if (trigger.MidiMessageType.HasValue)
+        if (trigger.MIDIMessageType.HasValue)
         {
-            var expected = midi.IsNoteOn ? ControlMidiMessageType.NoteOn : ControlMidiMessageType.NoteOff;
-            if (trigger.MidiMessageType.Value != expected)
+            var expected = midi.IsNoteOn ? ControlMIDIMessageType.NoteOn : ControlMIDIMessageType.NoteOff;
+            if (trigger.MIDIMessageType.Value != expected)
                 return false;
         }
-        if (trigger.MidiChannel.HasValue && trigger.MidiChannel.Value != midi.Channel)
+        if (trigger.MIDIChannel.HasValue && trigger.MIDIChannel.Value != midi.Channel)
             return false;
-        if (trigger.MidiNote.HasValue && trigger.MidiNote.Value != midi.Note)
+        if (trigger.MIDINote.HasValue && trigger.MIDINote.Value != midi.Note)
             return false;
-        if (!MidiValueMatches(trigger, midi.Velocity))
+        if (!MIDIValueMatches(trigger, midi.Velocity))
             return false;
-        if (trigger.MidiParameter.HasValue)
+        if (trigger.MIDIParameter.HasValue)
             return false;
 
         return true;
     }
 
-    private static bool MidiTriggerMatches(
+    private static bool MIDITriggerMatches(
         ControlScriptTriggerConfig trigger,
         ControlScriptTriggerKind kind,
-        ControlMidiMessagePayload midi)
+        ControlMIDIMessagePayload midi)
     {
-        if (kind is not (ControlScriptTriggerKind.MidiMessage
-            or ControlScriptTriggerKind.MidiControlChange
-            or ControlScriptTriggerKind.MidiNote))
+        if (kind is not (ControlScriptTriggerKind.MIDIMessage
+            or ControlScriptTriggerKind.MIDIControlChange
+            or ControlScriptTriggerKind.MIDINote))
             return false;
-        if (kind == ControlScriptTriggerKind.MidiControlChange
-            && midi.MessageType != ControlMidiMessageType.ControlChange)
+        if (kind == ControlScriptTriggerKind.MIDIControlChange
+            && midi.MessageType != ControlMIDIMessageType.ControlChange)
             return false;
-        if (kind == ControlScriptTriggerKind.MidiNote
-            && midi.MessageType is not (ControlMidiMessageType.NoteOn or ControlMidiMessageType.NoteOff))
+        if (kind == ControlScriptTriggerKind.MIDINote
+            && midi.MessageType is not (ControlMIDIMessageType.NoteOn or ControlMIDIMessageType.NoteOff))
             return false;
-        if (trigger.MidiMessageType.HasValue && trigger.MidiMessageType.Value != midi.MessageType)
+        if (trigger.MIDIMessageType.HasValue && trigger.MIDIMessageType.Value != midi.MessageType)
             return false;
-        if (trigger.MidiChannel.HasValue && trigger.MidiChannel.Value != midi.Channel)
+        if (trigger.MIDIChannel.HasValue && trigger.MIDIChannel.Value != midi.Channel)
             return false;
-        if (trigger.MidiController.HasValue && trigger.MidiController.Value != midi.Controller)
+        if (trigger.MIDIController.HasValue && trigger.MIDIController.Value != midi.Controller)
             return false;
-        if (trigger.MidiNote.HasValue && trigger.MidiNote.Value != midi.Note)
+        if (trigger.MIDINote.HasValue && trigger.MIDINote.Value != midi.Note)
             return false;
-        if (!MidiValueMatches(trigger, midi.Value))
+        if (!MIDIValueMatches(trigger, midi.Value))
             return false;
-        if (trigger.MidiParameter.HasValue && trigger.MidiParameter.Value != midi.Parameter)
+        if (trigger.MIDIParameter.HasValue && trigger.MIDIParameter.Value != midi.Parameter)
             return false;
 
         return true;
     }
 
-    private static bool MidiValueMatches(ControlScriptTriggerConfig trigger, int? value)
+    private static bool MIDIValueMatches(ControlScriptTriggerConfig trigger, int? value)
     {
-        if (trigger.MidiValue.HasValue)
-            return value.HasValue && trigger.MidiValue.Value == value.Value;
-        if (trigger.MidiValueMin.HasValue && (!value.HasValue || value.Value < trigger.MidiValueMin.Value))
+        if (trigger.MIDIValue.HasValue)
+            return value.HasValue && trigger.MIDIValue.Value == value.Value;
+        if (trigger.MIDIValueMin.HasValue && (!value.HasValue || value.Value < trigger.MIDIValueMin.Value))
             return false;
-        if (trigger.MidiValueMax.HasValue && (!value.HasValue || value.Value > trigger.MidiValueMax.Value))
+        if (trigger.MIDIValueMax.HasValue && (!value.HasValue || value.Value > trigger.MIDIValueMax.Value))
             return false;
         return true;
     }
 
-    private static bool OscTriggerMatches(ControlScriptTriggerConfig trigger, OscControlEvent osc) =>
-        OscAddressMatches(trigger.OscAddressPattern, osc.Address);
+    private static bool OSCTriggerMatches(ControlScriptTriggerConfig trigger, OSCControlEvent osc) =>
+        OSCAddressMatches(trigger.OSCAddressPattern, osc.Address);
 
     private void InvokeTrigger(
         ScriptRuntimeState scriptState,
@@ -599,7 +599,7 @@ public sealed class ControlScriptRuntime
 
     private IReadOnlyList<ControlValueCacheChange> UpdateCaches(ControlEvent evt)
     {
-        if (evt is not OscControlEvent osc)
+        if (evt is not OSCControlEvent osc)
             return [];
 
         var changes = new List<ControlValueCacheChange>();
@@ -659,7 +659,7 @@ public sealed class ControlScriptRuntime
 
     private IReadOnlyList<ControlValueCacheChange> ApplyMeterBlobCache(
         string[] deviceKeys,
-        OscControlEvent osc,
+        OSCControlEvent osc,
         OSCArgument argument,
         int argumentIndex,
         ControlEvent evt)
@@ -669,7 +669,7 @@ public sealed class ControlScriptRuntime
             return [];
 
         const ControlValueCacheSource source = ControlValueCacheSource.Incoming;
-        var cache = RuntimeServices.OscCache;
+        var cache = RuntimeServices.OSCCache;
         var changes = new List<ControlValueCacheChange>();
 
         foreach (var entry in decoder.Decode(osc.Address, osc.Arguments, argumentIndex, argument.AsBlob()))
@@ -704,7 +704,7 @@ public sealed class ControlScriptRuntime
         ControlEvent evt)
     {
         const ControlValueCacheSource source = ControlValueCacheSource.Incoming;
-        var cache = RuntimeServices.OscCache;
+        var cache = RuntimeServices.OSCCache;
         return argument.Type switch
         {
             OSCArgumentType.Float32 => cache.SetNumber(deviceKey, address, argument.AsFloat32(), source, argumentIndex, evt.CorrelationId, evt.Timestamp),
@@ -718,7 +718,7 @@ public sealed class ControlScriptRuntime
         };
     }
 
-    private static OscCacheChangedControlEvent ToCacheChangedEvent(ControlEvent evt, ControlValueCacheChange change) =>
+    private static OSCCacheChangedControlEvent ToCacheChangedEvent(ControlEvent evt, ControlValueCacheChange change) =>
         new(
             change.Timestamp,
             evt.SourceNodeId,
@@ -747,13 +747,13 @@ public sealed class ControlScriptRuntime
 
     private void MarkDeviceCacheAliasesStale(ControlDeviceInstanceConfig device)
     {
-        RuntimeServices.OscCache.MarkDeviceStale(device.Id.ToString());
+        RuntimeServices.OSCCache.MarkDeviceStale(device.Id.ToString());
         if (!string.IsNullOrWhiteSpace(device.Name))
-            RuntimeServices.OscCache.MarkDeviceStale(device.Name);
+            RuntimeServices.OSCCache.MarkDeviceStale(device.Name);
         if (!string.IsNullOrWhiteSpace(device.Binding.Alias))
-            RuntimeServices.OscCache.MarkDeviceStale(device.Binding.Alias);
+            RuntimeServices.OSCCache.MarkDeviceStale(device.Binding.Alias);
         if (!string.IsNullOrWhiteSpace(device.ProfileId))
-            RuntimeServices.OscCache.MarkDeviceStale(device.ProfileId);
+            RuntimeServices.OSCCache.MarkDeviceStale(device.ProfileId);
     }
 
     private bool IsDeviceEnabled(Guid deviceInstanceId) =>
@@ -810,7 +810,7 @@ public sealed class ControlScriptRuntime
 
         switch (evt)
         {
-            case MidiControlEvent midi:
+            case MIDIControlEvent midi:
                 obj["type"] = "midi";
                 var midiObj = MondValue.Object(state);
                 midiObj["message"] = "controlChange";
@@ -821,7 +821,7 @@ public sealed class ControlScriptRuntime
                 obj["midi"] = midiObj;
                 obj["value"] = midi.Value;
                 break;
-            case MidiNoteControlEvent midi:
+            case MIDINoteControlEvent midi:
                 obj["type"] = "midi";
                 var midiNoteObj = MondValue.Object(state);
                 midiNoteObj["message"] = midi.IsNoteOn ? "noteOn" : "noteOff";
@@ -832,20 +832,20 @@ public sealed class ControlScriptRuntime
                 obj["midi"] = midiNoteObj;
                 obj["value"] = midi.Velocity;
                 break;
-            case MidiMessageControlEvent midi:
+            case MIDIMessageControlEvent midi:
                 obj["type"] = "midi";
-                AddMidiPayload(state, obj, midi.Message);
+                AddMIDIPayload(state, obj, midi.Message);
                 break;
-            case OscControlEvent osc:
+            case OSCControlEvent osc:
                 obj["type"] = "osc";
                 var oscObj = MondValue.Object(state);
                 oscObj["address"] = osc.Address;
-                oscObj["args"] = MondValue.Array(osc.Arguments.Select(ToMondOscArgument));
+                oscObj["args"] = MondValue.Array(osc.Arguments.Select(ToMondOSCArgument));
                 obj["osc"] = oscObj;
-                if (TryGetOscScalar(osc.Arguments.FirstOrDefault(), out var value))
+                if (TryGetOSCScalar(osc.Arguments.FirstOrDefault(), out var value))
                     obj["value"] = value;
                 break;
-            case OscCacheChangedControlEvent cacheChanged:
+            case OSCCacheChangedControlEvent cacheChanged:
                 obj["type"] = "oscCacheChanged";
                 obj["deviceKey"] = cacheChanged.DeviceKey;
                 obj["source"] = cacheChanged.Source.ToString();
@@ -879,10 +879,10 @@ public sealed class ControlScriptRuntime
         return obj;
     }
 
-    private static void AddMidiPayload(MondState state, MondValue eventObject, ControlMidiMessagePayload midi)
+    private static void AddMIDIPayload(MondState state, MondValue eventObject, ControlMIDIMessagePayload midi)
     {
         var midiObj = MondValue.Object(state);
-        midiObj["message"] = ToMidiMessageName(midi.MessageType);
+        midiObj["message"] = ToMIDIMessageName(midi.MessageType);
         midiObj["messageType"] = midi.MessageType.ToString();
         if (midi.Channel.HasValue)
             midiObj["channel"] = midi.Channel.Value;
@@ -934,7 +934,7 @@ public sealed class ControlScriptRuntime
             _ => MondValue.Undefined,
         };
 
-    private static MondValue ToMondOscArgument(OSCArgument argument) =>
+    private static MondValue ToMondOSCArgument(OSCArgument argument) =>
         argument.Type switch
         {
             OSCArgumentType.Float32 => argument.AsFloat32(),
@@ -947,7 +947,7 @@ public sealed class ControlScriptRuntime
             _ => MondValue.Undefined,
         };
 
-    private static bool TryGetOscScalar(OSCArgument argument, out double value)
+    private static bool TryGetOSCScalar(OSCArgument argument, out double value)
     {
         switch (argument.Type)
         {
@@ -975,35 +975,35 @@ public sealed class ControlScriptRuntime
         }
     }
 
-    private static bool OscAddressMatches(string? pattern, string address) =>
-        ControlOscAddressPattern.Matches(pattern, address);
+    private static bool OSCAddressMatches(string? pattern, string address) =>
+        ControlOSCAddressPattern.Matches(pattern, address);
 
     private static string ToTriggerName(ControlScriptTriggerKind kind) =>
         kind.ToString();
 
-    private static string ToMidiMessageName(ControlMidiMessageType type) =>
+    private static string ToMIDIMessageName(ControlMIDIMessageType type) =>
         type switch
         {
-            ControlMidiMessageType.NRPN => "nrpn",
-            ControlMidiMessageType.RPN => "rpn",
-            ControlMidiMessageType.NoteOff => "noteOff",
-            ControlMidiMessageType.NoteOn => "noteOn",
-            ControlMidiMessageType.PolyphonicAftertouch => "polyphonicAftertouch",
-            ControlMidiMessageType.ControlChange => "controlChange",
-            ControlMidiMessageType.ProgramChange => "programChange",
-            ControlMidiMessageType.ChannelAftertouch => "channelAftertouch",
-            ControlMidiMessageType.PitchBend => "pitchBend",
-            ControlMidiMessageType.SysEx => "sysEx",
-            ControlMidiMessageType.MIDITimeCode => "midiTimeCode",
-            ControlMidiMessageType.SongPosition => "songPosition",
-            ControlMidiMessageType.SongSelect => "songSelect",
-            ControlMidiMessageType.TuneRequest => "tuneRequest",
-            ControlMidiMessageType.TimingClock => "timingClock",
-            ControlMidiMessageType.Start => "start",
-            ControlMidiMessageType.Continue => "continue",
-            ControlMidiMessageType.Stop => "stop",
-            ControlMidiMessageType.ActiveSensing => "activeSensing",
-            ControlMidiMessageType.Reset => "reset",
+            ControlMIDIMessageType.NRPN => "nrpn",
+            ControlMIDIMessageType.RPN => "rpn",
+            ControlMIDIMessageType.NoteOff => "noteOff",
+            ControlMIDIMessageType.NoteOn => "noteOn",
+            ControlMIDIMessageType.PolyphonicAftertouch => "polyphonicAftertouch",
+            ControlMIDIMessageType.ControlChange => "controlChange",
+            ControlMIDIMessageType.ProgramChange => "programChange",
+            ControlMIDIMessageType.ChannelAftertouch => "channelAftertouch",
+            ControlMIDIMessageType.PitchBend => "pitchBend",
+            ControlMIDIMessageType.SysEx => "sysEx",
+            ControlMIDIMessageType.MIDITimeCode => "midiTimeCode",
+            ControlMIDIMessageType.SongPosition => "songPosition",
+            ControlMIDIMessageType.SongSelect => "songSelect",
+            ControlMIDIMessageType.TuneRequest => "tuneRequest",
+            ControlMIDIMessageType.TimingClock => "timingClock",
+            ControlMIDIMessageType.Start => "start",
+            ControlMIDIMessageType.Continue => "continue",
+            ControlMIDIMessageType.Stop => "stop",
+            ControlMIDIMessageType.ActiveSensing => "activeSensing",
+            ControlMIDIMessageType.Reset => "reset",
             _ => "unknown",
         };
 

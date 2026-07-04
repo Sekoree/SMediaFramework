@@ -18,7 +18,7 @@ namespace HaPlay.Models;
 [JsonDerivedType(typeof(SubtitlePlaylistItem), typeDiscriminator: "subtitle")]
 [JsonDerivedType(typeof(TextPlaylistItem), typeDiscriminator: "text")]
 [JsonDerivedType(typeof(YouTubePlaylistItem), typeDiscriminator: "youtube")]
-[JsonDerivedType(typeof(MmdPlaylistItem), typeDiscriminator: "mmd")]
+[JsonDerivedType(typeof(MMDPlaylistItem), typeDiscriminator: "mmd")]
 public abstract record PlaylistItem
 {
     /// <summary>Stable per-instance identity. Lets the same underlying source appear twice in a
@@ -169,7 +169,7 @@ public sealed record TextPlaylistItem : PlaylistItem
 /// motion, rendered through the MMD compositor surface behind an <c>mmd://</c> URI. When no camera
 /// VMD is set, the manual placement fields below drive the camera — the deck preview IS the
 /// camera-placement view (tweak → replay → see the framing).</summary>
-public sealed record MmdPlaylistItem(string ModelPath) : PlaylistItem
+public sealed record MMDPlaylistItem(string ModelPath) : PlaylistItem
 {
     /// <summary>MSAA in the GL renderer (the add-dialog toggle).</summary>
     public bool Antialias { get; init; } = true;

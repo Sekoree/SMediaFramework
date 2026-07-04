@@ -6,8 +6,8 @@ namespace S.Media.Session;
 
 public enum TriggerSourceKind
 {
-    Midi,
-    Osc,
+    MIDI,
+    OSC,
     Keyboard,
     Hardware,
     App,

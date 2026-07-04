@@ -74,7 +74,7 @@
       </TabItem>
 
       <!-- Scene: MMD items — scene summary, full editor, explicit physics bake. -->
-      <TabItem Header="{x:Static res:Strings.MediaPropertiesTabScene}" IsVisible="{Binding IsMmdItem}">
+      <TabItem Header="{x:Static res:Strings.MediaPropertiesTabScene}" IsVisible="{Binding IsMMDItem}">
         <ScrollViewer>
           <StackPanel Spacing="10" Margin="0,8,0,0">
             <ItemsControl ItemsSource="{Binding SceneRows}" ItemTemplate="{StaticResource PropertyRowTemplate}" />

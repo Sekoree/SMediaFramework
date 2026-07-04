@@ -36,11 +36,11 @@ public sealed record ControlConnectionConfig
 
 public enum ControlNodeKind
 {
-    MidiInput,
-    OscInput,
+    MIDIInput,
+    OSCInput,
     MapRange,
-    OscOutput,
-    MidiOutput,
+    OSCOutput,
+    MIDIOutput,
     X32ChannelFader,
     ScriptTransform,
     Passthrough,
@@ -49,8 +49,8 @@ public enum ControlNodeKind
 public enum ControlPortType
 {
     Any,
-    Midi,
-    Osc,
+    MIDI,
+    OSC,
     Scalar,
     Text,
     Blob,
@@ -58,18 +58,18 @@ public enum ControlPortType
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(PassthroughControlNodeSettings), "passthrough")]
-[JsonDerivedType(typeof(MidiInputControlNodeSettings), "midiInput")]
-[JsonDerivedType(typeof(OscInputControlNodeSettings), "oscInput")]
+[JsonDerivedType(typeof(MIDIInputControlNodeSettings), "midiInput")]
+[JsonDerivedType(typeof(OSCInputControlNodeSettings), "oscInput")]
 [JsonDerivedType(typeof(MapRangeControlNodeSettings), "mapRange")]
-[JsonDerivedType(typeof(OscOutputControlNodeSettings), "oscOutput")]
-[JsonDerivedType(typeof(MidiOutputControlNodeSettings), "midiOutput")]
+[JsonDerivedType(typeof(OSCOutputControlNodeSettings), "oscOutput")]
+[JsonDerivedType(typeof(MIDIOutputControlNodeSettings), "midiOutput")]
 [JsonDerivedType(typeof(X32ChannelFaderControlNodeSettings), "x32ChannelFader")]
 [JsonDerivedType(typeof(ScriptTransformControlNodeSettings), "scriptTransform")]
 public abstract record ControlNodeSettings;
 
 public sealed record PassthroughControlNodeSettings : ControlNodeSettings;
 
-public sealed record MidiInputControlNodeSettings : ControlNodeSettings
+public sealed record MIDIInputControlNodeSettings : ControlNodeSettings
 {
     public Guid? EndpointId { get; init; }
     public int Channel { get; init; } = 1;
@@ -79,7 +79,7 @@ public sealed record MidiInputControlNodeSettings : ControlNodeSettings
     public double SoftTakeoverTolerance { get; init; } = 0.02;
 }
 
-public sealed record OscInputControlNodeSettings : ControlNodeSettings
+public sealed record OSCInputControlNodeSettings : ControlNodeSettings
 {
     public Guid? EndpointId { get; init; }
     public int LocalPort { get; init; } = 9000;
@@ -101,18 +101,18 @@ public sealed record ScriptTransformControlNodeSettings : ControlNodeSettings
     public int InstructionLimit { get; init; } = 100_000;
 }
 
-public sealed record OscOutputControlNodeSettings : ControlNodeSettings
+public sealed record OSCOutputControlNodeSettings : ControlNodeSettings
 {
     public Guid? EndpointId { get; init; }
     public string Host { get; init; } = "127.0.0.1";
     public int Port { get; init; } = 10023;
     public string Address { get; init; } = "/ch/01/mix/fader";
-    public ControlOscArgumentMode ArgumentMode { get; init; } = ControlOscArgumentMode.FirstScalarAsFloat;
+    public ControlOSCArgumentMode ArgumentMode { get; init; } = ControlOSCArgumentMode.FirstScalarAsFloat;
     public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
     public int MinSendIntervalMs { get; init; }
 }
 
-public sealed record MidiOutputControlNodeSettings : ControlNodeSettings
+public sealed record MIDIOutputControlNodeSettings : ControlNodeSettings
 {
     public Guid? EndpointId { get; init; }
     public int Channel { get; init; } = 1;
@@ -132,7 +132,7 @@ public sealed record X32ChannelFaderControlNodeSettings : ControlNodeSettings
     public int MinSendIntervalMs { get; init; }
 }
 
-public enum ControlOscArgumentMode
+public enum ControlOSCArgumentMode
 {
     None,
     FirstScalarAsFloat,
@@ -161,8 +161,10 @@ public sealed record X32CustomLayerSlotConfig
     public string Label { get; init; } = string.Empty;
     public X32LayerTargetKind TargetKind { get; init; } = X32LayerTargetKind.Channel;
     public int TargetIndex { get; init; } = 1;
-    public int MidiChannel { get; init; } = 1;
-    public int MidiController { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiChannel")]
+    public int MIDIChannel { get; init; } = 1;
+    [System.Text.Json.Serialization.JsonPropertyName("midiController")]
+    public int MIDIController { get; init; }
     public bool HighResolution14Bit { get; init; }
 }
 

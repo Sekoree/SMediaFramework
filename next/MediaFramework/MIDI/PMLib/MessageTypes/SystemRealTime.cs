@@ -37,7 +37,7 @@ public readonly struct MIDIStop : IMIDIMessage
 
 /// <summary>
 /// MIDI Active Sensing message (status <c>0xFE</c>).
-/// Sent periodically to indicate the connection is alive. Filtered by PortMidi by default.
+/// Sent periodically to indicate the connection is alive. Filtered by PortMIDI by default.
 /// </summary>
 public readonly struct ActiveSensing : IMIDIMessage
 {

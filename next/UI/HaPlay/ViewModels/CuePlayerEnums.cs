@@ -30,7 +30,7 @@ public enum CueRowStatus
     Current,
 }
 
-public enum CueMidiCommandType
+public enum CueMIDICommandType
 {
     NRPN,
     RPN,

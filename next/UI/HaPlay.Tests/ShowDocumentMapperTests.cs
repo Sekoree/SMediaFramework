@@ -38,7 +38,7 @@ public class ShowDocumentMapperTests
             },
         };
         OutputDefinition output = new LocalVideoOutputDefinition(
-            lineId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            lineId, "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
             ScreenIndex: 0, WindowWidth: 1280, WindowHeight: 720);
 
         var mappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(cueList, [output]);
@@ -71,7 +71,7 @@ public class ShowDocumentMapperTests
             },
         };
         OutputDefinition output = new LocalVideoOutputDefinition(
-            lineId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            lineId, "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
             ScreenIndex: 0, WindowWidth: 1280, WindowHeight: 720);
 
         var mappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(cueList, [output]);
@@ -356,12 +356,12 @@ public class ShowDocumentMapperTests
         Assert.False(Map(new NDIInputPlaylistItem("cam")).NotifyNaturalEnd);
         // YouTube plays a finite cached file; an MMD scene is finite exactly when it has a motion.
         Assert.True(Map(new YouTubePlaylistItem("abc123")).NotifyNaturalEnd);
-        Assert.True(Map(new MmdPlaylistItem("/m/miku.pmx") { MotionPath = "/m/dance.vmd" }).NotifyNaturalEnd);
-        Assert.False(Map(new MmdPlaylistItem("/m/miku.pmx")).NotifyNaturalEnd);
+        Assert.True(Map(new MMDPlaylistItem("/m/miku.pmx") { MotionPath = "/m/dance.vmd" }).NotifyNaturalEnd);
+        Assert.False(Map(new MMDPlaylistItem("/m/miku.pmx")).NotifyNaturalEnd);
     }
 
     [Fact]
-    public void MmdAndYouTubeCues_MapToTheirDescriptorUris()
+    public void MMDAndYouTubeCues_MapToTheirDescriptorUris()
     {
         // The cue path must produce the SAME provider URIs as the deck (HaPlayPlaybackHelpers) so a
         // cue-fired item keeps its per-item options — this was the "cue player cannot play MMD/YouTube"
@@ -370,7 +370,7 @@ public class ShowDocumentMapperTests
             Assert.Single(HaPlayShowMapper.ToShowDocument(
                 new CueList { Nodes = { new MediaCueNode { Label = "n", Source = source } } }).Clips);
 
-        var mmd = Map(new MmdPlaylistItem("/m/miku.pmx") { MotionPath = "/m/dance.vmd", RenderWidth = 1920 });
+        var mmd = Map(new MMDPlaylistItem("/m/miku.pmx") { MotionPath = "/m/dance.vmd", RenderWidth = 1920 });
         Assert.StartsWith("mmd://", mmd.MediaPath);
         Assert.Contains("dance.vmd", mmd.MediaPath);
 

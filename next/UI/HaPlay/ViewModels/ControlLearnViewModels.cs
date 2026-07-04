@@ -33,7 +33,7 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
         var initialRange = BuildInitialRange(record);
         _minimumValue = initialRange.Min;
         _maximumValue = initialRange.Max;
-        if (record.MidiValue is { } value)
+        if (record.MIDIValue is { } value)
             _observedValues.Add(value);
     }
 
@@ -101,7 +101,7 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
         if (!Matches(record))
             return false;
 
-        if (record.MidiValue is { } value)
+        if (record.MIDIValue is { } value)
         {
             _observedValues.Add(value);
             _minimumValue = _minimumValue.HasValue ? Math.Min(_minimumValue.Value, value) : value;
@@ -116,30 +116,30 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
     {
         ArgumentNullException.ThrowIfNull(record);
         return InferMessageType(Record) == InferMessageType(record)
-            && SameNullable(Record.MidiChannel, record.MidiChannel)
-            && SameNullable(Record.MidiController, record.MidiController)
-            && SameNullable(Record.MidiNote, record.MidiNote)
-            && SameNullable(Record.MidiParameter, record.MidiParameter)
+            && SameNullable(Record.MIDIChannel, record.MIDIChannel)
+            && SameNullable(Record.MIDIController, record.MIDIController)
+            && SameNullable(Record.MIDINote, record.MIDINote)
+            && SameNullable(Record.MIDIParameter, record.MIDIParameter)
             && SameDevice(Record.DeviceInstanceId, record.DeviceInstanceId);
     }
 
     private static (int? Min, int? Max) BuildInitialRange(ControlMonitorRecord record)
     {
-        if (record.MidiValue is not { } value)
+        if (record.MIDIValue is not { } value)
             return (null, null);
 
-        if (record.MidiController is not null)
+        if (record.MIDIController is not null)
             return (0, value);
-        if (record.MidiNote is not null)
+        if (record.MIDINote is not null)
             return (0, 127);
 
-        var messageType = record.MidiMessageType ?? ControlMidiMessageType.Unknown;
+        var messageType = record.MIDIMessageType ?? ControlMIDIMessageType.Unknown;
         return messageType switch
         {
-            ControlMidiMessageType.ControlChange => (0, value),
-            ControlMidiMessageType.NoteOn or ControlMidiMessageType.NoteOff or ControlMidiMessageType.PolyphonicAftertouch => (0, 127),
-            ControlMidiMessageType.ChannelAftertouch => (0, 127),
-            ControlMidiMessageType.PitchBend => (0, Math.Max(value, 16383)),
+            ControlMIDIMessageType.ControlChange => (0, value),
+            ControlMIDIMessageType.NoteOn or ControlMIDIMessageType.NoteOff or ControlMIDIMessageType.PolyphonicAftertouch => (0, 127),
+            ControlMIDIMessageType.ChannelAftertouch => (0, 127),
+            ControlMIDIMessageType.PitchBend => (0, Math.Max(value, 16383)),
             _ => (value, value),
         };
     }
@@ -153,15 +153,15 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
     private static bool SameDevice(Guid? left, Guid? right) =>
         !left.HasValue || !right.HasValue || left.Value == right.Value;
 
-    private static ControlMidiMessageType InferMessageType(ControlMonitorRecord record)
+    private static ControlMIDIMessageType InferMessageType(ControlMonitorRecord record)
     {
-        if (record.MidiMessageType is { } messageType)
+        if (record.MIDIMessageType is { } messageType)
             return messageType;
-        if (record.MidiController is not null)
-            return ControlMidiMessageType.ControlChange;
-        if (record.MidiNote is not null)
-            return ControlMidiMessageType.NoteOn;
-        return ControlMidiMessageType.Unknown;
+        if (record.MIDIController is not null)
+            return ControlMIDIMessageType.ControlChange;
+        if (record.MIDINote is not null)
+            return ControlMIDIMessageType.NoteOn;
+        return ControlMIDIMessageType.Unknown;
     }
 
     private void OnRangeChanged()
@@ -176,15 +176,15 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
 
     private static string BuildDescription(ControlMonitorRecord record)
     {
-        var channel = record.MidiChannel is { } ch ? $" ch {ch.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
-        var value = record.MidiValue is { } v ? $" (value {v.ToString(CultureInfo.InvariantCulture)})" : string.Empty;
-        if (record.MidiController is { } controller)
+        var channel = record.MIDIChannel is { } ch ? $" ch {ch.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
+        var value = record.MIDIValue is { } v ? $" (value {v.ToString(CultureInfo.InvariantCulture)})" : string.Empty;
+        if (record.MIDIController is { } controller)
             return $"CC {controller.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
-        if (record.MidiNote is { } note)
+        if (record.MIDINote is { } note)
             return $"Note {note.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
-        if (record.MidiParameter is { } parameter)
-            return $"{(record.MidiMessageType ?? ControlMidiMessageType.Unknown)} param {parameter.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
-        return $"{(record.MidiMessageType ?? ControlMidiMessageType.Unknown)}{channel}{value}";
+        if (record.MIDIParameter is { } parameter)
+            return $"{(record.MIDIMessageType ?? ControlMIDIMessageType.Unknown)} param {parameter.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
+        return $"{(record.MIDIMessageType ?? ControlMIDIMessageType.Unknown)}{channel}{value}";
     }
 
     private static string FormatOptionalInt(int? value) =>

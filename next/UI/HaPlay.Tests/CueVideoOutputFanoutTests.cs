@@ -44,7 +44,7 @@ public sealed class CueVideoOutputFanoutTests
             },
         };
         OutputDefinition definition = new LocalVideoOutputDefinition(
-            lineId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            lineId, "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
             ScreenIndex: 0, WindowWidth: 16, WindowHeight: 16);
         var effective = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(cueList, [definition]);
         var initialMapping = Assert.IsType<CueOutputMapping>(effective[bindingId]);

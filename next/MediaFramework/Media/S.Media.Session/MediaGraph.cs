@@ -12,9 +12,9 @@ public enum MediaGraphTopology
     /// <summary>File-backed media decoder with a video router and optional audio router.</summary>
     FilePlayback,
     FileToAudioDevice,
-    FileToLocalDisplayAndNdi,
+    FileToLocalDisplayAndNDI,
     FileToPreviewAndProgram,
-    NdiInputToPreviewAndProgram,
+    NDIInputToPreviewAndProgram,
     CueCompositor,
     SoundboardToAudioOutput,
 }
@@ -77,9 +77,9 @@ public static class MediaGraphBuilder
     [
         new(MediaGraphTopology.FilePlayback, "File to local display", "File decoder, video router, optional audio router."),
         new(MediaGraphTopology.FileToAudioDevice, "File to audio device", "File decoder plus audio router with optional package audio device output.", RequiresExternalDevice: true),
-        new(MediaGraphTopology.FileToLocalDisplayAndNdi, "File to local display plus NDI output", "File decoder feeding local preview/display and NDI output branches.", RequiresExternalDevice: true),
+        new(MediaGraphTopology.FileToLocalDisplayAndNDI, "File to local display plus NDI output", "File decoder feeding local preview/display and NDI output branches.", RequiresExternalDevice: true),
         new(MediaGraphTopology.FileToPreviewAndProgram, "File to preview plus program output", "File decoder routed to separate preview and program outputs."),
-        new(MediaGraphTopology.NdiInputToPreviewAndProgram, "NDI input to preview/program", "NDI receiver source routed to preview and program outputs.", RequiresExternalDevice: true),
+        new(MediaGraphTopology.NDIInputToPreviewAndProgram, "NDI input to preview/program", "NDI receiver source routed to preview and program outputs.", RequiresExternalDevice: true),
         new(MediaGraphTopology.CueCompositor, "Cue compositor with audio/video outputs", "Cue graph driving compositor layers and audio/video routes."),
         new(MediaGraphTopology.SoundboardToAudioOutput, "Soundboard to audio output", "Soundboard grid/cues routed to an audio output.", RequiresExternalDevice: true),
     ];

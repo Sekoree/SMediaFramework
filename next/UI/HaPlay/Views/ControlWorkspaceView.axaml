@@ -95,14 +95,14 @@
                           Command="{Binding AddLayerCommand}" />
                   <Button Grid.Column="2" Content="Add OSC device…"
                           ToolTip.Tip="Add an OSC device such as an X32 or X-Air"
-                          Command="{Binding AddOscDeviceCommand}" />
+                          Command="{Binding AddOSCDeviceCommand}" />
                   <Button Grid.Column="3" Content="Add OSC listener…"
                           ToolTip.Tip="Add an inbound OSC listener port for external control sources"
-                          Command="{Binding AddOscListenerCommand}" />
+                          Command="{Binding AddOSCListenerCommand}" />
                   <Button Grid.Column="4" Content="Resolve MIDI…"
                           ToolTip.Tip="Pick current ports for ambiguous or missing MIDI devices"
-                          Command="{Binding ResolveMidiDevicesCommand}"
-                          IsVisible="{Binding IsMidiAvailable}" />
+                          Command="{Binding ResolveMIDIDevicesCommand}"
+                          IsVisible="{Binding IsMIDIAvailable}" />
                 </Grid>
                 <ItemsControl DockPanel.Dock="Bottom" ItemsSource="{Binding ProfileWarnings}" Margin="0,8,0,0">
                   <ItemsControl.ItemTemplate>
@@ -126,9 +126,9 @@
                           <ContextMenu x:DataType="vm:ControlStructureRowViewModel">
                             <MenuItem Header="Add device script" Command="{Binding AddDeviceScriptCommand}" IsVisible="{Binding CanAddDeviceScript}" />
                             <MenuItem Header="Add endpoint script" Command="{Binding AddEndpointScriptCommand}" IsVisible="{Binding CanAddEndpointScript}" />
-                            <MenuItem Header="Add OSC listener…" Command="{Binding AddOscListenerCommand}" />
-                            <MenuItem Header="Edit OSC listener…" Command="{Binding EditOscListenerCommand}" IsVisible="{Binding CanEditOscListener}" />
-                            <MenuItem Header="Remove OSC listener" Command="{Binding RemoveOscListenerCommand}" IsVisible="{Binding CanEditOscListener}" />
+                            <MenuItem Header="Add OSC listener…" Command="{Binding AddOSCListenerCommand}" />
+                            <MenuItem Header="Edit OSC listener…" Command="{Binding EditOSCListenerCommand}" IsVisible="{Binding CanEditOSCListener}" />
+                            <MenuItem Header="Remove OSC listener" Command="{Binding RemoveOSCListenerCommand}" IsVisible="{Binding CanEditOSCListener}" />
                             <MenuItem Header="Add layer script" Command="{Binding AddLayerScriptCommand}" IsVisible="{Binding CanAddLayerScript}" />
                             <MenuItem Header="Add layer…" Command="{Binding AddLayerCommand}" />
                             <MenuItem Header="Activate layer" Command="{Binding ActivateLayerCommand}" IsVisible="{Binding CanActivateLayer}" />
@@ -139,11 +139,11 @@
                             <MenuItem Header="Edit periodic send…" Command="{Binding EditPeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
                             <MenuItem Header="Remove periodic send" Command="{Binding RemovePeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
                             <Separator IsVisible="{Binding CanAddDeviceScript}" />
-                            <MenuItem Header="Edit OSC device…" Command="{Binding EditOscDeviceCommand}" IsVisible="{Binding CanEditOscDevice}" />
-                            <MenuItem Header="Remove OSC device" Command="{Binding RemoveOscDeviceCommand}" IsVisible="{Binding CanEditOscDevice}" />
-                            <MenuItem Header="Test OSC send" Command="{Binding TestOscCommand}" IsVisible="{Binding CanTestOsc}" />
-                            <MenuItem Header="Edit MIDI device…" Command="{Binding EditMidiDeviceCommand}" IsVisible="{Binding CanEditMidiDevice}" />
-                            <MenuItem Header="Test MIDI send" Command="{Binding TestMidiCommand}" IsVisible="{Binding CanTestMidi}" />
+                            <MenuItem Header="Edit OSC device…" Command="{Binding EditOSCDeviceCommand}" IsVisible="{Binding CanEditOSCDevice}" />
+                            <MenuItem Header="Remove OSC device" Command="{Binding RemoveOSCDeviceCommand}" IsVisible="{Binding CanEditOSCDevice}" />
+                            <MenuItem Header="Test OSC send" Command="{Binding TestOSCCommand}" IsVisible="{Binding CanTestOSC}" />
+                            <MenuItem Header="Edit MIDI device…" Command="{Binding EditMIDIDeviceCommand}" IsVisible="{Binding CanEditMIDIDevice}" />
+                            <MenuItem Header="Test MIDI send" Command="{Binding TestMIDICommand}" IsVisible="{Binding CanTestMIDI}" />
                           </ContextMenu>
                         </Grid.ContextMenu>
                         <Border Grid.Column="0" Width="{Binding IndentWidth}" />
@@ -175,13 +175,13 @@
                           <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove layer"
                                   IsVisible="{Binding CanEditLayer}" Command="{Binding RemoveLayerCommand}" />
                           <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit OSC device"
-                                  IsVisible="{Binding CanEditOscDevice}" Command="{Binding EditOscDeviceCommand}" />
+                                  IsVisible="{Binding CanEditOSCDevice}" Command="{Binding EditOSCDeviceCommand}" />
                           <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove OSC device"
-                                  IsVisible="{Binding CanEditOscDevice}" Command="{Binding RemoveOscDeviceCommand}" />
+                                  IsVisible="{Binding CanEditOSCDevice}" Command="{Binding RemoveOSCDeviceCommand}" />
                           <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit OSC listener"
-                                  IsVisible="{Binding CanEditOscListener}" Command="{Binding EditOscListenerCommand}" />
+                                  IsVisible="{Binding CanEditOSCListener}" Command="{Binding EditOSCListenerCommand}" />
                           <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove OSC listener"
-                                  IsVisible="{Binding CanEditOscListener}" Command="{Binding RemoveOscListenerCommand}" />
+                                  IsVisible="{Binding CanEditOSCListener}" Command="{Binding RemoveOSCListenerCommand}" />
                           <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit periodic send"
                                   IsVisible="{Binding CanEditPeriodicSend}" Command="{Binding EditPeriodicSendCommand}" />
                           <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove periodic send"
@@ -204,7 +204,7 @@
                   <Button Content="Remove project" Classes="Dense" Command="{Binding RemoveSelectedProjectProfileCommand}" />
                 </StackPanel>
                 <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8"
-                        IsVisible="{Binding IsMidiAvailable}">
+                        IsVisible="{Binding IsMIDIAvailable}">
                   <StackPanel Spacing="6">
                     <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />
                     <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="6">
@@ -216,16 +216,16 @@
                       <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ProfileBuilderControlName}" PlaceholderText="Fader 1" />
                       <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="Channel" VerticalAlignment="Center" />
-                        <TextBox Width="54" Text="{Binding ProfileBuilderMidiChannelText}" />
+                        <TextBox Width="54" Text="{Binding ProfileBuilderMIDIChannelText}" />
                         <TextBlock Text="CC" VerticalAlignment="Center" />
-                        <TextBox Width="54" Text="{Binding ProfileBuilderMidiControllerText}" />
+                        <TextBox Width="54" Text="{Binding ProfileBuilderMIDIControllerText}" />
                         <CheckBox Content="14-bit CC" IsChecked="{Binding ProfileBuilderHighResolution14Bit}" VerticalAlignment="Center" />
                       </StackPanel>
                       <TextBlock Grid.Row="2" Grid.Column="0" Text="Range" VerticalAlignment="Center" />
                       <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
                         <TextBox Width="80" Text="{Binding ProfileBuilderMinValueText}" PlaceholderText="min" />
                         <TextBox Width="80" Text="{Binding ProfileBuilderMaxValueText}" PlaceholderText="max" />
-                        <Button Content="Save project profile" Command="{Binding SaveMidiProfileBuilderCommand}" />
+                        <Button Content="Save project profile" Command="{Binding SaveMIDIProfileBuilderCommand}" />
                       </StackPanel>
                       <TextBlock Grid.Row="2" Grid.Column="3"
                                  Text="{Binding ProfileBuilderStatus}"
@@ -399,16 +399,16 @@
                 <TextBlock Classes="SectionText" Text="{x:Static res:Strings.ControlManualSendsTitle}" />
                 <Grid ColumnDefinitions="Auto,140,Auto,80,Auto,*" ColumnSpacing="6">
                   <TextBlock Grid.Column="0" Text="Host" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="1" Text="{Binding TestOscHost}" />
+                  <TextBox Grid.Column="1" Text="{Binding TestOSCHost}" />
                   <TextBlock Grid.Column="2" Text="Port" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="3" Text="{Binding TestOscPort}" />
+                  <TextBox Grid.Column="3" Text="{Binding TestOSCPort}" />
                   <TextBlock Grid.Column="4" Text="Address" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="5" Text="{Binding TestOscAddress}" />
+                  <TextBox Grid.Column="5" Text="{Binding TestOSCAddress}" />
                 </Grid>
                 <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
                   <TextBlock Grid.Column="0" Text="Args" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="1" Text="{Binding TestOscArgs}" PlaceholderText="comma-separated, e.g. 0.5, 1, true, name" />
-                  <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOscCommand}" />
+                  <TextBox Grid.Column="1" Text="{Binding TestOSCArgs}" PlaceholderText="comma-separated, e.g. 0.5, 1, true, name" />
+                  <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOSCCommand}" />
                   <Button Grid.Column="3" Content="Run all manual triggers" Command="{Binding RunManualScriptsCommand}" />
                 </Grid>
               </StackPanel>

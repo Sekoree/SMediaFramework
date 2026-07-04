@@ -183,10 +183,10 @@ public static class HaPlayShowMapper
             // A real FILE cue must fire cue auto-follow when it plays through, even as a bare plain-Stop clip
             // with no trim/fade/loop (which otherwise starts no end monitor and just idles at EOF). Finite
             // sources only: images/text hold deliberately, live inputs never naturally end, and an MMD scene
-            // is finite exactly when it has a motion (MmdVideoSource exhausts at the VMD's end; a bind-pose
+            // is finite exactly when it has a motion (MMDVideoSource exhausts at the VMD's end; a bind-pose
             // scene renders indefinitely).
             NotifyNaturalEnd = media.Source is FilePlaylistItem or YouTubePlaylistItem
-                or MmdPlaylistItem { MotionPath.Length: > 0 },
+                or MMDPlaylistItem { MotionPath.Length: > 0 },
             // The cue's picked subtitle tracks (embedded stream indices or sidecar paths — including a
             // prepared YouTube caption sidecar). Only when the cue is placed on a composition: subtitles
             // need a canvas. Same mapping as the deck's MediaPlayerShowMapper.MapSubtitles.
@@ -266,11 +266,11 @@ public static class HaPlayShowMapper
         // Live inputs use the SAME descriptor URIs as the deck so a cue-fired item keeps its per-item options
         // (NDI stream selection / bandwidth / audio jitter-buffer override; PortAudio host API / channels /
         // rate / latency) instead of silently opening with provider defaults.
-        NDIInputPlaylistItem n => HaPlayPlaybackHelpers.BuildNdiInputUri(n),
+        NDIInputPlaylistItem n => HaPlayPlaybackHelpers.BuildNDIInputUri(n),
         PortAudioInputPlaylistItem p => HaPlayPlaybackHelpers.BuildPortAudioInputUri(p),
         // Prepared-cache youtube asset behind its canonical URI (reliable mode — see the provider).
         YouTubePlaylistItem y => HaPlayPlaybackHelpers.BuildYouTubeUri(y),
-        MmdPlaylistItem mmd => HaPlayPlaybackHelpers.BuildMmdUri(mmd),
+        MMDPlaylistItem mmd => HaPlayPlaybackHelpers.BuildMMDUri(mmd),
         _ => null,
     };
 

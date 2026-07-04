@@ -87,11 +87,11 @@ public sealed class MediaPropertiesDialogViewModelTests
     [Fact]
     public void ReplaceItem_AcceptsSameId_RejectsForeignId()
     {
-        var original = new MmdPlaylistItem("/models/miku.pmx") { RenderWidth = 1280, RenderHeight = 720 };
+        var original = new MMDPlaylistItem("/models/miku.pmx") { RenderWidth = 1280, RenderHeight = 720 };
         var vm = CreateVm(original);
 
         // A stale result from another item must not clobber the working copy.
-        vm.ReplaceItem(new MmdPlaylistItem("/models/other.pmx"));
+        vm.ReplaceItem(new MMDPlaylistItem("/models/other.pmx"));
         Assert.Same(original, vm.BuildResult());
 
         var edited = original with { RenderWidth = 1920, RenderHeight = 1080 };
@@ -129,43 +129,43 @@ public sealed class MediaPropertiesDialogViewModelTests
     public void TabVisibility_FollowsItemKind()
     {
         Assert.True(CreateVm(new FilePlaylistItem("/a.mkv")).IsFileItem);
-        Assert.True(CreateVm(new MmdPlaylistItem("/m.pmx")).IsMmdItem);
+        Assert.True(CreateVm(new MMDPlaylistItem("/m.pmx")).IsMMDItem);
         Assert.True(CreateVm(new YouTubePlaylistItem("abc123")).IsYouTubeItem);
 
         var vm = CreateVm(new TextPlaylistItem());
         Assert.False(vm.IsFileItem);
-        Assert.False(vm.IsMmdItem);
+        Assert.False(vm.IsMMDItem);
         Assert.False(vm.IsYouTubeItem);
     }
 
     [Fact]
     public void BakeStatus_TracksSceneState()
     {
-        var previousCacheDir = MmdPhysicsBakeCache.CacheDirectory;
-        MmdPhysicsBakeCache.CacheDirectory = Directory.CreateTempSubdirectory("bake-test-").FullName;
+        var previousCacheDir = MMDPhysicsBakeCache.CacheDirectory;
+        MMDPhysicsBakeCache.CacheDirectory = Directory.CreateTempSubdirectory("bake-test-").FullName;
         try
         {
-            var noPhysics = CreateVm(new MmdPlaylistItem("/m.pmx") { Physics = false, MotionPath = "/m.vmd" });
+            var noPhysics = CreateVm(new MMDPlaylistItem("/m.pmx") { Physics = false, MotionPath = "/m.vmd" });
             Assert.Equal(HaPlay.Resources.Strings.MediaPropertiesBakeStatusDisabled, noPhysics.BakeStatus);
             Assert.False(noPhysics.CanBakePhysics);
 
-            var noMotion = CreateVm(new MmdPlaylistItem("/m.pmx"));
+            var noMotion = CreateVm(new MMDPlaylistItem("/m.pmx"));
             Assert.Equal(HaPlay.Resources.Strings.MediaPropertiesBakeStatusNoMotion, noMotion.BakeStatus);
             Assert.False(noMotion.CanBakePhysics);
 
-            var bakeable = CreateVm(new MmdPlaylistItem("/m.pmx") { MotionPath = "/m.vmd" });
+            var bakeable = CreateVm(new MMDPlaylistItem("/m.pmx") { MotionPath = "/m.vmd" });
             Assert.Equal(HaPlay.Resources.Strings.MediaPropertiesBakeStatusNotCached, bakeable.BakeStatus);
             Assert.True(bakeable.CanBakePhysics);
 
             // Files missing on disk → the bake button stays disabled even for a physics+motion scene.
             var missingFiles = new MediaPropertiesDialogViewModel(
-                new MmdPlaylistItem("/m.pmx") { MotionPath = "/m.vmd" }) { FileExists = _ => false };
+                new MMDPlaylistItem("/m.pmx") { MotionPath = "/m.vmd" }) { FileExists = _ => false };
             Assert.False(missingFiles.CanBakePhysics);
         }
         finally
         {
-            try { Directory.Delete(MmdPhysicsBakeCache.CacheDirectory, recursive: true); } catch { /* best effort */ }
-            MmdPhysicsBakeCache.CacheDirectory = previousCacheDir;
+            try { Directory.Delete(MMDPhysicsBakeCache.CacheDirectory, recursive: true); } catch { /* best effort */ }
+            MMDPhysicsBakeCache.CacheDirectory = previousCacheDir;
         }
     }
 

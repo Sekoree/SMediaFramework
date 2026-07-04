@@ -1,6 +1,6 @@
 namespace PMLib.Types;
 
-/// <summary>PortMidi error codes. Zero or positive values indicate success.</summary>
+/// <summary>PortMIDI error codes. Zero or positive values indicate success.</summary>
 public enum PmError : int
 {
     /// <summary>Normal return value indicating no error.</summary>

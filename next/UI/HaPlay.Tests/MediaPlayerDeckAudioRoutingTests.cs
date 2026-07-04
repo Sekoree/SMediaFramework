@@ -16,13 +16,13 @@ public sealed class MediaPlayerDeckAudioRoutingTests
             LowBandwidth = true,
             AudioMinBufferedDurationMs = 25,
         };
-        var ndiUri = MediaPlayerViewModel.BuildNdiInputUri(ndi);
-        var parsedNdi = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(ndiUri);
-        Assert.Equal("Camera A (LAN)", parsedNdi.SourceName);
-        Assert.False(parsedNdi.ReceiveAudio);
-        Assert.True(parsedNdi.ReceiveVideo);
-        Assert.True(parsedNdi.LowBandwidth);
-        Assert.Equal(TimeSpan.FromMilliseconds(25), parsedNdi.AudioMinBufferedDuration);
+        var ndiUri = MediaPlayerViewModel.BuildNDIInputUri(ndi);
+        var parsedNDI = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(ndiUri);
+        Assert.Equal("Camera A (LAN)", parsedNDI.SourceName);
+        Assert.False(parsedNDI.ReceiveAudio);
+        Assert.True(parsedNDI.ReceiveVideo);
+        Assert.True(parsedNDI.LowBandwidth);
+        Assert.Equal(TimeSpan.FromMilliseconds(25), parsedNDI.AudioMinBufferedDuration);
 
         var pa = new PortAudioInputPlaylistItem("USB In")
         {

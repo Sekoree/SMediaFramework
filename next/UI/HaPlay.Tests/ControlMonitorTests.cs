@@ -30,12 +30,12 @@ public sealed class ControlMonitorTests
         {
             DeviceInstanceId = id,
             Direction = ControlMonitorDirection.Input,
-            Protocol = ControlMonitorProtocol.Osc,
+            Protocol = ControlMonitorProtocol.OSC,
             Result = ControlMonitorResult.Received,
             RemoteHost = "127.0.0.1",
             RemotePort = 10023,
             Address = "/ch/01/mix/fader",
-            OscArguments = [ControlMonitorOscArgumentRecord.FromOscArgument(OSCArgument.Float32(0.75f))],
+            OSCArguments = [ControlMonitorOSCArgumentRecord.FromOSCArgument(OSCArgument.Float32(0.75f))],
         };
 
         var jsonLines = ControlMonitorJsonLines.Write([record]);
@@ -43,21 +43,21 @@ public sealed class ControlMonitorTests
 
         Assert.Equal(id, restored.DeviceInstanceId);
         Assert.Equal(ControlMonitorDirection.Input, restored.Direction);
-        Assert.Equal(ControlMonitorProtocol.Osc, restored.Protocol);
+        Assert.Equal(ControlMonitorProtocol.OSC, restored.Protocol);
         Assert.Equal(ControlMonitorResult.Received, restored.Result);
         Assert.Equal("/ch/01/mix/fader", restored.Address);
-        Assert.Equal(0.75, Assert.Single(restored.OscArguments).FloatValue!.Value, precision: 6);
+        Assert.Equal(0.75, Assert.Single(restored.OSCArguments).FloatValue!.Value, precision: 6);
     }
 
     [Fact]
-    public async Task RuntimeSession_RecordsScriptInvocationAndOscOutput()
+    public async Task RuntimeSession_RecordsScriptInvocationAndOSCOutput()
     {
         var monitor = new ControlMonitorBuffer(maxRecords: 10);
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var config = new ControlSystemConfig
         {
             IsArmed = true,
-            Devices = [OscDevice(Guid.NewGuid(), "X32", "x32", "127.0.0.1", 10023)],
+            Devices = [OSCDevice(Guid.NewGuid(), "X32", "x32", "127.0.0.1", 10023)],
             Scripts =
             [
                 new ControlScriptConfig
@@ -93,15 +93,15 @@ public sealed class ControlMonitorTests
         await session.DispatchManualAsync();
 
         Assert.Contains(monitor.Records, r => r.Protocol == ControlMonitorProtocol.Script && r.Result == ControlMonitorResult.Invoked);
-        var output = Assert.Single(monitor.Records, r => r.Protocol == ControlMonitorProtocol.Osc && r.Direction == ControlMonitorDirection.Output);
+        var output = Assert.Single(monitor.Records, r => r.Protocol == ControlMonitorProtocol.OSC && r.Direction == ControlMonitorDirection.Output);
         Assert.Equal("/test", output.Address);
         Assert.Equal("127.0.0.1", output.RemoteHost);
         Assert.Equal(10023, output.RemotePort);
-        Assert.Equal(1, Assert.Single(output.OscArguments).FloatValue!.Value);
+        Assert.Equal(1, Assert.Single(output.OSCArguments).FloatValue!.Value);
     }
 
     [Fact]
-    public async Task OscListenerManager_RecordsInputAndDroppedOscMessages()
+    public async Task OSCListenerManager_RecordsInputAndDroppedOSCMessages()
     {
         var monitor = new ControlMonitorBuffer(maxRecords: 10);
         var listenerId = Guid.NewGuid();
@@ -109,8 +109,8 @@ public sealed class ControlMonitorTests
         var config = new ControlSystemConfig
         {
             IsArmed = true,
-            OscListeners = [new ControlOscListenerConfig { Id = listenerId, LocalPort = 10020 }],
-            Devices = [OscDevice(deviceId, "X32", "x32", "127.0.0.1", 10023, listenerId)],
+            OSCListeners = [new ControlOSCListenerConfig { Id = listenerId, LocalPort = 10020 }],
+            Devices = [OSCDevice(deviceId, "X32", "x32", "127.0.0.1", 10023, listenerId)],
             Scripts =
             [
                 new ControlScriptConfig
@@ -123,10 +123,10 @@ public sealed class ControlMonitorTests
                     [
                         new ControlScriptTriggerConfig
                         {
-                            Kind = ControlScriptTriggerKind.OscMessage,
-                            FunctionName = "onOsc",
+                            Kind = ControlScriptTriggerKind.OSCMessage,
+                            FunctionName = "onOSC",
                             DeviceInstanceId = deviceId,
-                            OscAddressPattern = "/ch/*/mix/fader",
+                            OSCAddressPattern = "/ch/*/mix/fader",
                         },
                     ],
                 },
@@ -138,13 +138,13 @@ public sealed class ControlMonitorTests
             {
                 ["Scripts/on-osc.mnd"] =
                     """
-                    export fun onOsc(event, context) {
+                    export fun onOSC(event, context) {
                     }
                     """,
             }),
-            new RecordingOscSender(),
+            new RecordingOSCSender(),
             monitor: monitor);
-        await using var manager = new ControlOscListenerManager(config, session, monitor);
+        await using var manager = new ControlOSCListenerManager(config, session, monitor);
 
         await manager.DispatchMessageAsync(
             listenerId,
@@ -170,12 +170,12 @@ public sealed class ControlMonitorTests
         new()
         {
             Direction = ControlMonitorDirection.Input,
-            Protocol = ControlMonitorProtocol.Osc,
+            Protocol = ControlMonitorProtocol.OSC,
             Result = ControlMonitorResult.Received,
             Address = address,
         };
 
-    private static ControlDeviceInstanceConfig OscDevice(
+    private static ControlDeviceInstanceConfig OSCDevice(
         Guid id,
         string name,
         string alias,
@@ -187,14 +187,14 @@ public sealed class ControlMonitorTests
             Id = id,
             Name = name,
             ProfileId = "x32",
-            Protocol = ControlDeviceProtocol.Osc,
+            Protocol = ControlDeviceProtocol.OSC,
             IsEnabled = true,
             Binding = new ControlDeviceBindingConfig
             {
                 Alias = alias,
-                OscHost = host,
-                OscPort = port,
-                OscListenerId = listenerId,
+                OSCHost = host,
+                OSCPort = port,
+                OSCListenerId = listenerId,
             },
         };
 
@@ -209,7 +209,7 @@ public sealed class ControlMonitorTests
             BundleTimeTag: null,
             DateTimeOffset.UtcNow);
 
-    private sealed class RecordingOscSender : IControlOscSender
+    private sealed class RecordingOSCSender : IControlOSCSender
     {
         public ValueTask SendAsync(
             string host,

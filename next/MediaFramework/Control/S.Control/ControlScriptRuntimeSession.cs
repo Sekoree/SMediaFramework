@@ -6,8 +6,8 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
     private readonly ControlSystemConfig _config;
     private readonly BufferingControlScriptCommandSink _commandSink;
     private readonly ControlScriptRuntime _runtime;
-    private readonly ControlScriptOscCommandRouter _oscRouter;
-    private readonly ControlScriptMidiCommandRouter _midiRouter;
+    private readonly ControlScriptOSCCommandRouter _oscRouter;
+    private readonly ControlScriptMIDICommandRouter _midiRouter;
     private readonly IControlMonitorSink _monitor;
     private readonly ControlDeviceHealthRegistry _deviceHealth = new();
     private readonly Dictionary<Guid, DateTimeOffset> _lastPeriodicDispatch = new();
@@ -19,10 +19,10 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
     public ControlScriptRuntimeSession(
         ControlSystemConfig config,
         IControlScriptSourceProvider sourceProvider,
-        IControlOscSender oscSender,
+        IControlOSCSender oscSender,
         int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit,
         IControlMonitorSink? monitor = null,
-        IControlMidiSender? midiSender = null,
+        IControlMIDISender? midiSender = null,
         ControlMeterBlobDecoderRegistry? meterBlobDecoders = null,
         IControlShowActions? showActions = null)
     {
@@ -31,11 +31,11 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
         ArgumentNullException.ThrowIfNull(oscSender);
 
         _monitor = monitor ?? NullControlMonitorSink.Instance;
-        OscCache = new ControlValueCache();
+        OSCCache = new ControlValueCache();
         _commandSink = new BufferingControlScriptCommandSink();
         var services = new ControlScriptRuntimeServices(
             _commandSink,
-            OscCache,
+            OSCCache,
             monitor: _monitor,
             devices: _config.Devices,
             deviceHealth: _deviceHealth,
@@ -44,8 +44,8 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
             meterBlobDecoders: meterBlobDecoders,
             showActions: showActions);
         _runtime = new ControlScriptRuntime(_config, sourceProvider, services, instructionLimit);
-        _oscRouter = new ControlScriptOscCommandRouter(_config, oscSender, OscCache);
-        _midiRouter = new ControlScriptMidiCommandRouter(_config, midiSender);
+        _oscRouter = new ControlScriptOSCCommandRouter(_config, oscSender, OSCCache);
+        _midiRouter = new ControlScriptMIDICommandRouter(_config, midiSender);
     }
 
     // The profiles scripts can read command data from: built-in JSON profiles plus any config overrides (by id).
@@ -59,7 +59,7 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
         return byId.Values.ToArray();
     }
 
-    public ControlValueCache OscCache { get; }
+    public ControlValueCache OSCCache { get; }
 
     /// <summary>Latest reported device-session health, also surfaced to scripts via <c>HaPlay.Devices</c>.</summary>
     public ControlDeviceHealthRegistry DeviceHealth => _deviceHealth;
@@ -245,20 +245,20 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
     /// scripts that may queue more commands), looping until quiet. Mutates the accumulator lists with the
     /// extra invocations/diagnostics/cache changes the layer switches produce.
     /// </summary>
-    private async ValueTask<(IReadOnlyList<ControlScriptOscCommandRouteResult> Osc, IReadOnlyList<ControlScriptMidiCommandRouteResult> Midi)>
+    private async ValueTask<(IReadOnlyList<ControlScriptOSCCommandRouteResult> OSC, IReadOnlyList<ControlScriptMIDICommandRouteResult> MIDI)>
         FlushAndApplyLayerSwitchesAsync(
             List<ControlScriptInvocationRecord> invocations,
             List<ControlScriptRuntimeDiagnostic> diagnostics,
             List<ControlValueCacheChange> cacheChanges,
             CancellationToken cancellationToken)
     {
-        var oscRoutes = new List<ControlScriptOscCommandRouteResult>();
-        var midiRoutes = new List<ControlScriptMidiCommandRouteResult>();
+        var oscRoutes = new List<ControlScriptOSCCommandRouteResult>();
+        var midiRoutes = new List<ControlScriptMIDICommandRouteResult>();
 
         for (var depth = 0; ; depth++)
         {
-            oscRoutes.AddRange(await FlushScriptOscCommandsAsync(cancellationToken).ConfigureAwait(false));
-            midiRoutes.AddRange(await FlushScriptMidiCommandsAsync(cancellationToken).ConfigureAwait(false));
+            oscRoutes.AddRange(await FlushScriptOSCCommandsAsync(cancellationToken).ConfigureAwait(false));
+            midiRoutes.AddRange(await FlushScriptMIDICommandsAsync(cancellationToken).ConfigureAwait(false));
 
             var requests = _commandSink.DrainLayerActivations();
             if (requests.Count == 0 || depth >= MaxLayerSwitchDepth)
@@ -299,29 +299,29 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
         return true;
     }
 
-    private ValueTask<IReadOnlyList<ControlScriptOscCommandRouteResult>> FlushScriptOscCommandsAsync(
+    private ValueTask<IReadOnlyList<ControlScriptOSCCommandRouteResult>> FlushScriptOSCCommandsAsync(
         CancellationToken cancellationToken)
     {
-        var messages = _commandSink.DrainOscMessages();
+        var messages = _commandSink.DrainOSCMessages();
         return messages.Count == 0
-            ? ValueTask.FromResult<IReadOnlyList<ControlScriptOscCommandRouteResult>>([])
+            ? ValueTask.FromResult<IReadOnlyList<ControlScriptOSCCommandRouteResult>>([])
             : _oscRouter.SendAllAsync(messages, cancellationToken);
     }
 
-    private ValueTask<IReadOnlyList<ControlScriptMidiCommandRouteResult>> FlushScriptMidiCommandsAsync(
+    private ValueTask<IReadOnlyList<ControlScriptMIDICommandRouteResult>> FlushScriptMIDICommandsAsync(
         CancellationToken cancellationToken)
     {
-        var messages = _commandSink.DrainMidiMessages();
+        var messages = _commandSink.DrainMIDIMessages();
         return messages.Count == 0
-            ? ValueTask.FromResult<IReadOnlyList<ControlScriptMidiCommandRouteResult>>([])
+            ? ValueTask.FromResult<IReadOnlyList<ControlScriptMIDICommandRouteResult>>([])
             : _midiRouter.SendAllAsync(messages, cancellationToken);
     }
 
     private void RecordDispatch(
         IReadOnlyList<ControlScriptInvocationRecord> invocations,
         IReadOnlyList<ControlScriptRuntimeDiagnostic> diagnostics,
-        IReadOnlyList<ControlScriptOscCommandRouteResult> oscRoutes,
-        IReadOnlyList<ControlScriptMidiCommandRouteResult> midiRoutes,
+        IReadOnlyList<ControlScriptOSCCommandRouteResult> oscRoutes,
+        IReadOnlyList<ControlScriptMIDICommandRouteResult> midiRoutes,
         IReadOnlyList<ControlValueCacheChange> cacheChanges)
     {
         foreach (var change in cacheChanges)
@@ -336,7 +336,7 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
                 DeviceKey = change.Key.DeviceKey,
                 Address = change.Key.Address,
                 CorrelationId = change.CorrelationId,
-                OscArguments = [ControlMonitorOscArgumentRecord.FromCachedValue(change.Value)],
+                OSCArguments = [ControlMonitorOSCArgumentRecord.FromCachedValue(change.Value)],
                 Message = change.Source.ToString(),
             });
         }
@@ -373,7 +373,7 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
             _monitor.Record(new ControlMonitorRecord
             {
                 Direction = route.Succeeded ? ControlMonitorDirection.Output : ControlMonitorDirection.Error,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 Result = route.Succeeded ? ControlMonitorResult.Sent : ControlMonitorResult.Failed,
                 DeviceInstanceId = route.DeviceInstanceId,
                 DeviceKey = route.Message.DeviceKey,
@@ -381,7 +381,7 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
                 RemoteHost = route.Host,
                 RemotePort = route.Port,
                 Address = route.Message.Address,
-                OscArguments = route.Message.Arguments.Select(ControlMonitorOscArgumentRecord.FromScriptArgument).ToList(),
+                OSCArguments = route.Message.Arguments.Select(ControlMonitorOSCArgumentRecord.FromScriptArgument).ToList(),
                 ErrorMessage = route.ErrorMessage,
             });
         }
@@ -391,18 +391,18 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
             _monitor.Record(new ControlMonitorRecord
             {
                 Direction = route.Succeeded ? ControlMonitorDirection.Output : ControlMonitorDirection.Error,
-                Protocol = ControlMonitorProtocol.Midi,
+                Protocol = ControlMonitorProtocol.MIDI,
                 Result = route.Succeeded ? ControlMonitorResult.Sent : ControlMonitorResult.Failed,
                 DeviceInstanceId = route.DeviceInstanceId,
                 DeviceKey = route.Message.DeviceKey,
                 Endpoint = route.OutputDeviceName ?? route.OutputDeviceId?.ToString(),
-                MidiChannel = route.Message.Channel,
-                MidiMessageType = ToMidiMessageType(route.Message.Kind),
-                MidiController = route.Message.Controller,
-                MidiNote = route.Message.Note,
-                MidiValue = route.Message.Value ?? route.Message.Velocity ?? route.Message.Data?.Length,
-                MidiParameter = route.Message.Parameter,
-                MidiHighResolution14Bit = route.Message.HighResolution14Bit,
+                MIDIChannel = route.Message.Channel,
+                MIDIMessageType = ToMIDIMessageType(route.Message.Kind),
+                MIDIController = route.Message.Controller,
+                MIDINote = route.Message.Note,
+                MIDIValue = route.Message.Value ?? route.Message.Velocity ?? route.Message.Data?.Length,
+                MIDIParameter = route.Message.Parameter,
+                MIDIHighResolution14Bit = route.Message.HighResolution14Bit,
                 Message = route.Message.Kind.ToString(),
                 ErrorMessage = route.ErrorMessage,
                 RawBytes = route.Message.Data,
@@ -410,36 +410,36 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
         }
     }
 
-    private static ControlMidiMessageType ToMidiMessageType(ControlScriptMidiMessageKind kind) =>
+    private static ControlMIDIMessageType ToMIDIMessageType(ControlScriptMIDIMessageKind kind) =>
         kind switch
         {
-            ControlScriptMidiMessageKind.ControlChange => ControlMidiMessageType.ControlChange,
-            ControlScriptMidiMessageKind.NoteOn => ControlMidiMessageType.NoteOn,
-            ControlScriptMidiMessageKind.NoteOff => ControlMidiMessageType.NoteOff,
-            ControlScriptMidiMessageKind.ProgramChange => ControlMidiMessageType.ProgramChange,
-            ControlScriptMidiMessageKind.PitchBend => ControlMidiMessageType.PitchBend,
-            ControlScriptMidiMessageKind.PolyphonicAftertouch => ControlMidiMessageType.PolyphonicAftertouch,
-            ControlScriptMidiMessageKind.ChannelAftertouch => ControlMidiMessageType.ChannelAftertouch,
-            ControlScriptMidiMessageKind.SysEx => ControlMidiMessageType.SysEx,
-            ControlScriptMidiMessageKind.MIDITimeCode => ControlMidiMessageType.MIDITimeCode,
-            ControlScriptMidiMessageKind.SongPosition => ControlMidiMessageType.SongPosition,
-            ControlScriptMidiMessageKind.SongSelect => ControlMidiMessageType.SongSelect,
-            ControlScriptMidiMessageKind.TuneRequest => ControlMidiMessageType.TuneRequest,
-            ControlScriptMidiMessageKind.TimingClock => ControlMidiMessageType.TimingClock,
-            ControlScriptMidiMessageKind.Start => ControlMidiMessageType.Start,
-            ControlScriptMidiMessageKind.Continue => ControlMidiMessageType.Continue,
-            ControlScriptMidiMessageKind.Stop => ControlMidiMessageType.Stop,
-            ControlScriptMidiMessageKind.ActiveSensing => ControlMidiMessageType.ActiveSensing,
-            ControlScriptMidiMessageKind.Reset => ControlMidiMessageType.Reset,
-            ControlScriptMidiMessageKind.NRPN => ControlMidiMessageType.NRPN,
-            ControlScriptMidiMessageKind.RPN => ControlMidiMessageType.RPN,
-            _ => ControlMidiMessageType.Unknown,
+            ControlScriptMIDIMessageKind.ControlChange => ControlMIDIMessageType.ControlChange,
+            ControlScriptMIDIMessageKind.NoteOn => ControlMIDIMessageType.NoteOn,
+            ControlScriptMIDIMessageKind.NoteOff => ControlMIDIMessageType.NoteOff,
+            ControlScriptMIDIMessageKind.ProgramChange => ControlMIDIMessageType.ProgramChange,
+            ControlScriptMIDIMessageKind.PitchBend => ControlMIDIMessageType.PitchBend,
+            ControlScriptMIDIMessageKind.PolyphonicAftertouch => ControlMIDIMessageType.PolyphonicAftertouch,
+            ControlScriptMIDIMessageKind.ChannelAftertouch => ControlMIDIMessageType.ChannelAftertouch,
+            ControlScriptMIDIMessageKind.SysEx => ControlMIDIMessageType.SysEx,
+            ControlScriptMIDIMessageKind.MIDITimeCode => ControlMIDIMessageType.MIDITimeCode,
+            ControlScriptMIDIMessageKind.SongPosition => ControlMIDIMessageType.SongPosition,
+            ControlScriptMIDIMessageKind.SongSelect => ControlMIDIMessageType.SongSelect,
+            ControlScriptMIDIMessageKind.TuneRequest => ControlMIDIMessageType.TuneRequest,
+            ControlScriptMIDIMessageKind.TimingClock => ControlMIDIMessageType.TimingClock,
+            ControlScriptMIDIMessageKind.Start => ControlMIDIMessageType.Start,
+            ControlScriptMIDIMessageKind.Continue => ControlMIDIMessageType.Continue,
+            ControlScriptMIDIMessageKind.Stop => ControlMIDIMessageType.Stop,
+            ControlScriptMIDIMessageKind.ActiveSensing => ControlMIDIMessageType.ActiveSensing,
+            ControlScriptMIDIMessageKind.Reset => ControlMIDIMessageType.Reset,
+            ControlScriptMIDIMessageKind.NRPN => ControlMIDIMessageType.NRPN,
+            ControlScriptMIDIMessageKind.RPN => ControlMIDIMessageType.RPN,
+            _ => ControlMIDIMessageType.Unknown,
         };
 }
 
 public sealed record ControlScriptRuntimeSessionResult(
     IReadOnlyList<ControlScriptInvocationRecord> Invocations,
     IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics,
-    IReadOnlyList<ControlScriptOscCommandRouteResult> OscRoutes,
-    IReadOnlyList<ControlScriptMidiCommandRouteResult> MidiRoutes,
+    IReadOnlyList<ControlScriptOSCCommandRouteResult> OSCRoutes,
+    IReadOnlyList<ControlScriptMIDICommandRouteResult> MIDIRoutes,
     IReadOnlyList<ControlValueCacheChange> CacheUpdates);

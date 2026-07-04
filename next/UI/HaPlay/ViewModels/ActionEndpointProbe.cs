@@ -9,7 +9,7 @@ namespace HaPlay.ViewModels;
 /// <summary>Lightweight reachability checks for action-cue OSC/MIDI endpoints.</summary>
 internal static class ActionEndpointProbe
 {
-    public static async Task<(bool Ok, string Detail)> TryProbeOscAsync(OscActionEndpoint osc, CancellationToken ct = default)
+    public static async Task<(bool Ok, string Detail)> TryProbeOSCAsync(OSCActionEndpoint osc, CancellationToken ct = default)
     {
         try
         {
@@ -23,16 +23,16 @@ internal static class ActionEndpointProbe
         }
     }
 
-    public static (bool Ok, string Detail) TryProbeMidi(MidiActionEndpoint midi, Func<string?> ensureMidiInitialized)
+    public static (bool Ok, string Detail) TryProbeMIDI(MIDIActionEndpoint midi, Func<string?> ensureMIDIInitialized)
     {
         try
         {
-            var initErr = ensureMidiInitialized();
+            var initErr = ensureMIDIInitialized();
             if (initErr is not null)
                 return (false, initErr);
 
             var devices = PMUtil.GetOutputDevices();
-            var device = ResolveMidiDevice(midi, devices);
+            var device = ResolveMIDIDevice(midi, devices);
             if (device is null)
                 return (false, Strings.OutputDeviceNotFound);
 
@@ -51,7 +51,7 @@ internal static class ActionEndpointProbe
         }
     }
 
-    private static PmDeviceEntry? ResolveMidiDevice(MidiActionEndpoint midi, IReadOnlyList<PmDeviceEntry> devices)
+    private static PmDeviceEntry? ResolveMIDIDevice(MIDIActionEndpoint midi, IReadOnlyList<PmDeviceEntry> devices)
     {
         if (midi.DeviceId is { } id)
         {

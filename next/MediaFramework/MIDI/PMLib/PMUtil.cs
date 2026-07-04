@@ -5,28 +5,28 @@ using PMLib.Types;
 namespace PMLib;
 
 /// <summary>
-/// Static utility helpers for common PortMidi operations.
-/// These are the primary public API surface for PortMidi — <c>Native</c> is internal.
+/// Static utility helpers for common PortMIDI operations.
+/// These are the primary public API surface for PortMIDI — <c>Native</c> is internal.
 /// </summary>
 public static class PMUtil
 {
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Initialises the PortMidi library and scans for available devices.
+    /// Initialises the PortMIDI library and scans for available devices.
     /// Must be called before any other <c>Pm_*</c> function.
     /// </summary>
     public static PmError Initialize() => Native.Pm_Initialize();
 
     /// <summary>
-    /// Terminates the PortMidi library. Call when you are finished with PortMidi.
+    /// Terminates the PortMIDI library. Call when you are finished with PortMIDI.
     /// All streams must be closed before calling this.
     /// </summary>
     public static PmError Terminate() => Native.Pm_Terminate();
 
     // ── Device enumeration ────────────────────────────────────────────────────
 
-    /// <summary>Returns the total number of MIDI devices currently known to PortMidi.</summary>
+    /// <summary>Returns the total number of MIDI devices currently known to PortMIDI.</summary>
     public static int CountDevices() => Native.Pm_CountDevices();
 
     /// <summary>

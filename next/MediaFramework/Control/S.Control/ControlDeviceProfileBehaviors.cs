@@ -8,14 +8,14 @@ public sealed record ControlDeviceProfileBehaviors
 
 public static class ControlDeviceProfileSeeding
 {
-    public static List<ControlPeriodicOscSendConfig> CreateDefaultPeriodicOscSends(ControlDeviceProfile? profile)
+    public static List<ControlPeriodicOSCSendConfig> CreateDefaultPeriodicOSCSends(ControlDeviceProfile? profile)
     {
         if (profile is null)
             return [];
 
         return profile.Tasks
             .Where(task => task.IsDefaultEnabled)
-            .Select(task => new ControlPeriodicOscSendConfig
+            .Select(task => new ControlPeriodicOSCSendConfig
             {
                 Id = Guid.NewGuid(),
                 Name = string.IsNullOrWhiteSpace(task.DisplayName) ? task.Address : task.DisplayName,
@@ -44,9 +44,9 @@ public static class ControlProfileControlMatcher
 
         foreach (var candidate in profile.Controls)
         {
-            if (candidate.MidiController != controller)
+            if (candidate.MIDIController != controller)
                 continue;
-            if (candidate.MidiChannel is int midiChannel && midiChannel != channel)
+            if (candidate.MIDIChannel is int midiChannel && midiChannel != channel)
                 continue;
             control = candidate;
             return true;
@@ -67,9 +67,9 @@ public static class ControlProfileControlMatcher
 
         foreach (var candidate in profile.Controls)
         {
-            if (candidate.MidiNote != note)
+            if (candidate.MIDINote != note)
                 continue;
-            if (candidate.MidiChannel is int midiChannel && midiChannel != channel)
+            if (candidate.MIDIChannel is int midiChannel && midiChannel != channel)
                 continue;
             control = candidate;
             return true;

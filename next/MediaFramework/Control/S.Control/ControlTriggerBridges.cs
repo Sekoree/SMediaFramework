@@ -5,15 +5,15 @@ using S.Media.Core.Triggers;
 
 namespace S.Control;
 
-/// <summary>Maps MIDI input messages to Core trigger ids without coupling the PortMidi binding to Core.</summary>
-public sealed class ControlMidiTriggerBridge : IDisposable
+/// <summary>Maps MIDI input messages to Core trigger ids without coupling the PortMIDI binding to Core.</summary>
+public sealed class ControlMIDITriggerBridge : IDisposable
 {
     private readonly TriggerBus _bus;
     private readonly MIDIInputDevice _input;
-    private readonly ControlMidiTriggerProfile _profile;
+    private readonly ControlMIDITriggerProfile _profile;
     private bool _disposed;
 
-    public ControlMidiTriggerBridge(TriggerBus bus, MIDIInputDevice input, ControlMidiTriggerProfile profile)
+    public ControlMIDITriggerBridge(TriggerBus bus, MIDIInputDevice input, ControlMIDITriggerProfile profile)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -49,25 +49,25 @@ public sealed class ControlMidiTriggerBridge : IDisposable
     }
 }
 
-public sealed class ControlMidiTriggerProfile
+public sealed class ControlMIDITriggerProfile
 {
     private readonly Dictionary<(byte Channel, byte Note), string> _noteOn = new();
     private readonly Dictionary<(byte Channel, byte Controller), string> _controlChanges = new();
     private readonly Dictionary<(byte Channel, byte Program), string> _programChanges = new();
 
-    public ControlMidiTriggerProfile MapNoteOn(byte channel, byte note, string triggerId)
+    public ControlMIDITriggerProfile MapNoteOn(byte channel, byte note, string triggerId)
     {
         _noteOn[(channel, note)] = triggerId;
         return this;
     }
 
-    public ControlMidiTriggerProfile MapControlChange(byte channel, byte controller, string triggerId)
+    public ControlMIDITriggerProfile MapControlChange(byte channel, byte controller, string triggerId)
     {
         _controlChanges[(channel, controller)] = triggerId;
         return this;
     }
 
-    public ControlMidiTriggerProfile MapProgramChange(byte channel, byte program, string triggerId)
+    public ControlMIDITriggerProfile MapProgramChange(byte channel, byte program, string triggerId)
     {
         _programChanges[(channel, program)] = triggerId;
         return this;
@@ -84,13 +84,13 @@ public sealed class ControlMidiTriggerProfile
 }
 
 /// <summary>Maps inbound OSC messages to Core trigger ids without coupling OSCLib to Core.</summary>
-public sealed class ControlOscTriggerBridge : IDisposable
+public sealed class ControlOSCTriggerBridge : IDisposable
 {
     private readonly TriggerBus _bus;
     private readonly IDisposable _registration;
     private bool _disposed;
 
-    public ControlOscTriggerBridge(TriggerBus bus, IOSCServer server)
+    public ControlOSCTriggerBridge(TriggerBus bus, IOSCServer server)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         ArgumentNullException.ThrowIfNull(server);

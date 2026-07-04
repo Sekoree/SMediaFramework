@@ -13,7 +13,7 @@ namespace S.Media.NDI.Clock;
 /// <remarks>
 /// <para>
 /// Wire <see cref="MediaClock.SetMaster"/> to this instance when playing out with NDI as the
-/// timing authority. Call <see cref="Audio.AudioRouterNdiExtensions.SlaveToNdi"/> on an
+/// timing authority. Call <see cref="Audio.AudioRouterNDIExtensions.SlaveToNDI"/> on an
 /// <see cref="S.Media.Core.Audio.AudioRouter"/> to pace decode from ingest media time.
 /// Pass the clock into <see cref="Audio.NDIAudioReceiver"/> so the capture
 /// thread calls <see cref="NotifyAudioFrame"/> before <c>NDIlib_recv_free_audio</c>.

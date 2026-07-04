@@ -3,13 +3,13 @@ using OSCLib;
 namespace S.Control;
 
 /// <summary>Host-mediated OSC output used by the control runtime and script command router.</summary>
-public interface IControlOscSender
+public interface IControlOSCSender
 {
     ValueTask SendAsync(string host, int port, string address, IReadOnlyList<OSCArgument> arguments, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Host-mediated MIDI output used by the control runtime and script command router.</summary>
-public interface IControlMidiSender
+public interface IControlMIDISender
 {
     ValueTask SendControlChangeAsync(
         Guid? endpointId,
@@ -39,8 +39,8 @@ public interface IControlMidiSender
         int value,
         CancellationToken cancellationToken = default);
 
-    ValueTask SendMidiMessageAsync(
+    ValueTask SendMIDIMessageAsync(
         Guid? endpointId,
-        ControlMidiMessagePayload message,
+        ControlMIDIMessagePayload message,
         CancellationToken cancellationToken = default);
 }

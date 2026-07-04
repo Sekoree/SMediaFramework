@@ -149,10 +149,10 @@ internal static class MediaRuntime
             TryUse(b, static () => new MiniAudioModule(), "MiniAudio");
             // NDI is frequently absent (no runtime / unsupported CPU). Only attempt it when the probe says so,
             // and still guard the Use in case discovery state changed since the probe.
-            if (RuntimeModules.IsNdiAvailable)
+            if (RuntimeModules.IsNDIAvailable)
                 TryUse(b, static () => new NDIModule(), "NDI");
             else
-                Trace.LogInformation("MediaRuntime: NDI module skipped — {Reason}", RuntimeModules.NdiUnavailableReason);
+                Trace.LogInformation("MediaRuntime: NDI module skipped — {Reason}", RuntimeModules.NDIUnavailableReason);
 
             // Text cues (NXT-06 cutover): a `text:` provider so the ShowSession path can play a rendered text cue
             // through the registry like any other source (the old engine rendered it via a held frame directly).
@@ -164,7 +164,7 @@ internal static class MediaRuntime
             TryUse(b, static () => Playback.YouTubeRuntime.Module, "YouTube");
 
             // PMX/VMD scenes behind mmd:// URIs; GL material surface with a managed CPU fallback.
-            TryUse(b, static () => new S.Media.Source.MMD.MmdSourceModule(), "MMD");
+            TryUse(b, static () => new S.Media.Source.MMD.MMDSourceModule(), "MMD");
 
             // Dynamic plugin capabilities register LAST so a plugin can extend but not silently pre-empt a
             // built-in for the same probe (registry probe scoring still decides the winner per open).

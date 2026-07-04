@@ -23,8 +23,8 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
     /// (W, H) pairs receivers will see regardless of source dimensions.</summary>
     public NDIResolutionChoice[] ResolutionChoices { get; } = NDIResolutionChoice.All;
 
-    [ObservableProperty] private string _displayName = Strings.NdiProgramDefaultName;
-    [ObservableProperty] private string _sourceName = Strings.NdiOutputDefaultSourceName;
+    [ObservableProperty] private string _displayName = Strings.NDIProgramDefaultName;
+    [ObservableProperty] private string _sourceName = Strings.NDIOutputDefaultSourceName;
     [ObservableProperty] private string? _groups;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowAudioSettings))]
@@ -51,7 +51,7 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
     [ObservableProperty] private string? _validationMessage;
 
     public bool IsEditing => _existingId is not null;
-    public string DialogTitle => IsEditing ? Strings.EditNdiOutputDialogTitle : Strings.AddNdiOutputDialogTitle;
+    public string DialogTitle => IsEditing ? Strings.EditNDIOutputDialogTitle : Strings.AddNDIOutputDialogTitle;
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void InitializeExistingOutputNames(IEnumerable<string> names)
@@ -105,7 +105,7 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
 
         if (string.IsNullOrWhiteSpace(SourceName))
         {
-            ValidationMessage = Strings.ValidationNdiSourceNameRequired;
+            ValidationMessage = Strings.ValidationNDISourceNameRequired;
             return null;
         }
 
@@ -113,7 +113,7 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
         {
             if (AudioChannelCount < 1 || AudioChannelCount > 64)
             {
-                ValidationMessage = Strings.ValidationNdiAudioChannelCountInvalid;
+                ValidationMessage = Strings.ValidationNDIAudioChannelCountInvalid;
                 return null;
             }
 
@@ -133,7 +133,7 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
             if (CustomResolutionWidth is < 16 or > 7680 || CustomResolutionHeight is < 16 or > 4320
                 || CustomResolutionWidth % 2 != 0 || CustomResolutionHeight % 2 != 0)
             {
-                ValidationMessage = Strings.ValidationNdiResolutionInvalid;
+                ValidationMessage = Strings.ValidationNDIResolutionInvalid;
                 return null;
             }
             resolutionLockWidth = CustomResolutionWidth;
@@ -166,16 +166,16 @@ public sealed record NDIPixelFormatChoice(string Label, PixelFormat? PixelFormat
 {
     public override string ToString() => Label;
 
-    public static readonly NDIPixelFormatChoice Auto = new(Strings.NdiPixelFormatAutoLabel, null);
+    public static readonly NDIPixelFormatChoice Auto = new(Strings.NDIPixelFormatAutoLabel, null);
 
     public static readonly NDIPixelFormatChoice[] All =
     [
         Auto,
-        new(Strings.NdiPixelFormatUyvyLabel, S.Media.Core.Video.PixelFormat.Uyvy),
-        new(Strings.NdiPixelFormatBgraLabel, S.Media.Core.Video.PixelFormat.Bgra32),
-        new(Strings.NdiPixelFormatRgbaLabel, S.Media.Core.Video.PixelFormat.Rgba32),
-        new(Strings.NdiPixelFormatNv12Label, S.Media.Core.Video.PixelFormat.Nv12),
-        new(Strings.NdiPixelFormatI420Label, S.Media.Core.Video.PixelFormat.I420),
+        new(Strings.NDIPixelFormatUyvyLabel, S.Media.Core.Video.PixelFormat.Uyvy),
+        new(Strings.NDIPixelFormatBgraLabel, S.Media.Core.Video.PixelFormat.Bgra32),
+        new(Strings.NDIPixelFormatRgbaLabel, S.Media.Core.Video.PixelFormat.Rgba32),
+        new(Strings.NDIPixelFormatNv12Label, S.Media.Core.Video.PixelFormat.Nv12),
+        new(Strings.NDIPixelFormatI420Label, S.Media.Core.Video.PixelFormat.I420),
     ];
 
     public static NDIPixelFormatChoice? FromPixelFormat(PixelFormat pf)
@@ -194,18 +194,18 @@ public sealed record NDIResolutionChoice(string Label, int? Width, int? Height, 
 {
     public override string ToString() => Label;
 
-    public static readonly NDIResolutionChoice Auto = new(Strings.NdiResolutionAutoLabel, null, null);
+    public static readonly NDIResolutionChoice Auto = new(Strings.NDIResolutionAutoLabel, null, null);
 
     /// <summary>The "Custom…" row: width/height come from the dialog's editable fields, not this record.</summary>
-    public static readonly NDIResolutionChoice Custom = new(Strings.NdiResolutionCustomEntryLabel, null, null, IsCustom: true);
+    public static readonly NDIResolutionChoice Custom = new(Strings.NDIResolutionCustomEntryLabel, null, null, IsCustom: true);
 
     public static readonly NDIResolutionChoice[] All =
     [
         Auto,
-        new(Strings.NdiResolution1080Label, 1920, 1080),
-        new(Strings.NdiResolution720Label, 1280, 720),
-        new(Strings.NdiResolution4kLabel, 3840, 2160),
-        new(Strings.NdiResolution576Label, 1024, 576),
+        new(Strings.NDIResolution1080Label, 1920, 1080),
+        new(Strings.NDIResolution720Label, 1280, 720),
+        new(Strings.NDIResolution4kLabel, 3840, 2160),
+        new(Strings.NDIResolution576Label, 1024, 576),
         Custom,
     ];
 

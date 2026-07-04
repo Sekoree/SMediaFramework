@@ -31,7 +31,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
 
     private VideoFormat _output;
     private GlVideoCompositor? _inner;
-    private SharedSdlGlContext? _context;
+    private SharedSDLGlContext? _context;
     private int _ownerThreadId;
     private bool _disposeRequested;
     private bool _resourcesDisposed;
@@ -197,7 +197,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
 
     /// <summary>
     /// Re-asserts the shared GL context as current on the calling thread before any GL work. Compositors
-    /// on one thread now share a single <see cref="SharedSdlGlContext"/>, so sibling compositors can no
+    /// on one thread now share a single <see cref="SharedSDLGlContext"/>, so sibling compositors can no
     /// longer displace each other's binding; this guards only against an unrelated GL user (e.g. the
     /// <see cref="TryProbe(out string)"/> transient context) leaving a different context current.
     /// </summary>
@@ -251,7 +251,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
         // Share one GL context with every other compositor on this thread (the canvas mixer and its
         // mapping stages). The context is reference-counted and made current here; subsequent Composite
         // calls re-assert it (EnsureContextCurrent) so a probe or sibling compositor can't displace it.
-        _context = SharedSdlGlContext.Acquire();
+        _context = SharedSDLGlContext.Acquire();
         _context.MakeCurrent();
 
         _inner = new GlVideoCompositor(_context.Gl, _output, PrecisionForOutput(_output.PixelFormat));

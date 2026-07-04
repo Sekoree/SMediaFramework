@@ -17,7 +17,7 @@ namespace HaPlay.ViewModels;
 
 public sealed partial class CueNodeViewModel : ObservableObject
 {
-    private const int DefaultNdiInputAudioChannels = 2;
+    private const int DefaultNDIInputAudioChannels = 2;
 
     public CueNodeViewModel(CueNodeKind kind)
     {
@@ -125,7 +125,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 SourceHasAudio = !ndi.VideoOnly;
                 SourceAudioChannels = ndi.VideoOnly
                     ? 0
-                    : Math.Max(SourceAudioChannels, DefaultNdiInputAudioChannels);
+                    : Math.Max(SourceAudioChannels, DefaultNDIInputAudioChannels);
                 SourceHasVideo = !ndi.AudioOnly;
                 SourceVideoIsAttachedPicture = false;
                 if (ndi.AudioOnly)
@@ -139,7 +139,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             // An MMD scene is a pure video source (30 fps BGRA at the scene's render size, no audio
             // leg) — without these flags the drawer never offers the Video tab, so the cue could not
             // be placed on a composition at all.
-            case MmdPlaylistItem mmd:
+            case MMDPlaylistItem mmd:
                 SourceHasVideo = true;
                 SourceHasAudio = false;
                 SourceAudioChannels = 0;
@@ -585,7 +585,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     public CueActionKind ActionKind
     {
-        get => Enum.TryParse<CueActionKind>(Extra, out var kind) ? kind : CueActionKind.OscOut;
+        get => Enum.TryParse<CueActionKind>(Extra, out var kind) ? kind : CueActionKind.OSCOut;
         set => Extra = value.ToString();
     }
 
@@ -988,7 +988,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
-                ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OscOut,
+                ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OSCOut,
             },
             _ => new CommentCueNode
             {

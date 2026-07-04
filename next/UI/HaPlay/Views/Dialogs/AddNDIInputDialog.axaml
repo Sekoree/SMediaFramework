@@ -78,7 +78,7 @@
         </Border>
 
         <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="11" Margin="0,4,0,0"
-                   Text="{x:Static res:Strings.NdiVideoOnlyBehaviorHint}" />
+                   Text="{x:Static res:Strings.NDIVideoOnlyBehaviorHint}" />
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

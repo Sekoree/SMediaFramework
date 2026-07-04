@@ -14,7 +14,7 @@ namespace PMLib.MessageTypes;
 /// <b>two</b> consecutive short messages: the coarse CC followed by the fine CC.
 /// Therefore <see cref="Controller"/> must be in the range 0–31 for 14-bit messages.
 ///
-/// <b>Receiving 14-bit CC:</b> PortMidi delivers each MIDI byte individually, so a 14-bit
+/// <b>Receiving 14-bit CC:</b> PortMIDI delivers each MIDI byte individually, so a 14-bit
 /// update arrives as two separate <see cref="ControlChange"/> instances (one coarse, one fine).
 /// Use <see cref="FromCoarseFine"/> to combine them into a single high-resolution value.
 /// </remarks>

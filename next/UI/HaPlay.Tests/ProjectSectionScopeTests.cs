@@ -28,11 +28,11 @@ public sealed class ProjectSectionScopeTests
     public void Normalize_CollapsesFullPairsToParents()
     {
         var normalized = ProjectSections.Normalize(
-            [ProjectSections.OutputsAudio, ProjectSections.OutputsVideo, ProjectSections.TargetsMidi]);
+            [ProjectSections.OutputsAudio, ProjectSections.OutputsVideo, ProjectSections.TargetsMIDI]);
 
         Assert.Contains(ProjectSections.Outputs, normalized);
         Assert.DoesNotContain(ProjectSections.OutputsAudio, normalized);
-        Assert.Contains(ProjectSections.TargetsMidi, normalized);
+        Assert.Contains(ProjectSections.TargetsMIDI, normalized);
     }
 
     [Fact]

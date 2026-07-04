@@ -8,9 +8,9 @@ namespace HaPlay.Tests;
 public sealed class ControlTriggerBridgeTests
 {
     [Fact]
-    public void MidiProfileResolvesMappedMessages()
+    public void MIDIProfileResolvesMappedMessages()
     {
-        var profile = new ControlMidiTriggerProfile()
+        var profile = new ControlMIDITriggerProfile()
             .MapNoteOn(0, 60, "pad.kick.fire")
             .MapControlChange(0, 7, "out.main.gain")
             .MapProgramChange(0, 3, "patch.lead");
@@ -24,20 +24,20 @@ public sealed class ControlTriggerBridgeTests
     }
 
     [Fact]
-    public void OscPayloadMapsFirstArgument()
+    public void OSCPayloadMapsFirstArgument()
     {
         var message = new OSCMessage("/pad/kick", [OSCArgument.Float32(0.5f)]);
-        var payload = ControlOscTriggerBridge.MapMessageToPayload(message);
+        var payload = ControlOSCTriggerBridge.MapMessageToPayload(message);
         Assert.Equal(TriggerValueKind.Numeric, payload.Kind);
         Assert.Equal(0.5, payload.NumericValue, 3);
     }
 
     [Fact]
-    public void OscBridgeRegistersAndDisposesHandler()
+    public void OSCBridgeRegistersAndDisposesHandler()
     {
         var bus = new TriggerBus();
         using var server = new OSCServer(new OSCServerOptions { Port = 0 });
-        using var bridge = new ControlOscTriggerBridge(bus, server);
+        using var bridge = new ControlOSCTriggerBridge(bus, server);
         bus.Register("/x", (in TriggerPayload _) => { });
 
         Assert.True(bus.Fire("/x"));

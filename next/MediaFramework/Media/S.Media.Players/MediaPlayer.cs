@@ -230,12 +230,12 @@ public sealed class MediaPlayer : IDisposable
         if (_portAudioPlaybackStats is { } pa)
             paSnap = new PortAudioMetricsSnapshot(pa.PlayedSamples, pa.UnderrunSamples, pa.DroppedSamples);
 
-        NdiIngestMetricsSnapshot? ndiSnap = null;
+        NDIIngestMetricsSnapshot? ndiSnap = null;
         foreach (var d in _ownedLiveDisposables)
         {
-            if (d is INdiOverflowReporter ndi)
+            if (d is INDIOverflowReporter ndi)
             {
-                ndiSnap = new NdiIngestMetricsSnapshot(ndi.AudioOverflowFloats, ndi.VideoOverflowFrames);
+                ndiSnap = new NDIIngestMetricsSnapshot(ndi.AudioOverflowFloats, ndi.VideoOverflowFrames);
                 break;
             }
         }

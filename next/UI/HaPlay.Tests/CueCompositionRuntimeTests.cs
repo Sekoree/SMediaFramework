@@ -69,7 +69,7 @@ public sealed class CueCompositionRuntimeTests
     }
 
     [Fact]
-    public void LeasedLineCount_StaysZeroWhenNdiCarrierCannotBeAcquired()
+    public void LeasedLineCount_StaysZeroWhenNDICarrierCannotBeAcquired()
     {
         var outputs = new OutputManagementViewModel();
         var line = new OutputLineViewModel(

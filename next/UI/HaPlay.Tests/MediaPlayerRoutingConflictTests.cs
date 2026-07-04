@@ -18,7 +18,7 @@ public sealed class MediaPlayerRoutingConflictTests
         await DispatchUi(async () =>
         {
             var (p1, p2) = CreateTwoPlayersWithOutput(
-                new LocalVideoOutputDefinition(Guid.NewGuid(), "Program", VideoOutputEngine.SdlOpenGl,
+                new LocalVideoOutputDefinition(Guid.NewGuid(), "Program", VideoOutputEngine.SDLOpenGl,
                     VideoSurfaceMode.Windowed, 0, 1280, 720));
             var prompted = false;
             p2.VideoOutputRouteConflictPrompt = conflict =>

@@ -28,7 +28,7 @@ internal sealed record VideoOutputRouteConflict(
 
 public partial class MediaPlayerViewModel : ViewModelBase
 {
-    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+    public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     private readonly OutputManagementViewModel _outputs;
     private readonly Func<MediaPlayerViewModel, Task>? _requestRemove;
@@ -2196,7 +2196,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // the open path surfaces its own actionable error (reliable-mode "not prepared", missing model
         // file). Gating them here silently no-ops the play with nothing in the log (the 2026-07-03
         // "YouTube item is instantly done" report: this gate predated both item kinds).
-        if (_currentPlaylistItem is YouTubePlaylistItem or MmdPlaylistItem)
+        if (_currentPlaylistItem is YouTubePlaylistItem or MMDPlaylistItem)
             return true;
         return _currentPlaylistItem is null
                && !string.IsNullOrWhiteSpace(MediaFilePath)

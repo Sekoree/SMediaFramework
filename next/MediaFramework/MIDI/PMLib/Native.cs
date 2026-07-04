@@ -6,7 +6,7 @@ using PMLib.Types;
 namespace PMLib;
 
 /// <summary>
-/// P/Invoke bindings for the PortMidi library, generated via <see cref="LibraryImportAttribute"/>.
+/// P/Invoke bindings for the PortMIDI library, generated via <see cref="LibraryImportAttribute"/>.
 /// The native library must be loadable as <c>portmidi</c>
 /// (i.e. <c>libportmidi.so</c> on Linux, <c>portmidi.dll</c> on Windows,
 /// <c>libportmidi.dylib</c> on macOS).
@@ -35,7 +35,7 @@ internal static partial class Native
     [LibraryImport(LibraryName, EntryPoint = "Pm_Initialize")]
     private static partial PmError Pm_Initialize_Import();
     /// <summary>
-    /// Initialises the PortMidi library and scans for available devices.
+    /// Initialises the PortMIDI library and scans for available devices.
     /// Must be called before any other <c>Pm_*</c> function.
     /// </summary>
     internal static PmError Pm_Initialize()
@@ -50,7 +50,7 @@ internal static partial class Native
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Terminate")]
     private static partial PmError Pm_Terminate_Import();
-    /// <summary>Terminates the PortMidi library. Call when you are finished with PortMidi.</summary>
+    /// <summary>Terminates the PortMIDI library. Call when you are finished with PortMIDI.</summary>
     internal static PmError Pm_Terminate()
     {
         return Gate(() =>

@@ -31,7 +31,7 @@ public partial class MediaPlayerViewModel
     // NDI-output audio (ShowSession re-back): each selected audio-capable NDI line's carrier audio sink, keyed
     // by the route device id the audio-output factory resolves. Populated (and the lines held) on open, released
     // on stop/switch — the audio analogue of _playerVideoOutputs / _playerAcquiredLines.
-    private readonly Dictionary<string, IAudioOutput> _playerNdiAudioOutputs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IAudioOutput> _playerNDIAudioOutputs = new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredAudioLines = new();
     // PortAudio route device id → the LINE's configured sample rate, so the audio-output factory can fall back
     // to opening a device at its own rate (behind an egress resampler) when it rejects the clip's mix rate.
@@ -71,8 +71,8 @@ public partial class MediaPlayerViewModel
                 var probe = await CueMediaProbe.TryProbeAsync(file.Path).ConfigureAwait(true);
                 hasVideo = probe?.HasVideo == true;
                 break;
-            case NDIInputPlaylistItem ndi when RuntimeModules.IsNdiAvailable:
-                mediaPath = BuildNdiInputUri(ndi);
+            case NDIInputPlaylistItem ndi when RuntimeModules.IsNDIAvailable:
+                mediaPath = BuildNDIInputUri(ndi);
                 hasVideo = !ndi.AudioOnly;
                 break;
             case YouTubePlaylistItem yt:
@@ -81,8 +81,8 @@ public partial class MediaPlayerViewModel
                 mediaPath = HaPlayPlaybackHelpers.BuildYouTubeUri(yt);
                 hasVideo = !yt.AudioOnly && yt.VideoStreamDescriptor is not null;
                 break;
-            case MmdPlaylistItem mmd:
-                mediaPath = HaPlayPlaybackHelpers.BuildMmdUri(mmd);
+            case MMDPlaylistItem mmd:
+                mediaPath = HaPlayPlaybackHelpers.BuildMMDUri(mmd);
                 hasVideo = true; // the MMD source is video-only
                 break;
             case PortAudioInputPlaylistItem paIn:
@@ -187,14 +187,14 @@ public partial class MediaPlayerViewModel
                 foreach (var held in _playerAcquiredAudioLines)
                     _outputs.ReleaseAudioOutputForLine(held);
                 _playerAcquiredAudioLines.Clear();
-                _playerNdiAudioOutputs.Clear();
+                _playerNDIAudioOutputs.Clear();
                 foreach (var line in lines)
                 {
                     if (line.Definition is not NDIOutputDefinition nd || nd.StreamMode == NDIOutputStreamMode.VideoOnly)
                         continue;
                     if (_outputs.AcquireAudioOutputForLine(line.Definition.Id) is not { } audio)
                         continue;
-                    _playerNdiAudioOutputs[NdiAudioDeviceId(line.Definition.Id)] = audio;
+                    _playerNDIAudioOutputs[NDIAudioDeviceId(line.Definition.Id)] = audio;
                     _playerAcquiredAudioLines.Add(line.Definition.Id);
                 }
 
@@ -275,8 +275,8 @@ public partial class MediaPlayerViewModel
     // The descriptor-URI builders live in HaPlayPlaybackHelpers so the CUE mapper shares them (a cue-fired
     // live input must keep its per-item options exactly like a deck-fired one); these thin forwards keep the
     // deck's call sites and tests stable.
-    internal static string BuildNdiInputUri(NDIInputPlaylistItem item) =>
-        HaPlayPlaybackHelpers.BuildNdiInputUri(item);
+    internal static string BuildNDIInputUri(NDIInputPlaylistItem item) =>
+        HaPlayPlaybackHelpers.BuildNDIInputUri(item);
 
     internal static string BuildPortAudioInputUri(PortAudioInputPlaylistItem item) =>
         HaPlayPlaybackHelpers.BuildPortAudioInputUri(item);
@@ -322,8 +322,8 @@ public partial class MediaPlayerViewModel
         var deviceId = _outputs.DefinitionsSnapshot
                 .OfType<PortAudioOutputDefinition>()
                 .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId
-            ?? (_playerNdiAudioOutputs.ContainsKey(NdiAudioDeviceId(outputLineId))
-                ? NdiAudioDeviceId(outputLineId)
+            ?? (_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(outputLineId))
+                ? NDIAudioDeviceId(outputLineId)
                 : null);
         if (deviceId is not null
             && session.TryGetActiveAudioPumpStats(deviceId, out var audio)
@@ -354,7 +354,7 @@ public partial class MediaPlayerViewModel
     /// Runs on the UI thread (reads deck observable state).</summary>
     /// <remarks>One device route per selected audio line with a full per-cell gain matrix + the compound
     /// (master × per-output) gain. PortAudio lines route to their backend device; audio-capable NDI lines route
-    /// to their carrier's audio side (its device id resolves through <see cref="BuildNdiAudioLease"/>, populated
+    /// to their carrier's audio side (its device id resolves through <see cref="BuildNDIAudioLease"/>, populated
     /// on open).</remarks>
     private IReadOnlyList<ShowClipAudioRoute> BuildDeckShowAudioRoutes(IReadOnlyList<OutputLineViewModel> lines)
     {
@@ -392,8 +392,8 @@ public partial class MediaPlayerViewModel
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly:
                     // Only route to an NDI line whose carrier audio was acquired on open; the device id maps back
                     // to that borrowed carrier in the audio-output factory.
-                    var ndiDeviceId = NdiAudioDeviceId(line.Definition.Id);
-                    if (_playerNdiAudioOutputs.ContainsKey(ndiDeviceId))
+                    var ndiDeviceId = NDIAudioDeviceId(line.Definition.Id);
+                    if (_playerNDIAudioOutputs.ContainsKey(ndiDeviceId))
                         routes.Add(Route(ndiDeviceId, CompoundEnvelope(binding),
                             nd.AudioSampleRate > 0 ? nd.AudioSampleRate : null));
                     break;
@@ -403,9 +403,9 @@ public partial class MediaPlayerViewModel
     }
 
     /// <summary>Stable route device id for an NDI line's carrier audio — the key shared by
-    /// <see cref="BuildDeckShowAudioRoutes"/> (emits it), the <c>_playerNdiAudioOutputs</c> map (populated on
-    /// open), and <see cref="BuildNdiAudioLease"/> (resolves it in the audio-output factory).</summary>
-    private static string NdiAudioDeviceId(Guid lineId) => $"ndi-audio:{lineId}";
+    /// <see cref="BuildDeckShowAudioRoutes"/> (emits it), the <c>_playerNDIAudioOutputs</c> map (populated on
+    /// open), and <see cref="BuildNDIAudioLease"/> (resolves it in the audio-output factory).</summary>
+    private static string NDIAudioDeviceId(Guid lineId) => $"ndi-audio:{lineId}";
 
     /// <summary>Stable composition-output id for a driven output line — shared by the video-output factory (fire
     /// path) and hot add/remove, so a single line's composition output is attached/detached by a fixed id
@@ -442,7 +442,7 @@ public partial class MediaPlayerViewModel
     /// failed (the mid-play "route → no output" bug). Safe on the session thread.</summary>
     private ClipAudioOutputLease? BuildDeckAudioLeaseCore(string deviceId, AudioFormat format)
     {
-        if (_playerNdiAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
+        if (_playerNDIAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
         {
             if (carrierAudio.Format.SampleRate == format.SampleRate && carrierAudio.Format.Channels == format.Channels)
                 // Format matches → route straight into the carrier (borrowed: released by the deck on stop).
@@ -591,10 +591,10 @@ public partial class MediaPlayerViewModel
 
         // NDI audio: hold the carrier audio for an audio-capable NDI line so the rebuild's route can reach it.
         if (line.Definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly }
-            && !_playerNdiAudioOutputs.ContainsKey(NdiAudioDeviceId(lineId))
+            && !_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(lineId))
             && _outputs.AcquireAudioOutputForLine(lineId) is { } audio)
         {
-            _playerNdiAudioOutputs[NdiAudioDeviceId(lineId)] = audio;
+            _playerNDIAudioOutputs[NDIAudioDeviceId(lineId)] = audio;
             _playerAcquiredAudioLines.Add(lineId);
         }
 
@@ -624,8 +624,8 @@ public partial class MediaPlayerViewModel
         }
 
         // 2) Drop the NDI carrier from the audio map so the rebuild excludes its route (don't release it yet).
-        var hadNdiAudio = _playerNdiAudioOutputs.Remove(NdiAudioDeviceId(lineId));
-        if (hadNdiAudio)
+        var hadNDIAudio = _playerNDIAudioOutputs.Remove(NDIAudioDeviceId(lineId));
+        if (hadNDIAudio)
             _playerAcquiredAudioLines.Remove(lineId);
 
         // 3) Rebuild the clip's audio outputs from the REMAINING routes — removes the dead route in the router
@@ -635,7 +635,7 @@ public partial class MediaPlayerViewModel
         // 4) Now the physical outputs carry no route/composition reference — safe to release.
         if (hadVideo)
             _outputs.ReleaseVideoOutputForLine(lineId);
-        if (hadNdiAudio)
+        if (hadNDIAudio)
             _outputs.ReleaseAudioOutputForLine(lineId);
 
         UpdateNoOutputWarning();
@@ -745,7 +745,7 @@ public partial class MediaPlayerViewModel
             foreach (var held in _playerAcquiredAudioLines)
                 _outputs.ReleaseAudioOutputForLine(held);
             _playerAcquiredAudioLines.Clear();
-            _playerNdiAudioOutputs.Clear();
+            _playerNDIAudioOutputs.Clear();
             _playerPaDeviceRates.Clear();
             ShowSessionActive = false;
             IsPlaying = false;

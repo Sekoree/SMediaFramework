@@ -59,11 +59,11 @@ public sealed class MediaPlayerRegistryItemLoadTests
         });
 
     [Fact]
-    public Task PlayingAnMmdItemWithAMissingModel_ReachesTheOpenPath_AndSurfacesItsError() =>
+    public Task PlayingAnMMDItemWithAMissingModel_ReachesTheOpenPath_AndSurfacesItsError() =>
         DispatchUi(async () =>
         {
             var player = CreatePlayer();
-            var item = new MmdPlaylistItem("/nonexistent/model.pmx");
+            var item = new MMDPlaylistItem("/nonexistent/model.pmx");
 
             await player.PlayPlaylistItemAsync(item);
 

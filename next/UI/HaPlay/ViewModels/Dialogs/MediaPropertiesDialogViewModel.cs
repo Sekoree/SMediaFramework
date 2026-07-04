@@ -48,7 +48,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
     public string DialogTitle => Strings.Format(nameof(Strings.MediaPropertiesDialogTitleFormat), _current.DisplayName);
 
     public bool IsFileItem => _current is FilePlaylistItem;
-    public bool IsMmdItem => _current is MmdPlaylistItem;
+    public bool IsMMDItem => _current is MMDPlaylistItem;
     public bool IsYouTubeItem => _current is YouTubePlaylistItem;
 
     // ---------------------------------------------------------------- Details
@@ -241,7 +241,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
     private bool _isBaking;
 
     public bool CanBakePhysics =>
-        _current is MmdPlaylistItem { Physics: true, MotionPath.Length: > 0 } mmd
+        _current is MMDPlaylistItem { Physics: true, MotionPath.Length: > 0 } mmd
         && FileExists(mmd.ModelPath) && FileExists(mmd.MotionPath) && !IsBaking;
 
     /// <summary>Explicit pre-bake from the dialog: loads the documents on a worker, bakes the full
@@ -249,7 +249,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanBakePhysics))]
     private async Task BakePhysicsAsync()
     {
-        if (_current is not MmdPlaylistItem { MotionPath: { Length: > 0 } motionPath } mmd)
+        if (_current is not MMDPlaylistItem { MotionPath: { Length: > 0 } motionPath } mmd)
             return;
 
         IsBaking = true;
@@ -260,9 +260,9 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
         {
             var baked = await Task.Run(async () =>
             {
-                var model = PmxDocument.Load(mmd.ModelPath);
-                var motion = VmdDocument.Load(motionPath);
-                return await MmdPhysicsBakeCache.BakeAsync(
+                var model = PMXDocument.Load(mmd.ModelPath);
+                var motion = VMDDocument.Load(motionPath);
+                return await MMDPhysicsBakeCache.BakeAsync(
                     mmd.ModelPath, motionPath, model, motion,
                     progress: p => Avalonia.Threading.Dispatcher.UIThread.Post(() => BakeProgress = p)).ConfigureAwait(false);
             }).ConfigureAwait(true);
@@ -285,7 +285,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
 
     private void RefreshBakeStatus()
     {
-        if (_current is not MmdPlaylistItem mmd)
+        if (_current is not MMDPlaylistItem mmd)
         {
             BakeStatus = null;
             return;
@@ -295,7 +295,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
         {
             { Physics: false } => Strings.MediaPropertiesBakeStatusDisabled,
             { MotionPath: null or "" } => Strings.MediaPropertiesBakeStatusNoMotion,
-            _ when MmdPhysicsBakeCache.IsCached(mmd.ModelPath, mmd.MotionPath!) => Strings.MediaPropertiesBakeStatusCached,
+            _ when MMDPhysicsBakeCache.IsCached(mmd.ModelPath, mmd.MotionPath!) => Strings.MediaPropertiesBakeStatusCached,
             _ => Strings.MediaPropertiesBakeStatusNotCached,
         };
     }
@@ -342,7 +342,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
             DetailRows.Add(row);
 
         SceneRows.Clear();
-        if (_current is MmdPlaylistItem mmd)
+        if (_current is MMDPlaylistItem mmd)
         {
             SceneRows.Add(new MediaPropertyRow(Strings.MediaPropertiesRowModel, mmd.ModelPath));
             SceneRows.Add(new MediaPropertyRow(
@@ -385,7 +385,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
 
         OnPropertyChanged(nameof(DialogTitle));
         OnPropertyChanged(nameof(IsFileItem));
-        OnPropertyChanged(nameof(IsMmdItem));
+        OnPropertyChanged(nameof(IsMMDItem));
         OnPropertyChanged(nameof(IsYouTubeItem));
         OnPropertyChanged(nameof(SubtitleSummary));
         NotifyBakeStateChanged();
@@ -397,9 +397,9 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
         ImagePlaylistItem => Strings.MediaPropertiesKindImage,
         SubtitlePlaylistItem => Strings.MediaPropertiesKindSubtitle,
         TextPlaylistItem => Strings.MediaPropertiesKindText,
-        MmdPlaylistItem => Strings.MediaPropertiesKindMmd,
+        MMDPlaylistItem => Strings.MediaPropertiesKindMMD,
         YouTubePlaylistItem => Strings.MediaPropertiesKindYouTube,
-        NDIInputPlaylistItem => Strings.MediaPropertiesKindNdi,
+        NDIInputPlaylistItem => Strings.MediaPropertiesKindNDI,
         PortAudioInputPlaylistItem => Strings.MediaPropertiesKindPortAudio,
         _ => item.GetType().Name,
     };
@@ -420,7 +420,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
             case TextPlaylistItem t:
                 yield return new MediaPropertyRow(Strings.MediaPropertiesRowResolution, $"{t.CanvasWidth}×{t.CanvasHeight}");
                 break;
-            case MmdPlaylistItem m:
+            case MMDPlaylistItem m:
                 yield return new MediaPropertyRow(Strings.MediaPropertiesRowLocation, m.ModelPath);
                 yield return new MediaPropertyRow(Strings.MediaPropertiesRowResolution, $"{m.RenderWidth}×{m.RenderHeight}");
                 break;

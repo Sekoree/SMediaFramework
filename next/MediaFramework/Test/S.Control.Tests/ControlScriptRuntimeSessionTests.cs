@@ -7,7 +7,7 @@ namespace HaPlay.Tests;
 public sealed class ControlScriptRuntimeSessionTests
 {
     [Fact]
-    public async Task DispatchControlEventAsync_RunsStarterScriptAndRoutesOscToConfiguredX32()
+    public async Task DispatchControlEventAsync_RunsStarterScriptAndRoutesOSCToConfiguredX32()
     {
         var midiDeviceId = Guid.NewGuid();
         var x32DeviceId = Guid.NewGuid();
@@ -15,15 +15,15 @@ public sealed class ControlScriptRuntimeSessionTests
             BuiltInControlScriptTemplateRepository.XTouchMiniX32FadersTemplateId);
         Assert.NotNull(template);
 
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
                 Devices =
                 [
-                    MidiDevice(midiDeviceId, "X-Touch Mini"),
-                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                    MIDIDevice(midiDeviceId, "X-Touch Mini"),
+                    OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
                 ],
                 Scripts =
                 [
@@ -38,11 +38,11 @@ public sealed class ControlScriptRuntimeSessionTests
                         [
                             new ControlScriptTriggerConfig
                             {
-                                Kind = ControlScriptTriggerKind.MidiControlChange,
+                                Kind = ControlScriptTriggerKind.MIDIControlChange,
                                 FunctionName = "onXTouchFaderEncoder",
                                 DeviceInstanceId = midiDeviceId,
-                                MidiChannel = 1,
-                                MidiController = 16,
+                                MIDIChannel = 1,
+                                MIDIController = 16,
                             },
                         ],
                     },
@@ -51,10 +51,10 @@ public sealed class ControlScriptRuntimeSessionTests
             new Dictionary<string, string> { [template.SuggestedPath] = template.Source },
             sender);
 
-        var result = await session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 16, value: 10));
+        var result = await session.DispatchControlEventAsync(MIDICcEvent(midiDeviceId, controller: 16, value: 10));
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
-        Assert.True(Assert.Single(result.OscRoutes).Succeeded);
+        Assert.True(Assert.Single(result.OSCRoutes).Succeeded);
         var sent = Assert.Single(sender.Sent);
         Assert.Equal("192.168.2.76", sent.Host);
         Assert.Equal(10023, sent.Port);
@@ -67,12 +67,12 @@ public sealed class ControlScriptRuntimeSessionTests
     {
         var x32DeviceId = Guid.NewGuid();
         var triggerId = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
+                Devices = [OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -121,15 +121,15 @@ public sealed class ControlScriptRuntimeSessionTests
     {
         var midiDeviceId = Guid.NewGuid();
         var x32DeviceId = Guid.NewGuid();
-        var sender = new DelayedOscSender(TimeSpan.FromMilliseconds(50));
+        var sender = new DelayedOSCSender(TimeSpan.FromMilliseconds(50));
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
                 Devices =
                 [
-                    MidiDevice(midiDeviceId, "X-Touch Mini"),
-                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                    MIDIDevice(midiDeviceId, "X-Touch Mini"),
+                    OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
                 ],
                 Scripts =
                 [
@@ -142,7 +142,7 @@ public sealed class ControlScriptRuntimeSessionTests
                         [
                             new ControlScriptTriggerConfig
                             {
-                                Kind = ControlScriptTriggerKind.MidiControlChange,
+                                Kind = ControlScriptTriggerKind.MIDIControlChange,
                                 FunctionName = "onCc",
                                 DeviceInstanceId = midiDeviceId,
                             },
@@ -161,8 +161,8 @@ public sealed class ControlScriptRuntimeSessionTests
             },
             sender);
 
-        var first = session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 16, value: 1)).AsTask();
-        var second = session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 17, value: 2)).AsTask();
+        var first = session.DispatchControlEventAsync(MIDICcEvent(midiDeviceId, controller: 16, value: 1)).AsTask();
+        var second = session.DispatchControlEventAsync(MIDICcEvent(midiDeviceId, controller: 17, value: 2)).AsTask();
 
         var results = await Task.WhenAll(first, second);
 
@@ -175,12 +175,12 @@ public sealed class ControlScriptRuntimeSessionTests
     public async Task DispatchDeviceEnabledAsync_RoutesStartupRequestScript()
     {
         var x32DeviceId = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
+                Devices = [OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -216,20 +216,20 @@ public sealed class ControlScriptRuntimeSessionTests
         var result = await session.DispatchDeviceEnabledAsync(x32DeviceId);
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
-        Assert.True(Assert.Single(result.OscRoutes).Succeeded);
+        Assert.True(Assert.Single(result.OSCRoutes).Succeeded);
         Assert.Equal("/ch/01/mix/fader", Assert.Single(sender.Sent).Address);
     }
 
     [Fact]
-    public async Task DispatchManualAsync_ReturnsRouteFailureForUnknownOscDevice()
+    public async Task DispatchManualAsync_ReturnsRouteFailureForUnknownOSCDevice()
     {
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var scriptId = Guid.NewGuid();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [OscDevice(Guid.NewGuid(), "X32", "x32", "192.168.2.76", 10023)],
+                Devices = [OSCDevice(Guid.NewGuid(), "X32", "x32", "192.168.2.76", 10023)],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -262,7 +262,7 @@ public sealed class ControlScriptRuntimeSessionTests
         var result = await session.DispatchManualAsync(scriptId);
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
-        var route = Assert.Single(result.OscRoutes);
+        var route = Assert.Single(result.OSCRoutes);
         Assert.False(route.Succeeded);
         Assert.Contains("No enabled OSC device matches key 'missing'", route.ErrorMessage);
         Assert.Empty(sender.Sent);
@@ -276,8 +276,8 @@ public sealed class ControlScriptRuntimeSessionTests
             new ControlSystemConfig
             {
                 IsArmed = true,
-                OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
-                Devices = [OscDevice(x32Id, "X32", "x32", "192.168.2.76", 10023)],
+                OSCCacheUpdateMode = ControlOSCCacheUpdateMode.OptimisticSendAndIncoming,
+                Devices = [OSCDevice(x32Id, "X32", "x32", "192.168.2.76", 10023)],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -305,25 +305,25 @@ public sealed class ControlScriptRuntimeSessionTests
                     }
                     """,
             },
-            new RecordingOscSender());
+            new RecordingOSCSender());
 
         await session.DispatchManualAsync();
 
-        Assert.True(session.OscCache.TryGetNumber("x32", "/ch/01/mix/fader", out var value));
+        Assert.True(session.OSCCache.TryGetNumber("x32", "/ch/01/mix/fader", out var value));
         Assert.Equal(0.42, value, precision: 12);
     }
 
     [Fact]
-    public async Task DispatchManualAsync_RoutesMidiOutputAndRecordsMonitorEntry()
+    public async Task DispatchManualAsync_RoutesMIDIOutputAndRecordsMonitorEntry()
     {
         var xtouchId = Guid.NewGuid();
         var monitor = new ControlMonitorBuffer(maxRecords: 10);
-        var midiSender = new RecordingMidiSender();
+        var midiSender = new RecordingMIDISender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [MidiDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI")],
+                Devices = [MIDIDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI")],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -352,20 +352,20 @@ public sealed class ControlScriptRuntimeSessionTests
                     }
                     """,
             },
-            new RecordingOscSender(),
+            new RecordingOSCSender(),
             monitor,
             midiSender);
 
         var result = await session.DispatchManualAsync();
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
-        Assert.Empty(result.OscRoutes);
-        Assert.All(result.MidiRoutes, route => Assert.True(route.Succeeded));
+        Assert.Empty(result.OSCRoutes);
+        Assert.All(result.MIDIRoutes, route => Assert.True(route.Succeeded));
         Assert.Collection(
             midiSender.Sent,
             sent =>
             {
-                Assert.Equal(ControlScriptMidiMessageKind.NoteOn, sent.Kind);
+                Assert.Equal(ControlScriptMIDIMessageKind.NoteOn, sent.Kind);
                 Assert.Equal(xtouchId, sent.EndpointId);
                 Assert.Equal(1, sent.Channel);
                 Assert.Equal(89, sent.Note);
@@ -373,18 +373,18 @@ public sealed class ControlScriptRuntimeSessionTests
             },
             sent =>
             {
-                Assert.Equal(ControlScriptMidiMessageKind.ControlChange, sent.Kind);
+                Assert.Equal(ControlScriptMIDIMessageKind.ControlChange, sent.Kind);
                 Assert.Equal(xtouchId, sent.EndpointId);
                 Assert.Equal(16, sent.Controller);
                 Assert.Equal(64, sent.Value);
             });
 
         var midiOutputRecords = monitor.Records
-            .Where(r => r.Protocol == ControlMonitorProtocol.Midi && r.Direction == ControlMonitorDirection.Output)
+            .Where(r => r.Protocol == ControlMonitorProtocol.MIDI && r.Direction == ControlMonitorDirection.Output)
             .ToArray();
         Assert.Equal(2, midiOutputRecords.Length);
-        Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMidiMessageKind.NoteOn) && r.MidiNote == 89);
-        Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMidiMessageKind.ControlChange) && r.MidiController == 16);
+        Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMIDIMessageKind.NoteOn) && r.MIDINote == 89);
+        Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMIDIMessageKind.ControlChange) && r.MIDIController == 16);
     }
 
     [Fact]
@@ -393,15 +393,15 @@ public sealed class ControlScriptRuntimeSessionTests
         var x32DeviceId = Guid.NewGuid();
         var xtouchId = Guid.NewGuid();
         var monitor = new ControlMonitorBuffer(maxRecords: 20);
-        var midiSender = new RecordingMidiSender();
+        var midiSender = new RecordingMIDISender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
                 Devices =
                 [
-                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
-                    MidiDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI"),
+                    OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                    MIDIDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI"),
                 ],
                 Scripts =
                 [
@@ -416,10 +416,10 @@ public sealed class ControlScriptRuntimeSessionTests
                         [
                             new ControlScriptTriggerConfig
                             {
-                                Kind = ControlScriptTriggerKind.OscCacheChanged,
+                                Kind = ControlScriptTriggerKind.OSCCacheChanged,
                                 FunctionName = "onFaderChanged",
                                 DeviceInstanceId = x32DeviceId,
-                                OscAddressPattern = "/ch/01/mix/fader",
+                                OSCAddressPattern = "/ch/01/mix/fader",
                             },
                         ],
                     },
@@ -434,18 +434,18 @@ public sealed class ControlScriptRuntimeSessionTests
                     }
                     """,
             },
-            new RecordingOscSender(),
+            new RecordingOSCSender(),
             monitor,
             midiSender);
 
         var result = await session.DispatchControlEventAsync(
-            OscEvent(x32DeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.5f)));
+            OSCEvent(x32DeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.5f)));
 
         var cacheUpdate = Assert.Single(result.CacheUpdates);
         Assert.Equal("/ch/01/mix/fader", cacheUpdate.Key.Address);
         Assert.True(Assert.Single(result.Invocations).Succeeded);
         var midiSent = Assert.Single(midiSender.Sent);
-        Assert.Equal(ControlScriptMidiMessageKind.ControlChange, midiSent.Kind);
+        Assert.Equal(ControlScriptMIDIMessageKind.ControlChange, midiSent.Kind);
         Assert.Equal(xtouchId, midiSent.EndpointId);
 
         var cacheRecord = Assert.Single(
@@ -462,12 +462,12 @@ public sealed class ControlScriptRuntimeSessionTests
     {
         var x32DeviceId = Guid.NewGuid();
         var monitor = new ControlMonitorBuffer(maxRecords: 20);
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
+                Devices = [OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -563,7 +563,7 @@ public sealed class ControlScriptRuntimeSessionTests
                     }
                     """,
             },
-            new RecordingOscSender(),
+            new RecordingOSCSender(),
             monitor);
 
         var result = await session.DispatchManualAsync(scriptId);
@@ -590,25 +590,25 @@ public sealed class ControlScriptRuntimeSessionTests
     {
         var x32Id = Guid.NewGuid();
         var spareId = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
                 Devices =
                 [
-                    OscDevice(x32Id, "X32", "x32", "192.168.2.76", 10023),
+                    OSCDevice(x32Id, "X32", "x32", "192.168.2.76", 10023),
                     new ControlDeviceInstanceConfig
                     {
                         Id = spareId,
                         Name = "Spare",
-                        Protocol = ControlDeviceProtocol.Osc,
+                        Protocol = ControlDeviceProtocol.OSC,
                         IsEnabled = false,
                         Binding = new ControlDeviceBindingConfig
                         {
                             Alias = "spare",
-                            OscHost = "192.168.2.99",
-                            OscPort = 10023,
+                            OSCHost = "192.168.2.99",
+                            OSCPort = 10023,
                         },
                     },
                 ],
@@ -662,15 +662,15 @@ public sealed class ControlScriptRuntimeSessionTests
     }
 
     [Fact]
-    public async Task DispatchManualAsync_RoutesExtendedOscArgumentTypesAndValueRequest()
+    public async Task DispatchManualAsync_RoutesExtendedOSCArgumentTypesAndValueRequest()
     {
         var x32Id = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [OscDevice(x32Id, "X32", "x32", "192.168.2.76", 10023)],
+                Devices = [OSCDevice(x32Id, "X32", "x32", "192.168.2.76", 10023)],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -729,12 +729,12 @@ public sealed class ControlScriptRuntimeSessionTests
     public async Task DispatchManualAsync_RoutesHighResolutionCc()
     {
         var xtouchId = Guid.NewGuid();
-        var midiSender = new RecordingMidiSender();
+        var midiSender = new RecordingMIDISender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
-                Devices = [MidiDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI")],
+                Devices = [MIDIDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI")],
                 Scripts =
                 [
                     new ControlScriptConfig
@@ -758,14 +758,14 @@ public sealed class ControlScriptRuntimeSessionTests
                     }
                     """,
             },
-            new RecordingOscSender(),
+            new RecordingOSCSender(),
             midiSender: midiSender);
 
         var result = await session.DispatchManualAsync();
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
         var sent = Assert.Single(midiSender.Sent);
-        Assert.Equal(ControlScriptMidiMessageKind.ControlChange, sent.Kind);
+        Assert.Equal(ControlScriptMIDIMessageKind.ControlChange, sent.Kind);
         Assert.True(sent.HighResolution14Bit);
         Assert.Equal(16, sent.Controller);
         Assert.Equal(8000, sent.Value);
@@ -777,15 +777,15 @@ public sealed class ControlScriptRuntimeSessionTests
         var midiDeviceId = Guid.NewGuid();
         var x32DeviceId = Guid.NewGuid();
         var layerB = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = CreateSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
                 Devices =
                 [
-                    MidiDevice(midiDeviceId, "X-Touch Mini"),
-                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                    MIDIDevice(midiDeviceId, "X-Touch Mini"),
+                    OSCDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
                 ],
                 Layers = [new ControlLayerConfig { Id = layerB, Name = "B", IsEnabled = false }],
                 Scripts =
@@ -796,7 +796,7 @@ public sealed class ControlScriptRuntimeSessionTests
                         Name = "Switcher",
                         ScriptPath = "Scripts/switch.mnd",
                         Scope = ControlScriptScope.Project,
-                        Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.MidiControlChange, FunctionName = "onSwitch", DeviceInstanceId = midiDeviceId }],
+                        Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.MIDIControlChange, FunctionName = "onSwitch", DeviceInstanceId = midiDeviceId }],
                     },
                     new ControlScriptConfig
                     {
@@ -818,7 +818,7 @@ public sealed class ControlScriptRuntimeSessionTests
 
         Assert.Null(session.ActiveLayerId);
 
-        await session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 20, value: 5));
+        await session.DispatchControlEventAsync(MIDICcEvent(midiDeviceId, controller: 20, value: 5));
 
         Assert.Equal(layerB, session.ActiveLayerId);
         Assert.Equal("/layer/b/on", Assert.Single(sender.Sent).Address);
@@ -827,12 +827,12 @@ public sealed class ControlScriptRuntimeSessionTests
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,
-        IControlOscSender sender,
+        IControlOSCSender sender,
         IControlMonitorSink? monitor = null,
-        IControlMidiSender? midiSender = null) =>
+        IControlMIDISender? midiSender = null) =>
         new(config, new InMemoryControlScriptSourceProvider(scripts), sender, monitor: monitor, midiSender: midiSender);
 
-    private static ControlDeviceInstanceConfig MidiDevice(
+    private static ControlDeviceInstanceConfig MIDIDevice(
         Guid id,
         string name,
         string? alias = null,
@@ -841,16 +841,16 @@ public sealed class ControlScriptRuntimeSessionTests
         {
             Id = id,
             Name = name,
-            Protocol = ControlDeviceProtocol.Midi,
+            Protocol = ControlDeviceProtocol.MIDI,
             IsEnabled = true,
             Binding = new ControlDeviceBindingConfig
             {
                 Alias = alias,
-                MidiOutputDeviceName = outputName,
+                MIDIOutputDeviceName = outputName,
             },
         };
 
-    private static ControlDeviceInstanceConfig OscDevice(
+    private static ControlDeviceInstanceConfig OSCDevice(
         Guid id,
         string name,
         string alias,
@@ -861,17 +861,17 @@ public sealed class ControlScriptRuntimeSessionTests
             Id = id,
             Name = name,
             ProfileId = "x32",
-            Protocol = ControlDeviceProtocol.Osc,
+            Protocol = ControlDeviceProtocol.OSC,
             IsEnabled = true,
             Binding = new ControlDeviceBindingConfig
             {
                 Alias = alias,
-                OscHost = host,
-                OscPort = port,
+                OSCHost = host,
+                OSCPort = port,
             },
         };
 
-    private static MidiControlEvent MidiCcEvent(Guid deviceId, int controller, int value) =>
+    private static MIDIControlEvent MIDICcEvent(Guid deviceId, int controller, int value) =>
         new(
             DateTimeOffset.UtcNow,
             Guid.NewGuid(),
@@ -882,7 +882,7 @@ public sealed class ControlScriptRuntimeSessionTests
             Value: value,
             HighResolution14Bit: false);
 
-    private static OscControlEvent OscEvent(Guid deviceId, string address, params OSCArgument[] arguments) =>
+    private static OSCControlEvent OSCEvent(Guid deviceId, string address, params OSCArgument[] arguments) =>
         new(
             DateTimeOffset.UtcNow,
             Guid.NewGuid(),
@@ -891,9 +891,9 @@ public sealed class ControlScriptRuntimeSessionTests
             address,
             arguments);
 
-    private sealed class RecordingOscSender : IControlOscSender
+    private sealed class RecordingOSCSender : IControlOSCSender
     {
-        public List<SentOscMessage> Sent { get; } = new();
+        public List<SentOSCMessage> Sent { get; } = new();
 
         public ValueTask SendAsync(
             string host,
@@ -902,31 +902,31 @@ public sealed class ControlScriptRuntimeSessionTests
             IReadOnlyList<OSCArgument> arguments,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+            Sent.Add(new SentOSCMessage(host, port, address, arguments.ToArray()));
             return ValueTask.CompletedTask;
         }
     }
 
-    private sealed record SentOscMessage(
+    private sealed record SentOSCMessage(
         string Host,
         int Port,
         string Address,
         IReadOnlyList<OSCArgument> Arguments);
 
-    private sealed class DelayedOscSender : IControlOscSender
+    private sealed class DelayedOSCSender : IControlOSCSender
     {
         private readonly TimeSpan _delay;
         private readonly object _sentGate = new();
-        private readonly List<SentOscMessage> _sent = new();
+        private readonly List<SentOSCMessage> _sent = new();
         private int _currentSends;
         private int _maxConcurrentSends;
 
-        public DelayedOscSender(TimeSpan delay)
+        public DelayedOSCSender(TimeSpan delay)
         {
             _delay = delay;
         }
 
-        public IReadOnlyList<SentOscMessage> Sent
+        public IReadOnlyList<SentOSCMessage> Sent
         {
             get
             {
@@ -950,7 +950,7 @@ public sealed class ControlScriptRuntimeSessionTests
                 UpdateMaxConcurrentSends(current);
                 await Task.Delay(_delay, cancellationToken).ConfigureAwait(false);
                 lock (_sentGate)
-                    _sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+                    _sent.Add(new SentOSCMessage(host, port, address, arguments.ToArray()));
             }
             finally
             {
@@ -971,9 +971,9 @@ public sealed class ControlScriptRuntimeSessionTests
         }
     }
 
-    private sealed class RecordingMidiSender : IControlMidiSender
+    private sealed class RecordingMIDISender : IControlMIDISender
     {
-        public List<SentMidiMessage> Sent { get; } = new();
+        public List<SentMIDIMessage> Sent { get; } = new();
 
         public ValueTask SendControlChangeAsync(
             Guid? endpointId,
@@ -983,8 +983,8 @@ public sealed class ControlScriptRuntimeSessionTests
             bool highResolution14Bit,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentMidiMessage(
-                ControlScriptMidiMessageKind.ControlChange,
+            Sent.Add(new SentMIDIMessage(
+                ControlScriptMIDIMessageKind.ControlChange,
                 endpointId,
                 channel,
                 Controller: controller,
@@ -1002,8 +1002,8 @@ public sealed class ControlScriptRuntimeSessionTests
             bool isNoteOn,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentMidiMessage(
-                isNoteOn ? ControlScriptMidiMessageKind.NoteOn : ControlScriptMidiMessageKind.NoteOff,
+            Sent.Add(new SentMIDIMessage(
+                isNoteOn ? ControlScriptMIDIMessageKind.NoteOn : ControlScriptMIDIMessageKind.NoteOff,
                 endpointId,
                 channel,
                 Controller: null,
@@ -1019,8 +1019,8 @@ public sealed class ControlScriptRuntimeSessionTests
             int program,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentMidiMessage(
-                ControlScriptMidiMessageKind.ProgramChange,
+            Sent.Add(new SentMIDIMessage(
+                ControlScriptMIDIMessageKind.ProgramChange,
                 endpointId,
                 channel,
                 Controller: null,
@@ -1036,8 +1036,8 @@ public sealed class ControlScriptRuntimeSessionTests
             int value,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentMidiMessage(
-                ControlScriptMidiMessageKind.PitchBend,
+            Sent.Add(new SentMIDIMessage(
+                ControlScriptMIDIMessageKind.PitchBend,
                 endpointId,
                 channel,
                 Controller: null,
@@ -1047,12 +1047,12 @@ public sealed class ControlScriptRuntimeSessionTests
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask SendMidiMessageAsync(
+        public ValueTask SendMIDIMessageAsync(
             Guid? endpointId,
-            ControlMidiMessagePayload message,
+            ControlMIDIMessagePayload message,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentMidiMessage(
+            Sent.Add(new SentMIDIMessage(
                 ToScriptMessageKind(message.MessageType),
                 endpointId,
                 message.Channel ?? 0,
@@ -1063,35 +1063,35 @@ public sealed class ControlScriptRuntimeSessionTests
             return ValueTask.CompletedTask;
         }
 
-        private static ControlScriptMidiMessageKind ToScriptMessageKind(ControlMidiMessageType messageType) =>
+        private static ControlScriptMIDIMessageKind ToScriptMessageKind(ControlMIDIMessageType messageType) =>
             messageType switch
             {
-                ControlMidiMessageType.ControlChange => ControlScriptMidiMessageKind.ControlChange,
-                ControlMidiMessageType.NoteOn => ControlScriptMidiMessageKind.NoteOn,
-                ControlMidiMessageType.NoteOff => ControlScriptMidiMessageKind.NoteOff,
-                ControlMidiMessageType.PolyphonicAftertouch => ControlScriptMidiMessageKind.PolyphonicAftertouch,
-                ControlMidiMessageType.ProgramChange => ControlScriptMidiMessageKind.ProgramChange,
-                ControlMidiMessageType.ChannelAftertouch => ControlScriptMidiMessageKind.ChannelAftertouch,
-                ControlMidiMessageType.PitchBend => ControlScriptMidiMessageKind.PitchBend,
-                ControlMidiMessageType.SysEx => ControlScriptMidiMessageKind.SysEx,
-                ControlMidiMessageType.MIDITimeCode => ControlScriptMidiMessageKind.MIDITimeCode,
-                ControlMidiMessageType.SongPosition => ControlScriptMidiMessageKind.SongPosition,
-                ControlMidiMessageType.SongSelect => ControlScriptMidiMessageKind.SongSelect,
-                ControlMidiMessageType.TuneRequest => ControlScriptMidiMessageKind.TuneRequest,
-                ControlMidiMessageType.TimingClock => ControlScriptMidiMessageKind.TimingClock,
-                ControlMidiMessageType.Start => ControlScriptMidiMessageKind.Start,
-                ControlMidiMessageType.Continue => ControlScriptMidiMessageKind.Continue,
-                ControlMidiMessageType.Stop => ControlScriptMidiMessageKind.Stop,
-                ControlMidiMessageType.ActiveSensing => ControlScriptMidiMessageKind.ActiveSensing,
-                ControlMidiMessageType.Reset => ControlScriptMidiMessageKind.Reset,
-                ControlMidiMessageType.NRPN => ControlScriptMidiMessageKind.NRPN,
-                ControlMidiMessageType.RPN => ControlScriptMidiMessageKind.RPN,
+                ControlMIDIMessageType.ControlChange => ControlScriptMIDIMessageKind.ControlChange,
+                ControlMIDIMessageType.NoteOn => ControlScriptMIDIMessageKind.NoteOn,
+                ControlMIDIMessageType.NoteOff => ControlScriptMIDIMessageKind.NoteOff,
+                ControlMIDIMessageType.PolyphonicAftertouch => ControlScriptMIDIMessageKind.PolyphonicAftertouch,
+                ControlMIDIMessageType.ProgramChange => ControlScriptMIDIMessageKind.ProgramChange,
+                ControlMIDIMessageType.ChannelAftertouch => ControlScriptMIDIMessageKind.ChannelAftertouch,
+                ControlMIDIMessageType.PitchBend => ControlScriptMIDIMessageKind.PitchBend,
+                ControlMIDIMessageType.SysEx => ControlScriptMIDIMessageKind.SysEx,
+                ControlMIDIMessageType.MIDITimeCode => ControlScriptMIDIMessageKind.MIDITimeCode,
+                ControlMIDIMessageType.SongPosition => ControlScriptMIDIMessageKind.SongPosition,
+                ControlMIDIMessageType.SongSelect => ControlScriptMIDIMessageKind.SongSelect,
+                ControlMIDIMessageType.TuneRequest => ControlScriptMIDIMessageKind.TuneRequest,
+                ControlMIDIMessageType.TimingClock => ControlScriptMIDIMessageKind.TimingClock,
+                ControlMIDIMessageType.Start => ControlScriptMIDIMessageKind.Start,
+                ControlMIDIMessageType.Continue => ControlScriptMIDIMessageKind.Continue,
+                ControlMIDIMessageType.Stop => ControlScriptMIDIMessageKind.Stop,
+                ControlMIDIMessageType.ActiveSensing => ControlScriptMIDIMessageKind.ActiveSensing,
+                ControlMIDIMessageType.Reset => ControlScriptMIDIMessageKind.Reset,
+                ControlMIDIMessageType.NRPN => ControlScriptMIDIMessageKind.NRPN,
+                ControlMIDIMessageType.RPN => ControlScriptMIDIMessageKind.RPN,
                 _ => throw new InvalidOperationException($"Unexpected MIDI message type '{messageType}'."),
             };
     }
 
-    private sealed record SentMidiMessage(
-        ControlScriptMidiMessageKind Kind,
+    private sealed record SentMIDIMessage(
+        ControlScriptMIDIMessageKind Kind,
         Guid? EndpointId,
         int Channel,
         int? Controller,

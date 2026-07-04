@@ -17,7 +17,7 @@ namespace HaPlay.ViewModels;
 
 public partial class CuePlayerViewModel : ViewModelBase
 {
-    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+    public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     private CancellationTokenSource? _transportRunCts;
 
@@ -963,7 +963,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>NDI media cues in the pre-roll window (§6.11).</summary>
-    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets()
+    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNDIPreConnectTargets()
     {
         var simultaneousGroup = GetStandbySimultaneousGroupTargets();
         if (simultaneousGroup.Count > 0)
@@ -1704,7 +1704,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 continue;
             if (!Guid.TryParse(node.EndpointIdText, out var missingId) || liveIds.Contains(missingId))
                 continue;
-            var kind = Enum.TryParse<CueActionKind>(node.Extra, out var k) ? k : CueActionKind.OscOut;
+            var kind = Enum.TryParse<CueActionKind>(node.Extra, out var k) ? k : CueActionKind.OSCOut;
             if (groups.TryGetValue(missingId, out var g))
                 groups[missingId] = (g.Count + 1, g.Kind);
             else

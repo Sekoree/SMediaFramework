@@ -46,7 +46,7 @@ if (chosen.Name is null)
 if (probeAuto)
 {
     Console.WriteLine("auto-probing the lowest glitch-free audio buffer for this network…");
-    var presets = NdiAudioBufferProbe.Probe(chosen, onStep: (buf, underruns) => Console.WriteLine(
+    var presets = NDIAudioBufferProbe.Probe(chosen, onStep: (buf, underruns) => Console.WriteLine(
         $"  {buf.TotalMilliseconds,3:0} ms → {underruns} underrun chunk(s)  {(underruns == 0 ? "OK" : "glitches — floor reached")}"));
     if (presets.HasAudio)
     {

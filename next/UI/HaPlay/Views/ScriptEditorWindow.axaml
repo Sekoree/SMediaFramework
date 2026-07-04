@@ -119,10 +119,10 @@
                             </ComboBox>
                             <WrapPanel Grid.Column="1" Orientation="Horizontal">
                               <TextBox Width="160" Margin="0,0,6,6" Text="{Binding FunctionName}" PlaceholderText="exported function" />
-                              <TextBox Width="180" Text="{Binding OscAddressPattern}"
-                                       PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" Margin="0,0,6,6" />
-                              <ComboBox Width="160" ItemsSource="{Binding MidiMessageTypeOptions}"
-                                        SelectedItem="{Binding MidiMessageType}" IsVisible="{Binding ShowMidiMessageType}"
+                              <TextBox Width="180" Text="{Binding OSCAddressPattern}"
+                                       PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOSCAddress}" Margin="0,0,6,6" />
+                              <ComboBox Width="160" ItemsSource="{Binding MIDIMessageTypeOptions}"
+                                        SelectedItem="{Binding MIDIMessageType}" IsVisible="{Binding ShowMIDIMessageType}"
                                         Margin="0,0,6,6">
                                 <ComboBox.ItemTemplate>
                                   <DataTemplate>
@@ -130,20 +130,20 @@
                                   </DataTemplate>
                                 </ComboBox.ItemTemplate>
                               </ComboBox>
-                              <TextBox Width="64" Text="{Binding MidiChannelText}"
-                                       PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" Margin="0,0,6,6" />
-                              <TextBox Width="64" Text="{Binding MidiControllerText}"
-                                       PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" Margin="0,0,6,6" />
-                              <TextBox Width="64" Text="{Binding MidiNoteText}"
-                                       PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiValueText}"
-                                       PlaceholderText="value" IsVisible="{Binding ShowMidiValue}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiValueMinText}"
-                                       PlaceholderText="min" IsVisible="{Binding ShowMidiValueRange}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiValueMaxText}"
-                                       PlaceholderText="max" IsVisible="{Binding ShowMidiValueRange}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiParameterText}"
-                                       PlaceholderText="param" IsVisible="{Binding ShowMidiParameter}" Margin="0,0,6,6" />
+                              <TextBox Width="64" Text="{Binding MIDIChannelText}"
+                                       PlaceholderText="chan" IsVisible="{Binding ShowMIDIChannel}" Margin="0,0,6,6" />
+                              <TextBox Width="64" Text="{Binding MIDIControllerText}"
+                                       PlaceholderText="cc" IsVisible="{Binding ShowMIDIController}" Margin="0,0,6,6" />
+                              <TextBox Width="64" Text="{Binding MIDINoteText}"
+                                       PlaceholderText="note" IsVisible="{Binding ShowMIDINote}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIValueText}"
+                                       PlaceholderText="value" IsVisible="{Binding ShowMIDIValue}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIValueMinText}"
+                                       PlaceholderText="min" IsVisible="{Binding ShowMIDIValueRange}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIValueMaxText}"
+                                       PlaceholderText="max" IsVisible="{Binding ShowMIDIValueRange}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIParameterText}"
+                                       PlaceholderText="param" IsVisible="{Binding ShowMIDIParameter}" Margin="0,0,6,6" />
                               <TextBox Width="90" Text="{Binding IntervalMsText}"
                                        PlaceholderText="ms" IsVisible="{Binding ShowInterval}" Margin="0,0,6,6" />
                               <Button Padding="8,2" ToolTip.Tip="Remove trigger" Margin="0,0,0,6"

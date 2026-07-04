@@ -6,7 +6,7 @@ using PMLib.Types;
 namespace PMLib.Devices;
 
 /// <summary>
-/// A PortMidi input device that polls for incoming MIDI messages on a background thread
+/// A PortMIDI input device that polls for incoming MIDI messages on a background thread
 /// and raises <see cref="MessageReceived"/> and <see cref="SysExReceived"/> events.
 /// </summary>
 public class MIDIInputDevice : MIDIDevice
@@ -20,7 +20,7 @@ public class MIDIInputDevice : MIDIDevice
     // ── Configuration ─────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Number of input events buffered by PortMidi before overflow.
+    /// Number of input events buffered by PortMIDI before overflow.
     /// Must be set before <see cref="Open"/>. Default: 256.
     /// </summary>
     public int BufferSize { get; set; } = 256;
@@ -43,7 +43,7 @@ public class MIDIInputDevice : MIDIDevice
 
     /// <summary>
     /// Raised on the polling thread when a complete SysEx message (0xF0 … 0xF7) has been
-    /// assembled from its PortMidi fragments.
+    /// assembled from its PortMIDI fragments.
     /// </summary>
     public event EventHandler<SysEx>? SysExReceived;
 
@@ -187,7 +187,7 @@ public class MIDIInputDevice : MIDIDevice
     }
 
     /// <summary>
-    /// Routes a single PortMidi event through the shared MIDI decoder and SysEx accumulator:
+    /// Routes a single PortMIDI event through the shared MIDI decoder and SysEx accumulator:
     /// <list type="bullet">
     ///   <item><b>Normal mode</b>: decodes the event and
     ///     fires <see cref="MessageReceived"/>, or transitions to SysEx mode on 0xF0.</item>

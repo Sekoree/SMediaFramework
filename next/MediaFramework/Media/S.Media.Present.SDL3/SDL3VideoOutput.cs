@@ -340,7 +340,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
 
         SDL.SetRenderVSync(_renderer, _vsync ? 1 : 0);
 
-        var sdlFormat = ToSdlPixelFormat(_format.PixelFormat);
+        var sdlFormat = ToSDLPixelFormat(_format.PixelFormat);
         _texture = SDL.CreateTexture(_renderer, sdlFormat, SDL.TextureAccess.Streaming, _format.Width, _format.Height);
         if (_texture == nint.Zero)
             throw new InvalidOperationException($"SDL_CreateTexture failed: {SDL.GetError()}");
@@ -473,7 +473,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
             (nint)pinUV.Pointer, frame.Strides[1]);
     }
 
-    private static SDL.PixelFormat ToSdlPixelFormat(CoreVideo.PixelFormat fmt) => fmt switch
+    private static SDL.PixelFormat ToSDLPixelFormat(CoreVideo.PixelFormat fmt) => fmt switch
     {
         // Memory layout B,G,R,A → SDL's native-endian-aware ARGB8888
         // (which on little-endian targets places A in the high byte).
@@ -482,6 +482,6 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         CoreVideo.PixelFormat.Nv12   => SDL.PixelFormat.NV12,
         CoreVideo.PixelFormat.Uyvy   => SDL.PixelFormat.UYVY,
         CoreVideo.PixelFormat.Yuyv   => SDL.PixelFormat.YUY2,
-        _ => throw new NotSupportedException($"ToSdlPixelFormat: {fmt}"),
+        _ => throw new NotSupportedException($"ToSDLPixelFormat: {fmt}"),
     };
 }

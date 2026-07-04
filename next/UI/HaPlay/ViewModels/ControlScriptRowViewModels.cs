@@ -243,23 +243,23 @@ public sealed partial class ControlScriptRowViewModel : ViewModelBase
         var label = trigger.Kind.ToString();
         if (!string.IsNullOrWhiteSpace(trigger.FunctionName))
             label += $":{trigger.FunctionName}";
-        if (!string.IsNullOrWhiteSpace(trigger.OscAddressPattern))
-            label += $" {trigger.OscAddressPattern}";
-        if (trigger.MidiMessageType is { } messageType)
+        if (!string.IsNullOrWhiteSpace(trigger.OSCAddressPattern))
+            label += $" {trigger.OSCAddressPattern}";
+        if (trigger.MIDIMessageType is { } messageType)
             label += $" {messageType}";
-        if (trigger.MidiController is { } controller)
+        if (trigger.MIDIController is { } controller)
             label += $" cc{controller}";
-        if (trigger.MidiNote is { } note)
+        if (trigger.MIDINote is { } note)
             label += $" note{note}";
-        if (trigger.MidiValue is { } value)
+        if (trigger.MIDIValue is { } value)
             label += $" value{value}";
-        if (trigger.MidiValueMin is not null || trigger.MidiValueMax is not null)
+        if (trigger.MIDIValueMin is not null || trigger.MIDIValueMax is not null)
         {
-            var minText = trigger.MidiValueMin?.ToString(CultureInfo.InvariantCulture) ?? "*";
-            var maxText = trigger.MidiValueMax?.ToString(CultureInfo.InvariantCulture) ?? "*";
+            var minText = trigger.MIDIValueMin?.ToString(CultureInfo.InvariantCulture) ?? "*";
+            var maxText = trigger.MIDIValueMax?.ToString(CultureInfo.InvariantCulture) ?? "*";
             label += $" range{minText}..{maxText}";
         }
-        if (trigger.MidiParameter is { } parameter)
+        if (trigger.MIDIParameter is { } parameter)
             label += $" param{parameter}";
         return label;
     }
@@ -302,25 +302,25 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
                 return;
 
             Update(
-                NormalizeMidiTrigger(_trigger with { Kind = value }),
+                NormalizeMIDITrigger(_trigger with { Kind = value }),
                 nameof(Kind),
-                nameof(MidiMessageType),
-                nameof(MidiMessageTypeOptions),
-                nameof(MidiChannelText),
-                nameof(MidiControllerText),
-                nameof(MidiNoteText),
-                nameof(MidiValueText),
-                nameof(MidiValueMinText),
-                nameof(MidiValueMaxText),
-                nameof(MidiParameterText),
-                nameof(ShowOscAddress),
-                nameof(ShowMidiMessageType),
-                nameof(ShowMidiChannel),
-                nameof(ShowMidiController),
-                nameof(ShowMidiNote),
-                nameof(ShowMidiValue),
-                nameof(ShowMidiValueRange),
-                nameof(ShowMidiParameter),
+                nameof(MIDIMessageType),
+                nameof(MIDIMessageTypeOptions),
+                nameof(MIDIChannelText),
+                nameof(MIDIControllerText),
+                nameof(MIDINoteText),
+                nameof(MIDIValueText),
+                nameof(MIDIValueMinText),
+                nameof(MIDIValueMaxText),
+                nameof(MIDIParameterText),
+                nameof(ShowOSCAddress),
+                nameof(ShowMIDIMessageType),
+                nameof(ShowMIDIChannel),
+                nameof(ShowMIDIController),
+                nameof(ShowMIDINote),
+                nameof(ShowMIDIValue),
+                nameof(ShowMIDIValueRange),
+                nameof(ShowMIDIParameter),
                 nameof(ShowInterval));
         }
     }
@@ -338,142 +338,142 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
         }
     }
 
-    public string OscAddressPattern
+    public string OSCAddressPattern
     {
-        get => _trigger.OscAddressPattern ?? string.Empty;
+        get => _trigger.OSCAddressPattern ?? string.Empty;
         set
         {
             var next = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-            if (next == _trigger.OscAddressPattern)
+            if (next == _trigger.OSCAddressPattern)
                 return;
 
-            Update(_trigger with { OscAddressPattern = next }, nameof(OscAddressPattern));
+            Update(_trigger with { OSCAddressPattern = next }, nameof(OSCAddressPattern));
         }
     }
 
-    public IReadOnlyList<ControlMidiMessageType?> MidiMessageTypeOptions =>
+    public IReadOnlyList<ControlMIDIMessageType?> MIDIMessageTypeOptions =>
         Kind switch
         {
-            ControlScriptTriggerKind.MidiNote => [null, ControlMidiMessageType.NoteOn, ControlMidiMessageType.NoteOff],
-            ControlScriptTriggerKind.MidiControlChange => [null, ControlMidiMessageType.ControlChange],
-            _ => AllMidiMessageTypeOptions,
+            ControlScriptTriggerKind.MIDINote => [null, ControlMIDIMessageType.NoteOn, ControlMIDIMessageType.NoteOff],
+            ControlScriptTriggerKind.MIDIControlChange => [null, ControlMIDIMessageType.ControlChange],
+            _ => AllMIDIMessageTypeOptions,
         };
 
-    public ControlMidiMessageType? MidiMessageType
+    public ControlMIDIMessageType? MIDIMessageType
     {
-        get => _trigger.MidiMessageType;
+        get => _trigger.MIDIMessageType;
         set
         {
-            if (value == _trigger.MidiMessageType)
+            if (value == _trigger.MIDIMessageType)
                 return;
 
             Update(
-                NormalizeMidiTrigger(_trigger with { MidiMessageType = value }),
-                nameof(MidiMessageType),
-                nameof(MidiChannelText),
-                nameof(MidiControllerText),
-                nameof(MidiNoteText),
-                nameof(MidiValueText),
-                nameof(MidiValueMinText),
-                nameof(MidiValueMaxText),
-                nameof(MidiParameterText),
-                nameof(ShowMidiChannel),
-                nameof(ShowMidiController),
-                nameof(ShowMidiNote),
-                nameof(ShowMidiValue),
-                nameof(ShowMidiValueRange),
-                nameof(ShowMidiParameter));
+                NormalizeMIDITrigger(_trigger with { MIDIMessageType = value }),
+                nameof(MIDIMessageType),
+                nameof(MIDIChannelText),
+                nameof(MIDIControllerText),
+                nameof(MIDINoteText),
+                nameof(MIDIValueText),
+                nameof(MIDIValueMinText),
+                nameof(MIDIValueMaxText),
+                nameof(MIDIParameterText),
+                nameof(ShowMIDIChannel),
+                nameof(ShowMIDIController),
+                nameof(ShowMIDINote),
+                nameof(ShowMIDIValue),
+                nameof(ShowMIDIValueRange),
+                nameof(ShowMIDIParameter));
         }
     }
 
-    public string MidiChannelText
+    public string MIDIChannelText
     {
-        get => FormatOptionalInt(_trigger.MidiChannel);
+        get => FormatOptionalInt(_trigger.MIDIChannel);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiChannel)
+            if (next == _trigger.MIDIChannel)
                 return;
 
-            Update(_trigger with { MidiChannel = next }, nameof(MidiChannelText));
+            Update(_trigger with { MIDIChannel = next }, nameof(MIDIChannelText));
         }
     }
 
-    public string MidiControllerText
+    public string MIDIControllerText
     {
-        get => FormatOptionalInt(_trigger.MidiController);
+        get => FormatOptionalInt(_trigger.MIDIController);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiController)
+            if (next == _trigger.MIDIController)
                 return;
 
-            Update(_trigger with { MidiController = next }, nameof(MidiControllerText));
+            Update(_trigger with { MIDIController = next }, nameof(MIDIControllerText));
         }
     }
 
-    public string MidiNoteText
+    public string MIDINoteText
     {
-        get => FormatOptionalInt(_trigger.MidiNote);
+        get => FormatOptionalInt(_trigger.MIDINote);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiNote)
+            if (next == _trigger.MIDINote)
                 return;
 
-            Update(_trigger with { MidiNote = next }, nameof(MidiNoteText));
+            Update(_trigger with { MIDINote = next }, nameof(MIDINoteText));
         }
     }
 
-    public string MidiValueText
+    public string MIDIValueText
     {
-        get => FormatOptionalInt(_trigger.MidiValue);
+        get => FormatOptionalInt(_trigger.MIDIValue);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiValue)
+            if (next == _trigger.MIDIValue)
                 return;
 
-            Update(_trigger with { MidiValue = next }, nameof(MidiValueText));
+            Update(_trigger with { MIDIValue = next }, nameof(MIDIValueText));
         }
     }
 
-    public string MidiValueMinText
+    public string MIDIValueMinText
     {
-        get => FormatOptionalInt(_trigger.MidiValueMin);
+        get => FormatOptionalInt(_trigger.MIDIValueMin);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiValueMin)
+            if (next == _trigger.MIDIValueMin)
                 return;
 
-            Update(_trigger with { MidiValueMin = next }, nameof(MidiValueMinText));
+            Update(_trigger with { MIDIValueMin = next }, nameof(MIDIValueMinText));
         }
     }
 
-    public string MidiValueMaxText
+    public string MIDIValueMaxText
     {
-        get => FormatOptionalInt(_trigger.MidiValueMax);
+        get => FormatOptionalInt(_trigger.MIDIValueMax);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiValueMax)
+            if (next == _trigger.MIDIValueMax)
                 return;
 
-            Update(_trigger with { MidiValueMax = next }, nameof(MidiValueMaxText));
+            Update(_trigger with { MIDIValueMax = next }, nameof(MIDIValueMaxText));
         }
     }
 
-    public string MidiParameterText
+    public string MIDIParameterText
     {
-        get => FormatOptionalInt(_trigger.MidiParameter);
+        get => FormatOptionalInt(_trigger.MIDIParameter);
         set
         {
             var next = ParseOptionalInt(value);
-            if (next == _trigger.MidiParameter)
+            if (next == _trigger.MIDIParameter)
                 return;
 
-            Update(_trigger with { MidiParameter = next }, nameof(MidiParameterText));
+            Update(_trigger with { MIDIParameter = next }, nameof(MIDIParameterText));
         }
     }
 
@@ -490,124 +490,124 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
         }
     }
 
-    public bool ShowOscAddress => Kind is ControlScriptTriggerKind.OscMessage or ControlScriptTriggerKind.OscCacheChanged;
+    public bool ShowOSCAddress => Kind is ControlScriptTriggerKind.OSCMessage or ControlScriptTriggerKind.OSCCacheChanged;
 
-    public bool ShowMidiMessageType => Kind is ControlScriptTriggerKind.MidiMessage or ControlScriptTriggerKind.MidiNote;
+    public bool ShowMIDIMessageType => Kind is ControlScriptTriggerKind.MIDIMessage or ControlScriptTriggerKind.MIDINote;
 
-    public bool ShowMidiChannel => Kind is ControlScriptTriggerKind.MidiControlChange
-        or ControlScriptTriggerKind.MidiNote
-        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesChannel(_trigger.MidiMessageType));
+    public bool ShowMIDIChannel => Kind is ControlScriptTriggerKind.MIDIControlChange
+        or ControlScriptTriggerKind.MIDINote
+        || (Kind == ControlScriptTriggerKind.MIDIMessage && MIDIMessageTypeUsesChannel(_trigger.MIDIMessageType));
 
-    public bool ShowMidiController => Kind == ControlScriptTriggerKind.MidiControlChange
-        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesController(_trigger.MidiMessageType));
+    public bool ShowMIDIController => Kind == ControlScriptTriggerKind.MIDIControlChange
+        || (Kind == ControlScriptTriggerKind.MIDIMessage && MIDIMessageTypeUsesController(_trigger.MIDIMessageType));
 
-    public bool ShowMidiNote => Kind == ControlScriptTriggerKind.MidiNote
-        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesNote(_trigger.MidiMessageType));
+    public bool ShowMIDINote => Kind == ControlScriptTriggerKind.MIDINote
+        || (Kind == ControlScriptTriggerKind.MIDIMessage && MIDIMessageTypeUsesNote(_trigger.MIDIMessageType));
 
-    public bool ShowMidiValue => Kind is ControlScriptTriggerKind.MidiControlChange
-        or ControlScriptTriggerKind.MidiNote
-        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesValue(_trigger.MidiMessageType));
+    public bool ShowMIDIValue => Kind is ControlScriptTriggerKind.MIDIControlChange
+        or ControlScriptTriggerKind.MIDINote
+        || (Kind == ControlScriptTriggerKind.MIDIMessage && MIDIMessageTypeUsesValue(_trigger.MIDIMessageType));
 
-    public bool ShowMidiValueRange => ShowMidiValue;
+    public bool ShowMIDIValueRange => ShowMIDIValue;
 
-    public bool ShowMidiParameter => Kind == ControlScriptTriggerKind.MidiMessage
-        && MidiMessageTypeUsesParameter(_trigger.MidiMessageType);
+    public bool ShowMIDIParameter => Kind == ControlScriptTriggerKind.MIDIMessage
+        && MIDIMessageTypeUsesParameter(_trigger.MIDIMessageType);
 
     public bool ShowInterval => Kind is ControlScriptTriggerKind.Periodic;
 
-    private bool IsMidiKind => Kind is ControlScriptTriggerKind.MidiMessage
-        or ControlScriptTriggerKind.MidiControlChange
-        or ControlScriptTriggerKind.MidiNote;
+    private bool IsMIDIKind => Kind is ControlScriptTriggerKind.MIDIMessage
+        or ControlScriptTriggerKind.MIDIControlChange
+        or ControlScriptTriggerKind.MIDINote;
 
-    private static readonly IReadOnlyList<ControlMidiMessageType?> AllMidiMessageTypeOptions =
-        new ControlMidiMessageType?[] { null }
-            .Concat(Enum.GetValues<ControlMidiMessageType>()
-                .Where(t => t != ControlMidiMessageType.Unknown)
-                .Select(t => (ControlMidiMessageType?)t))
+    private static readonly IReadOnlyList<ControlMIDIMessageType?> AllMIDIMessageTypeOptions =
+        new ControlMIDIMessageType?[] { null }
+            .Concat(Enum.GetValues<ControlMIDIMessageType>()
+                .Where(t => t != ControlMIDIMessageType.Unknown)
+                .Select(t => (ControlMIDIMessageType?)t))
             .ToArray();
 
-    private static ControlScriptTriggerConfig NormalizeMidiTrigger(ControlScriptTriggerConfig trigger)
+    private static ControlScriptTriggerConfig NormalizeMIDITrigger(ControlScriptTriggerConfig trigger)
     {
-        if (trigger.Kind == ControlScriptTriggerKind.MidiControlChange)
+        if (trigger.Kind == ControlScriptTriggerKind.MIDIControlChange)
         {
             return trigger with
             {
-                MidiMessageType = trigger.MidiMessageType is null or ControlMidiMessageType.ControlChange
-                    ? trigger.MidiMessageType
+                MIDIMessageType = trigger.MIDIMessageType is null or ControlMIDIMessageType.ControlChange
+                    ? trigger.MIDIMessageType
                     : null,
-                MidiNote = null,
-                MidiParameter = null,
+                MIDINote = null,
+                MIDIParameter = null,
             };
         }
 
-        if (trigger.Kind == ControlScriptTriggerKind.MidiNote)
+        if (trigger.Kind == ControlScriptTriggerKind.MIDINote)
         {
             return trigger with
             {
-                MidiMessageType = trigger.MidiMessageType is null
-                    or ControlMidiMessageType.NoteOn
-                    or ControlMidiMessageType.NoteOff
-                        ? trigger.MidiMessageType
+                MIDIMessageType = trigger.MIDIMessageType is null
+                    or ControlMIDIMessageType.NoteOn
+                    or ControlMIDIMessageType.NoteOff
+                        ? trigger.MIDIMessageType
                         : null,
-                MidiController = null,
-                MidiParameter = null,
+                MIDIController = null,
+                MIDIParameter = null,
             };
         }
 
-        if (trigger.Kind != ControlScriptTriggerKind.MidiMessage || trigger.MidiMessageType is not { } messageType)
+        if (trigger.Kind != ControlScriptTriggerKind.MIDIMessage || trigger.MIDIMessageType is not { } messageType)
             return trigger;
 
         return trigger with
         {
-            MidiChannel = MidiMessageTypeUsesChannel(messageType) ? trigger.MidiChannel : null,
-            MidiController = MidiMessageTypeUsesController(messageType) ? trigger.MidiController : null,
-            MidiNote = MidiMessageTypeUsesNote(messageType) ? trigger.MidiNote : null,
-            MidiValue = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValue : null,
-            MidiValueMin = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValueMin : null,
-            MidiValueMax = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValueMax : null,
-            MidiParameter = MidiMessageTypeUsesParameter(messageType) ? trigger.MidiParameter : null,
+            MIDIChannel = MIDIMessageTypeUsesChannel(messageType) ? trigger.MIDIChannel : null,
+            MIDIController = MIDIMessageTypeUsesController(messageType) ? trigger.MIDIController : null,
+            MIDINote = MIDIMessageTypeUsesNote(messageType) ? trigger.MIDINote : null,
+            MIDIValue = MIDIMessageTypeUsesValue(messageType) ? trigger.MIDIValue : null,
+            MIDIValueMin = MIDIMessageTypeUsesValue(messageType) ? trigger.MIDIValueMin : null,
+            MIDIValueMax = MIDIMessageTypeUsesValue(messageType) ? trigger.MIDIValueMax : null,
+            MIDIParameter = MIDIMessageTypeUsesParameter(messageType) ? trigger.MIDIParameter : null,
         };
     }
 
-    private static bool MidiMessageTypeUsesChannel(ControlMidiMessageType? messageType) =>
+    private static bool MIDIMessageTypeUsesChannel(ControlMIDIMessageType? messageType) =>
         messageType is null
-            or ControlMidiMessageType.NRPN
-            or ControlMidiMessageType.RPN
-            or ControlMidiMessageType.NoteOff
-            or ControlMidiMessageType.NoteOn
-            or ControlMidiMessageType.PolyphonicAftertouch
-            or ControlMidiMessageType.ControlChange
-            or ControlMidiMessageType.ProgramChange
-            or ControlMidiMessageType.ChannelAftertouch
-            or ControlMidiMessageType.PitchBend;
+            or ControlMIDIMessageType.NRPN
+            or ControlMIDIMessageType.RPN
+            or ControlMIDIMessageType.NoteOff
+            or ControlMIDIMessageType.NoteOn
+            or ControlMIDIMessageType.PolyphonicAftertouch
+            or ControlMIDIMessageType.ControlChange
+            or ControlMIDIMessageType.ProgramChange
+            or ControlMIDIMessageType.ChannelAftertouch
+            or ControlMIDIMessageType.PitchBend;
 
-    private static bool MidiMessageTypeUsesController(ControlMidiMessageType? messageType) =>
-        messageType is null or ControlMidiMessageType.ControlChange;
+    private static bool MIDIMessageTypeUsesController(ControlMIDIMessageType? messageType) =>
+        messageType is null or ControlMIDIMessageType.ControlChange;
 
-    private static bool MidiMessageTypeUsesNote(ControlMidiMessageType? messageType) =>
+    private static bool MIDIMessageTypeUsesNote(ControlMIDIMessageType? messageType) =>
         messageType is null
-            or ControlMidiMessageType.NoteOff
-            or ControlMidiMessageType.NoteOn
-            or ControlMidiMessageType.PolyphonicAftertouch;
+            or ControlMIDIMessageType.NoteOff
+            or ControlMIDIMessageType.NoteOn
+            or ControlMIDIMessageType.PolyphonicAftertouch;
 
-    private static bool MidiMessageTypeUsesValue(ControlMidiMessageType? messageType) =>
+    private static bool MIDIMessageTypeUsesValue(ControlMIDIMessageType? messageType) =>
         messageType is null
-            or ControlMidiMessageType.NRPN
-            or ControlMidiMessageType.RPN
-            or ControlMidiMessageType.NoteOff
-            or ControlMidiMessageType.NoteOn
-            or ControlMidiMessageType.PolyphonicAftertouch
-            or ControlMidiMessageType.ControlChange
-            or ControlMidiMessageType.ProgramChange
-            or ControlMidiMessageType.ChannelAftertouch
-            or ControlMidiMessageType.PitchBend
-            or ControlMidiMessageType.SysEx
-            or ControlMidiMessageType.MIDITimeCode
-            or ControlMidiMessageType.SongPosition
-            or ControlMidiMessageType.SongSelect;
+            or ControlMIDIMessageType.NRPN
+            or ControlMIDIMessageType.RPN
+            or ControlMIDIMessageType.NoteOff
+            or ControlMIDIMessageType.NoteOn
+            or ControlMIDIMessageType.PolyphonicAftertouch
+            or ControlMIDIMessageType.ControlChange
+            or ControlMIDIMessageType.ProgramChange
+            or ControlMIDIMessageType.ChannelAftertouch
+            or ControlMIDIMessageType.PitchBend
+            or ControlMIDIMessageType.SysEx
+            or ControlMIDIMessageType.MIDITimeCode
+            or ControlMIDIMessageType.SongPosition
+            or ControlMIDIMessageType.SongSelect;
 
-    private static bool MidiMessageTypeUsesParameter(ControlMidiMessageType? messageType) =>
-        messageType is null or ControlMidiMessageType.NRPN or ControlMidiMessageType.RPN;
+    private static bool MIDIMessageTypeUsesParameter(ControlMIDIMessageType? messageType) =>
+        messageType is null or ControlMIDIMessageType.NRPN or ControlMIDIMessageType.RPN;
 
     private void Update(ControlScriptTriggerConfig trigger, params string[] changedProperties)
     {

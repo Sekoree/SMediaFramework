@@ -6,7 +6,7 @@ using PMLib.Types;
 namespace PMLib.Devices;
 
 /// <summary>
-/// A PortMidi output device. Call <see cref="MIDIDevice.Open"/> before writing,
+/// A PortMIDI output device. Call <see cref="MIDIDevice.Open"/> before writing,
 /// and <see cref="MIDIDevice.Dispose"/> when finished.
 /// </summary>
 public class MIDIOutputDevice : MIDIDevice

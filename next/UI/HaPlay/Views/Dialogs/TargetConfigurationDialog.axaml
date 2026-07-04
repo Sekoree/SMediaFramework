@@ -19,12 +19,12 @@
     </StackPanel>
 
     <TabControl>
-      <TabItem Header="{x:Static res:Strings.TargetOscTabHeader}">
-        <views:OscConnectionsView DataContext="{Binding}" />
+      <TabItem Header="{x:Static res:Strings.TargetOSCTabHeader}">
+        <views:OSCConnectionsView DataContext="{Binding}" />
       </TabItem>
-      <TabItem Header="{x:Static res:Strings.TargetMidiTabHeader}"
-               IsVisible="{Binding IsMidiAvailable}">
-        <views:MidiDevicesView DataContext="{Binding}" />
+      <TabItem Header="{x:Static res:Strings.TargetMIDITabHeader}"
+               IsVisible="{Binding IsMIDIAvailable}">
+        <views:MIDIDevicesView DataContext="{Binding}" />
       </TabItem>
     </TabControl>
   </DockPanel>

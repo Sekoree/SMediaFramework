@@ -16,9 +16,9 @@ public sealed partial class ActionEndpointRowViewModel : ObservableObject
     [ObservableProperty]
     private string? _healthDetail;
 
-    public bool IsOsc => Endpoint is OscActionEndpoint;
+    public bool IsOSC => Endpoint is OSCActionEndpoint;
 
-    public bool IsMidi => Endpoint is MidiActionEndpoint;
+    public bool IsMIDI => Endpoint is MIDIActionEndpoint;
 
     /// <summary>Fill color for the list-row status LED.</summary>
     public string HealthColor => Health switch

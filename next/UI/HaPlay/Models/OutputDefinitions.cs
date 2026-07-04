@@ -8,13 +8,13 @@ public enum ManagedOutputKind
 {
     PortAudio,
     NDI,
-    SdlOpenGlVideo,
+    SDLOpenGlVideo,
     AvaloniaOpenGlVideo,
 }
 
 public enum VideoOutputEngine
 {
-    SdlOpenGl,
+    SDLOpenGl,
     AvaloniaOpenGl,
 }
 
@@ -108,7 +108,7 @@ public sealed record LocalVideoOutputDefinition(
 {
     [JsonIgnore]
     public override ManagedOutputKind Kind =>
-        Engine == VideoOutputEngine.SdlOpenGl ? ManagedOutputKind.SdlOpenGlVideo : ManagedOutputKind.AvaloniaOpenGlVideo;
+        Engine == VideoOutputEngine.SDLOpenGl ? ManagedOutputKind.SDLOpenGlVideo : ManagedOutputKind.AvaloniaOpenGlVideo;
 }
 
 public sealed record NDIOutputDefinition(

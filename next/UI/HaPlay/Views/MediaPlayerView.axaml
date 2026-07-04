@@ -410,13 +410,13 @@
                                 <Separator />
                                 <MenuItem Header="{x:Static res:Strings.PortAudioInputMenuHeader}"
                                           Command="{Binding AddPortAudioInputCommand}" />
-                                <MenuItem Header="{x:Static res:Strings.NdiInputMenuHeader}"
+                                <MenuItem Header="{x:Static res:Strings.NDIInputMenuHeader}"
                                           Command="{Binding AddNDIInputCommand}"
-                                          IsVisible="{Binding IsNdiAvailable}" />
+                                          IsVisible="{Binding IsNDIAvailable}" />
                                 <MenuItem Header="{x:Static res:Strings.AddYouTubeMenuItem}"
                                           Command="{Binding AddYouTubeCommand}" />
-                                <MenuItem Header="{x:Static res:Strings.AddMmdMenuItem}"
-                                          Command="{Binding AddMmdCommand}" />
+                                <MenuItem Header="{x:Static res:Strings.AddMMDMenuItem}"
+                                          Command="{Binding AddMMDCommand}" />
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>

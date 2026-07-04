@@ -111,7 +111,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MicCaptureSmoke", "MediaFra
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NDIAVCorrelationProbe", "MediaFramework\Tools\NDIAVCorrelationProbe\NDIAVCorrelationProbe.csproj", "{FB22E1C8-BCF6-4F3C-99CF-465C2B7D0E32}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CompositeToNdiSmoke", "MediaFramework\Tools\CompositeToNdiSmoke\CompositeToNdiSmoke.csproj", "{CF729E2E-9333-415E-9276-0DDC77E1BDA1}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CompositeToNDISmoke", "MediaFramework\Tools\CompositeToNDISmoke\CompositeToNDISmoke.csproj", "{CF729E2E-9333-415E-9276-0DDC77E1BDA1}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AvaloniaVideoSmoke", "MediaFramework\Tools\AvaloniaVideoSmoke\AvaloniaVideoSmoke.csproj", "{ED13617B-72CA-4AAD-8A62-8B338D8158C1}"
 EndProject
@@ -165,7 +165,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Source.MMD.Tests", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Abi.Tests", "MediaFramework\Test\S.Abi.Tests\S.Abi.Tests.csproj", "{545C7E70-26F9-45A1-95C2-B6F743714873}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MmdGlSmoke", "MediaFramework\Tools\MmdGlSmoke\MmdGlSmoke.csproj", "{C8D3FEA5-E066-4A9E-83F3-B0E2C71565CB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MMDGlSmoke", "MediaFramework\Tools\MMDGlSmoke\MMDGlSmoke.csproj", "{C8D3FEA5-E066-4A9E-83F3-B0E2C71565CB}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "External", "External", "{75F5BA04-7ACD-4059-8F1C-67D229FA6579}"
 EndProject

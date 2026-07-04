@@ -20,7 +20,7 @@ public sealed class AudioMatrixDialogModelTests
             var outputs = new OutputManagementViewModel();
             outputs.ReplaceDefinitionsForLoad(new OutputDefinition[]
             {
-                new LocalVideoOutputDefinition(Guid.NewGuid(), "Projector", VideoOutputEngine.SdlOpenGl,
+                new LocalVideoOutputDefinition(Guid.NewGuid(), "Projector", VideoOutputEngine.SDLOpenGl,
                     VideoSurfaceMode.Windowed, 0, 1280, 720),
                 new NDIOutputDefinition(Guid.NewGuid(), "Video only NDI", "video", null,
                     NDIOutputStreamMode.VideoOnly, 2, 48_000),

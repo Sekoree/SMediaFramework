@@ -18,7 +18,7 @@ namespace S.Media.NDI;
 /// Combined NDI receive source: <see cref="Find"/> on the network, <see cref="Open"/> a source, then wire
 /// <see cref="Audio"/> / <see cref="Video"/> into <see cref="S.Media.Playback.MediaPlayer.OpenLive"/>.
 /// </summary>
-public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
+public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.NDISource");
 
@@ -47,8 +47,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private TimeSpan _nextVideoPts;
     private TimeSpan _videoRebaseBasePts;
     private TimeSpan _lastResolvedVideoPts;
-    private long _videoNdiTimingOriginTicks;
-    private bool _videoNdiTimingOriginSet;
+    private long _videoNDITimingOriginTicks;
+    private bool _videoNDITimingOriginSet;
     private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
     private bool _presentVideoByAbsoluteTimecode;
@@ -370,8 +370,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             _videoRebaseBasePts = nextPresentationTime;
             _lastResolvedVideoPts = nextPresentationTime;
             _hasLastResolvedVideoPts = false;
-            _videoNdiTimingOriginTicks = 0;
-            _videoNdiTimingOriginSet = false;
+            _videoNDITimingOriginTicks = 0;
+            _videoNDITimingOriginSet = false;
         }
     }
 
@@ -694,8 +694,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         else if (NDIFrameTiming.TryMapPresentationTime(
                      video.Timecode,
                      video.Timestamp,
-                     ref _videoNdiTimingOriginTicks,
-                     ref _videoNdiTimingOriginSet,
+                     ref _videoNDITimingOriginTicks,
+                     ref _videoNDITimingOriginSet,
                      out var relative))
         {
             var pts = _videoRebaseBasePts + relative;

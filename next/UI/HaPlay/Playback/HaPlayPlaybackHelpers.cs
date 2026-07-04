@@ -19,22 +19,22 @@ internal static class HaPlayPlaybackHelpers
     /// <summary>"Always pre-bake if possible": the moment an MMD scene lands in a playlist or cue list
     /// (add or edit), start the shared background physics bake so it's warm before the first play
     /// instead of baking during it. Coalesced + cached by (model, motion) in
-    /// <see cref="S.Media.Source.MMD.MmdPhysicsBakeCache"/>; a scene without physics/motion or with
+    /// <see cref="S.Media.Source.MMD.MMDPhysicsBakeCache"/>; a scene without physics/motion or with
     /// missing files is skipped, and failures fall back to the playback-time bake path.</summary>
     internal static void StartBackgroundPhysicsBake(PlaylistItem? item)
     {
-        if (item is not MmdPlaylistItem { Physics: true, MotionPath.Length: > 0 } mmd
+        if (item is not MMDPlaylistItem { Physics: true, MotionPath.Length: > 0 } mmd
             || !File.Exists(mmd.ModelPath) || !File.Exists(mmd.MotionPath)
-            || S.Media.Source.MMD.MmdPhysicsBakeCache.IsCached(mmd.ModelPath, mmd.MotionPath))
+            || S.Media.Source.MMD.MMDPhysicsBakeCache.IsCached(mmd.ModelPath, mmd.MotionPath))
             return;
 
         _ = Task.Run(() =>
         {
             try
             {
-                var model = S.Media.Source.MMD.PmxDocument.Load(mmd.ModelPath);
-                var motion = S.Media.Source.MMD.VmdDocument.Load(mmd.MotionPath!);
-                _ = S.Media.Source.MMD.MmdPhysicsBakeCache.LoadOrStart(mmd.ModelPath, mmd.MotionPath!, model, motion);
+                var model = S.Media.Source.MMD.PMXDocument.Load(mmd.ModelPath);
+                var motion = S.Media.Source.MMD.VMDDocument.Load(mmd.MotionPath!);
+                _ = S.Media.Source.MMD.MMDPhysicsBakeCache.LoadOrStart(mmd.ModelPath, mmd.MotionPath!, model, motion);
             }
             catch
             {
@@ -47,7 +47,7 @@ internal static class HaPlayPlaybackHelpers
     /// per-item stream selection, bandwidth mode, and audio jitter-buffer override — the ONE builder both the
     /// deck and the cue mapper must use, so a persisted item keeps its options on either playback path (the
     /// registry's <c>NDIDecoderProvider.ParseSourceUri</c> is the counterpart).</summary>
-    internal static string BuildNdiInputUri(NDIInputPlaylistItem item)
+    internal static string BuildNDIInputUri(NDIInputPlaylistItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
         var query = new List<string>
@@ -86,10 +86,10 @@ internal static class HaPlayPlaybackHelpers
 
     /// <summary>Builds the <c>mmd://</c> URI for an MMD scene item — the manual camera placement only
     /// applies when no camera VMD is set (the source prefers the camera track).</summary>
-    internal static string BuildMmdUri(MmdPlaylistItem item)
+    internal static string BuildMMDUri(MMDPlaylistItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
-        return S.Media.Source.MMD.MmdSourceUri.Build(new S.Media.Source.MMD.MmdSourceRequest(
+        return S.Media.Source.MMD.MMDSourceUri.Build(new S.Media.Source.MMD.MMDSourceRequest(
             item.ModelPath,
             item.MotionPath,
             item.CameraMotionPath,

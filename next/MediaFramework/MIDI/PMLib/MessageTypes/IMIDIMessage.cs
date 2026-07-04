@@ -8,7 +8,7 @@ public interface IMIDIMessage
     MIDIMessageType MessageType { get; }
 
     /// <summary>
-    /// Writes this message to an open PortMidi output stream.
+    /// Writes this message to an open PortMIDI output stream.
     /// Some message types (e.g. 14-bit <see cref="ControlChange"/>) emit two
     /// consecutive short messages.
     /// </summary>

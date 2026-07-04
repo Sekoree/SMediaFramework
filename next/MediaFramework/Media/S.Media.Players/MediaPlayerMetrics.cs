@@ -11,7 +11,7 @@ public sealed record MediaPlayerMetrics(
     IReadOnlyList<VideoOutputPumpMetricsEntry> VideoOutputs,
     IReadOnlyList<AudioOutputPumpMetricsEntry> AudioOutputs,
     PortAudioMetricsSnapshot? PortAudio,
-    NdiIngestMetricsSnapshot? Ndi);
+    NDIIngestMetricsSnapshot? NDI);
 
 public sealed record MediaClockMetricsSnapshot(
     TimeSpan CurrentPosition,
@@ -43,6 +43,6 @@ public sealed record PortAudioMetricsSnapshot(
     long UnderrunSamples,
     long DroppedSamples);
 
-public sealed record NdiIngestMetricsSnapshot(
+public sealed record NDIIngestMetricsSnapshot(
     long AudioOverflowFloats,
     long VideoOverflowFrames);

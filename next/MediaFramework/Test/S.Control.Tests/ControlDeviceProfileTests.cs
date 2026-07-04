@@ -29,10 +29,10 @@ public sealed class ControlDeviceProfileTests
     }
 
     [Fact]
-    public void ProfileSeeding_CreatesDefaultPeriodicOscSendsFromProfileTasks()
+    public void ProfileSeeding_CreatesDefaultPeriodicOSCSendsFromProfileTasks()
     {
         var profile = TestProfiles.ById(TestProfiles.X32);
-        var sends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOscSends(profile);
+        var sends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOSCSends(profile);
 
         var xremote = Assert.Single(sends);
         Assert.Equal("/xremote", xremote.Address);
@@ -45,9 +45,9 @@ public sealed class ControlDeviceProfileTests
         var profile = TestProfiles.ById(TestProfiles.XAir);
 
         Assert.Equal("behringer.xair.osc", profile.Id);
-        Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
-        Assert.Equal(10024, profile.DefaultOscPort);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OscRemote);
+        Assert.Equal(ControlDeviceProtocol.OSC, profile.Protocol);
+        Assert.Equal(10024, profile.DefaultOSCPort);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OSCRemote);
 
         // Channels share the X32 /ch/NN/mix layout (16 channels for XR16/XR18).
         var ch1Fader = Assert.Single(profile.Commands, c => c.Id == "xair.ch.01.fader");
@@ -78,35 +78,35 @@ public sealed class ControlDeviceProfileTests
         var profile = TestProfiles.ById(TestProfiles.XTouchMini);
 
         Assert.Equal("behringer.xtouch-mini.mc", profile.Id);
-        Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MidiInput);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MidiOutput);
+        Assert.Equal(ControlDeviceProtocol.MIDI, profile.Protocol);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MIDIInput);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MIDIOutput);
         Assert.Equal(35, profile.Controls.Count);
 
         var layerA = Assert.Single(profile.Controls, c => c.Id == "xtouch.layer.a");
         Assert.Equal(ControlProfileControlKind.LayerButton, layerA.Kind);
-        Assert.Equal(84, layerA.MidiNote);
+        Assert.Equal(84, layerA.MIDINote);
 
         var layerB = Assert.Single(profile.Controls, c => c.Id == "xtouch.layer.b");
-        Assert.Equal(85, layerB.MidiNote);
+        Assert.Equal(85, layerB.MIDINote);
 
         var encoder1 = Assert.Single(profile.Controls, c => c.Id == "xtouch.encoder.1");
         Assert.Equal(ControlProfileControlKind.Encoder, encoder1.Kind);
-        Assert.Equal(16, encoder1.MidiController);
+        Assert.Equal(16, encoder1.MIDIController);
         Assert.Equal(ControlProfileValueMode.RelativeEncoder, encoder1.ValueMode);
         Assert.Equal(Enumerable.Range(1, 10), encoder1.IncrementValues);
         Assert.Equal(Enumerable.Range(65, 8), encoder1.DecrementValues);
 
         var encoder8 = Assert.Single(profile.Controls, c => c.Id == "xtouch.encoder.8");
-        Assert.Equal(23, encoder8.MidiController);
+        Assert.Equal(23, encoder8.MIDIController);
 
         var encoderPush1 = Assert.Single(profile.Controls, c => c.Id == "xtouch.encoder.1.push");
-        Assert.Equal(32, encoderPush1.MidiNote);
+        Assert.Equal(32, encoderPush1.MIDINote);
 
         var buttonNotes = profile.Controls
             .Where(c => c.Id.StartsWith("xtouch.button.", StringComparison.Ordinal))
             .OrderBy(c => int.Parse(c.Id["xtouch.button.".Length..]))
-            .Select(c => c.MidiNote)
+            .Select(c => c.MIDINote)
             .ToArray();
         Assert.Equal([89, 90, 40, 41, 42, 43, 44, 45, 87, 88, 91, 92, 86, 93, 94, 95], buttonNotes);
 
@@ -123,37 +123,37 @@ public sealed class ControlDeviceProfileTests
         var profile = TestProfiles.ById(TestProfiles.Bcf2000);
 
         Assert.Equal("behringer.bcf2000", profile.Id);
-        Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MidiInput);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MidiOutput);
+        Assert.Equal(ControlDeviceProtocol.MIDI, profile.Protocol);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MIDIInput);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MIDIOutput);
 
         // Motor faders: 14-bit absolute CC 0..7 across the full 14-bit range.
         var fader1 = Assert.Single(profile.Controls, c => c.Id == "bcf.fader.1");
         Assert.Equal(ControlProfileControlKind.Fader, fader1.Kind);
-        Assert.Equal(0, fader1.MidiController);
+        Assert.Equal(0, fader1.MIDIController);
         Assert.Equal(ControlProfileValueMode.Absolute14Bit, fader1.ValueMode);
-        Assert.True(fader1.MidiHighResolution14Bit);
-        Assert.Equal(0, fader1.MidiValueMin);
-        Assert.Equal(16383, fader1.MidiValueMax);
-        Assert.Equal(7, Assert.Single(profile.Controls, c => c.Id == "bcf.fader.8").MidiController);
+        Assert.True(fader1.MIDIHighResolution14Bit);
+        Assert.Equal(0, fader1.MIDIValueMin);
+        Assert.Equal(16383, fader1.MIDIValueMax);
+        Assert.Equal(7, Assert.Single(profile.Controls, c => c.Id == "bcf.fader.8").MIDIController);
 
         // Rotary encoders: 14-bit absolute CC 10..17.
         var enc1 = Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.1");
         Assert.Equal(ControlProfileControlKind.Encoder, enc1.Kind);
-        Assert.Equal(10, enc1.MidiController);
-        Assert.True(enc1.MidiHighResolution14Bit);
-        Assert.Equal(16383, enc1.MidiValueMax);
-        Assert.Equal(17, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.8").MidiController);
+        Assert.Equal(10, enc1.MIDIController);
+        Assert.True(enc1.MIDIHighResolution14Bit);
+        Assert.Equal(16383, enc1.MIDIValueMax);
+        Assert.Equal(17, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.8").MIDIController);
 
         // Encoder press: notes 0..7.
-        Assert.Equal(0, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.1.push").MidiNote);
-        Assert.Equal(7, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.8.push").MidiNote);
+        Assert.Equal(0, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.1.push").MIDINote);
+        Assert.Equal(7, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.8.push").MIDINote);
 
         // Button banks: Row 1 notes 10..17, Row 2 20..27, Group 6 up to 63.
-        Assert.Equal(10, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row1.1").MidiNote);
-        Assert.Equal(17, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row1.8").MidiNote);
-        Assert.Equal(20, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row2.1").MidiNote);
-        Assert.Equal(63, Assert.Single(profile.Controls, c => c.Id == "bcf.button.group6.4").MidiNote);
+        Assert.Equal(10, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row1.1").MIDINote);
+        Assert.Equal(17, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row1.8").MIDINote);
+        Assert.Equal(20, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row2.1").MIDINote);
+        Assert.Equal(63, Assert.Single(profile.Controls, c => c.Id == "bcf.button.group6.4").MIDINote);
 
         // 8 faders + 8 encoders + 8 pushes + (8+8+4+4+2+4) buttons = 54.
         Assert.Equal(54, profile.Controls.Count);
@@ -168,9 +168,9 @@ public sealed class ControlDeviceProfileTests
         var profile = TestProfiles.ById(TestProfiles.X32);
 
         Assert.Equal("behringer.x32.osc", profile.Id);
-        Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OscRemote);
-        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OscListener);
+        Assert.Equal(ControlDeviceProtocol.OSC, profile.Protocol);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OSCRemote);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OSCListener);
 
         var ch1Fader = Assert.Single(profile.Commands, c => c.Id == "x32.ch.01.fader");
         Assert.Equal("/ch/01/mix/fader", ch1Fader.Address);
@@ -194,7 +194,7 @@ public sealed class ControlDeviceProfileTests
         Assert.Equal(3, profile.Tasks.Count);
         var xremote = Assert.Single(profile.Tasks, t => t.Id == "x32.xremote");
         Assert.True(xremote.IsDefaultEnabled);
-        Assert.Equal(ControlDeviceTaskKind.PeriodicOscSend, xremote.Kind);
+        Assert.Equal(ControlDeviceTaskKind.PeriodicOSCSend, xremote.Kind);
         Assert.Equal("/xremote", xremote.Address);
         Assert.Equal(8000, xremote.IntervalMs);
 
@@ -221,7 +221,7 @@ public sealed class ControlDeviceProfileTests
         {
             Id = "test",
             DisplayName = "Test",
-            Protocol = ControlDeviceProtocol.Osc,
+            Protocol = ControlDeviceProtocol.OSC,
             Commands =
             [
                 new ControlCommandProfile { Id = "dup", Address = "/a" },
@@ -251,14 +251,14 @@ public sealed class ControlDeviceProfileTests
         {
             Id = "user.generic-midi",
             DisplayName = "User Generic MIDI",
-            Protocol = ControlDeviceProtocol.Midi,
+            Protocol = ControlDeviceProtocol.MIDI,
             Ports =
             [
                 new ControlDevicePortProfile
                 {
                     Id = "midi-in",
                     DisplayName = "MIDI In",
-                    Kind = ControlDevicePortKind.MidiInput,
+                    Kind = ControlDevicePortKind.MIDIInput,
                 },
             ],
         };
@@ -296,7 +296,7 @@ public sealed class ControlDeviceProfileTests
         {
             Id = "learned.xtouch.custom",
             DisplayName = "Learned X-Touch Custom",
-            Protocol = ControlDeviceProtocol.Midi,
+            Protocol = ControlDeviceProtocol.MIDI,
             Controls =
             [
                 new ControlControlProfile
@@ -304,11 +304,11 @@ public sealed class ControlDeviceProfileTests
                     Id = "learned.button.1",
                     DisplayName = "Learned Button 1",
                     Kind = ControlProfileControlKind.Fader,
-                    MidiChannel = 1,
-                    MidiController = 16,
-                    MidiHighResolution14Bit = true,
-                    MidiValueMin = 0,
-                    MidiValueMax = 10000,
+                    MIDIChannel = 1,
+                    MIDIController = 16,
+                    MIDIHighResolution14Bit = true,
+                    MIDIValueMin = 0,
+                    MIDIValueMax = 10000,
                     ValueMode = ControlProfileValueMode.Absolute14Bit,
                 },
             ],
@@ -327,10 +327,10 @@ public sealed class ControlDeviceProfileTests
             Assert.Equal("Learned X-Touch Custom", loaded.DisplayName);
             var control = Assert.Single(loaded.Controls);
             Assert.Equal(ControlProfileValueMode.Absolute14Bit, control.ValueMode);
-            Assert.True(control.MidiHighResolution14Bit);
-            Assert.Equal(16, control.MidiController);
-            Assert.Equal(0, control.MidiValueMin);
-            Assert.Equal(10000, control.MidiValueMax);
+            Assert.True(control.MIDIHighResolution14Bit);
+            Assert.Equal(16, control.MIDIController);
+            Assert.Equal(0, control.MIDIValueMin);
+            Assert.Equal(10000, control.MIDIValueMax);
         }
         finally
         {
@@ -392,7 +392,7 @@ public sealed class ControlDeviceProfileTests
         {
             Id = "behringer.x32.osc",
             DisplayName = "App X32 Override",
-            Protocol = ControlDeviceProtocol.Osc,
+            Protocol = ControlDeviceProtocol.OSC,
         };
         var projectProfile = appProfile with { DisplayName = "Project X32 Override" };
         var appRepository = new ProjectControlDeviceProfileRepository([appProfile]);

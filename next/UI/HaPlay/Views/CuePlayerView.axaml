@@ -81,12 +81,12 @@
             <MenuItem Header="{x:Static res:Strings.AddTextButton}" Command="{Binding AddTextCueCommand}" />
             <MenuItem Header="Subtitle cue" Command="{Binding AddSubtitleCueCommand}" />
             <Separator />
-            <MenuItem Header="{x:Static res:Strings.AddNdiInputCueButton}"
-                      Command="{Binding AddNdiInputCueCommand}"
-                      IsVisible="{Binding IsNdiAvailable}" />
+            <MenuItem Header="{x:Static res:Strings.AddNDIInputCueButton}"
+                      Command="{Binding AddNDIInputCueCommand}"
+                      IsVisible="{Binding IsNDIAvailable}" />
             <MenuItem Header="{x:Static res:Strings.AddPortAudioInputCueButton}" Command="{Binding AddPortAudioInputCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddYouTubeMenuItem}" Command="{Binding AddYouTubeCueCommand}" />
-            <MenuItem Header="{x:Static res:Strings.AddMmdMenuItem}" Command="{Binding AddMmdCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddMMDMenuItem}" Command="{Binding AddMMDCueCommand}" />
             <Separator />
             <MenuItem Header="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />

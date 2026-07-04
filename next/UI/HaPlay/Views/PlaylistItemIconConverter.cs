@@ -17,7 +17,7 @@ public sealed class PlaylistItemIconConverter : IValueConverter
         ImagePlaylistItem => AppIcons.Image,
         SubtitlePlaylistItem => AppIcons.Speech,
         TextPlaylistItem => AppIcons.TextCard,
-        MmdPlaylistItem => AppIcons.Person,
+        MMDPlaylistItem => AppIcons.Person,
         YouTubePlaylistItem => AppIcons.Play,
         NDIInputPlaylistItem => AppIcons.Antenna,
         PortAudioInputPlaylistItem => AppIcons.Microphone,

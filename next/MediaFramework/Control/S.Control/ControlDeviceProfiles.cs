@@ -13,7 +13,8 @@ public sealed record ControlDeviceProfile
     public string Version { get; init; } = "1.0";
 
     /// <summary>Suggested remote port for an OSC device using this profile (e.g. X32 = 10023, X-Air = 10024).</summary>
-    public int? DefaultOscPort { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("defaultOscPort")]
+    public int? DefaultOSCPort { get; init; }
 
     public List<ControlDevicePortProfile> Ports { get; init; } = new();
 
@@ -54,10 +55,10 @@ public sealed record ControlDevicePortProfile
 
 public enum ControlDevicePortKind
 {
-    MidiInput,
-    MidiOutput,
-    OscRemote,
-    OscListener,
+    MIDIInput,
+    MIDIOutput,
+    OSCRemote,
+    OSCListener,
 }
 
 public sealed record ControlControlProfile
@@ -68,19 +69,25 @@ public sealed record ControlControlProfile
 
     public ControlProfileControlKind Kind { get; init; }
 
-    public int? MidiChannel { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiChannel")]
+    public int? MIDIChannel { get; init; }
 
-    public int? MidiController { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiController")]
+    public int? MIDIController { get; init; }
 
-    public int? MidiNote { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiNote")]
+    public int? MIDINote { get; init; }
 
     public ControlProfileValueMode ValueMode { get; init; }
 
-    public bool MidiHighResolution14Bit { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiHighResolution14Bit")]
+    public bool MIDIHighResolution14Bit { get; init; }
 
-    public int? MidiValueMin { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiValueMin")]
+    public int? MIDIValueMin { get; init; }
 
-    public int? MidiValueMax { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiValueMax")]
+    public int? MIDIValueMax { get; init; }
 
     public List<int> IncrementValues { get; init; } = new();
 
@@ -161,12 +168,12 @@ public sealed record ControlDeviceTaskProfile
 
     public int IntervalMs { get; init; } = 8000;
 
-    public List<ControlOscArgumentConfig> Arguments { get; init; } = new();
+    public List<ControlOSCArgumentConfig> Arguments { get; init; } = new();
 }
 
 public enum ControlDeviceTaskKind
 {
-    PeriodicOscSend,
+    PeriodicOSCSend,
 }
 
 public sealed record ControlDeviceProfileValidationIssue(string Code, string Message);
@@ -429,9 +436,9 @@ public static class ControlDeviceProfileValidator
 
         foreach (var control in profile.Controls)
         {
-            if (control.MidiValueMin.HasValue
-                && control.MidiValueMax.HasValue
-                && control.MidiValueMin.Value > control.MidiValueMax.Value)
+            if (control.MIDIValueMin.HasValue
+                && control.MIDIValueMax.HasValue
+                && control.MIDIValueMin.Value > control.MIDIValueMax.Value)
             {
                 issues.Add(new ControlDeviceProfileValidationIssue("invalid-control-range", $"Control '{control.Id}' has min above max."));
             }

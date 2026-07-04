@@ -29,7 +29,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     private NDIFinder? _finder;
     private DispatcherTimer? _discoveryTimer;
 
-    [ObservableProperty] private string _displayName = Strings.NdiInputDefaultName;
+    [ObservableProperty] private string _displayName = Strings.NDIInputDefaultName;
     [ObservableProperty] private string _sourceName = string.Empty;
     [ObservableProperty] private string? _validationMessage;
     [ObservableProperty] private bool _useDiscovery = true;
@@ -52,7 +52,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private string? _selectedDiscoveredSource;
 
     public bool IsEditing => _existingId is not null;
-    public string DialogTitle => IsEditing ? Strings.EditNdiInputDialogTitle : Strings.AddNdiInputDialogTitle;
+    public string DialogTitle => IsEditing ? Strings.EditNDIInputDialogTitle : Strings.AddNDIInputDialogTitle;
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void LoadFromExisting(NDIInputPlaylistItem existing)
@@ -85,7 +85,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             {
                 DiscoveryStatus = string.Format(
                     System.Globalization.CultureInfo.CurrentUICulture,
-                    Strings.NdiDiscoveryUnavailableStatus,
+                    Strings.NDIDiscoveryUnavailableStatus,
                     rc);
                 UseDiscovery = false;
                 return Task.CompletedTask;
@@ -111,7 +111,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     private async Task RefreshAsync()
     {
         IsScanning = true;
-        DiscoveryStatus = Strings.NdiDiscoveryScanningStatus;
+        DiscoveryStatus = Strings.NDIDiscoveryScanningStatus;
         try
         {
             await StartDiscoveryAsync().ConfigureAwait(false);
@@ -125,7 +125,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
 
     /// <summary>
     /// Probes the live network for the lowest glitch-free audio jitter-buffer size for the selected source
-    /// (ramps from a safe reserve down to the floor — see <see cref="NdiAudioBufferProbe"/>), reports the
+    /// (ramps from a safe reserve down to the floor — see <see cref="NDIAudioBufferProbe"/>), reports the
     /// lowest/balanced/safe presets, and sets the override to the measured floor. Runs off the UI thread with
     /// per-step progress; cancellable.
     /// </summary>
@@ -152,9 +152,9 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
                 var match = NDISource.Find(TimeSpan.FromSeconds(3))
                     .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.Ordinal));
                 if (match.Name is null)
-                    return (NdiAudioBufferPresets?)null;
+                    return (NDIAudioBufferPresets?)null;
 
-                return NdiAudioBufferProbe.Probe(
+                return NDIAudioBufferProbe.Probe(
                     match,
                     onStep: (buf, underruns) => Dispatcher.UIThread.Post(() =>
                         BufferProbeStatus = $"{buf.TotalMilliseconds:0} ms → {(underruns == 0 ? "OK" : $"{underruns} underrun chunk(s)")}"),
@@ -242,17 +242,17 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
                 ? p
                 : DiscoveredSources.FirstOrDefault();
             DiscoveryStatus = newNames.Count == 0
-                ? Strings.NdiDiscoveryNoSourcesStatus
+                ? Strings.NDIDiscoveryNoSourcesStatus
                 : string.Format(
                     System.Globalization.CultureInfo.CurrentUICulture,
-                    Strings.NdiDiscoverySourceCountStatus,
+                    Strings.NDIDiscoverySourceCountStatus,
                     newNames.Count);
         }
         catch (Exception ex)
         {
             DiscoveryStatus = string.Format(
                 System.Globalization.CultureInfo.CurrentUICulture,
-                Strings.NdiDiscoveryScanFailedStatus,
+                Strings.NDIDiscoveryScanFailedStatus,
                 ex.Message);
         }
     }
@@ -283,7 +283,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         {
             ValidationMessage = UseDiscovery
                 ? Strings.ValidationDiscoveryPickOrManual
-                : Strings.ValidationNdiSourceNameExample;
+                : Strings.ValidationNDISourceNameExample;
             return null;
         }
 

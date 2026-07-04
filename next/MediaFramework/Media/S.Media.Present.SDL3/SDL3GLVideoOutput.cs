@@ -544,9 +544,9 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         if (_disposed)
             return;
         _disposed = true;
-        var releaseSdl = _graphicsInitialized;
+        var releaseSDL = _graphicsInitialized;
         TeardownGraphicsCore();
-        if (releaseSdl)
+        if (releaseSDL)
             SDL3Runtime.Release();
     }
 

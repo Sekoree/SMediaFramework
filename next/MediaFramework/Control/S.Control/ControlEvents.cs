@@ -11,7 +11,7 @@ public abstract record ControlEvent(
     Guid CorrelationId,
     IReadOnlyList<Guid>? Path = null);
 
-public sealed record MidiControlEvent(
+public sealed record MIDIControlEvent(
     DateTimeOffset Timestamp,
     Guid SourceNodeId,
     Guid OriginId,
@@ -23,7 +23,7 @@ public sealed record MidiControlEvent(
     IReadOnlyList<Guid>? Path = null)
     : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
 
-public sealed record MidiNoteControlEvent(
+public sealed record MIDINoteControlEvent(
     DateTimeOffset Timestamp,
     Guid SourceNodeId,
     Guid OriginId,
@@ -35,18 +35,18 @@ public sealed record MidiNoteControlEvent(
     IReadOnlyList<Guid>? Path = null)
     : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
 
-public sealed record MidiMessageControlEvent(
+public sealed record MIDIMessageControlEvent(
     DateTimeOffset Timestamp,
     Guid SourceNodeId,
     Guid OriginId,
     Guid CorrelationId,
-    ControlMidiMessagePayload Message,
+    ControlMIDIMessagePayload Message,
     IReadOnlyList<Guid>? Path = null)
     : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
 
-public sealed record ControlMidiMessagePayload
+public sealed record ControlMIDIMessagePayload
 {
-    public ControlMidiMessageType MessageType { get; init; } = ControlMidiMessageType.Unknown;
+    public ControlMIDIMessageType MessageType { get; init; } = ControlMIDIMessageType.Unknown;
 
     /// <summary>One-based MIDI channel for channel messages. System messages leave this null.</summary>
     public int? Channel { get; init; }
@@ -80,7 +80,7 @@ public sealed record ControlMidiMessagePayload
 
     public byte[]? Data { get; init; }
 
-    public static ControlMidiMessagePayload FromMidiMessage(IMIDIMessage message)
+    public static ControlMIDIMessagePayload FromMIDIMessage(IMIDIMessage message)
     {
         ArgumentNullException.ThrowIfNull(message);
 
@@ -88,7 +88,7 @@ public sealed record ControlMidiMessagePayload
         {
             ControlChange cc => new()
             {
-                MessageType = ControlMidiMessageType.ControlChange,
+                MessageType = ControlMIDIMessageType.ControlChange,
                 Channel = cc.Channel + 1,
                 Controller = cc.Controller,
                 Value = cc.Value,
@@ -96,7 +96,7 @@ public sealed record ControlMidiMessagePayload
             },
             NoteOn note => new()
             {
-                MessageType = ControlMidiMessageType.NoteOn,
+                MessageType = ControlMIDIMessageType.NoteOn,
                 Channel = note.Channel + 1,
                 Note = note.Note,
                 Velocity = note.Velocity,
@@ -105,7 +105,7 @@ public sealed record ControlMidiMessagePayload
             },
             NoteOff note => new()
             {
-                MessageType = ControlMidiMessageType.NoteOff,
+                MessageType = ControlMIDIMessageType.NoteOff,
                 Channel = note.Channel + 1,
                 Note = note.Note,
                 Velocity = note.Velocity,
@@ -114,7 +114,7 @@ public sealed record ControlMidiMessagePayload
             },
             PolyphonicAftertouch aftertouch => new()
             {
-                MessageType = ControlMidiMessageType.PolyphonicAftertouch,
+                MessageType = ControlMIDIMessageType.PolyphonicAftertouch,
                 Channel = aftertouch.Channel + 1,
                 Note = aftertouch.Note,
                 Pressure = aftertouch.Pressure,
@@ -122,66 +122,66 @@ public sealed record ControlMidiMessagePayload
             },
             ProgramChange program => new()
             {
-                MessageType = ControlMidiMessageType.ProgramChange,
+                MessageType = ControlMIDIMessageType.ProgramChange,
                 Channel = program.Channel + 1,
                 Program = program.Program,
                 Value = program.Program,
             },
             ChannelAftertouch aftertouch => new()
             {
-                MessageType = ControlMidiMessageType.ChannelAftertouch,
+                MessageType = ControlMIDIMessageType.ChannelAftertouch,
                 Channel = aftertouch.Channel + 1,
                 Pressure = aftertouch.Pressure,
                 Value = aftertouch.Pressure,
             },
             PitchBend bend => new()
             {
-                MessageType = ControlMidiMessageType.PitchBend,
+                MessageType = ControlMIDIMessageType.PitchBend,
                 Channel = bend.Channel + 1,
                 PitchBend = bend.Value,
                 Value = bend.Value,
             },
             SysEx sysEx => new()
             {
-                MessageType = ControlMidiMessageType.SysEx,
+                MessageType = ControlMIDIMessageType.SysEx,
                 Data = sysEx.Data.ToArray(),
                 Value = sysEx.Data.Length,
             },
             MIDITimeCode timeCode => new()
             {
-                MessageType = ControlMidiMessageType.MIDITimeCode,
+                MessageType = ControlMIDIMessageType.MIDITimeCode,
                 DataByte = timeCode.DataByte,
                 Value = timeCode.DataByte,
             },
             SongPosition songPosition => new()
             {
-                MessageType = ControlMidiMessageType.SongPosition,
+                MessageType = ControlMIDIMessageType.SongPosition,
                 SongPosition = songPosition.Beats,
                 Value = songPosition.Beats,
             },
             SongSelect songSelect => new()
             {
-                MessageType = ControlMidiMessageType.SongSelect,
+                MessageType = ControlMIDIMessageType.SongSelect,
                 Song = songSelect.Song,
                 Value = songSelect.Song,
             },
-            TuneRequest => new() { MessageType = ControlMidiMessageType.TuneRequest },
-            TimingClock => new() { MessageType = ControlMidiMessageType.TimingClock },
-            MIDIStart => new() { MessageType = ControlMidiMessageType.Start },
-            MIDIContinue => new() { MessageType = ControlMidiMessageType.Continue },
-            MIDIStop => new() { MessageType = ControlMidiMessageType.Stop },
-            ActiveSensing => new() { MessageType = ControlMidiMessageType.ActiveSensing },
-            MIDIReset => new() { MessageType = ControlMidiMessageType.Reset },
+            TuneRequest => new() { MessageType = ControlMIDIMessageType.TuneRequest },
+            TimingClock => new() { MessageType = ControlMIDIMessageType.TimingClock },
+            MIDIStart => new() { MessageType = ControlMIDIMessageType.Start },
+            MIDIContinue => new() { MessageType = ControlMIDIMessageType.Continue },
+            MIDIStop => new() { MessageType = ControlMIDIMessageType.Stop },
+            ActiveSensing => new() { MessageType = ControlMIDIMessageType.ActiveSensing },
+            MIDIReset => new() { MessageType = ControlMIDIMessageType.Reset },
             NRPN nrpn => new()
             {
-                MessageType = ControlMidiMessageType.NRPN,
+                MessageType = ControlMIDIMessageType.NRPN,
                 Channel = nrpn.Channel + 1,
                 Parameter = nrpn.Parameter,
                 Value = nrpn.Value,
             },
             RPN rpn => new()
             {
-                MessageType = ControlMidiMessageType.RPN,
+                MessageType = ControlMIDIMessageType.RPN,
                 Channel = rpn.Channel + 1,
                 Parameter = rpn.Parameter,
                 Value = rpn.Value,
@@ -190,34 +190,34 @@ public sealed record ControlMidiMessagePayload
         };
     }
 
-    private static ControlMidiMessageType MapMessageType(MIDIMessageType messageType) =>
+    private static ControlMIDIMessageType MapMessageType(MIDIMessageType messageType) =>
         messageType switch
         {
-            MIDIMessageType.NRPN => ControlMidiMessageType.NRPN,
-            MIDIMessageType.RPN => ControlMidiMessageType.RPN,
-            MIDIMessageType.NoteOff => ControlMidiMessageType.NoteOff,
-            MIDIMessageType.NoteOn => ControlMidiMessageType.NoteOn,
-            MIDIMessageType.PolyphonicAftertouch => ControlMidiMessageType.PolyphonicAftertouch,
-            MIDIMessageType.ControlChange => ControlMidiMessageType.ControlChange,
-            MIDIMessageType.ProgramChange => ControlMidiMessageType.ProgramChange,
-            MIDIMessageType.ChannelAftertouch => ControlMidiMessageType.ChannelAftertouch,
-            MIDIMessageType.PitchBend => ControlMidiMessageType.PitchBend,
-            MIDIMessageType.SysEx => ControlMidiMessageType.SysEx,
-            MIDIMessageType.MIDITimeCode => ControlMidiMessageType.MIDITimeCode,
-            MIDIMessageType.SongPosition => ControlMidiMessageType.SongPosition,
-            MIDIMessageType.SongSelect => ControlMidiMessageType.SongSelect,
-            MIDIMessageType.TuneRequest => ControlMidiMessageType.TuneRequest,
-            MIDIMessageType.TimingClock => ControlMidiMessageType.TimingClock,
-            MIDIMessageType.Start => ControlMidiMessageType.Start,
-            MIDIMessageType.Continue => ControlMidiMessageType.Continue,
-            MIDIMessageType.Stop => ControlMidiMessageType.Stop,
-            MIDIMessageType.ActiveSensing => ControlMidiMessageType.ActiveSensing,
-            MIDIMessageType.Reset => ControlMidiMessageType.Reset,
-            _ => ControlMidiMessageType.Unknown,
+            MIDIMessageType.NRPN => ControlMIDIMessageType.NRPN,
+            MIDIMessageType.RPN => ControlMIDIMessageType.RPN,
+            MIDIMessageType.NoteOff => ControlMIDIMessageType.NoteOff,
+            MIDIMessageType.NoteOn => ControlMIDIMessageType.NoteOn,
+            MIDIMessageType.PolyphonicAftertouch => ControlMIDIMessageType.PolyphonicAftertouch,
+            MIDIMessageType.ControlChange => ControlMIDIMessageType.ControlChange,
+            MIDIMessageType.ProgramChange => ControlMIDIMessageType.ProgramChange,
+            MIDIMessageType.ChannelAftertouch => ControlMIDIMessageType.ChannelAftertouch,
+            MIDIMessageType.PitchBend => ControlMIDIMessageType.PitchBend,
+            MIDIMessageType.SysEx => ControlMIDIMessageType.SysEx,
+            MIDIMessageType.MIDITimeCode => ControlMIDIMessageType.MIDITimeCode,
+            MIDIMessageType.SongPosition => ControlMIDIMessageType.SongPosition,
+            MIDIMessageType.SongSelect => ControlMIDIMessageType.SongSelect,
+            MIDIMessageType.TuneRequest => ControlMIDIMessageType.TuneRequest,
+            MIDIMessageType.TimingClock => ControlMIDIMessageType.TimingClock,
+            MIDIMessageType.Start => ControlMIDIMessageType.Start,
+            MIDIMessageType.Continue => ControlMIDIMessageType.Continue,
+            MIDIMessageType.Stop => ControlMIDIMessageType.Stop,
+            MIDIMessageType.ActiveSensing => ControlMIDIMessageType.ActiveSensing,
+            MIDIMessageType.Reset => ControlMIDIMessageType.Reset,
+            _ => ControlMIDIMessageType.Unknown,
         };
 }
 
-public enum ControlMidiMessageType
+public enum ControlMIDIMessageType
 {
     Unknown,
     NRPN,
@@ -242,7 +242,7 @@ public enum ControlMidiMessageType
     Reset,
 }
 
-public sealed record OscControlEvent(
+public sealed record OSCControlEvent(
     DateTimeOffset Timestamp,
     Guid SourceNodeId,
     Guid OriginId,
@@ -264,7 +264,7 @@ public sealed record DeviceHealthChangedControlEvent(
     IReadOnlyList<Guid>? Path = null)
     : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
 
-public sealed record OscCacheChangedControlEvent(
+public sealed record OSCCacheChangedControlEvent(
     DateTimeOffset Timestamp,
     Guid SourceNodeId,
     Guid OriginId,

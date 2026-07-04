@@ -339,7 +339,7 @@ public sealed record MediaCueNode : CueNode
 
 public sealed record ActionCueNode : CueNode
 {
-    public CueActionKind ActionKind { get; init; } = CueActionKind.OscOut;
+    public CueActionKind ActionKind { get; init; } = CueActionKind.OSCOut;
 
     public Guid? EndpointId { get; init; }
 
@@ -434,8 +434,8 @@ public enum CueEndBehavior
 
 public enum CueActionKind
 {
-    OscOut,
-    MidiOut,
+    OSCOut,
+    MIDIOut,
 }
 
 [JsonSourceGenerationOptions(
@@ -461,7 +461,7 @@ public enum CueActionKind
 [JsonSerializable(typeof(SubtitlePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
 [JsonSerializable(typeof(YouTubePlaylistItem))]
-[JsonSerializable(typeof(MmdPlaylistItem))]
+[JsonSerializable(typeof(MMDPlaylistItem))]
 [JsonSerializable(typeof(CueListsCollectionDocument))]
 [JsonSerializable(typeof(CueCompositionsDocument))]
 [JsonSerializable(typeof(List<CueList>))]

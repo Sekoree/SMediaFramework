@@ -3,11 +3,11 @@ using PMLib.Types;
 namespace PMLib.MessageTypes;
 
 /// <summary>
-/// Decodes raw <see cref="PmEvent"/> structures received from PortMidi into
+/// Decodes raw <see cref="PmEvent"/> structures received from PortMIDI into
 /// strongly-typed <see cref="IMIDIMessage"/> instances.
 /// </summary>
 /// <remarks>
-/// <b>14-bit Control Change:</b> PortMidi delivers CC messages individually, so a 14-bit
+/// <b>14-bit Control Change:</b> PortMIDI delivers CC messages individually, so a 14-bit
 /// update arrives as two separate <see cref="ControlChange"/> objects (coarse CC 0–31
 /// followed by fine CC 32–63). Higher-level code must track these pairs and combine them
 /// using <see cref="ControlChange.FromCoarseFine"/>.

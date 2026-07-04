@@ -209,12 +209,12 @@
         <TabItem Header="{x:Static res:Strings.OutputsHeader}">
           <views:OutputManagementView DataContext="{Binding OutputManagement}" />
         </TabItem>
-        <TabItem Header="{x:Static res:Strings.MidiHeader}"
-                 IsVisible="{Binding IsMidiAvailable}">
-          <views:MidiDevicesView />
+        <TabItem Header="{x:Static res:Strings.MIDIHeader}"
+                 IsVisible="{Binding IsMIDIAvailable}">
+          <views:MIDIDevicesView />
         </TabItem>
-        <TabItem Header="{x:Static res:Strings.IoTabOsc}">
-          <views:OscConnectionsView />
+        <TabItem Header="{x:Static res:Strings.IoTabOSC}">
+          <views:OSCConnectionsView />
         </TabItem>
       </TabControl>
 

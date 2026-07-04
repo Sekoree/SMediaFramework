@@ -17,7 +17,7 @@ public class ControlShowBridgeTests
         public void Stop(string? groupId = null) => Calls.Add($"stop:{groupId ?? "-"}");
     }
 
-    private sealed class NullOscSender : IControlOscSender
+    private sealed class NullOSCSender : IControlOSCSender
     {
         public ValueTask SendAsync(string host, int port, string address, IReadOnlyList<OSCArgument> arguments,
             CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
@@ -87,7 +87,7 @@ public class ControlShowBridgeTests
                     }
                     """,
             }),
-            new NullOscSender(),
+            new NullOSCSender(),
             showActions: recorder);
 
         await session.DispatchManualAsync();

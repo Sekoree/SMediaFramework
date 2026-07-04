@@ -6,20 +6,20 @@ namespace HaPlay.Tests;
 public sealed class ControlDeviceMatcherTests
 {
     [Fact]
-    public void MatchMidiInput_UsesRememberedIdBeforeAmbiguousName()
+    public void MatchMIDIInput_UsesRememberedIdBeforeAmbiguousName()
     {
-        var device = MidiDevice(
+        var device = MIDIDevice(
             inputId: 2,
             inputName: "Shared MIDI",
             alias: "surface",
             name: "Surface");
         var ports = new[]
         {
-            new ControlMidiPortInfo(1, "Shared MIDI"),
-            new ControlMidiPortInfo(2, "Shared MIDI"),
+            new ControlMIDIPortInfo(1, "Shared MIDI"),
+            new ControlMIDIPortInfo(2, "Shared MIDI"),
         };
 
-        var match = ControlDeviceMatcher.MatchMidiInput(device, ports);
+        var match = ControlDeviceMatcher.MatchMIDIInput(device, ports);
 
         Assert.Equal(ControlDeviceMatchStatus.Matched, match.Status);
         Assert.Equal(ControlDeviceMatchKind.RememberedDeviceId, match.Kind);
@@ -27,15 +27,15 @@ public sealed class ControlDeviceMatcherTests
     }
 
     [Fact]
-    public void MatchMidiInput_UsesUserAliasWhenPortNameMatchesAlias()
+    public void MatchMIDIInput_UsesUserAliasWhenPortNameMatchesAlias()
     {
-        var device = MidiDevice(
+        var device = MIDIDevice(
             inputId: null,
             inputName: null,
             alias: "xtouch",
             name: "Control Surface");
 
-        var match = ControlDeviceMatcher.MatchMidiInput(device, [new ControlMidiPortInfo(3, "xtouch")]);
+        var match = ControlDeviceMatcher.MatchMIDIInput(device, [new ControlMIDIPortInfo(3, "xtouch")]);
 
         Assert.Equal(ControlDeviceMatchStatus.Matched, match.Status);
         Assert.Equal(ControlDeviceMatchKind.UserAlias, match.Kind);
@@ -43,15 +43,15 @@ public sealed class ControlDeviceMatcherTests
     }
 
     [Fact]
-    public void MatchMidiOutput_FuzzyMatchesNormalizedName()
+    public void MatchMIDIOutput_FuzzyMatchesNormalizedName()
     {
-        var device = MidiDevice(
+        var device = MIDIDevice(
             outputId: null,
             outputName: "XTouch Mini",
             alias: "surface",
             name: "Control Surface");
 
-        var match = ControlDeviceMatcher.MatchMidiOutput(device, [new ControlMidiPortInfo(7, "X-Touch MINI")]);
+        var match = ControlDeviceMatcher.MatchMIDIOutput(device, [new ControlMIDIPortInfo(7, "X-Touch MINI")]);
 
         Assert.Equal(ControlDeviceMatchStatus.Matched, match.Status);
         Assert.Equal(ControlDeviceMatchKind.FuzzyName, match.Kind);
@@ -59,20 +59,20 @@ public sealed class ControlDeviceMatcherTests
     }
 
     [Fact]
-    public void MatchMidiOutput_ReturnsAmbiguousForMultipleFuzzyMatches()
+    public void MatchMIDIOutput_ReturnsAmbiguousForMultipleFuzzyMatches()
     {
-        var device = MidiDevice(
+        var device = MIDIDevice(
             outputId: null,
             outputName: "XTouch Mini",
             alias: "surface",
             name: "Control Surface");
         var ports = new[]
         {
-            new ControlMidiPortInfo(7, "X-Touch MINI"),
-            new ControlMidiPortInfo(8, "X Touch Mini"),
+            new ControlMIDIPortInfo(7, "X-Touch MINI"),
+            new ControlMIDIPortInfo(8, "X Touch Mini"),
         };
 
-        var match = ControlDeviceMatcher.MatchMidiOutput(device, ports);
+        var match = ControlDeviceMatcher.MatchMIDIOutput(device, ports);
 
         Assert.Equal(ControlDeviceMatchStatus.Ambiguous, match.Status);
         Assert.Equal([7, 8], match.Candidates.Select(p => p.Id));
@@ -80,22 +80,22 @@ public sealed class ControlDeviceMatcherTests
     }
 
     [Fact]
-    public void MatchMidiInput_ReturnsMissingWhenNoConfidentMatchExists()
+    public void MatchMIDIInput_ReturnsMissingWhenNoConfidentMatchExists()
     {
-        var device = MidiDevice(
+        var device = MIDIDevice(
             inputId: 4,
             inputName: "XTouch Mini",
             alias: "xtouch",
             name: "X-Touch Mini");
 
-        var match = ControlDeviceMatcher.MatchMidiInput(device, [new ControlMidiPortInfo(9, "Other Controller")]);
+        var match = ControlDeviceMatcher.MatchMIDIInput(device, [new ControlMIDIPortInfo(9, "Other Controller")]);
 
         Assert.Equal(ControlDeviceMatchStatus.Missing, match.Status);
         Assert.Null(match.Port);
         Assert.Contains("was not found", match.Message);
     }
 
-    private static ControlDeviceInstanceConfig MidiDevice(
+    private static ControlDeviceInstanceConfig MIDIDevice(
         int? inputId = null,
         string? inputName = null,
         int? outputId = null,
@@ -106,15 +106,15 @@ public sealed class ControlDeviceMatcherTests
         {
             Id = Guid.NewGuid(),
             Name = name,
-            Protocol = ControlDeviceProtocol.Midi,
+            Protocol = ControlDeviceProtocol.MIDI,
             IsEnabled = true,
             Binding = new ControlDeviceBindingConfig
             {
                 Alias = alias,
-                MidiInputDeviceId = inputId,
-                MidiInputDeviceName = inputName,
-                MidiOutputDeviceId = outputId,
-                MidiOutputDeviceName = outputName,
+                MIDIInputDeviceId = inputId,
+                MIDIInputDeviceName = inputName,
+                MIDIOutputDeviceId = outputId,
+                MIDIOutputDeviceName = outputName,
             },
         };
 }

@@ -8,57 +8,57 @@ namespace HaPlay.Tests;
 public sealed class ControlWorkspaceViewModelTests
 {
     [Fact]
-    public async Task AddOrUpdateMidiDevices_MergesInputAndOutputByDeviceName()
+    public async Task AddOrUpdateMIDIDevices_MergesInputAndOutputByDeviceName()
     {
         await using var vm = new ControlWorkspaceViewModel();
 
-        vm.AddOrUpdateMidiInputDevice(1, "X-Touch MINI");
-        vm.AddOrUpdateMidiOutputDevice(2, "X-Touch MINI");
+        vm.AddOrUpdateMIDIInputDevice(1, "X-Touch MINI");
+        vm.AddOrUpdateMIDIOutputDevice(2, "X-Touch MINI");
 
         var device = Assert.Single(vm.BuildSnapshot().Devices);
-        Assert.Equal(ControlDeviceProtocol.Midi, device.Protocol);
+        Assert.Equal(ControlDeviceProtocol.MIDI, device.Protocol);
         Assert.Equal("X-Touch MINI", device.Name);
         Assert.Equal("x-touch-mini", device.Binding.Alias);
-        Assert.Equal(1, device.Binding.MidiInputDeviceId);
-        Assert.Equal("X-Touch MINI", device.Binding.MidiInputDeviceName);
-        Assert.Equal(2, device.Binding.MidiOutputDeviceId);
-        Assert.Equal("X-Touch MINI", device.Binding.MidiOutputDeviceName);
+        Assert.Equal(1, device.Binding.MIDIInputDeviceId);
+        Assert.Equal("X-Touch MINI", device.Binding.MIDIInputDeviceName);
+        Assert.Equal(2, device.Binding.MIDIOutputDeviceId);
+        Assert.Equal("X-Touch MINI", device.Binding.MIDIOutputDeviceName);
         Assert.Equal(1, vm.DeviceCount);
     }
 
     [Fact]
-    public async Task RemoveMidiBinding_RemovesOnlySelectedDirection()
+    public async Task RemoveMIDIBinding_RemovesOnlySelectedDirection()
     {
         await using var vm = new ControlWorkspaceViewModel();
-        vm.AddOrUpdateMidiInputDevice(1, "X-Touch MINI");
-        vm.AddOrUpdateMidiOutputDevice(2, "X-Touch MINI");
+        vm.AddOrUpdateMIDIInputDevice(1, "X-Touch MINI");
+        vm.AddOrUpdateMIDIOutputDevice(2, "X-Touch MINI");
         var deviceId = Assert.Single(vm.BuildSnapshot().Devices).Id;
 
-        Assert.True(vm.RemoveMidiInputDevice(deviceId));
+        Assert.True(vm.RemoveMIDIInputDevice(deviceId));
 
         var outputOnly = Assert.Single(vm.BuildSnapshot().Devices);
-        Assert.Null(outputOnly.Binding.MidiInputDeviceId);
-        Assert.Null(outputOnly.Binding.MidiInputDeviceName);
-        Assert.Equal(2, outputOnly.Binding.MidiOutputDeviceId);
-        Assert.Equal("X-Touch MINI", outputOnly.Binding.MidiOutputDeviceName);
+        Assert.Null(outputOnly.Binding.MIDIInputDeviceId);
+        Assert.Null(outputOnly.Binding.MIDIInputDeviceName);
+        Assert.Equal(2, outputOnly.Binding.MIDIOutputDeviceId);
+        Assert.Equal("X-Touch MINI", outputOnly.Binding.MIDIOutputDeviceName);
 
-        Assert.True(vm.RemoveMidiOutputDevice(deviceId));
+        Assert.True(vm.RemoveMIDIOutputDevice(deviceId));
         Assert.Empty(vm.BuildSnapshot().Devices);
     }
 
     [Fact]
-    public async Task AddOrUpdateMidiDevices_CreatesSeparateDevicesForDifferentNames()
+    public async Task AddOrUpdateMIDIDevices_CreatesSeparateDevicesForDifferentNames()
     {
         await using var vm = new ControlWorkspaceViewModel();
 
-        vm.AddOrUpdateMidiInputDevice(1, "X-Touch MINI");
-        vm.AddOrUpdateMidiOutputDevice(2, "Backup MIDI Out");
+        vm.AddOrUpdateMIDIInputDevice(1, "X-Touch MINI");
+        vm.AddOrUpdateMIDIOutputDevice(2, "Backup MIDI Out");
 
         var snapshot = vm.BuildSnapshot();
 
         Assert.Equal(2, snapshot.Devices.Count);
-        Assert.Contains(snapshot.Devices, d => d.Binding.MidiInputDeviceName == "X-Touch MINI");
-        Assert.Contains(snapshot.Devices, d => d.Binding.MidiOutputDeviceName == "Backup MIDI Out");
+        Assert.Contains(snapshot.Devices, d => d.Binding.MIDIInputDeviceName == "X-Touch MINI");
+        Assert.Contains(snapshot.Devices, d => d.Binding.MIDIOutputDeviceName == "Backup MIDI Out");
     }
 
     [Fact]
@@ -179,9 +179,9 @@ public sealed class ControlWorkspaceViewModelTests
                         [
                             new ControlScriptTriggerConfig
                             {
-                                Kind = ControlScriptTriggerKind.MidiControlChange,
+                                Kind = ControlScriptTriggerKind.MIDIControlChange,
                                 FunctionName = "onEncoder",
-                                MidiController = 16,
+                                MIDIController = 16,
                             },
                         ],
                     },
@@ -372,34 +372,34 @@ public sealed class ControlWorkspaceViewModelTests
         row.AddTriggerCommand.Execute(null);
         var triggerRow = Assert.Single(row.Triggers);
 
-        triggerRow.Kind = ControlScriptTriggerKind.MidiMessage;
+        triggerRow.Kind = ControlScriptTriggerKind.MIDIMessage;
         triggerRow.FunctionName = "  onProgram  ";
-        triggerRow.MidiControllerText = "7";
-        triggerRow.MidiNoteText = "60";
-        triggerRow.MidiParameterText = "12";
-        triggerRow.MidiMessageType = ControlMidiMessageType.ProgramChange;
-        triggerRow.MidiChannelText = "1";
-        triggerRow.MidiValueText = "5";
+        triggerRow.MIDIControllerText = "7";
+        triggerRow.MIDINoteText = "60";
+        triggerRow.MIDIParameterText = "12";
+        triggerRow.MIDIMessageType = ControlMIDIMessageType.ProgramChange;
+        triggerRow.MIDIChannelText = "1";
+        triggerRow.MIDIValueText = "5";
 
-        Assert.True(triggerRow.ShowMidiMessageType);
-        Assert.True(triggerRow.ShowMidiChannel);
-        Assert.False(triggerRow.ShowMidiController);
-        Assert.False(triggerRow.ShowMidiNote);
-        Assert.True(triggerRow.ShowMidiValue);
-        Assert.False(triggerRow.ShowMidiParameter);
-        Assert.False(triggerRow.ShowOscAddress);
+        Assert.True(triggerRow.ShowMIDIMessageType);
+        Assert.True(triggerRow.ShowMIDIChannel);
+        Assert.False(triggerRow.ShowMIDIController);
+        Assert.False(triggerRow.ShowMIDINote);
+        Assert.True(triggerRow.ShowMIDIValue);
+        Assert.False(triggerRow.ShowMIDIParameter);
+        Assert.False(triggerRow.ShowOSCAddress);
 
         var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
-        Assert.Equal(ControlScriptTriggerKind.MidiMessage, trigger.Kind);
+        Assert.Equal(ControlScriptTriggerKind.MIDIMessage, trigger.Kind);
         Assert.Equal("onProgram", trigger.FunctionName);
-        Assert.Equal(ControlMidiMessageType.ProgramChange, trigger.MidiMessageType);
-        Assert.Equal(1, trigger.MidiChannel);
-        Assert.Equal(5, trigger.MidiValue);
-        Assert.Null(trigger.MidiController);
-        Assert.Null(trigger.MidiNote);
-        Assert.Null(trigger.MidiParameter);
+        Assert.Equal(ControlMIDIMessageType.ProgramChange, trigger.MIDIMessageType);
+        Assert.Equal(1, trigger.MIDIChannel);
+        Assert.Equal(5, trigger.MIDIValue);
+        Assert.Null(trigger.MIDIController);
+        Assert.Null(trigger.MIDINote);
+        Assert.Null(trigger.MIDIParameter);
         Assert.Contains("onProgram", row.TriggerSummary);
-        Assert.Contains(nameof(ControlMidiMessageType.ProgramChange), row.TriggerSummary);
+        Assert.Contains(nameof(ControlMIDIMessageType.ProgramChange), row.TriggerSummary);
     }
 
     [Fact]
@@ -417,9 +417,9 @@ public sealed class ControlWorkspaceViewModelTests
                     [
                         new ControlScriptTriggerConfig
                         {
-                            Kind = ControlScriptTriggerKind.MidiControlChange,
+                            Kind = ControlScriptTriggerKind.MIDIControlChange,
                             FunctionName = "onEncoder",
-                            MidiController = 16,
+                            MIDIController = 16,
                         },
                     ],
                 },
@@ -427,11 +427,11 @@ public sealed class ControlWorkspaceViewModelTests
         });
 
         var triggerRow = Assert.Single(Assert.Single(vm.ScriptRows).Triggers);
-        Assert.Equal("16", triggerRow.MidiControllerText);
+        Assert.Equal("16", triggerRow.MIDIControllerText);
 
-        triggerRow.MidiControllerText = string.Empty;
+        triggerRow.MIDIControllerText = string.Empty;
 
-        Assert.Null(Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).MidiController);
+        Assert.Null(Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).MIDIController);
     }
 
     [Fact]
@@ -475,16 +475,16 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = deviceId,
                     Name = "X-Touch MINI",
-                    Protocol = ControlDeviceProtocol.Midi,
-                    Binding = new ControlDeviceBindingConfig { MidiInputDeviceName = "X-Touch MINI" },
+                    Protocol = ControlDeviceProtocol.MIDI,
+                    Binding = new ControlDeviceBindingConfig { MIDIInputDeviceName = "X-Touch MINI" },
                 },
             ],
         });
 
         var row = vm.StructureRows.Single(r => r.Kind == "MIDI" && r.DeviceInstanceId == deviceId);
         Assert.True(row.CanAddDeviceScript);
-        Assert.True(row.CanTestMidi);
-        Assert.False(row.CanTestOsc);
+        Assert.True(row.CanTestMIDI);
+        Assert.False(row.CanTestOSC);
 
         row.AddDeviceScriptCommand!.Execute(null);
 
@@ -506,8 +506,8 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = deviceId,
                     Name = "X32",
-                    Protocol = ControlDeviceProtocol.Osc,
-                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { OSCHost = "192.168.2.76", OSCPort = 10023 },
                 },
             ],
         });
@@ -524,7 +524,7 @@ public sealed class ControlWorkspaceViewModelTests
         deviceRow.AddPeriodicSendCommand!.Execute(null);
         await Task.Yield();
 
-        var send = Assert.Single(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOscSends);
+        var send = Assert.Single(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOSCSends);
         Assert.Equal("/xremote", send.Address);
         Assert.Equal(5000, send.IntervalMs);
     }
@@ -543,11 +543,11 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = deviceId,
                     Name = "X32",
-                    Protocol = ControlDeviceProtocol.Osc,
-                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
-                    PeriodicOscSends =
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { OSCHost = "192.168.2.76", OSCPort = 10023 },
+                    PeriodicOSCSends =
                     [
-                        new ControlPeriodicOscSendConfig { Id = sendId, Name = "/xremote", Address = "/xremote", IntervalMs = 8000 },
+                        new ControlPeriodicOSCSendConfig { Id = sendId, Name = "/xremote", Address = "/xremote", IntervalMs = 8000 },
                     ],
                 },
             ],
@@ -562,24 +562,24 @@ public sealed class ControlWorkspaceViewModelTests
 
         var periodicRow = vm.StructureRows.Single(r => r.Kind == "Periodic" && r.PeriodicSendId == sendId);
         Assert.True(periodicRow.CanEditPeriodicSend);
-        Assert.False(periodicRow.CanEditOscDevice); // periodic rows don't offer device-level actions
+        Assert.False(periodicRow.CanEditOSCDevice); // periodic rows don't offer device-level actions
 
         periodicRow.EditPeriodicSendCommand!.Execute(null);
         await Task.Yield();
-        Assert.Equal(5000, Assert.Single(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOscSends).IntervalMs);
+        Assert.Equal(5000, Assert.Single(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOSCSends).IntervalMs);
 
         var refreshedRow = vm.StructureRows.Single(r => r.Kind == "Periodic" && r.PeriodicSendId == sendId);
         refreshedRow.RemovePeriodicSendCommand!.Execute(null);
-        Assert.Empty(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOscSends);
+        Assert.Empty(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOSCSends);
     }
 
     [Fact]
-    public async Task AddOscDevice_CreatesOscDeviceFromDialogValues()
+    public async Task AddOSCDevice_CreatesOSCDeviceFromDialogValues()
     {
         await using var vm = new ControlWorkspaceViewModel();
         vm.LoadConfig(new ControlSystemConfig());
 
-        vm.OscDevicePrompt = dialog =>
+        vm.OSCDevicePrompt = dialog =>
         {
             // Verify the dialog is seeded with the X32 defaults, then accept.
             Assert.Equal("X32", dialog.Name);
@@ -589,55 +589,55 @@ public sealed class ControlWorkspaceViewModelTests
             return Task.FromResult(true);
         };
 
-        await vm.AddOscDeviceCommand.ExecuteAsync(null);
+        await vm.AddOSCDeviceCommand.ExecuteAsync(null);
 
         var device = Assert.Single(vm.BuildSnapshot().Devices);
-        Assert.Equal(ControlDeviceProtocol.Osc, device.Protocol);
+        Assert.Equal(ControlDeviceProtocol.OSC, device.Protocol);
         Assert.Equal("X32", device.Name);
         Assert.Equal("behringer.x32.osc", device.ProfileId);
         Assert.Equal("x32", device.Binding.Alias);
-        Assert.Equal("192.168.2.76", device.Binding.OscHost);
-        Assert.Equal(10023, device.Binding.OscPort);
-        Assert.Null(device.Binding.OscLocalPort); // blank local port = automatic/ephemeral
+        Assert.Equal("192.168.2.76", device.Binding.OSCHost);
+        Assert.Equal(10023, device.Binding.OSCPort);
+        Assert.Null(device.Binding.OSCLocalPort); // blank local port = automatic/ephemeral
         Assert.True(device.IsEnabled);
     }
 
     [Fact]
-    public async Task AddOscDevice_SetsFixedLocalPortFromDialog()
+    public async Task AddOSCDevice_SetsFixedLocalPortFromDialog()
     {
         await using var vm = new ControlWorkspaceViewModel();
         vm.LoadConfig(new ControlSystemConfig());
-        vm.OscDevicePrompt = dialog =>
+        vm.OSCDevicePrompt = dialog =>
         {
             dialog.LocalPortText = "10024";
             Assert.True(dialog.IsValid);
             return Task.FromResult(true);
         };
 
-        await vm.AddOscDeviceCommand.ExecuteAsync(null);
+        await vm.AddOSCDeviceCommand.ExecuteAsync(null);
 
-        Assert.Equal(10024, Assert.Single(vm.BuildSnapshot().Devices).Binding.OscLocalPort);
+        Assert.Equal(10024, Assert.Single(vm.BuildSnapshot().Devices).Binding.OSCLocalPort);
     }
 
     [Fact]
-    public async Task AddOscDevice_WhenCancelled_AddsNothing()
+    public async Task AddOSCDevice_WhenCancelled_AddsNothing()
     {
         await using var vm = new ControlWorkspaceViewModel();
         vm.LoadConfig(new ControlSystemConfig());
-        vm.OscDevicePrompt = _ => Task.FromResult(false);
+        vm.OSCDevicePrompt = _ => Task.FromResult(false);
 
-        await vm.AddOscDeviceCommand.ExecuteAsync(null);
+        await vm.AddOSCDeviceCommand.ExecuteAsync(null);
 
         Assert.Empty(vm.BuildSnapshot().Devices);
     }
 
     [Fact]
-    public async Task AddOscListener_CreatesListenerFromDialogValues()
+    public async Task AddOSCListener_CreatesListenerFromDialogValues()
     {
         await using var vm = new ControlWorkspaceViewModel();
         vm.LoadConfig(new ControlSystemConfig()); // no listeners by default
 
-        vm.OscListenerPrompt = dialog =>
+        vm.OSCListenerPrompt = dialog =>
         {
             Assert.Equal("10020", dialog.LocalPortText); // first listener seeds the conventional port
             dialog.Name = "Lighting in";
@@ -645,39 +645,39 @@ public sealed class ControlWorkspaceViewModelTests
             return Task.FromResult(true);
         };
 
-        await vm.AddOscListenerCommand.ExecuteAsync(null);
+        await vm.AddOSCListenerCommand.ExecuteAsync(null);
 
-        var listener = Assert.Single(vm.BuildSnapshot().OscListeners);
+        var listener = Assert.Single(vm.BuildSnapshot().OSCListeners);
         Assert.Equal("Lighting in", listener.Name);
         Assert.Equal(9100, listener.LocalPort);
         Assert.True(listener.IsEnabled);
         Assert.Equal(1, vm.ListenerCount);
-        Assert.Contains(vm.StructureRows, r => r.Kind == "Listen" && r.OscListenerId == listener.Id);
+        Assert.Contains(vm.StructureRows, r => r.Kind == "Listen" && r.OSCListenerId == listener.Id);
     }
 
     [Fact]
-    public async Task AddOscListener_WhenCancelled_AddsNothing()
+    public async Task AddOSCListener_WhenCancelled_AddsNothing()
     {
         await using var vm = new ControlWorkspaceViewModel();
         vm.LoadConfig(new ControlSystemConfig());
-        vm.OscListenerPrompt = _ => Task.FromResult(false);
+        vm.OSCListenerPrompt = _ => Task.FromResult(false);
 
-        await vm.AddOscListenerCommand.ExecuteAsync(null);
+        await vm.AddOSCListenerCommand.ExecuteAsync(null);
 
-        Assert.Empty(vm.BuildSnapshot().OscListeners);
+        Assert.Empty(vm.BuildSnapshot().OSCListeners);
     }
 
     [Fact]
-    public async Task EditOscListener_UpdatesNamePortAndEnabled()
+    public async Task EditOSCListener_UpdatesNamePortAndEnabled()
     {
         await using var vm = new ControlWorkspaceViewModel();
         var listenerId = Guid.NewGuid();
         vm.LoadConfig(new ControlSystemConfig
         {
-            OscListeners = [new ControlOscListenerConfig { Id = listenerId, Name = "Old", LocalPort = 10020, IsEnabled = true }],
+            OSCListeners = [new ControlOSCListenerConfig { Id = listenerId, Name = "Old", LocalPort = 10020, IsEnabled = true }],
         });
 
-        vm.OscListenerPrompt = dialog =>
+        vm.OSCListenerPrompt = dialog =>
         {
             Assert.Equal("Old", dialog.Name);
             Assert.Equal("10020", dialog.LocalPortText);
@@ -687,36 +687,36 @@ public sealed class ControlWorkspaceViewModelTests
             return Task.FromResult(true);
         };
 
-        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OscListenerId == listenerId);
-        Assert.True(row.CanEditOscListener);
-        row.EditOscListenerCommand!.Execute(null);
+        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OSCListenerId == listenerId);
+        Assert.True(row.CanEditOSCListener);
+        row.EditOSCListenerCommand!.Execute(null);
         await Task.Yield();
 
-        var listener = Assert.Single(vm.BuildSnapshot().OscListeners);
+        var listener = Assert.Single(vm.BuildSnapshot().OSCListeners);
         Assert.Equal("New", listener.Name);
         Assert.Equal(10030, listener.LocalPort);
         Assert.False(listener.IsEnabled);
     }
 
     [Fact]
-    public async Task RemoveOscListener_RemovesListener()
+    public async Task RemoveOSCListener_RemovesListener()
     {
         await using var vm = new ControlWorkspaceViewModel();
         var listenerId = Guid.NewGuid();
         vm.LoadConfig(new ControlSystemConfig
         {
-            OscListeners = [new ControlOscListenerConfig { Id = listenerId, Name = "Aux", LocalPort = 10021 }],
+            OSCListeners = [new ControlOSCListenerConfig { Id = listenerId, Name = "Aux", LocalPort = 10021 }],
         });
 
-        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OscListenerId == listenerId);
-        Assert.True(row.CanEditOscListener);
-        row.RemoveOscListenerCommand!.Execute(null);
+        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OSCListenerId == listenerId);
+        Assert.True(row.CanEditOSCListener);
+        row.RemoveOSCListenerCommand!.Execute(null);
 
-        Assert.Empty(vm.BuildSnapshot().OscListeners);
+        Assert.Empty(vm.BuildSnapshot().OSCListeners);
     }
 
     [Fact]
-    public async Task EditOscDevice_UpdatesHostAndPreservesPeriodicSends()
+    public async Task EditOSCDevice_UpdatesHostAndPreservesPeriodicSends()
     {
         await using var vm = new ControlWorkspaceViewModel();
         var deviceId = Guid.NewGuid();
@@ -729,14 +729,14 @@ public sealed class ControlWorkspaceViewModelTests
                     Id = deviceId,
                     Name = "X32",
                     ProfileId = "behringer.x32.osc",
-                    Protocol = ControlDeviceProtocol.Osc,
-                    Binding = new ControlDeviceBindingConfig { Alias = "x32", OscHost = "192.168.2.76", OscPort = 10023 },
-                    PeriodicOscSends = [new ControlPeriodicOscSendConfig()],
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { Alias = "x32", OSCHost = "192.168.2.76", OSCPort = 10023 },
+                    PeriodicOSCSends = [new ControlPeriodicOSCSendConfig()],
                 },
             ],
         });
 
-        vm.OscDevicePrompt = dialog =>
+        vm.OSCDevicePrompt = dialog =>
         {
             Assert.Equal("Edit OSC device", dialog.Title);
             Assert.Equal("192.168.2.76", dialog.Host);
@@ -746,17 +746,17 @@ public sealed class ControlWorkspaceViewModelTests
         };
 
         var row = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
-        row.EditOscDeviceCommand!.Execute(null);
+        row.EditOSCDeviceCommand!.Execute(null);
         await Task.Yield();
 
         var device = Assert.Single(vm.BuildSnapshot().Devices);
-        Assert.Equal("10.0.0.5", device.Binding.OscHost);
-        Assert.Equal(10024, device.Binding.OscPort);
-        Assert.Single(device.PeriodicOscSends); // preserved across edit
+        Assert.Equal("10.0.0.5", device.Binding.OSCHost);
+        Assert.Equal(10024, device.Binding.OSCPort);
+        Assert.Single(device.PeriodicOSCSends); // preserved across edit
     }
 
     [Fact]
-    public async Task RemoveOscDevice_DropsTheDevice()
+    public async Task RemoveOSCDevice_DropsTheDevice()
     {
         await using var vm = new ControlWorkspaceViewModel();
         var deviceId = Guid.NewGuid();
@@ -768,15 +768,15 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = deviceId,
                     Name = "X32",
-                    Protocol = ControlDeviceProtocol.Osc,
-                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { OSCHost = "192.168.2.76", OSCPort = 10023 },
                 },
             ],
         });
 
         var row = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
-        Assert.True(row.CanEditOscDevice);
-        row.RemoveOscDeviceCommand!.Execute(null);
+        Assert.True(row.CanEditOSCDevice);
+        row.RemoveOSCDeviceCommand!.Execute(null);
 
         Assert.Empty(vm.BuildSnapshot().Devices);
     }
@@ -788,10 +788,10 @@ public sealed class ControlWorkspaceViewModelTests
         var listenerId = Guid.NewGuid();
         vm.LoadConfig(new ControlSystemConfig
         {
-            OscListeners = [new ControlOscListenerConfig { Id = listenerId, Name = "Main", LocalPort = 10020 }],
+            OSCListeners = [new ControlOSCListenerConfig { Id = listenerId, Name = "Main", LocalPort = 10020 }],
         });
 
-        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OscListenerId == listenerId);
+        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OSCListenerId == listenerId);
         Assert.True(row.CanAddEndpointScript);
         Assert.False(row.CanAddDeviceScript);
 
@@ -1059,7 +1059,7 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
-    public async Task ContextMenu_AddPeriodicSend_AddsSendToOscDevice()
+    public async Task ContextMenu_AddPeriodicSend_AddsSendToOSCDevice()
     {
         await using var vm = new ControlWorkspaceViewModel();
         var deviceId = Guid.NewGuid();
@@ -1071,23 +1071,23 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = deviceId,
                     Name = "X32",
-                    Protocol = ControlDeviceProtocol.Osc,
-                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { OSCHost = "192.168.2.76", OSCPort = 10023 },
                 },
             ],
         });
 
         var row = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
         Assert.True(row.CanAddPeriodicSend);
-        Assert.True(row.CanTestOsc);
-        Assert.False(row.CanTestMidi);
+        Assert.True(row.CanTestOSC);
+        Assert.False(row.CanTestMIDI);
 
         vm.PeriodicSendPrompt = _ => Task.FromResult(true); // accept the dialog defaults (/xremote @ 8000)
         row.AddPeriodicSendCommand!.Execute(null);
         await Task.Yield();
 
         var device = Assert.Single(vm.BuildSnapshot().Devices);
-        var send = Assert.Single(device.PeriodicOscSends);
+        var send = Assert.Single(device.PeriodicOSCSends);
         Assert.Equal("/xremote", send.Address);
         Assert.Equal(8000, send.IntervalMs);
     }
@@ -1107,10 +1107,10 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
-    public async Task ResolveMidiDevices_AppliesUserSelectionToBinding()
+    public async Task ResolveMIDIDevices_AppliesUserSelectionToBinding()
     {
         await using var vm = new ControlWorkspaceViewModel();
-        vm.MidiAvailabilityProbe = static () => true; // resolution is pure over the injected catalog — no native portmidi needed
+        vm.MIDIAvailabilityProbe = static () => true; // resolution is pure over the injected catalog — no native portmidi needed
         var deviceId = Guid.NewGuid();
         vm.LoadConfig(new ControlSystemConfig
         {
@@ -1120,43 +1120,43 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = deviceId,
                     Name = "X-Touch MINI",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                     IsEnabled = true,
-                    Binding = new ControlDeviceBindingConfig { MidiInputDeviceName = "X-Touch MINI" },
+                    Binding = new ControlDeviceBindingConfig { MIDIInputDeviceName = "X-Touch MINI" },
                 },
             ],
         });
 
         var inputs = new[]
         {
-            new ControlMidiPortInfo(1, "X-Touch MINI"),
-            new ControlMidiPortInfo(2, "X-Touch MINI"),
+            new ControlMIDIPortInfo(1, "X-Touch MINI"),
+            new ControlMIDIPortInfo(2, "X-Touch MINI"),
         };
-        vm.MidiCatalogProvider = () => new ControlMidiPortCatalog(inputs, Array.Empty<ControlMidiPortInfo>());
+        vm.MIDICatalogProvider = () => new ControlMIDIPortCatalog(inputs, Array.Empty<ControlMIDIPortInfo>());
 
-        IReadOnlyList<ControlMidiResolutionRequest>? captured = null;
-        vm.MidiResolutionPrompt = requests =>
+        IReadOnlyList<ControlMIDIResolutionRequest>? captured = null;
+        vm.MIDIResolutionPrompt = requests =>
         {
             captured = requests;
-            var map = new Dictionary<ControlMidiResolutionKey, ControlMidiPortInfo>
+            var map = new Dictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>
             {
-                [new ControlMidiResolutionKey(deviceId, ControlMidiPortDirection.Input)] = new(2, "X-Touch MINI"),
+                [new ControlMIDIResolutionKey(deviceId, ControlMIDIPortDirection.Input)] = new(2, "X-Touch MINI"),
             };
-            return Task.FromResult<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(map);
+            return Task.FromResult<IReadOnlyDictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>?>(map);
         };
 
-        await vm.ResolveMidiDevicesCommand.ExecuteAsync(null);
+        await vm.ResolveMIDIDevicesCommand.ExecuteAsync(null);
 
         Assert.NotNull(captured);
         Assert.Equal(ControlDeviceMatchStatus.Ambiguous, Assert.Single(captured!).Status);
-        Assert.Equal(2, Assert.Single(vm.BuildSnapshot().Devices).Binding.MidiInputDeviceId);
+        Assert.Equal(2, Assert.Single(vm.BuildSnapshot().Devices).Binding.MIDIInputDeviceId);
     }
 
     [Fact]
-    public async Task ResolveMidiDevices_WhenAllMatch_DoesNotPrompt()
+    public async Task ResolveMIDIDevices_WhenAllMatch_DoesNotPrompt()
     {
         await using var vm = new ControlWorkspaceViewModel();
-        vm.MidiAvailabilityProbe = static () => true; // see above — the flow under test never touches the runtime
+        vm.MIDIAvailabilityProbe = static () => true; // see above — the flow under test never touches the runtime
         vm.LoadConfig(new ControlSystemConfig
         {
             Devices =
@@ -1164,31 +1164,31 @@ public sealed class ControlWorkspaceViewModelTests
                 new ControlDeviceInstanceConfig
                 {
                     Name = "X-Touch MINI",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                     IsEnabled = true,
-                    Binding = new ControlDeviceBindingConfig { MidiInputDeviceName = "X-Touch MINI" },
+                    Binding = new ControlDeviceBindingConfig { MIDIInputDeviceName = "X-Touch MINI" },
                 },
             ],
         });
-        vm.MidiCatalogProvider = () => new ControlMidiPortCatalog(
-            [new ControlMidiPortInfo(1, "X-Touch MINI")],
-            Array.Empty<ControlMidiPortInfo>());
+        vm.MIDICatalogProvider = () => new ControlMIDIPortCatalog(
+            [new ControlMIDIPortInfo(1, "X-Touch MINI")],
+            Array.Empty<ControlMIDIPortInfo>());
 
         var prompted = false;
-        vm.MidiResolutionPrompt = _ =>
+        vm.MIDIResolutionPrompt = _ =>
         {
             prompted = true;
-            return Task.FromResult<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(null);
+            return Task.FromResult<IReadOnlyDictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>?>(null);
         };
 
-        await vm.ResolveMidiDevicesCommand.ExecuteAsync(null);
+        await vm.ResolveMIDIDevicesCommand.ExecuteAsync(null);
 
         Assert.False(prompted);
         Assert.Contains("resolve to a current port", vm.StatusMessage);
     }
 
     [Fact]
-    public void FindLearnCapture_ReturnsFirstMidiInputAfterBaseline()
+    public void FindLearnCapture_ReturnsFirstMIDIInputAfterBaseline()
     {
         var since = DateTimeOffset.Parse("2026-06-05T10:00:00Z");
         var records = new[]
@@ -1198,16 +1198,16 @@ public sealed class ControlWorkspaceViewModelTests
             {
                 TimestampUtc = since.AddSeconds(-1),
                 Direction = ControlMonitorDirection.Input,
-                Protocol = ControlMonitorProtocol.Midi,
-                MidiChannel = 1,
-                MidiController = 99,
+                Protocol = ControlMonitorProtocol.MIDI,
+                MIDIChannel = 1,
+                MIDIController = 99,
             },
             // OSC — ignored
             new ControlMonitorRecord
             {
                 TimestampUtc = since.AddSeconds(1),
                 Direction = ControlMonitorDirection.Input,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 Address = "/ch/01/mix/fader",
             },
             // output MIDI — ignored
@@ -1215,80 +1215,80 @@ public sealed class ControlWorkspaceViewModelTests
             {
                 TimestampUtc = since.AddSeconds(2),
                 Direction = ControlMonitorDirection.Output,
-                Protocol = ControlMonitorProtocol.Midi,
-                MidiController = 16,
+                Protocol = ControlMonitorProtocol.MIDI,
+                MIDIController = 16,
             },
             // first matching input — captured
             new ControlMonitorRecord
             {
                 TimestampUtc = since.AddSeconds(3),
                 Direction = ControlMonitorDirection.Input,
-                Protocol = ControlMonitorProtocol.Midi,
-                MidiChannel = 1,
-                MidiController = 16,
-                MidiValue = 5,
+                Protocol = ControlMonitorProtocol.MIDI,
+                MIDIChannel = 1,
+                MIDIController = 16,
+                MIDIValue = 5,
             },
         };
 
         var capture = ControlWorkspaceViewModel.FindLearnCapture(records, since);
 
         Assert.NotNull(capture);
-        Assert.Equal(16, capture!.MidiController);
-        Assert.Equal(5, capture.MidiValue);
+        Assert.Equal(16, capture!.MIDIController);
+        Assert.Equal(5, capture.MIDIValue);
     }
 
     [Fact]
     public void BuildLearnedTrigger_MapsCcAndNoteRecords()
     {
         var cc = ControlWorkspaceViewModel.BuildLearnedTrigger(
-            new ControlMonitorRecord { MidiChannel = 1, MidiController = 16 },
+            new ControlMonitorRecord { MIDIChannel = 1, MIDIController = 16 },
             "onCc16");
-        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, cc.Kind);
+        Assert.Equal(ControlScriptTriggerKind.MIDIControlChange, cc.Kind);
         Assert.Equal("onCc16", cc.FunctionName);
-        Assert.Equal(1, cc.MidiChannel);
-        Assert.Equal(ControlMidiMessageType.ControlChange, cc.MidiMessageType);
-        Assert.Equal(16, cc.MidiController);
-        Assert.Null(cc.MidiNote);
+        Assert.Equal(1, cc.MIDIChannel);
+        Assert.Equal(ControlMIDIMessageType.ControlChange, cc.MIDIMessageType);
+        Assert.Equal(16, cc.MIDIController);
+        Assert.Null(cc.MIDINote);
 
         var note = ControlWorkspaceViewModel.BuildLearnedTrigger(
-            new ControlMonitorRecord { MidiChannel = 1, MidiMessageType = ControlMidiMessageType.NoteOff, MidiNote = 40 },
+            new ControlMonitorRecord { MIDIChannel = 1, MIDIMessageType = ControlMIDIMessageType.NoteOff, MIDINote = 40 },
             "onNote40");
-        Assert.Equal(ControlScriptTriggerKind.MidiNote, note.Kind);
-        Assert.Equal(ControlMidiMessageType.NoteOff, note.MidiMessageType);
-        Assert.Equal(40, note.MidiNote);
-        Assert.Null(note.MidiController);
+        Assert.Equal(ControlScriptTriggerKind.MIDINote, note.Kind);
+        Assert.Equal(ControlMIDIMessageType.NoteOff, note.MIDIMessageType);
+        Assert.Equal(40, note.MIDINote);
+        Assert.Null(note.MIDIController);
     }
 
     [Fact]
-    public void BuildLearnedTrigger_MapsGenericMidiMessageRecords()
+    public void BuildLearnedTrigger_MapsGenericMIDIMessageRecords()
     {
         var program = ControlWorkspaceViewModel.BuildLearnedTrigger(
             new ControlMonitorRecord
             {
-                MidiChannel = 1,
-                MidiMessageType = ControlMidiMessageType.ProgramChange,
-                MidiValue = 5,
+                MIDIChannel = 1,
+                MIDIMessageType = ControlMIDIMessageType.ProgramChange,
+                MIDIValue = 5,
             },
             "onProgramChange");
 
-        Assert.Equal(ControlScriptTriggerKind.MidiMessage, program.Kind);
-        Assert.Equal(ControlMidiMessageType.ProgramChange, program.MidiMessageType);
-        Assert.Equal(1, program.MidiChannel);
-        Assert.Equal(5, program.MidiValue);
+        Assert.Equal(ControlScriptTriggerKind.MIDIMessage, program.Kind);
+        Assert.Equal(ControlMIDIMessageType.ProgramChange, program.MIDIMessageType);
+        Assert.Equal(1, program.MIDIChannel);
+        Assert.Equal(5, program.MIDIValue);
 
         var bend = ControlWorkspaceViewModel.BuildLearnedTrigger(
             new ControlMonitorRecord
             {
-                MidiChannel = 1,
-                MidiMessageType = ControlMidiMessageType.PitchBend,
-                MidiValue = 128,
+                MIDIChannel = 1,
+                MIDIMessageType = ControlMIDIMessageType.PitchBend,
+                MIDIValue = 128,
             },
             "onPitchBend");
 
-        Assert.Equal(ControlScriptTriggerKind.MidiMessage, bend.Kind);
-        Assert.Equal(ControlMidiMessageType.PitchBend, bend.MidiMessageType);
-        Assert.Equal(1, bend.MidiChannel);
-        Assert.Null(bend.MidiValue);
+        Assert.Equal(ControlScriptTriggerKind.MIDIMessage, bend.Kind);
+        Assert.Equal(ControlMIDIMessageType.PitchBend, bend.MIDIMessageType);
+        Assert.Equal(1, bend.MIDIChannel);
+        Assert.Null(bend.MIDIValue);
     }
 
     [Fact]
@@ -1314,10 +1314,10 @@ public sealed class ControlWorkspaceViewModelTests
         vm.ApplyLearnCapture(new ControlMonitorRecord
         {
             Direction = ControlMonitorDirection.Input,
-            Protocol = ControlMonitorProtocol.Midi,
-            MidiChannel = 1,
-            MidiController = 16,
-            MidiValue = 5,
+            Protocol = ControlMonitorProtocol.MIDI,
+            MIDIChannel = 1,
+            MIDIController = 16,
+            MIDIValue = 5,
         });
 
         Assert.True(vm.HasLearnCandidate);
@@ -1328,10 +1328,10 @@ public sealed class ControlWorkspaceViewModelTests
 
         Assert.False(vm.HasLearnCandidate);
         var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
-        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
-        Assert.Equal(16, trigger.MidiController);
-        Assert.Null(trigger.MidiValueMin);
-        Assert.Null(trigger.MidiValueMax);
+        Assert.Equal(ControlScriptTriggerKind.MIDIControlChange, trigger.Kind);
+        Assert.Equal(16, trigger.MIDIController);
+        Assert.Null(trigger.MIDIValueMin);
+        Assert.Null(trigger.MIDIValueMax);
         Assert.Equal("onCc16", trigger.FunctionName);
         Assert.Contains("export fun onCc16", vm.SelectedScriptText);
         Assert.Contains("onCc16", row.TriggerSummary);
@@ -1350,16 +1350,16 @@ public sealed class ControlWorkspaceViewModelTests
         vm.ApplyLearnCapture(new ControlMonitorRecord
         {
             Direction = ControlMonitorDirection.Input,
-            Protocol = ControlMonitorProtocol.Midi,
-            MidiChannel = 1,
-            MidiNote = 40,
+            Protocol = ControlMonitorProtocol.MIDI,
+            MIDIChannel = 1,
+            MIDINote = 40,
         });
         vm.ConfirmLearnCommand.Execute(null);
 
         // Only the original export should be present (no appended stub).
         var occurrences = vm.SelectedScriptText.Split("export fun onNote40").Length - 1;
         Assert.Equal(1, occurrences);
-        Assert.Equal(ControlScriptTriggerKind.MidiNote, Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).Kind);
+        Assert.Equal(ControlScriptTriggerKind.MIDINote, Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).Kind);
     }
 
     [Fact]
@@ -1376,25 +1376,25 @@ public sealed class ControlWorkspaceViewModelTests
         {
             TimestampUtc = DateTimeOffset.UtcNow,
             Direction = ControlMonitorDirection.Input,
-            Protocol = ControlMonitorProtocol.Midi,
+            Protocol = ControlMonitorProtocol.MIDI,
             DeviceInstanceId = deviceId,
-            MidiMessageType = ControlMidiMessageType.ControlChange,
-            MidiChannel = 1,
-            MidiController = 16,
-            MidiValue = 0,
-            MidiHighResolution14Bit = true,
+            MIDIMessageType = ControlMIDIMessageType.ControlChange,
+            MIDIChannel = 1,
+            MIDIController = 16,
+            MIDIValue = 0,
+            MIDIHighResolution14Bit = true,
         });
         vm.ApplyLearnCapture(new ControlMonitorRecord
         {
             TimestampUtc = DateTimeOffset.UtcNow.AddMilliseconds(10),
             Direction = ControlMonitorDirection.Input,
-            Protocol = ControlMonitorProtocol.Midi,
+            Protocol = ControlMonitorProtocol.MIDI,
             DeviceInstanceId = deviceId,
-            MidiMessageType = ControlMidiMessageType.ControlChange,
-            MidiChannel = 1,
-            MidiController = 16,
-            MidiValue = 10000,
-            MidiHighResolution14Bit = true,
+            MIDIMessageType = ControlMIDIMessageType.ControlChange,
+            MIDIChannel = 1,
+            MIDIController = 16,
+            MIDIValue = 10000,
+            MIDIHighResolution14Bit = true,
         });
 
         Assert.True(vm.HasLearnCandidate);
@@ -1404,11 +1404,11 @@ public sealed class ControlWorkspaceViewModelTests
         vm.ConfirmLearnCommand.Execute(null);
 
         var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
-        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
-        Assert.Equal(16, trigger.MidiController);
-        Assert.Null(trigger.MidiValue);
-        Assert.Equal(0, trigger.MidiValueMin);
-        Assert.Equal(10000, trigger.MidiValueMax);
+        Assert.Equal(ControlScriptTriggerKind.MIDIControlChange, trigger.Kind);
+        Assert.Equal(16, trigger.MIDIController);
+        Assert.Null(trigger.MIDIValue);
+        Assert.Equal(0, trigger.MIDIValueMin);
+        Assert.Equal(10000, trigger.MIDIValueMax);
     }
 
     [Fact]
@@ -1420,9 +1420,9 @@ public sealed class ControlWorkspaceViewModelTests
         var listenerId = Guid.NewGuid();
         var config = new ControlSystemConfig
         {
-            OscListeners =
+            OSCListeners =
             [
-                new ControlOscListenerConfig
+                new ControlOSCListenerConfig
                 {
                     Id = listenerId,
                     Name = "Main",
@@ -1435,29 +1435,29 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = midiId,
                     Name = "X-Touch MINI",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                     Binding = new ControlDeviceBindingConfig
                     {
-                        MidiInputDeviceId = 1,
-                        MidiInputDeviceName = "X-Touch MINI",
-                        MidiOutputDeviceId = 2,
-                        MidiOutputDeviceName = "X-Touch MINI",
+                        MIDIInputDeviceId = 1,
+                        MIDIInputDeviceName = "X-Touch MINI",
+                        MIDIOutputDeviceId = 2,
+                        MIDIOutputDeviceName = "X-Touch MINI",
                     },
                 },
                 new ControlDeviceInstanceConfig
                 {
                     Id = oscId,
                     Name = "X32",
-                    Protocol = ControlDeviceProtocol.Osc,
+                    Protocol = ControlDeviceProtocol.OSC,
                     Binding = new ControlDeviceBindingConfig
                     {
-                        OscHost = "192.168.2.76",
-                        OscPort = 10023,
-                        OscListenerId = listenerId,
+                        OSCHost = "192.168.2.76",
+                        OSCPort = 10023,
+                        OSCListenerId = listenerId,
                     },
-                    PeriodicOscSends =
+                    PeriodicOSCSends =
                     [
-                        new ControlPeriodicOscSendConfig
+                        new ControlPeriodicOSCSendConfig
                         {
                             Name = "/xremote",
                             Address = "/xremote",
@@ -1488,8 +1488,8 @@ public sealed class ControlWorkspaceViewModelTests
                     [
                         new ControlScriptTriggerConfig
                         {
-                            Kind = ControlScriptTriggerKind.MidiControlChange,
-                            MidiController = 16,
+                            Kind = ControlScriptTriggerKind.MIDIControlChange,
+                            MIDIController = 16,
                         },
                     ],
                 },
@@ -1513,32 +1513,32 @@ public sealed class ControlWorkspaceViewModelTests
         var config = new ControlSystemConfig
         {
             // An app listener is opt-in now, so add one explicitly to exercise the port-collision warning.
-            OscListeners = [new ControlOscListenerConfig { LocalPort = 10020 }],
+            OSCListeners = [new ControlOSCListenerConfig { LocalPort = 10020 }],
             Devices =
             [
                 new ControlDeviceInstanceConfig
                 {
                     Name = "Known X32",
                     ProfileId = "behringer.x32.osc",
-                    Protocol = ControlDeviceProtocol.Osc,
+                    Protocol = ControlDeviceProtocol.OSC,
                 },
                 new ControlDeviceInstanceConfig
                 {
                     Name = "Unknown Surface",
                     ProfileId = "missing.profile",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                 },
                 new ControlDeviceInstanceConfig
                 {
                     Name = "Wrong Protocol",
                     ProfileId = "behringer.x32.osc",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                 },
                 new ControlDeviceInstanceConfig
                 {
                     Name = "Colliding OSC",
-                    Protocol = ControlDeviceProtocol.Osc,
-                    Binding = new ControlDeviceBindingConfig { OscLocalPort = 10020 },
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { OSCLocalPort = 10020 },
                 },
             ],
         };
@@ -1548,8 +1548,8 @@ public sealed class ControlWorkspaceViewModelTests
             CompositeControlDeviceProfileRepository.ForProject(config));
 
         Assert.DoesNotContain(warnings, warning => warning.Contains("Known X32"));
-        Assert.Contains(warnings, warning => warning.Contains("missing.profile") && warning.Contains("raw Midi scripting"));
-        Assert.Contains(warnings, warning => warning.Contains("Wrong Protocol") && warning.Contains("device is Midi"));
+        Assert.Contains(warnings, warning => warning.Contains("missing.profile") && warning.Contains("raw MIDI scripting"));
+        Assert.Contains(warnings, warning => warning.Contains("Wrong Protocol") && warning.Contains("device is MIDI"));
         Assert.Contains(warnings, warning => warning.Contains("Colliding OSC") && warning.Contains("client source port 10020"));
     }
 
@@ -1560,11 +1560,11 @@ public sealed class ControlWorkspaceViewModelTests
 
         Assert.Contains(rows, row =>
             row.Id == "behringer.xtouch-mini.mc"
-            && row.Protocol == nameof(ControlDeviceProtocol.Midi)
+            && row.Protocol == nameof(ControlDeviceProtocol.MIDI)
             && row.Summary.Contains("controls"));
         Assert.Contains(rows, row =>
             row.Id == "behringer.x32.osc"
-            && row.Protocol == nameof(ControlDeviceProtocol.Osc)
+            && row.Protocol == nameof(ControlDeviceProtocol.OSC)
             && row.Summary.Contains("commands")
             && row.Summary.Contains("tasks"));
     }
@@ -1580,7 +1580,7 @@ public sealed class ControlWorkspaceViewModelTests
                 {
                     Id = "custom.osc",
                     DisplayName = "Custom OSC",
-                    Protocol = ControlDeviceProtocol.Osc,
+                    Protocol = ControlDeviceProtocol.OSC,
                 },
             ],
         });
@@ -1591,31 +1591,31 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
-    public async Task SaveMidiProfileBuilder_CreatesProjectMidiProfileWithCcRange()
+    public async Task SaveMIDIProfileBuilder_CreatesProjectMIDIProfileWithCcRange()
     {
         await using var vm = new ControlWorkspaceViewModel
         {
             ProfileBuilderDisplayName = "Motor Fader",
             ProfileBuilderControlName = "Main Fader",
-            ProfileBuilderMidiChannelText = "1",
-            ProfileBuilderMidiControllerText = "16",
+            ProfileBuilderMIDIChannelText = "1",
+            ProfileBuilderMIDIControllerText = "16",
             ProfileBuilderHighResolution14Bit = true,
             ProfileBuilderMinValueText = "0",
             ProfileBuilderMaxValueText = "10000",
         };
 
-        vm.SaveMidiProfileBuilderCommand.Execute(null);
+        vm.SaveMIDIProfileBuilderCommand.Execute(null);
 
         var profile = Assert.Single(vm.BuildSnapshot().DeviceProfileOverrides);
         Assert.Equal("custom.midi.motor-fader", profile.Id);
-        Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
+        Assert.Equal(ControlDeviceProtocol.MIDI, profile.Protocol);
         Assert.Equal(2, profile.Ports.Count);
         var control = Assert.Single(profile.Controls);
         Assert.Equal(ControlProfileValueMode.Absolute14Bit, control.ValueMode);
-        Assert.True(control.MidiHighResolution14Bit);
-        Assert.Equal(16, control.MidiController);
-        Assert.Equal(0, control.MidiValueMin);
-        Assert.Equal(10000, control.MidiValueMax);
+        Assert.True(control.MIDIHighResolution14Bit);
+        Assert.Equal(16, control.MIDIController);
+        Assert.Equal(0, control.MIDIValueMin);
+        Assert.Equal(10000, control.MIDIValueMax);
         Assert.Contains(vm.ProfileRows, row => row.Id == profile.Id && row.Source == "Project");
     }
 
@@ -1630,7 +1630,7 @@ public sealed class ControlWorkspaceViewModelTests
             {
                 Id = "custom.osc",
                 DisplayName = "Custom OSC",
-                Protocol = ControlDeviceProtocol.Osc,
+                Protocol = ControlDeviceProtocol.OSC,
                 Commands =
                 [
                     new ControlCommandProfile
@@ -1681,7 +1681,7 @@ public sealed class ControlWorkspaceViewModelTests
                     Id = x32Id,
                     Name = "X32",
                     ProfileId = "behringer.x32.osc",
-                    Protocol = ControlDeviceProtocol.Osc,
+                    Protocol = ControlDeviceProtocol.OSC,
                     Binding = new ControlDeviceBindingConfig { Alias = "x32" },
                 },
             ],
@@ -1716,12 +1716,12 @@ public sealed class ControlWorkspaceViewModelTests
                     Id = x32Id,
                     Name = "X32",
                     ProfileId = "behringer.x32.osc",
-                    Protocol = ControlDeviceProtocol.Osc,
+                    Protocol = ControlDeviceProtocol.OSC,
                     Binding = new ControlDeviceBindingConfig
                     {
                         Alias = "x32",
-                        OscHost = "192.168.2.76",
-                        OscPort = 10023,
+                        OSCHost = "192.168.2.76",
+                        OSCPort = 10023,
                     },
                 },
             ],
@@ -1752,7 +1752,7 @@ public sealed class ControlWorkspaceViewModelTests
             new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Input,
-                Protocol = ControlMonitorProtocol.Midi,
+                Protocol = ControlMonitorProtocol.MIDI,
                 DeviceInstanceId = xtouchId,
                 DeviceKey = "xtouch",
                 Endpoint = "X-Touch MINI",
@@ -1761,7 +1761,7 @@ public sealed class ControlWorkspaceViewModelTests
             new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Output,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 DeviceKey = "x32",
                 Endpoint = "192.168.2.76:10023",
                 Message = "send",
@@ -1769,7 +1769,7 @@ public sealed class ControlWorkspaceViewModelTests
             new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Input,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 DeviceKey = "x32",
                 Endpoint = "192.168.2.76:10023",
                 Message = "receive",
@@ -1782,7 +1782,7 @@ public sealed class ControlWorkspaceViewModelTests
                 ErrorsOnly: false,
                 Text: string.Empty,
                 Direction: nameof(ControlMonitorDirection.Input),
-                Protocol: nameof(ControlMonitorProtocol.Midi),
+                Protocol: nameof(ControlMonitorProtocol.MIDI),
                 DeviceText: "xtouch")).ToArray();
 
         var record = Assert.Single(filtered);
@@ -1797,14 +1797,14 @@ public sealed class ControlWorkspaceViewModelTests
             new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Output,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 Result = ControlMonitorResult.Sent,
                 Address = "/ch/01/mix/fader",
             },
             new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Error,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 Result = ControlMonitorResult.Failed,
                 Address = "/ch/01/mix/fader",
                 ErrorMessage = "timeout",
@@ -1812,7 +1812,7 @@ public sealed class ControlWorkspaceViewModelTests
             new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Error,
-                Protocol = ControlMonitorProtocol.Midi,
+                Protocol = ControlMonitorProtocol.MIDI,
                 Result = ControlMonitorResult.Failed,
                 ErrorMessage = "missing device",
             },
@@ -1835,7 +1835,7 @@ public sealed class ControlWorkspaceViewModelTests
     public async Task SaveAndLoadControlConfigFromPath_RoundTripsSnapshot()
     {
         await using var vm = new ControlWorkspaceViewModel();
-        vm.AddOrUpdateMidiInputDevice(1, "X-Touch MINI");
+        vm.AddOrUpdateMIDIInputDevice(1, "X-Touch MINI");
 
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + ControlSystemIO.FileExtension);
         try

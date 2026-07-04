@@ -48,13 +48,13 @@ public partial class MediaPropertiesDialog : Window
 
     private async void EditSceneClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is not { Current: MmdPlaylistItem mmd } vm)
+        if (Vm is not { Current: MMDPlaylistItem mmd } vm)
             return;
 
-        var dialogVm = new AddMmdDialogViewModel();
+        var dialogVm = new AddMMDDialogViewModel();
         dialogVm.LoadFromExisting(mmd);
-        var dialog = new AddMmdDialog { DataContext = dialogVm };
-        var result = await dialog.ShowDialog<MmdPlaylistItem?>(this);
+        var dialog = new AddMMDDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MMDPlaylistItem?>(this);
         if (result is not null)
             vm.ReplaceItem(result);
     }

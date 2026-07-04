@@ -44,9 +44,9 @@
         <Button Content="{x:Static res:Strings.ClearHealthButton}" Command="{Binding ClearHealthCommand}" />
         <Button Content="{x:Static res:Strings.AddPortAudioButton}" Command="{Binding AddPortAudioCommand}" />
         <Button Content="{x:Static res:Strings.AddLocalVideoButton}" Command="{Binding AddLocalVideoCommand}" />
-        <Button Content="{x:Static res:Strings.AddNdiButton}"
+        <Button Content="{x:Static res:Strings.AddNDIButton}"
                 Command="{Binding AddNDICommand}"
-                IsVisible="{Binding IsNdiAvailable}" />
+                IsVisible="{Binding IsNDIAvailable}" />
       </StackPanel>
     </Grid>
 

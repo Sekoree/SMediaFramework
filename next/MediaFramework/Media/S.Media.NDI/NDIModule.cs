@@ -50,10 +50,10 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
     // One ref-counted receiver per paired OpenVideo + OpenAudio call for the same ndi://, so audio and video
     // arrive on a single connection anchored together (one audio-driven ingest clock) rather than two
     // independently-anchored receivers. Independent consumers get independent receivers.
-    private readonly SharedNdiSourceCache _cache;
+    private readonly SharedNDISourceCache _cache;
 
     public NDIDecoderProvider(TimeSpan? audioMinBuffer = null) =>
-        _cache = new SharedNdiSourceCache(uri =>
+        _cache = new SharedNDISourceCache(uri =>
         {
             var descriptor = ParseSourceUri(uri);
             var source = NDISource.Open(ResolveSource(descriptor.SourceName), new NDISourceOptions

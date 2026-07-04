@@ -38,7 +38,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     public VideoEngineChoice[] Engines { get; } =
     [
         new(VideoOutputEngine.AvaloniaOpenGl, Strings.EngineInAppPreviewLabel, Strings.EngineInAppPreviewSubtitle),
-        new(VideoOutputEngine.SdlOpenGl, Strings.EngineStandaloneWindowLabel, Strings.EngineStandaloneWindowSubtitle),
+        new(VideoOutputEngine.SDLOpenGl, Strings.EngineStandaloneWindowLabel, Strings.EngineStandaloneWindowSubtitle),
     ];
 
     public VideoSurfaceMode[] SurfaceModes { get; } = Enum.GetValues<VideoSurfaceMode>();
@@ -55,7 +55,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(Engine))]
     [NotifyPropertyChangedFor(nameof(AlwaysOnTopSupported))]
     private VideoEngineChoice _selectedEngine = new(
-        VideoOutputEngine.SdlOpenGl, Strings.EngineStandaloneWindowLabel,
+        VideoOutputEngine.SDLOpenGl, Strings.EngineStandaloneWindowLabel,
         Strings.EngineStandaloneWindowSubtitle);
 
     /// <summary>Convenience accessor for the legacy enum field; bound from <see cref="SelectedEngine"/>.</summary>

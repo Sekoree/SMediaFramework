@@ -16,9 +16,9 @@ public sealed class ControlSystemIOTests
         var config = new ControlSystemConfig
         {
             IsArmed = true,
-            OscListeners =
+            OSCListeners =
             {
-                new ControlOscListenerConfig
+                new ControlOSCListenerConfig
                 {
                     Id = listenerId,
                     Name = "Lighting In",
@@ -31,11 +31,11 @@ public sealed class ControlSystemIOTests
                 {
                     Id = deviceId,
                     Name = "X-Touch Mini",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                     Binding = new ControlDeviceBindingConfig
                     {
-                        MidiInputDeviceName = "X-TOUCH MINI",
-                        MidiOutputDeviceName = "X-TOUCH MINI",
+                        MIDIInputDeviceName = "X-TOUCH MINI",
+                        MIDIOutputDeviceName = "X-TOUCH MINI",
                     },
                     ScriptIds = { scriptId },
                 },
@@ -70,11 +70,11 @@ public sealed class ControlSystemIOTests
                         new ControlScriptTriggerConfig
                         {
                             Id = triggerId,
-                            Kind = ControlScriptTriggerKind.MidiControlChange,
+                            Kind = ControlScriptTriggerKind.MIDIControlChange,
                             FunctionName = "onCc",
                             DeviceInstanceId = deviceId,
-                            MidiChannel = 0,
-                            MidiController = 42,
+                            MIDIChannel = 0,
+                            MIDIController = 42,
                         },
                     },
                 },
@@ -91,14 +91,14 @@ public sealed class ControlSystemIOTests
             Assert.Equal("HaPlay.Tests", document.Generator);
             Assert.Equal("scontrol", ControlSystemIO.FileExtension);
             Assert.True(document.ControlSystem.IsArmed);
-            Assert.Equal(listenerId, Assert.Single(document.ControlSystem.OscListeners).Id);
-            Assert.Equal("Lighting In", document.ControlSystem.OscListeners[0].Name);
-            Assert.Equal(10030, document.ControlSystem.OscListeners[0].LocalPort);
+            Assert.Equal(listenerId, Assert.Single(document.ControlSystem.OSCListeners).Id);
+            Assert.Equal("Lighting In", document.ControlSystem.OSCListeners[0].Name);
+            Assert.Equal(10030, document.ControlSystem.OSCListeners[0].LocalPort);
 
             var device = Assert.Single(document.ControlSystem.Devices);
             Assert.Equal(deviceId, device.Id);
-            Assert.Equal(ControlDeviceProtocol.Midi, device.Protocol);
-            Assert.Equal("X-TOUCH MINI", device.Binding.MidiInputDeviceName);
+            Assert.Equal(ControlDeviceProtocol.MIDI, device.Protocol);
+            Assert.Equal("X-TOUCH MINI", device.Binding.MIDIInputDeviceName);
             Assert.Equal(scriptId, Assert.Single(device.ScriptIds));
 
             var layer = Assert.Single(document.ControlSystem.Layers);
@@ -114,8 +114,8 @@ public sealed class ControlSystemIOTests
             Assert.Equal(ControlScriptFailureMode.DisableScope, script.FailurePolicy.Mode);
             var trigger = Assert.Single(script.Triggers);
             Assert.Equal(triggerId, trigger.Id);
-            Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
-            Assert.Equal(42, trigger.MidiController);
+            Assert.Equal(ControlScriptTriggerKind.MIDIControlChange, trigger.Kind);
+            Assert.Equal(42, trigger.MIDIController);
         }
         finally
         {
@@ -137,7 +137,7 @@ public sealed class ControlSystemIOTests
     }
 
     [Fact]
-    public void Serialize_RoundTripsGenericMidiTriggerFilters()
+    public void Serialize_RoundTripsGenericMIDITriggerFilters()
     {
         var document = new ControlSystemDocument
         {
@@ -153,12 +153,12 @@ public sealed class ControlSystemIOTests
                         {
                             new ControlScriptTriggerConfig
                             {
-                                Kind = ControlScriptTriggerKind.MidiMessage,
+                                Kind = ControlScriptTriggerKind.MIDIMessage,
                                 FunctionName = "onProgram",
-                                MidiMessageType = ControlMidiMessageType.ProgramChange,
-                                MidiChannel = 1,
-                                MidiValue = 5,
-                                MidiParameter = 12,
+                                MIDIMessageType = ControlMIDIMessageType.ProgramChange,
+                                MIDIChannel = 1,
+                                MIDIValue = 5,
+                                MIDIParameter = 12,
                             },
                         },
                     },
@@ -169,10 +169,10 @@ public sealed class ControlSystemIOTests
         var loaded = ControlSystemIO.Deserialize(ControlSystemIO.Serialize(document));
         var trigger = Assert.Single(Assert.Single(loaded.ControlSystem.Scripts).Triggers);
 
-        Assert.Equal(ControlScriptTriggerKind.MidiMessage, trigger.Kind);
-        Assert.Equal(ControlMidiMessageType.ProgramChange, trigger.MidiMessageType);
-        Assert.Equal(1, trigger.MidiChannel);
-        Assert.Equal(5, trigger.MidiValue);
-        Assert.Equal(12, trigger.MidiParameter);
+        Assert.Equal(ControlScriptTriggerKind.MIDIMessage, trigger.Kind);
+        Assert.Equal(ControlMIDIMessageType.ProgramChange, trigger.MIDIMessageType);
+        Assert.Equal(1, trigger.MIDIChannel);
+        Assert.Equal(5, trigger.MIDIValue);
+        Assert.Equal(12, trigger.MIDIParameter);
     }
 }

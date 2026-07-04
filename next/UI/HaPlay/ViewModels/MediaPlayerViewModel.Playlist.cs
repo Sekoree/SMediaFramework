@@ -219,19 +219,19 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    private bool CanAddNDIInput() => IsNdiAvailable;
+    private bool CanAddNDIInput() => IsNDIAvailable;
 
     /// <summary>Gate 6 — opens the MMD scene dialog (model/motion pickers + the rudimentary 3D
     /// camera-placement preview) and adds the produced item to the playlist.</summary>
     [RelayCommand]
-    private async Task AddMmdAsync()
+    private async Task AddMMDAsync()
     {
         var top = TryGetMainWindow();
         if (top is null) return;
 
-        var dialogVm = new Dialogs.AddMmdDialogViewModel();
-        var dialog = new Views.Dialogs.AddMmdDialog { DataContext = dialogVm };
-        var result = await dialog.ShowDialog<MmdPlaylistItem?>(top);
+        var dialogVm = new Dialogs.AddMMDDialogViewModel();
+        var dialog = new Views.Dialogs.AddMMDDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MMDPlaylistItem?>(top);
         if (result is null) return;
         PlaylistItems.Add(result);
         SelectedPlaylistItem = result;

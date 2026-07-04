@@ -6,7 +6,7 @@ using PMLib.Types;
 namespace PMLib.Devices;
 
 /// <summary>
-/// Base class for an open PortMidi device stream.
+/// Base class for an open PortMIDI device stream.
 /// Call <see cref="Open"/> to open the device and <see cref="Dispose"/> (or <see cref="Close"/>)
 /// to release it.
 /// </summary>
@@ -16,7 +16,7 @@ public abstract class MIDIDevice : IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Native PortMidi stream handle. <see cref="nint.Zero"/> when not open.
+    /// Native PortMIDI stream handle. <see cref="nint.Zero"/> when not open.
     /// </summary>
     /// <remarks>
     /// ⚠️ <b>Thread safety:</b> This field is not <c>volatile</c> and is not protected by a lock.
@@ -28,7 +28,7 @@ public abstract class MIDIDevice : IDisposable
     /// </remarks>
     protected nint Stream;
 
-    /// <summary>PortMidi device ID passed to the constructor.</summary>
+    /// <summary>PortMIDI device ID passed to the constructor.</summary>
     public int DeviceId { get; }
 
     /// <summary>Device name cached at construction time (safe after <c>Pm_Terminate</c>).</summary>

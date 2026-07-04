@@ -151,7 +151,7 @@ public sealed class ControlScriptFileHostTests
     }
 
     [Fact]
-    public void BuiltInXTouchMiniX32FaderTemplate_SendsX32FaderOscFromMidiEncoder()
+    public void BuiltInXTouchMiniX32FaderTemplate_SendsX32FaderOSCFromMIDIEncoder()
     {
         var template = BuiltInControlScriptTemplateRepository.Instance.FindById(
             BuiltInControlScriptTemplateRepository.XTouchMiniX32FadersTemplateId);
@@ -165,13 +165,13 @@ public sealed class ControlScriptFileHostTests
             runtimeServices: runtimeServices);
         var module = host.LoadModule(template.SuggestedPath);
 
-        module.Invoke("onXTouchFaderEncoder", CreateMidiCcEvent(module.State, 16, 10), MondValue.Object(module.State));
+        module.Invoke("onXTouchFaderEncoder", CreateMIDICcEvent(module.State, 16, 10), MondValue.Object(module.State));
 
-        var message = Assert.Single(sink.OscMessages);
+        var message = Assert.Single(sink.OSCMessages);
         Assert.Equal("x32", message.DeviceKey);
         Assert.Equal("/ch/01/mix/fader", message.Address);
         var argument = Assert.Single(message.Arguments);
-        Assert.Equal(ControlScriptOscArgumentType.Float32, argument.Type);
+        Assert.Equal(ControlScriptOSCArgumentType.Float32, argument.Type);
         Assert.Equal(0.75 + 10.0 / 1023.0, argument.NumberValue, precision: 12);
         Assert.Equal(argument.NumberValue, cache.GetNumberOrDefault("x32", "/ch/01/mix/fader", 0), precision: 12);
     }
@@ -191,9 +191,9 @@ public sealed class ControlScriptFileHostTests
             runtimeServices: new ControlScriptRuntimeServices(sink, cache));
         var module = host.LoadModule(template.SuggestedPath);
 
-        module.Invoke("onXTouchFaderEncoder", CreateMidiCcEvent(module.State, 23, 72), MondValue.Object(module.State));
+        module.Invoke("onXTouchFaderEncoder", CreateMIDICcEvent(module.State, 23, 72), MondValue.Object(module.State));
 
-        var message = Assert.Single(sink.OscMessages);
+        var message = Assert.Single(sink.OSCMessages);
         Assert.Equal("/ch/08/mix/fader", message.Address);
         var argument = Assert.Single(message.Arguments);
         Assert.Equal(0.5 - 8.0 / 1023.0, argument.NumberValue, precision: 12);
@@ -218,7 +218,7 @@ public sealed class ControlScriptFileHostTests
         ControlScriptRuntimeServices? runtimeServices = null) =>
         new(new InMemoryControlScriptSourceProvider(scripts), instructionLimit, runtimeServices);
 
-    private static MondValue CreateMidiCcEvent(MondState state, int controller, int value)
+    private static MondValue CreateMIDICcEvent(MondState state, int controller, int value)
     {
         var evt = MondValue.Object(state);
         var midi = MondValue.Object(state);
@@ -230,18 +230,18 @@ public sealed class ControlScriptFileHostTests
 
     private sealed class RecordingControlScriptCommandSink : IControlScriptCommandSink
     {
-        public List<ControlScriptOscMessage> OscMessages { get; } = new();
+        public List<ControlScriptOSCMessage> OSCMessages { get; } = new();
 
-        public List<ControlScriptMidiMessage> MidiMessages { get; } = new();
+        public List<ControlScriptMIDIMessage> MIDIMessages { get; } = new();
 
-        public void SendOsc(ControlScriptOscMessage message)
+        public void SendOSC(ControlScriptOSCMessage message)
         {
-            OscMessages.Add(message);
+            OSCMessages.Add(message);
         }
 
-        public void SendMidi(ControlScriptMidiMessage message)
+        public void SendMIDI(ControlScriptMIDIMessage message)
         {
-            MidiMessages.Add(message);
+            MIDIMessages.Add(message);
         }
 
         public void RequestActivateLayer(string layerKey)
