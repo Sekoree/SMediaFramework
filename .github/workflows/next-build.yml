@@ -267,18 +267,21 @@ jobs:
         run: |
           set -uo pipefail   # NOT -e: ASIO acquisition is best-effort and must not abort the PortAudio build.
           # ASIO is an optional PortAudio host API needing Steinberg's SDK (not redistributable). Fetch it
-          # best-effort from the stable direct link; if it is unavailable PortAudio still builds with the
-          # always-present WASAPI/WDM-KS/WMME/DirectSound host APIs. (The old www.steinberg.net/asiosdk URL
-          # served an HTML consent page, not the zip — tar then failed and killed the whole step.)
+          # best-effort and VERIFY it's actually a ZIP (PK magic) before use — Steinberg's endpoints have
+          # served an HTML consent/redirect page with a 200 to the CI runner (not extractable). If ASIO is
+          # unavailable PortAudio still builds with the always-present WASAPI/WDM-KS/WMME/DirectSound APIs.
           PA_ASIO=(-DPA_USE_ASIO=OFF)
-          if curl -fsSL https://download.steinberg.net/sdk_downloads/asiosdk_2.3.3_2019-06-14.zip -o asiosdk.zip && tar -xf asiosdk.zip; then
-            asio="$(find . -maxdepth 1 -type d -iname 'asiosdk*' | head -1)"
+          if curl.exe -fsSL "https://www.steinberg.net/asiosdk" -o asiosdk.zip && [ "$(head -c2 asiosdk.zip)" = "PK" ]; then
+            powershell -NoProfile -Command "Expand-Archive -Force -Path asiosdk.zip -DestinationPath asio_sdk" || true
+            asio="$(find asio_sdk -maxdepth 2 -type d -iname 'asio*sdk*' | head -1)"
             if [ -n "$asio" ]; then PA_ASIO=(-DPA_USE_ASIO=ON "-DASIOSDK_ROOT_DIR=$PWD/$asio"); echo "ASIO SDK: $asio"; fi
           fi
           echo "PortAudio ASIO flags: ${PA_ASIO[*]}"
           curl -fsSL https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz | tar xz
-          # v19.7.0 options are PA_BUILD_SHARED / PA_BUILD_STATIC (not PA_BUILD_SHARED_LIBS).
-          cmake -S portaudio-19.7.0 -B pa-build -A x64 -DPA_BUILD_SHARED=ON -DPA_BUILD_STATIC=OFF "${PA_ASIO[@]}"
+          # PortAudio 19.7.0 declares cmake_minimum_required < 3.5, which CMake 4.x removed support for
+          # (-DCMAKE_POLICY_VERSION_MINIMUM=3.5 restores it). Options are PA_BUILD_SHARED / PA_BUILD_STATIC.
+          cmake -S portaudio-19.7.0 -B pa-build -A x64 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DPA_BUILD_SHARED=ON -DPA_BUILD_STATIC=OFF "${PA_ASIO[@]}"
           cmake --build pa-build --config Release
           # Output name varies across versions (portaudio.dll / portaudio_x64.dll) — normalize to portaudio.dll.
           dll="$(find pa-build -name 'portaudio*.dll' | head -1)"

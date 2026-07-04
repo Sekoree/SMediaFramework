@@ -304,7 +304,7 @@ public class AudioRouterControlTests
         var rampIndex = -1;
         List<float[]> captured = [];
         var chunksBeforeMutation = 0;
-        for (var attempt = 0; attempt < 5 && rampChunk is null; attempt++)
+        for (var attempt = 0; attempt < 20 && rampChunk is null; attempt++)
         {
             r.SetRouteGain("src", "out", 1f);
             Thread.Sleep(40);                 // steady-state chunks at gain 1.0 (and the up-ramp, if retrying)

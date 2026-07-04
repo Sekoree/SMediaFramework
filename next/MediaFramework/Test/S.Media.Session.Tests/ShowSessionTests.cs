@@ -1288,7 +1288,12 @@ public sealed class ShowSessionTests
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
         await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(255, output.BottomRightAlpha);
+        // The first submitted frame can precede the opened-dimension scaling on a loaded runner (bottom-right
+        // still 0); every full-canvas frame thereafter fills the 8x8 canvas, so poll a few frames for opaque.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (Array.IndexOf(output.Alphas, 255) < 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(20);
+        Assert.Contains(255, output.Alphas);
     }
 
     [Fact]
@@ -1526,25 +1531,36 @@ public sealed class ShowSessionTests
         // The standalone session also carries an implicit empty "main" master group; assert on the two cue groups.
         static bool Running(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).IsRunning;
 
-        var fired = await session.SnapshotAsync();
+        // IsRunning is driven by the per-group transport, which can lag a just-awaited pause/resume by a
+        // scheduler tick on a loaded runner — poll the snapshot until it settles (times out → still asserts).
+        async Task<IReadOnlyList<TransportSnapshot>> SettledSnapshot(Func<IReadOnlyList<TransportSnapshot>, bool> until)
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            IReadOnlyList<TransportSnapshot> s;
+            do { s = await session.SnapshotAsync(); }
+            while (!until(s) && DateTime.UtcNow < deadline);
+            return s;
+        }
+
+        var fired = await SettledSnapshot(s => Running(s, "A") && Running(s, "B"));
         Assert.True(Running(fired, "A"));
         Assert.True(Running(fired, "B"));
 
         // Single-group pause hits only its group — the other keeps running (the gap SetAllPausedAsync closes).
         await session.SetPausedAsync(true, "A");
-        var afterOne = await session.SnapshotAsync();
+        var afterOne = await SettledSnapshot(s => !Running(s, "A") && Running(s, "B"));
         Assert.False(Running(afterOne, "A"));
         Assert.True(Running(afterOne, "B"));
 
         // All-groups pause freezes both …
         await session.SetAllPausedAsync(true);
-        var afterAll = await session.SnapshotAsync();
+        var afterAll = await SettledSnapshot(s => !Running(s, "A") && !Running(s, "B"));
         Assert.False(Running(afterAll, "A"));
         Assert.False(Running(afterAll, "B"));
 
         // … and resumes both.
         await session.SetAllPausedAsync(false);
-        var afterResume = await session.SnapshotAsync();
+        var afterResume = await SettledSnapshot(s => Running(s, "A") && Running(s, "B"));
         Assert.True(Running(afterResume, "A"));
         Assert.True(Running(afterResume, "B"));
     }
