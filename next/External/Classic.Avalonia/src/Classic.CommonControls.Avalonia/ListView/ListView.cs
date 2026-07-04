@@ -26,14 +26,9 @@ public class ListView : ListBox
 
     internal bool UpdateSelectionFromPointerEvent(Control source, PointerEventArgs e)
     {
-        var hotkeys = Application.Current!.PlatformSettings?.HotkeyConfiguration;
-        var toggle = hotkeys is not null && (e.KeyModifiers & hotkeys.CommandModifiers) == hotkeys.CommandModifiers;
-
-        return UpdateSelectionFromEventSource(
-            source,
-            true,
-            (e.KeyModifiers & KeyModifiers.Shift) == KeyModifiers.Shift,
-            toggle,
-            e.GetCurrentPoint(source).Properties.IsRightButtonPressed);
+        // UpdateSelectionFromEvent derives select/range(Shift)/toggle(command)/right-button from the event
+        // itself — identical to the explicit modifiers this used to compute (Avalonia deprecated the
+        // UpdateSelectionFromEventSource overload in favour of it).
+        return UpdateSelectionFromEvent(source, e);
     }
 }

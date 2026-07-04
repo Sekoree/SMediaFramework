@@ -10,9 +10,12 @@
              tears down (Pa_Terminate + host dispose) under the HAPLAY_SMOKE gate. dotnet run stays JIT;
              only `dotnet publish` pays the AOT compile. -->
         <PublishAot>true</PublishAot>
-        <!-- The exe assembly defaults to the project name (HaPlay.Desktop); the plain name "HaPlay" is
-             taken by the UI library assembly (avares://HaPlay/... resource URIs target it), so the exe
-             cannot claim it. The old "HaPlay_Test" name was a port-era leftover (NXT-15). -->
+        <!-- The exe assembly can't be "HaPlay" (the UI library owns that name; avares://HaPlay/... resource
+             URIs target it) and the project-name default "HaPlay.Desktop" makes file managers mistake the
+             binary for an XDG ".Desktop" entry. Ship a plain, distinct binary name instead. A case-only
+             variant (HAPlay) would collide with HaPlay.dll on case-insensitive filesystems, so keep it clear.
+             The launch smokes in .github/workflows/next-build.yml reference this exact name. -->
+        <AssemblyName>HaPlayer</AssemblyName>
 
         <!-- Real-time audio latency hint (COMPLEMENTARY, not the fix). The AOT-only audio drops were
              actually a router pacing flaw — fixed by primary-output backpressure in AudioRouter.OutputPump

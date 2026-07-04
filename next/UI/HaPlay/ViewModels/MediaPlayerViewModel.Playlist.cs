@@ -255,39 +255,6 @@ public partial class MediaPlayerViewModel
         SelectedPlaylistItem = result;
     }
 
-    /// <summary>Opens the subtitle track picker for the selected file item and stores the chosen tracks +
-    /// font/placement overrides on it. Applies on the item's next load/play (the ShowSession clip
-    /// composition renders them as a top overlay layer).</summary>
-    [RelayCommand]
-    private async Task ConfigureSubtitlesAsync()
-    {
-        if (SelectedPlaylistItem is not FilePlaylistItem file)
-        {
-            StatusMessage = "Select a file in the playlist to choose its subtitle tracks.";
-            return;
-        }
-
-        var top = TryGetMainWindow();
-        if (top is null) return;
-
-        var dialogVm = new Dialogs.SubtitleSelectionDialogViewModel();
-        dialogVm.Load(file.Path, file.Subtitles);
-        var dialog = new Views.Dialogs.SubtitleSelectionDialog { DataContext = dialogVm };
-
-        var result = await dialog.ShowDialog<IReadOnlyList<CueSubtitleSelection>?>(top);
-        if (result is null)
-            return;
-
-        var updated = file with { Subtitles = result };
-        var idx = PlaylistItems.IndexOf(file);
-        if (idx >= 0)
-            PlaylistItems[idx] = updated;
-        SelectedPlaylistItem = updated;
-        StatusMessage = result.Count == 0
-            ? "Subtitles cleared — applies on next play."
-            : $"{result.Count} subtitle track(s) selected — applies on next play.";
-    }
-
     /// <summary>Opens the common per-item properties dialog (details / tracks / MMD scene / YouTube
     /// streams) for the selected playlist item and applies its edits. Edits keep the item's
     /// <see cref="PlaylistItem.Id"/>, so cue references and the current-item pointer stay valid.</summary>
@@ -306,13 +273,33 @@ public partial class MediaPlayerViewModel
 
         var idx = PlaylistItems.IndexOf(item);
         if (idx < 0) return;
+        var wasActive = ReferenceEquals(_currentPlaylistItem, item);
         PlaylistItems[idx] = result;
         if (ReferenceEquals(_currentPlaylistItem, item))
             _currentPlaylistItem = result;
+        if (ReferenceEquals(CurrentPlayingItem, item)) // keep the now-playing marker on the edited item
+            CurrentPlayingItem = result;
         SelectedPlaylistItem = result;
         StatusMessage = Strings.Format(nameof(Strings.MediaPropertiesAppliedStatusFormat), result.DisplayName);
         HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
+
+        // An edit that changes HOW the running clip decodes — audio-track or subtitle selection — only takes
+        // effect on (re)open: the live clip was opened with the old selection. When the edited item is the one
+        // loaded in the deck, re-open it and restore the playhead so a movie doesn't jump back to the start.
+        if (wasActive && RequiresReopenForPlayback(item, result))
+        {
+            var resumeAt = CurrentPosition;
+            await OpenOrReloadAsync().ConfigureAwait(false);
+            if (resumeAt > TimeSpan.Zero)
+                await ShowSessionSeekAsync(resumeAt).ConfigureAwait(false);
+        }
     }
+
+    /// <summary>True when an edit changed a field the decoder open consumes (audio-track index or the subtitle
+    /// selection) — the only edits that need the running clip re-opened to take effect.</summary>
+    private static bool RequiresReopenForPlayback(PlaylistItem before, PlaylistItem after) =>
+        before is FilePlaylistItem o && after is FilePlaylistItem n
+        && (o.AudioTrackIndex != n.AudioTrackIndex || !o.Subtitles.SequenceEqual(n.Subtitles));
 
     private bool CanShowItemProperties() => SelectedPlaylistItem is not null;
 
@@ -485,6 +472,7 @@ public partial class MediaPlayerViewModel
     private Task PrepareCurrentItemAsync(PlaylistItem? item)
     {
         _currentPlaylistItem = item;
+        CurrentPlayingItem = item; // "now playing" marker; cleared when the deck returns to idle.
         MediaFilePath = item is FilePlaylistItem f ? f.Path : null;
         OnPropertyChanged(nameof(CurrentMediaDisplay));
         return Task.CompletedTask;

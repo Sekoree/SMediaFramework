@@ -264,6 +264,7 @@ public static class Strings
     public static string AudioTrackAutomaticLabel => Get(nameof(AudioTrackAutomaticLabel));
     public static string AudioTrackTooltip => Get(nameof(AudioTrackTooltip));
     public static string PlaylistContextAudioTrack => Get(nameof(PlaylistContextAudioTrack));
+    public static string MediaPropertiesNoSelectableTracks => Get(nameof(MediaPropertiesNoSelectableTracks));
     public static string AudioTrackChangedStatusFormat => Get(nameof(AudioTrackChangedStatusFormat));
     public static string CueTransportStandbyTooltip => Get(nameof(CueTransportStandbyTooltip));
     public static string CueTransportGoTooltip => Get(nameof(CueTransportGoTooltip));
@@ -579,6 +580,7 @@ public static class Strings
     public static string AggregateSummaryActiveFormat => Get(nameof(AggregateSummaryActiveFormat));
     public static string OutputEditInUseDialogTitle => Get(nameof(OutputEditInUseDialogTitle));
     public static string OutputEditInUseApplyButton => Get(nameof(OutputEditInUseApplyButton));
+    public static string OutputEditInUseContinueButton => Get(nameof(OutputEditInUseContinueButton));
     public static string OutputEditInUseDialogMessageFormat => Get(nameof(OutputEditInUseDialogMessageFormat));
     public static string OutputRemoveInUseDialogTitle => Get(nameof(OutputRemoveInUseDialogTitle));
     public static string OutputRemoveInUseStopButton => Get(nameof(OutputRemoveInUseStopButton));

@@ -66,6 +66,16 @@ public sealed class YouTubePreparer
     public bool IsPrepared(string videoId, string? videoDescriptor, string? audioDescriptor) =>
         File.Exists(AssetPathFor(videoId, videoDescriptor, audioDescriptor));
 
+    /// <summary>Content-addressed cache path for ONE downloaded stream, keyed by its OWN descriptor so it is
+    /// reused across selection changes — swapping the audio stream keeps the already-downloaded video and
+    /// vice-versa, instead of re-downloading both. <paramref name="ext"/> tags the role (<c>.v</c>/<c>.a</c>);
+    /// the container is content-probed at remux time, so the extension need not encode it.</summary>
+    private string StreamCachePath(string videoId, string descriptor, string ext)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"1|{videoId}|{descriptor}")))[..16];
+        return Path.Combine(_cacheRoot, $"{videoId}-{hash}{ext}");
+    }
+
     /// <summary>
     /// Prepares (or returns the already-cached asset for) one selection. "Best" selections are resolved
     /// against the live manifest first, so their cache identity is the RESOLVED stream pair.
@@ -126,35 +136,38 @@ public sealed class YouTubePreparer
         var key = CacheKey(videoId, videoDescriptor, audioDescriptor);
         var assetPath = Path.Combine(_cacheRoot, key + ".mkv");
         var subtitlePath = selection.SubtitleLanguage is { Length: > 0 } lang
-            ? Path.Combine(_cacheRoot, $"{key}.{lang}.srt")
+            ? Path.Combine(_cacheRoot, $"{key}.{lang}.ass")
             : null;
 
         if (!File.Exists(assetPath))
         {
-            var videoTemp = videoDescriptor is null ? null : Path.Combine(_cacheRoot, key + ".v.partial");
-            var audioTemp = audioDescriptor is null ? null : Path.Combine(_cacheRoot, key + ".a.partial");
+            // Per-stream caches (keyed by each stream's own descriptor) so changing ONE stream selection
+            // reuses the other — swapping audio keeps the cached video and vice-versa, instead of
+            // re-downloading both. They persist for that reuse (like the .mkv assets); only the remux is temp.
+            var videoCache = videoDescriptor is null ? null : StreamCachePath(videoId, videoDescriptor, ".v");
+            var audioCache = audioDescriptor is null ? null : StreamCachePath(videoId, audioDescriptor, ".a");
             var assetTemp = assetPath + ".partial";
             try
             {
-                if (videoDescriptor is not null)
+                if (videoCache is not null && !File.Exists(videoCache))
                 {
                     progress?.Report(new(YouTubePreparePhase.DownloadingVideo, 0));
-                    await _gateway.DownloadStreamAsync(
-                        videoId, videoDescriptor, videoTemp!,
-                        Wrap(progress, YouTubePreparePhase.DownloadingVideo), cancellationToken).ConfigureAwait(false);
+                    await DownloadToCacheAsync(
+                        videoDescriptor!, videoCache,
+                        Wrap(progress, YouTubePreparePhase.DownloadingVideo)).ConfigureAwait(false);
                 }
 
-                if (audioDescriptor is not null)
+                if (audioCache is not null && !File.Exists(audioCache))
                 {
                     progress?.Report(new(YouTubePreparePhase.DownloadingAudio, 0));
-                    await _gateway.DownloadStreamAsync(
-                        videoId, audioDescriptor, audioTemp!,
-                        Wrap(progress, YouTubePreparePhase.DownloadingAudio), cancellationToken).ConfigureAwait(false);
+                    await DownloadToCacheAsync(
+                        audioDescriptor!, audioCache,
+                        Wrap(progress, YouTubePreparePhase.DownloadingAudio)).ConfigureAwait(false);
                 }
 
                 progress?.Report(new(YouTubePreparePhase.Remuxing, 0));
                 await Task.Run(
-                    () => _remux(videoTemp, audioTemp, assetTemp, cancellationToken),
+                    () => _remux(videoCache, audioCache, assetTemp, cancellationToken),
                     cancellationToken).ConfigureAwait(false);
 
                 File.Move(assetTemp, assetPath, overwrite: true); // atomic commit — readers only ever see complete assets
@@ -162,8 +175,7 @@ public sealed class YouTubePreparer
             finally
             {
                 TryDelete(assetTemp);
-                TryDelete(videoTemp);
-                TryDelete(audioTemp);
+                // videoCache / audioCache are intentionally KEPT for reuse across stream-selection changes.
             }
         }
 
@@ -172,7 +184,7 @@ public sealed class YouTubePreparer
             var subTemp = subtitlePath + ".partial";
             try
             {
-                if (await _gateway.TryDownloadCaptionsSrtAsync(
+                if (await _gateway.TryDownloadCaptionsAssAsync(
                         videoId, selection.SubtitleLanguage!, subTemp, cancellationToken).ConfigureAwait(false))
                     File.Move(subTemp, subtitlePath, overwrite: true);
                 else
@@ -190,6 +202,23 @@ public sealed class YouTubePreparer
             IncludeVideo = selection.IncludeVideo,
         };
         return new YouTubePreparedMedia(assetPath, subtitlePath, manifest, resolved);
+
+        // Download one stream into its content-addressed cache atomically: to a unique temp, then rename into
+        // place. A concurrent prepare that reuses the same stream either finds the finished cache file (and
+        // skips) or races to its own temp — it never observes a partial cache file.
+        async Task DownloadToCacheAsync(string descriptor, string cachePath, IProgress<double>? p)
+        {
+            var temp = $"{cachePath}.{Guid.NewGuid():N}.partial";
+            try
+            {
+                await _gateway.DownloadStreamAsync(videoId, descriptor, temp, p, cancellationToken).ConfigureAwait(false);
+                File.Move(temp, cachePath, overwrite: true);
+            }
+            finally
+            {
+                TryDelete(temp);
+            }
+        }
 
         static IProgress<double>? Wrap(IProgress<YouTubePrepareProgress>? inner, YouTubePreparePhase phase) =>
             inner is null ? null : new Progress<double>(f => inner.Report(new(phase, f)));

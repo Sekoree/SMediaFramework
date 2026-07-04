@@ -31,7 +31,8 @@ public static class MediaPlayerShowMapper
         int canvasWidth = 1920,
         int canvasHeight = 1080,
         IReadOnlyList<CueSubtitleSelection>? subtitles = null,
-        bool loop = false)
+        bool loop = false,
+        int? audioStreamIndex = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
 
@@ -44,7 +45,11 @@ public static class MediaPlayerShowMapper
                     PlayerCueId,
                     mediaPath,
                     CompositionId: hasVideo ? PlayerCompositionId : null,
-                    LayerIndex: 0)
+                    LayerIndex: 0,
+                    // Multi-track select (03 §6): null = automatic (av_find_best_stream), else the explicit
+                    // container audio stream index the operator chose in the Properties dialog. Without this the
+                    // deck always decoded the DEFAULT track (a 5.1 mix) regardless of the selection.
+                    AudioStreamIndex: audioStreamIndex)
                 {
                     // The deck states its outputs EXPLICITLY — never null. No route routed ⇒ an empty list ⇒ NO
                     // audio output at all: the deck plays to nothing (a "no output routed" banner is shown), and

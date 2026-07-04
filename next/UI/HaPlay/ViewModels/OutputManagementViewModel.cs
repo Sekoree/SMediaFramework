@@ -516,13 +516,17 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// </summary>
     /// <remarks>
     /// Hot semantics per §3.6: the runtime swap proceeds even if a playback session currently holds the
-    /// line. The session will see a brief silence/black-frame window; orchestration (UI confirm prompts,
-    /// session re-acquire) is the Phase B caller's concern.
+    /// line. With <paramref name="detachRoutes"/> = true (default) the session detaches its route around the
+    /// swap (the OutputLineReconfiguring/Reconfigured events) — a brief silence/black-frame, but a
+    /// guaranteed-consistent route afterward. With <paramref name="detachRoutes"/> = false those events are
+    /// skipped: the runtime applies the change in place under the still-attached route (cosmetic changes like
+    /// Always-on-top apply with no interruption; a structural change may briefly glitch the live route).
     /// </remarks>
     public async Task ReconfigureLineAsync(
         OutputLineViewModel line,
         OutputDefinition newDefinition,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool detachRoutes = true)
     {
         if (newDefinition.Id != line.Definition.Id)
             throw new ArgumentException(
@@ -533,7 +537,8 @@ public partial class OutputManagementViewModel : ViewModelBase
                 $"Cannot reconfigure {line.Definition.GetType().Name} with {newDefinition.GetType().Name} — output kind is immutable.",
                 nameof(newDefinition));
 
-        await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(false);
+        if (detachRoutes)
+            await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(false);
 
         switch (newDefinition)
         {
@@ -572,7 +577,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         // A clone-of change is the load-bearing topology change — fire the event so player VMs resync
         // their routing checkbox list (clones get hidden, parents get exposed).
         RaiseTopologyChanged();
-        await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(false);
+        if (detachRoutes)
+            await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(false);
     }
 
     private static async Task RaiseAsync(Func<OutputLineViewModel, Task>? handlers, OutputLineViewModel line)
@@ -855,18 +861,27 @@ public partial class OutputManagementViewModel : ViewModelBase
         if (edited.Equals(line.Definition))
             return; // no changes
 
-        // §3.6: confirm only when a player is *actively playing through* this line.
+        // §3.6: confirm only when a player is *actively playing through* this line. The operator chooses
+        // whether to keep playing (apply live — no route teardown, best for cosmetic changes like
+        // Always-on-top) or reconnect the output (brief black-frame, for structural changes).
+        var detachRoutes = true;
         if (PlaybackUsageProbe?.Invoke(line) == true)
         {
-            var confirmed = await ConfirmGlitchyEditAsync(owner, line);
-            if (!confirmed)
-                return;
+            switch (await ConfirmGlitchyEditAsync(owner, line))
+            {
+                case OutputEditApplyMode.Cancel:
+                    return;
+                case OutputEditApplyMode.Live:
+                    detachRoutes = false;
+                    break;
+                // OutputEditApplyMode.Reconnect keeps the default detachRoutes = true.
+            }
         }
 
         try
         {
             using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "OutputManagement.EditSelectedAsync.ReconfigureLineAsync", slowWarningMs: 2000);
-            await ReconfigureLineAsync(line, edited, cancellationToken).ConfigureAwait(false);
+            await ReconfigureLineAsync(line, edited, cancellationToken, detachRoutes).ConfigureAwait(false);
             timing?.SetOutcome($"line={line.Definition.DisplayName}");
         }
         catch (Exception ex)
@@ -906,25 +921,43 @@ public partial class OutputManagementViewModel : ViewModelBase
         return await dlg.ShowDialog<NDIOutputDefinition?>(owner);
     }
 
-    private static async Task<bool> ConfirmGlitchyEditAsync(Window owner, OutputLineViewModel line)
+    /// <summary>Operator's answer to the "output in use" edit prompt.</summary>
+    private enum OutputEditApplyMode
+    {
+        /// <summary>Abort the edit.</summary>
+        Cancel,
+
+        /// <summary>Detach the route, reconfigure, re-attach — brief black-frame, consistent route.</summary>
+        Reconnect,
+
+        /// <summary>Apply live under the still-attached route — no interruption for cosmetic changes.</summary>
+        Live,
+    }
+
+    private static async Task<OutputEditApplyMode> ConfirmGlitchyEditAsync(Window owner, OutputLineViewModel line)
     {
         var dlg = new Window
         {
             Title = Strings.OutputEditInUseDialogTitle,
-            Width = 480,
-            Height = 200,
+            Width = 520,
+            Height = 220,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ShowInTaskbar = false,
         };
 
-        var ok = new Button { Content = Strings.OutputEditInUseApplyButton, IsDefault = true };
+        // "Save & continue" (apply live) is the default — most in-use edits are cosmetic (Always-on-top,
+        // window placement) and shouldn't interrupt playback. "Reconnect" is the deliberate choice for a
+        // structural change that needs the route re-established.
+        var continueLive = new Button { Content = Strings.OutputEditInUseContinueButton, IsDefault = true };
+        var reconnect = new Button { Content = Strings.OutputEditInUseApplyButton };
         var cancel = new Button { Content = Strings.CancelButton, IsCancel = true };
 
-        var tcs = new TaskCompletionSource<bool>();
-        ok.Click += (_, _) => { tcs.TrySetResult(true); dlg.Close(); };
-        cancel.Click += (_, _) => { tcs.TrySetResult(false); dlg.Close(); };
-        dlg.Closed += (_, _) => tcs.TrySetResult(false);
+        var tcs = new TaskCompletionSource<OutputEditApplyMode>();
+        continueLive.Click += (_, _) => { tcs.TrySetResult(OutputEditApplyMode.Live); dlg.Close(); };
+        reconnect.Click += (_, _) => { tcs.TrySetResult(OutputEditApplyMode.Reconnect); dlg.Close(); };
+        cancel.Click += (_, _) => { tcs.TrySetResult(OutputEditApplyMode.Cancel); dlg.Close(); };
+        dlg.Closed += (_, _) => tcs.TrySetResult(OutputEditApplyMode.Cancel);
 
         var buttons = new StackPanel
         {
@@ -934,7 +967,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             Margin = new Avalonia.Thickness(0, 16, 0, 0),
         };
         buttons.Children.Add(cancel);
-        buttons.Children.Add(ok);
+        buttons.Children.Add(reconnect);
+        buttons.Children.Add(continueLive);
         DockPanel.SetDock(buttons, Dock.Bottom);
 
         var message = new TextBlock

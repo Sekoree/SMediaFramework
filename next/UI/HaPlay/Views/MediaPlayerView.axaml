@@ -296,6 +296,7 @@
                                     <StackPanel Spacing="6" Margin="4" MinWidth="160">
                                         <CheckBox Content="{x:Static res:Strings.LoopToggleLabel}"
                                                   IsChecked="{Binding IsLooping}"
+                                                  IsEnabled="{Binding AutoAdvancePlaylist}"
                                                   ToolTip.Tip="{x:Static res:Strings.LoopToggleTooltip}" />
                                         <CheckBox Content="{x:Static res:Strings.AutoAdvanceToggleLabel}"
                                                   IsChecked="{Binding AutoAdvancePlaylist}"
@@ -454,9 +455,15 @@
                                              making set tabs impossible to switch. -->
                                         <Panel Background="Transparent"
                                                DoubleTapped="OnPlaylistTabDoubleTapped">
-                                            <TextBlock Text="{Binding Name}" MinWidth="64"
-                                                       VerticalAlignment="Center" Padding="2,0"
-                                                       IsVisible="{Binding !IsRenaming}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="4"
+                                                        IsVisible="{Binding !IsRenaming}">
+                                                <!-- Marks the Set the player is currently playing from. -->
+                                                <TextBlock Text="&#x25B6;" FontSize="9" VerticalAlignment="Center"
+                                                           Foreground="#2E9E4B"
+                                                           IsVisible="{Binding IsPlaying}" />
+                                                <TextBlock Text="{Binding Name}" MinWidth="60"
+                                                           VerticalAlignment="Center" Padding="2,0" />
+                                            </StackPanel>
                                             <TextBox Text="{Binding Name, Mode=TwoWay}"
                                                      MinWidth="64"
                                                      IsVisible="{Binding IsRenaming}"
@@ -487,40 +494,43 @@
                             <MenuItem Header="{x:Static res:Strings.PlaylistContextMoveDown}"
                                       Command="{Binding MovePlaylistItemDownCommand}" />
                             <Separator />
-                            <!-- Multi-track files only (MKV with several languages); hidden otherwise. -->
-                            <MenuItem Header="{x:Static res:Strings.PlaylistContextAudioTrack}"
-                                      IsVisible="{Binding SelectedItemHasMultipleAudioTracks}"
-                                      ItemsSource="{Binding SelectedItemAudioTrackChoices}">
-                                <MenuItem.Styles>
-                                    <Style Selector="MenuItem MenuItem" x:DataType="vm:PlaylistAudioTrackChoiceViewModel">
-                                        <Setter Property="Header" Value="{Binding Label}" />
-                                        <Setter Property="Command" Value="{Binding SelectCommand}" />
-                                    </Style>
-                                </MenuItem.Styles>
-                            </MenuItem>
-                            <Separator IsVisible="{Binding SelectedItemHasMultipleAudioTracks}" />
-                            <MenuItem Header="Subtitles…" Command="{Binding ConfigureSubtitlesCommand}" />
-                            <MenuItem Header="{x:Static res:Strings.PlaylistContextProperties}"
-                                      Command="{Binding ShowItemPropertiesCommand}" />
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextRemove}"
+                                      Command="{Binding RemoveFromPlaylistCommand}" />
+                            <Separator />
                             <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
                                       Click="OnCopyPlaylistItemApiUrlClick" />
                             <Separator />
-                            <MenuItem Header="{x:Static res:Strings.PlaylistContextRemove}"
-                                      Command="{Binding RemoveFromPlaylistCommand}" />
+                            <!-- Audio-track AND subtitle selection both live in the Properties dialog's Tracks
+                                 tab (shown only when the file has multiple audio / any subtitle streams) — no
+                                 more per-row track submenus on the context menu. -->
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextProperties}"
+                                      Command="{Binding ShowItemPropertiesCommand}" />
                         </ContextMenu>
                     </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="models:PlaylistItem">
-                            <Grid ColumnDefinitions="Auto,Auto,*" >
-                                <TextBlock Grid.Column="0" Classes="drag-handle" Margin="0,0,8,0" />
-                                <PathIcon Grid.Column="1" Width="12" Height="12"
-                                          Data="{Binding Converter={x:Static views:PlaylistItemIconConverter.Instance}}"
-                                          Opacity="0.85" Margin="0,0,6,0" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="2" Text="{Binding DisplayName}"
-                                           ToolTip.Tip="{Binding ToolTip}"
-                                           VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis" />
-                            </Grid>
+                            <!-- The now-playing row gets an accent border (transparent otherwise so the row
+                                 keeps its size). Matched by PlaylistItem.Id, so two same-file items and
+                                 record 'with' edits both resolve correctly. -->
+                            <Border BorderThickness="1" CornerRadius="3" Padding="3,1" Margin="0,0,2,0">
+                                <Border.BorderBrush>
+                                    <MultiBinding Converter="{x:Static views:PlaylistItemIsPlayingConverter.Instance}">
+                                        <Binding />
+                                        <Binding Path="((vm:MediaPlayerViewModel)DataContext).CurrentPlayingItem"
+                                                 RelativeSource="{RelativeSource AncestorType=ListBox}" />
+                                    </MultiBinding>
+                                </Border.BorderBrush>
+                                <Grid ColumnDefinitions="Auto,Auto,*" >
+                                    <TextBlock Grid.Column="0" Classes="drag-handle" Margin="0,0,8,0" />
+                                    <PathIcon Grid.Column="1" Width="12" Height="12"
+                                              Data="{Binding Converter={x:Static views:PlaylistItemIconConverter.Instance}}"
+                                              Opacity="0.85" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Text="{Binding DisplayName}"
+                                               ToolTip.Tip="{Binding ToolTip}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" />
+                                </Grid>
+                            </Border>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>

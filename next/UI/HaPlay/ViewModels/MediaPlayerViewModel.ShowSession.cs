@@ -208,7 +208,12 @@ public partial class MediaPlayerViewModel
                 MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
                     (item as FilePlaylistItem)?.Subtitles
                         ?? (item as YouTubePlaylistItem)?.Subtitles,
-                    loop: IsLooping)).ConfigureAwait(true);
+                    // Loop is a modifier on unattended progression: it only loops the current item when
+                    // Auto-Advance is also on. With Auto-Advance off the item plays once and stops.
+                    loop: IsLooping && AutoAdvancePlaylist,
+                    // The operator's audio-track choice from the Properties dialog (null = automatic). File items
+                    // only; live/YouTube sources have no container multi-track selection here.
+                    audioStreamIndex: (item as FilePlaylistItem)?.AudioTrackIndex)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
@@ -745,6 +750,7 @@ public partial class MediaPlayerViewModel
             ShowSessionActive = false;
             IsPlaying = false;
             IsMediaLoaded = false;
+            CurrentPlayingItem = null; // deck back to idle — clear the now-playing markers
             CurrentPosition = TimeSpan.Zero;
             SyncIdleSlate();
         });
@@ -814,7 +820,7 @@ public partial class MediaPlayerViewModel
                 // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches
                 // this branch (the clip's Loop flag restarts it seamlessly inside the session); this
                 // replay covers loop toggled ON mid-play, when the running clip predates the flag.
-                if (IsLooping && _currentPlaylistItem is { } current)
+                if (IsLooping && AutoAdvancePlaylist && _currentPlaylistItem is { } current)
                     await PlayPlaylistItemAsync(current).ConfigureAwait(true);
                 else if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
                     await PlayPlaylistItemAsync(next).ConfigureAwait(true);

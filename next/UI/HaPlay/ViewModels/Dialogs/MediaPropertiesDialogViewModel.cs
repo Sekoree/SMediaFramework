@@ -141,6 +141,18 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasMultipleAudioTracks;
 
+    /// <summary>True when the file has embedded subtitle streams (or already-configured subtitles) — gates the
+    /// subtitle picker in the dialog, which is embedded-track-based (nothing to offer otherwise).</summary>
+    [ObservableProperty]
+    private bool _hasSubtitleTracks;
+
+    /// <summary>True for a file item with neither a multi-track audio choice nor subtitles — the Tracks tab
+    /// would otherwise be blank, so it shows an explanatory hint instead.</summary>
+    public bool HasNoSelectableTracks => IsFileItem && !HasMultipleAudioTracks && !HasSubtitleTracks;
+
+    partial void OnHasMultipleAudioTracksChanged(bool value) => OnPropertyChanged(nameof(HasNoSelectableTracks));
+    partial void OnHasSubtitleTracksChanged(bool value) => OnPropertyChanged(nameof(HasNoSelectableTracks));
+
     public string SubtitleSummary => _current switch
     {
         FilePlaylistItem { Subtitles.Count: > 0 } f =>
@@ -158,6 +170,24 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
         var tracks = await Playback.CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(true);
         PublishAudioTracks(tracks);
     }
+
+    /// <summary>Probes the file for embedded subtitle streams to decide whether the subtitle picker shows
+    /// (tests call <see cref="PublishSubtitleAvailability"/> directly). Already-configured subtitles keep it
+    /// available even if the embedded probe finds none.</summary>
+    public async Task LoadSubtitleTracksAsync()
+    {
+        if (_current is not FilePlaylistItem file)
+            return;
+        if (file.Subtitles.Count > 0)
+        {
+            PublishSubtitleAvailability(true);
+            return;
+        }
+        var tracks = await Playback.CueMediaProbe.TryProbeSubtitleTracksAsync(file.Path).ConfigureAwait(true);
+        PublishSubtitleAvailability(tracks.Count > 0);
+    }
+
+    internal void PublishSubtitleAvailability(bool hasTracks) => HasSubtitleTracks = hasTracks;
 
     internal void PublishAudioTracks(IReadOnlyList<MediaStreamInfo> tracks)
     {

@@ -224,7 +224,8 @@ public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
     /// <summary>Resolved audio stream descriptor (<c>codec|container|language</c>).</summary>
     public string? AudioStreamDescriptor { get; init; }
 
-    /// <summary>Selected caption-track language code; the prepared cache holds its sidecar .srt.</summary>
+    /// <summary>Selected caption-track language code; the prepared cache holds its sidecar .ass (converted
+    /// from YouTube's rich json3 timedtext so colour/style/positioning survive).</summary>
     public string? SubtitleLanguage { get; init; }
 
     /// <summary>True = the video leg was deliberately not selected (audio-only cue/deck item).</summary>

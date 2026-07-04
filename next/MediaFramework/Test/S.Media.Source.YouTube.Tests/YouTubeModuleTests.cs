@@ -92,12 +92,13 @@ public sealed class YouTubeModuleTests : IDisposable
             await File.WriteAllTextAsync(filePath, $"stream:{descriptor}", ct);
         }
 
-        public async Task<bool> TryDownloadCaptionsSrtAsync(
+        public async Task<bool> TryDownloadCaptionsAssAsync(
             string videoId, string languageCode, string filePath, CancellationToken ct)
         {
             if (languageCode != "en")
                 return false;
-            await File.WriteAllTextAsync(filePath, "1\n00:00:00,000 --> 00:00:01,000\nhi\n", ct);
+            await File.WriteAllTextAsync(
+                filePath, "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,hi\n", ct);
             return true;
         }
     }
@@ -175,7 +176,8 @@ public sealed class YouTubeModuleTests : IDisposable
 
         Assert.Equal("stream:opus|webm|en", File.ReadAllText(prepared.AssetPath));
         Assert.NotNull(prepared.SubtitlePath);
-        Assert.Contains("-->", File.ReadAllText(prepared.SubtitlePath!));
+        Assert.EndsWith(".ass", prepared.SubtitlePath);
+        Assert.Contains("Dialogue:", File.ReadAllText(prepared.SubtitlePath!));
     }
 
     [Fact]

@@ -38,8 +38,8 @@
                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
                      DataValidationErrors.Errors="{TemplateBinding (DataValidationErrors.Errors)}"
-                     UseFloatingWatermark="{TemplateBinding UseFloatingWatermark}"
-                     Watermark="{TemplateBinding Watermark}">
+                     UseFloatingPlaceholder="{TemplateBinding UseFloatingPlaceholder}"
+                     PlaceholderText="{TemplateBinding PlaceholderText}">
             </TextBox>
 
             <Button Name="PART_Button"

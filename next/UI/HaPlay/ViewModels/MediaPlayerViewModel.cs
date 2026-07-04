@@ -60,6 +60,29 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// auto-advance) works for both files and live inputs.</summary>
     private PlaylistItem? _currentPlaylistItem;
 
+    /// <summary>The playlist item currently loaded in the deck (playing or paused), or null when idle.
+    /// Drives the "now playing" row highlight and the playing-Set tab marker. Distinct from
+    /// <see cref="_currentPlaylistItem"/> (which the transport keeps for next/prev navigation even while
+    /// stopped) only in lifetime: this one clears the moment the deck returns to idle.</summary>
+    [ObservableProperty]
+    private PlaylistItem? _currentPlayingItem;
+
+    partial void OnCurrentPlayingItemChanged(PlaylistItem? value)
+    {
+        _ = value;
+        RefreshPlayingTabIndicators();
+    }
+
+    /// <summary>Marks the Set the player is playing from (<see cref="PlaylistTabViewModel.IsPlaying"/>).
+    /// Only the active-playback tab is flagged, and only while an item is actually loaded — so the marker
+    /// shows on the playing Set even when the user has switched to view a different Set.</summary>
+    private void RefreshPlayingTabIndicators()
+    {
+        var playingTab = CurrentPlayingItem is not null ? _activePlaybackTab : null;
+        foreach (var tab in PlaylistTabs)
+            tab.IsPlaying = ReferenceEquals(tab, playingTab);
+    }
+
     /// <summary>
     /// Trim settings loaded from config, keyed by input channel. Applied whenever the matrix is resized.
     /// </summary>
@@ -1244,63 +1267,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         ShowItemPropertiesCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
         TogglePlayPauseCommand.NotifyCanExecuteChanged();
-        _ = RefreshSelectedItemAudioTrackChoicesAsync(value);
-    }
-
-    /// <summary>Audio-track entries for the playlist context menu ("Audio track" submenu). Filled
-    /// asynchronously when a multi-track file item is selected; empty otherwise (submenu hidden).</summary>
-    public ObservableCollection<PlaylistAudioTrackChoiceViewModel> SelectedItemAudioTrackChoices { get; } = new();
-
-    [ObservableProperty]
-    private bool _selectedItemHasMultipleAudioTracks;
-
-    private async Task RefreshSelectedItemAudioTrackChoicesAsync(PlaylistItem? value)
-    {
-        if (value is not FilePlaylistItem file)
-        {
-            SelectedItemAudioTrackChoices.Clear();
-            SelectedItemHasMultipleAudioTracks = false;
-            return;
-        }
-
-        var tracks = await Playback.CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(false);
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            // Selection may have moved on while probing — only publish for the still-selected item.
-            if (!ReferenceEquals(SelectedPlaylistItem, value))
-                return;
-
-            SelectedItemAudioTrackChoices.Clear();
-            if (tracks.Count >= 2)
-            {
-                SelectedItemAudioTrackChoices.Add(new PlaylistAudioTrackChoiceViewModel(
-                    this, null, Strings.AudioTrackAutomaticLabel, file.AudioTrackIndex is null));
-                foreach (var track in tracks)
-                    SelectedItemAudioTrackChoices.Add(new PlaylistAudioTrackChoiceViewModel(
-                        this, track.Index, track.ToDisplayString(), file.AudioTrackIndex == track.Index));
-            }
-
-            SelectedItemHasMultipleAudioTracks = SelectedItemAudioTrackChoices.Count > 0;
-        });
-    }
-
-    /// <summary>Replaces the selected file item with a copy carrying the chosen audio track. Applies on
-    /// the next open of the item (reload if it is currently playing).</summary>
-    internal void SetSelectedPlaylistItemAudioTrack(int? audioTrackIndex)
-    {
-        if (SelectedPlaylistItem is not FilePlaylistItem file || file.AudioTrackIndex == audioTrackIndex)
-            return;
-
-        var replacement = file with { AudioTrackIndex = audioTrackIndex };
-        var idx = PlaylistItems.IndexOf(file);
-        if (idx < 0)
-            return;
-
-        PlaylistItems[idx] = replacement;
-        if (ReferenceEquals(_currentPlaylistItem, file))
-            _currentPlaylistItem = replacement;
-        SelectedPlaylistItem = replacement;
-        StatusMessage = Strings.Format(nameof(Strings.AudioTrackChangedStatusFormat), replacement.DisplayName);
     }
 
     partial void OnSelectedPlaylistTabChanged(PlaylistTabViewModel? oldValue, PlaylistTabViewModel? newValue)
@@ -2106,6 +2072,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         MediaFilePath = config.MediaFilePath;
         _currentPlaylistItem = null;
+        CurrentPlayingItem = null;
         OnPropertyChanged(nameof(CurrentMediaDisplay));
         var selectedIndex = Math.Clamp(config.SelectedPlaylistTabIndex, 0, PlaylistTabs.Count - 1);
         SelectedPlaylistTab = PlaylistTabs[selectedIndex];
@@ -2201,7 +2168,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             // runs (on the next open), and the WaitingForSource retry state owns its own lifecycle, so
             // only reset when we're not actively waiting for a live source to return.
             if (LoadState != PlayerLoadState.WaitingForSource)
+            {
                 LoadState = PlayerLoadState.Idle;
+                // A hard close (not a reload arc) clears the now-playing markers; WaitingForSource keeps them
+                // (the retry loop owns that state and re-lights them on each attempt).
+                if (resetPlayingUi) CurrentPlayingItem = null;
+            }
             PlayCommand.NotifyCanExecuteChanged();
             PauseCommand.NotifyCanExecuteChanged();
             StopCommand.NotifyCanExecuteChanged();
@@ -2301,6 +2273,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             var item = _waitingItem;
             _currentPlaylistItem = item;
+            CurrentPlayingItem = item; // keep the marker lit while a live source retries
             // Push the next deadline forward immediately so a slow open doesn't fire a retry storm
             // when the dispatcher catches up.
             var retrySec = GetRetrySeconds(item);

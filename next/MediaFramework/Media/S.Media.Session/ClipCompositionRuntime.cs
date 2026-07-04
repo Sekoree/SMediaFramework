@@ -453,15 +453,21 @@ public sealed class ClipCompositionRuntime : IDisposable
             CompositionName);
     }
 
-    public LayerSlot AddLayer(VideoFormat sourceFormat, VideoPlacementSpec placement)
+    public LayerSlot AddLayer(
+        VideoFormat sourceFormat, VideoPlacementSpec placement,
+        SlotKeepPolicy keepPolicy = SlotKeepPolicy.MasterAligned)
     {
         LayerSlot layer;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var rawSlot = _mixer.AddSlot();
+            // Master-clock compositions align decoded frames to the clock by PTS; without a master they
+            // are latest-wins. Callers whose frames carry no meaningful PTS (subtitle overlays are
+            // pump-driven and re-rendered in place at PresentationTime 0) must opt into Latest explicitly —
+            // MasterAligned would freeze on the first frame, since every frame is equidistant from the clock.
             if (_master is not null)
-                rawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+                rawSlot.KeepPolicy = keepPolicy;
             layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence));
             try
             {
@@ -572,7 +578,11 @@ public sealed class ClipCompositionRuntime : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var placement = new VideoPlacementSpec(CompositionName, layerIndex, Placement: "stretch");
-        var layer = AddLayer(_canvasFormat, placement);
+        // Latest-wins: the subtitle feed is pump-driven — it renders the source at the current position each
+        // tick and submits that frame. Its frames carry no per-frame PTS (re-rendered in place at PTS 0), so a
+        // MasterAligned slot would freeze on the first frame (every frame equidistant from the clock). Latest
+        // takes the newest submitted frame, which is exactly the one rendered for this position.
+        var layer = AddLayer(_canvasFormat, placement, SlotKeepPolicy.Latest);
         var feed = new SubtitleLayerFeed(this, source, layer, positionProvider);
         lock (_gate)
         {

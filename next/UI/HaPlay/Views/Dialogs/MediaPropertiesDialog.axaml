@@ -49,16 +49,27 @@
       <!-- Tracks: file items — audio track choice + subtitle selection. -->
       <TabItem Header="{x:Static res:Strings.MediaPropertiesTabTracks}" IsVisible="{Binding IsFileItem}">
         <StackPanel Spacing="10" Margin="0,8,0,0">
-          <TextBlock Text="{x:Static res:Strings.MediaPropertiesAudioTrackLabel}" FontWeight="SemiBold" />
-          <ComboBox MinWidth="260" HorizontalAlignment="Left"
-                    ItemsSource="{Binding AudioTrackOptions}"
-                    SelectedItem="{Binding SelectedAudioTrack, Mode=TwoWay}" />
-
-          <TextBlock Text="{x:Static res:Strings.MediaPropertiesSubtitlesLabel}" FontWeight="SemiBold" Margin="0,10,0,0" />
-          <StackPanel Orientation="Horizontal" Spacing="10">
-            <TextBlock Text="{Binding SubtitleSummary}" VerticalAlignment="Center" Opacity="0.85" />
-            <Button Content="{x:Static res:Strings.MediaPropertiesEditSubtitlesButton}" Click="EditSubtitlesClick" />
+          <!-- Only shown when the file has more than one audio track (nothing to choose otherwise). -->
+          <StackPanel Spacing="10" IsVisible="{Binding HasMultipleAudioTracks}">
+            <TextBlock Text="{x:Static res:Strings.MediaPropertiesAudioTrackLabel}" FontWeight="SemiBold" />
+            <ComboBox MinWidth="260" HorizontalAlignment="Left"
+                      ItemsSource="{Binding AudioTrackOptions}"
+                      SelectedItem="{Binding SelectedAudioTrack, Mode=TwoWay}" />
           </StackPanel>
+
+          <!-- Only shown when the file actually carries subtitle streams (or already has some configured) —
+               the picker is embedded-track-based, so it's empty and pointless otherwise. -->
+          <StackPanel Spacing="10" IsVisible="{Binding HasSubtitleTracks}">
+            <TextBlock Text="{x:Static res:Strings.MediaPropertiesSubtitlesLabel}" FontWeight="SemiBold" Margin="0,10,0,0" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="{Binding SubtitleSummary}" VerticalAlignment="Center" Opacity="0.85" />
+              <Button Content="{x:Static res:Strings.MediaPropertiesEditSubtitlesButton}" Click="EditSubtitlesClick" />
+            </StackPanel>
+          </StackPanel>
+
+          <TextBlock Text="{x:Static res:Strings.MediaPropertiesNoSelectableTracks}"
+                     Opacity="0.75" TextWrapping="Wrap"
+                     IsVisible="{Binding HasNoSelectableTracks}" />
         </StackPanel>
       </TabItem>
 

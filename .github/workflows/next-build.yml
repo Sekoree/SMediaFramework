@@ -138,7 +138,7 @@ jobs:
         env:
           HAPLAY_SMOKE: '1'
           LIBGL_ALWAYS_SOFTWARE: 1
-        run: xvfb-run -a ./haplay-publish/HaPlay.Desktop --media-log-level information
+        run: xvfb-run -a ./haplay-publish/HaPlayer --media-log-level information
 
       # Windows runners have a service desktop; the launch there is unproven — run it best-effort until it
       # has a green history, then promote to gating (the AOT publish above IS the Windows compile gate).
@@ -148,7 +148,7 @@ jobs:
         timeout-minutes: 5
         env:
           HAPLAY_SMOKE: '1'
-        run: ./haplay-publish/HaPlay.Desktop.exe --media-log-level information
+        run: ./haplay-publish/HaPlayer.exe --media-log-level information
 
   # ─────────────────────────────────────────────────────────────────────────────────────────────
   # Runnable AOT artifacts: build/stage the native libs the app P/Invokes (that don't come from

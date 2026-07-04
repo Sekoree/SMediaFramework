@@ -22,6 +22,7 @@ public partial class MediaPropertiesDialog : Window
             {
                 await vm.LoadDetailsAsync();
                 await vm.LoadAudioTracksAsync();
+                await vm.LoadSubtitleTracksAsync();
             }
         };
     }

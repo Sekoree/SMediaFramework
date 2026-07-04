@@ -78,4 +78,20 @@ public sealed class MediaPlayerShowMapperTests
         var doc = MediaPlayerShowMapper.ToShowDocument("/m/movie.mkv", hasVideo: true);
         Assert.Null(Assert.Single(doc.Clips).Subtitles);
     }
+
+    [Fact]
+    public void ExplicitAudioTrack_FlowsOntoTheClipBinding()
+    {
+        // The operator picked container audio stream #3 (a stereo track) in Properties — the deck's clip
+        // binding must carry it so the shared demux elects that stream instead of the default (5.1) track.
+        var doc = MediaPlayerShowMapper.ToShowDocument("/m/movie.mkv", hasVideo: true, audioStreamIndex: 3);
+        Assert.Equal(3, Assert.Single(doc.Clips).AudioStreamIndex);
+    }
+
+    [Fact]
+    public void NoAudioTrack_LeavesAudioStreamIndexNull_ForAutomaticSelection()
+    {
+        var doc = MediaPlayerShowMapper.ToShowDocument("/m/movie.mkv", hasVideo: true);
+        Assert.Null(Assert.Single(doc.Clips).AudioStreamIndex);
+    }
 }

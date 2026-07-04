@@ -49,12 +49,13 @@ public sealed class YouTubeIntegrationTests : IDisposable
             string videoId, string descriptor, string filePath, IProgress<double>? progress, CancellationToken ct) =>
             await File.WriteAllTextAsync(filePath, $"stream:{descriptor}", ct);
 
-        public async Task<bool> TryDownloadCaptionsSrtAsync(
+        public async Task<bool> TryDownloadCaptionsAssAsync(
             string videoId, string languageCode, string filePath, CancellationToken ct)
         {
             if (languageCode != "en")
                 return false;
-            await File.WriteAllTextAsync(filePath, "1\n00:00:00,000 --> 00:00:01,000\nhi\n", ct);
+            await File.WriteAllTextAsync(
+                filePath, "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,hi\n", ct);
             return true;
         }
     }

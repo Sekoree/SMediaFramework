@@ -16,7 +16,7 @@ internal class FontUtils
     {
         FontAliasingProperty.Changed.AddClassHandler<Control>((c, e) =>
         {
-            RenderOptions.SetTextRenderingMode(c, e.GetNewValue<bool?>() is true ? TextRenderingMode.Alias : TextRenderingMode.SubpixelAntialias);
+            TextOptions.SetTextRenderingMode(c, e.GetNewValue<bool?>() is true ? TextRenderingMode.Alias : TextRenderingMode.SubpixelAntialias);
         });
     }
 }

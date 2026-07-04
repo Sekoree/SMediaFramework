@@ -1349,10 +1349,13 @@
     <value>Apply edit while output is in use?</value>
   </data>
   <data name="OutputEditInUseApplyButton" xml:space="preserve">
-    <value>Apply (brief glitch)</value>
+    <value>Reconnect (brief glitch)</value>
+  </data>
+  <data name="OutputEditInUseContinueButton" xml:space="preserve">
+    <value>Save &amp; continue (may glitch)</value>
   </data>
   <data name="OutputEditInUseDialogMessageFormat" xml:space="preserve">
-    <value>'{0}' is currently delivering audio/video to a running player. Applying the edit will cause a brief silence / black-frame on that output (typically 1–2 frames). Continue?</value>
+    <value>'{0}' is currently delivering audio/video to a running player. Save &amp; continue applies the change live under the running output — best for cosmetic changes like Always-on-top, usually with no interruption. Reconnect re-establishes the output for structural changes (a brief silence / black-frame).</value>
   </data>
   <data name="OutputRemoveInUseDialogTitle" xml:space="preserve">
     <value>Remove output while in use?</value>
@@ -2724,6 +2727,9 @@
   </data>
   <data name="MediaPropertiesAudioTrackLabel" xml:space="preserve">
     <value>Audio track</value>
+  </data>
+  <data name="MediaPropertiesNoSelectableTracks" xml:space="preserve">
+    <value>This file has a single audio track and no subtitles.</value>
   </data>
   <data name="MediaPropertiesSubtitlesLabel" xml:space="preserve">
     <value>Subtitles</value>
