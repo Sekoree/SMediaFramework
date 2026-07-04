@@ -174,7 +174,10 @@ public sealed class ControlOSCListenerManagerTests
 
         await client.SendMessageAsync("/ch/01/mix/fader", [OSCArgument.Float32(0.75f)]);
 
-        var sent = await sender.NextSent.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // Generous ceiling: the packet crosses a real loopback UDP socket, then the receive loop parses it and
+        // runs a Mond script before the sender fires — 2 s was too tight on a loaded CI runner. The wait
+        // completes the instant NextSent resolves, so the happy path pays nothing for the larger ceiling.
+        var sent = await sender.NextSent.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("/seen", sent.Address);
         Assert.Equal(0.75f, Assert.Single(sent.Arguments).AsFloat32());
         Assert.Equal(ControlSessionState.Running, manager.ListenerHealth[listenerId].State);
