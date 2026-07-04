@@ -1535,10 +1535,15 @@ public sealed class ShowSessionTests
         // scheduler tick on a loaded runner — poll the snapshot until it settles (times out → still asserts).
         async Task<IReadOnlyList<TransportSnapshot>> SettledSnapshot(Func<IReadOnlyList<TransportSnapshot>, bool> until)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-            IReadOnlyList<TransportSnapshot> s;
-            do { s = await session.SnapshotAsync(); }
-            while (!until(s) && DateTime.UtcNow < deadline);
+            // Poll WITH a yield: SnapshotAsync can complete synchronously, so a tight await-loop would hot-spin
+            // and starve the pause/resume continuation on a 2-core runner (it then never settles). Delay yields.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+            var s = await session.SnapshotAsync();
+            while (!until(s) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(15);
+                s = await session.SnapshotAsync();
+            }
             return s;
         }
 

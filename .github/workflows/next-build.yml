@@ -273,8 +273,14 @@ jobs:
           PA_ASIO=(-DPA_USE_ASIO=OFF)
           if curl.exe -fsSL "https://www.steinberg.net/asiosdk" -o asiosdk.zip && [ "$(head -c2 asiosdk.zip)" = "PK" ]; then
             powershell -NoProfile -Command "Expand-Archive -Force -Path asiosdk.zip -DestinationPath asio_sdk" || true
-            asio="$(find asio_sdk -maxdepth 2 -type d -iname 'asio*sdk*' | head -1)"
-            if [ -n "$asio" ]; then PA_ASIO=(-DPA_USE_ASIO=ON "-DASIOSDK_ROOT_DIR=$PWD/$asio"); echo "ASIO SDK: $asio"; fi
+            # FindASIOSDK.cmake needs ASIOSDK_ROOT_DIR to be the dir that DIRECTLY contains common/asio.h.
+            # The zip nests a top-level asiosdk_* folder, so resolve the root from the header — a name glob
+            # ('asio*sdk*') also matched the asio_sdk wrapper dir and pointed one level too high.
+            hdr="$(find asio_sdk -type f -ipath '*/common/asio.h' | head -1)"
+            if [ -n "$hdr" ]; then
+              asio="$(dirname "$(dirname "$hdr")")"
+              PA_ASIO=(-DPA_USE_ASIO=ON "-DASIOSDK_ROOT_DIR=$PWD/$asio"); echo "ASIO SDK: $asio"
+            fi
           fi
           echo "PortAudio ASIO flags: ${PA_ASIO[*]}"
           curl -fsSL https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz | tar xz
