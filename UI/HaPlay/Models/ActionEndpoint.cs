@@ -3,8 +3,8 @@ using System.Text.Json.Serialization;
 namespace HaPlay.Models;
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
-[JsonDerivedType(typeof(OscActionEndpoint), typeDiscriminator: "osc")]
-[JsonDerivedType(typeof(MidiActionEndpoint), typeDiscriminator: "midi")]
+[JsonDerivedType(typeof(OSCActionEndpoint), typeDiscriminator: "osc")]
+[JsonDerivedType(typeof(MIDIActionEndpoint), typeDiscriminator: "midi")]
 public abstract record ActionEndpoint
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -18,7 +18,7 @@ public abstract record ActionEndpoint
     public virtual string Summary => string.Empty;
 }
 
-public sealed record OscActionEndpoint : ActionEndpoint
+public sealed record OSCActionEndpoint : ActionEndpoint
 {
     public string Host { get; init; } = "127.0.0.1";
 
@@ -31,7 +31,7 @@ public sealed record OscActionEndpoint : ActionEndpoint
     public override string Summary => $"{Host}:{Port}";
 }
 
-public sealed record MidiActionEndpoint : ActionEndpoint
+public sealed record MIDIActionEndpoint : ActionEndpoint
 {
     public int? DeviceId { get; init; }
 

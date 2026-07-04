@@ -1,11 +1,11 @@
 using Microsoft.Extensions.Logging;
-using S.Media.Core.Clock;
+using S.Media.Time;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
-using S.Media.Effects;
-using S.Media.FFmpeg.Video;
-using S.Media.Playback;
-using S.Media.SDL3;
+using S.Media.Compositor;
+using S.Media.Decode.FFmpeg.Video;
+using S.Media.Session;
+using S.Media.Present.SDL3;
 
 namespace HaPlay.Playback;
 
@@ -66,6 +66,14 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
 
     /// <summary>The layer-0 sink the deck's video router fans its decoded frames into.</summary>
     public IVideoOutput VideoSink => _videoLayer.Output;
+
+    /// <summary>The composition canvas format (size the subtitle overlays render at).</summary>
+    public VideoFormat CanvasFormat => _composition.CanvasFormat;
+
+    /// <summary>Attaches a subtitle/overlay source as a top layer composited each frame at the deck's playhead
+    /// (delegates to the framework runtime). Returns a handle that detaches + disposes the feed.</summary>
+    public IDisposable AttachSubtitleOverlay(S.Media.Core.Video.IVideoOverlaySource source, Func<TimeSpan> positionProvider) =>
+        _composition.AttachSubtitleOverlay(source, positionProvider);
 
     public int OutputCount => _composition.OutputCount;
 

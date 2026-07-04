@@ -88,7 +88,7 @@ public sealed class CuePlayerViewInteractionTests
         DispatchUi(() =>
         {
             var vm = new CuePlayerViewModel();
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             cue.SourceOrAction = "/tmp/test.mp3";
             vm.MediaCueExecutor = async (_, _) =>
@@ -110,7 +110,9 @@ public sealed class CuePlayerViewInteractionTests
             vm.GoCommand.Execute(null);
         });
 
-        PumpUntil(() => seenFinalStatus.IsSet, TimeSpan.FromSeconds(2));
+        // Generous window: the executor hops through Task.Run on a thread pool the parallel test
+        // collections keep saturated on CI — 2 s flaked on the Windows runner. Exits early on success.
+        PumpUntil(() => seenFinalStatus.IsSet, TimeSpan.FromSeconds(20));
 
         Assert.True(seenFinalStatus.IsSet);
         Assert.False(statusRaisedOffUiThread);
@@ -126,7 +128,7 @@ public sealed class CuePlayerViewInteractionTests
         DispatchUi(() =>
         {
             vm = new CuePlayerViewModel();
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             cue.SourceOrAction = "/tmp/test.mp4";
             vm.MediaCueExecutor = async (_, _) =>
@@ -146,7 +148,7 @@ public sealed class CuePlayerViewInteractionTests
             vm.GoCommand.Execute(null);
         });
 
-        PumpUntil(() => seenFailureStatus.IsSet, TimeSpan.FromSeconds(2));
+        PumpUntil(() => seenFailureStatus.IsSet, TimeSpan.FromSeconds(20));
 
         DispatchUi(() =>
         {
@@ -157,6 +159,57 @@ public sealed class CuePlayerViewInteractionTests
             Assert.Same(cue, vm.SelectedCueNode);
             Assert.Contains("Failed to start", vm.StatusMessage);
             Assert.DoesNotContain("Triggered", vm.StatusMessage);
+        });
+    }
+
+    [Fact]
+    public void IdleCuePlacementEdit_FlagsShowDocumentStaleForNextFire()
+    {
+        DispatchUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            var staleMarks = 0;
+            var liveUpdates = 0;
+            vm.CueClipModelStaleCallback = () => staleMarks++;
+            vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => { liveUpdates++; return Task.CompletedTask; };
+
+            vm.AddEmptyMediaCue();
+            Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            vm.AddVideoPlacementCommand.Execute(null);
+            var placement = Assert.Single(vm.VisibleVideoPlacements);
+
+            // The cue was never fired → editing its placement must flag the backing show document stale (so the
+            // next GO reloads the current geometry) rather than attempting a live update on a non-running cue.
+            placement.DestX = 0.25;
+            placement.DestWidth = 1.0;
+
+            Assert.True(staleMarks > 0, "idle placement edit should flag the show document stale");
+            Assert.Equal(0, liveUpdates);
+        });
+    }
+
+    [Fact]
+    public void ActiveCuePlacementEdit_PushesLiveUpdate_WithoutMarkingStale()
+    {
+        DispatchUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            var staleMarks = 0;
+            var liveUpdates = 0;
+            vm.CueClipModelStaleCallback = () => staleMarks++;
+            vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => { liveUpdates++; return Task.CompletedTask; };
+
+            vm.AddEmptyMediaCue();
+            var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            vm.AddVideoPlacementCommand.Execute(null);
+            var placement = Assert.Single(vm.VisibleVideoPlacements);
+
+            vm.OnCueStarted(cue.Id); // now running → live path, not document reload
+
+            placement.DestX = 0.25;
+
+            Assert.True(liveUpdates > 0, "running cue placement edit should push a live update");
+            Assert.Equal(0, staleMarks);
         });
     }
 

@@ -29,16 +29,16 @@ public static class ProjectSections
     // Sub-sections (finer I/O split — the "checkboxes instead of a menu per combination" ask).
     public const string OutputsAudio = "outputs.audio";
     public const string OutputsVideo = "outputs.video";
-    public const string TargetsMidi = "targets.midi";
-    public const string TargetsOsc = "targets.osc";
+    public const string TargetsMIDI = "targets.midi";
+    public const string TargetsOSC = "targets.osc";
 
     /// <summary>Every selectable leaf section, in display order.</summary>
     public static readonly IReadOnlyList<string> Leaves =
     [
         OutputsAudio,
         OutputsVideo,
-        TargetsMidi,
-        TargetsOsc,
+        TargetsMIDI,
+        TargetsOSC,
         Players,
         CueLists,
         Soundboards,
@@ -63,7 +63,7 @@ public static class ProjectSections
     {
         var set = new HashSet<string>(leaves, StringComparer.Ordinal);
         CollapsePair(set, OutputsAudio, OutputsVideo, Outputs);
-        CollapsePair(set, TargetsMidi, TargetsOsc, ActionTargets);
+        CollapsePair(set, TargetsMIDI, TargetsOSC, ActionTargets);
         return set.Order(StringComparer.Ordinal).ToList();
     }
 

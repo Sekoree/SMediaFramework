@@ -33,4 +33,3 @@ public enum NDIErrorCode
     /// <summary>Failed to create an <see cref="NDISendListener"/> instance (Discovery Server may be unavailable).</summary>
     NDISendListenerCreateFailed = 10,
 }
-

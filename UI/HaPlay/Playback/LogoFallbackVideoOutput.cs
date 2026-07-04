@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using S.Media.Core.Video;
-using S.Media.Effects;
-using S.Media.FFmpeg.Video;
+using S.Media.Compositor;
+using S.Media.Decode.FFmpeg.Video;
 
 namespace HaPlay.Playback;
 

@@ -48,13 +48,13 @@ public sealed class ControlMonitorEntryViewModel
         var parts = new List<string>();
         if (!string.IsNullOrWhiteSpace(record.Address))
             parts.Add(record.Address!);
-        if (record.OscArguments.Count > 0)
-            parts.Add("[" + string.Join(", ", record.OscArguments.Select(FormatOscArgument)) + "]");
-        if (record.MidiController is { } controller)
+        if (record.OSCArguments.Count > 0)
+            parts.Add("[" + string.Join(", ", record.OSCArguments.Select(FormatOSCArgument)) + "]");
+        if (record.MIDIController is { } controller)
             parts.Add($"cc{controller}");
-        if (record.MidiNote is { } note)
+        if (record.MIDINote is { } note)
             parts.Add($"note{note}");
-        if (record.MidiValue is { } value)
+        if (record.MIDIValue is { } value)
             parts.Add($"={value}");
         if (!string.IsNullOrWhiteSpace(record.DeviceKey))
             parts.Add($"dev:{record.DeviceKey}");
@@ -68,7 +68,7 @@ public sealed class ControlMonitorEntryViewModel
         return parts.Count > 0 ? string.Join("  ", parts) : "(no detail)";
     }
 
-    private static string FormatOscArgument(ControlMonitorOscArgumentRecord argument)
+    private static string FormatOSCArgument(ControlMonitorOSCArgumentRecord argument)
     {
         if (argument.FloatValue is { } f)
             return f.ToString("0.###", CultureInfo.InvariantCulture);
@@ -103,14 +103,14 @@ internal sealed record ControlStructureRowCommands(
     Action<ControlStructureRowViewModel> AddPeriodicSend,
     Action<ControlStructureRowViewModel> EditPeriodicSend,
     Action<ControlStructureRowViewModel> RemovePeriodicSend,
-    Action<ControlStructureRowViewModel> EditOscDevice,
-    Action<ControlStructureRowViewModel> RemoveOscDevice,
-    Action<ControlStructureRowViewModel> TestOsc,
-    Action<ControlStructureRowViewModel> TestMidi,
-    Action AddOscListener,
-    Action<ControlStructureRowViewModel> EditOscListener,
-    Action<ControlStructureRowViewModel> RemoveOscListener,
-    Action<ControlStructureRowViewModel> EditMidiDevice,
+    Action<ControlStructureRowViewModel> EditOSCDevice,
+    Action<ControlStructureRowViewModel> RemoveOSCDevice,
+    Action<ControlStructureRowViewModel> TestOSC,
+    Action<ControlStructureRowViewModel> TestMIDI,
+    Action AddOSCListener,
+    Action<ControlStructureRowViewModel> EditOSCListener,
+    Action<ControlStructureRowViewModel> RemoveOSCListener,
+    Action<ControlStructureRowViewModel> EditMIDIDevice,
     Action<ControlStructureRowViewModel> ExportLayer);
 
 public sealed class ControlStructureRowViewModel
@@ -137,7 +137,7 @@ public sealed class ControlStructureRowViewModel
         this.IsGroup = IsGroup;
         DeviceInstanceId = deviceInstanceId;
         LayerId = layerId;
-        OscListenerId = oscListenerId;
+        OSCListenerId = oscListenerId;
         PeriodicSendId = periodicSendId;
         Protocol = protocol;
 
@@ -152,17 +152,17 @@ public sealed class ControlStructureRowViewModel
             AddLayerCommand = new RelayCommand(commands.AddLayer);
             EditLayerCommand = new RelayCommand(() => commands.EditLayer(this), () => CanEditLayer);
             RemoveLayerCommand = new RelayCommand(() => commands.RemoveLayer(this), () => CanEditLayer);
-            AddOscListenerCommand = new RelayCommand(commands.AddOscListener);
-            EditOscListenerCommand = new RelayCommand(() => commands.EditOscListener(this), () => CanEditOscListener);
-            RemoveOscListenerCommand = new RelayCommand(() => commands.RemoveOscListener(this), () => CanEditOscListener);
+            AddOSCListenerCommand = new RelayCommand(commands.AddOSCListener);
+            EditOSCListenerCommand = new RelayCommand(() => commands.EditOSCListener(this), () => CanEditOSCListener);
+            RemoveOSCListenerCommand = new RelayCommand(() => commands.RemoveOSCListener(this), () => CanEditOSCListener);
             AddPeriodicSendCommand = new RelayCommand(() => commands.AddPeriodicSend(this), () => CanAddPeriodicSend);
             EditPeriodicSendCommand = new RelayCommand(() => commands.EditPeriodicSend(this), () => CanEditPeriodicSend);
             RemovePeriodicSendCommand = new RelayCommand(() => commands.RemovePeriodicSend(this), () => CanEditPeriodicSend);
-            EditOscDeviceCommand = new RelayCommand(() => commands.EditOscDevice(this), () => CanEditOscDevice);
-            RemoveOscDeviceCommand = new RelayCommand(() => commands.RemoveOscDevice(this), () => CanEditOscDevice);
-            TestOscCommand = new RelayCommand(() => commands.TestOsc(this), () => CanTestOsc);
-            TestMidiCommand = new RelayCommand(() => commands.TestMidi(this), () => CanTestMidi);
-            EditMidiDeviceCommand = new RelayCommand(() => commands.EditMidiDevice(this), () => CanEditMidiDevice);
+            EditOSCDeviceCommand = new RelayCommand(() => commands.EditOSCDevice(this), () => CanEditOSCDevice);
+            RemoveOSCDeviceCommand = new RelayCommand(() => commands.RemoveOSCDevice(this), () => CanEditOSCDevice);
+            TestOSCCommand = new RelayCommand(() => commands.TestOSC(this), () => CanTestOSC);
+            TestMIDICommand = new RelayCommand(() => commands.TestMIDI(this), () => CanTestMIDI);
+            EditMIDIDeviceCommand = new RelayCommand(() => commands.EditMIDIDevice(this), () => CanEditMIDIDevice);
             ExportLayerCommand = new RelayCommand(() => commands.ExportLayer(this), () => CanEditLayer);
         }
     }
@@ -183,7 +183,7 @@ public sealed class ControlStructureRowViewModel
 
     public Guid? LayerId { get; }
 
-    public Guid? OscListenerId { get; }
+    public Guid? OSCListenerId { get; }
 
     public Guid? PeriodicSendId { get; }
 
@@ -195,9 +195,9 @@ public sealed class ControlStructureRowViewModel
 
     public bool CanEditPeriodicSend => PeriodicSendId is not null && DeviceInstanceId is not null;
 
-    public bool CanAddEndpointScript => OscListenerId is not null;
+    public bool CanAddEndpointScript => OSCListenerId is not null;
 
-    public bool CanEditOscListener => OscListenerId is not null;
+    public bool CanEditOSCListener => OSCListenerId is not null;
 
     public bool CanAddLayerScript => LayerId is not null;
 
@@ -205,15 +205,15 @@ public sealed class ControlStructureRowViewModel
 
     public bool CanEditLayer => LayerId is not null;
 
-    public bool CanAddPeriodicSend => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
+    public bool CanAddPeriodicSend => Protocol == ControlDeviceProtocol.OSC && DeviceInstanceId is not null && PeriodicSendId is null;
 
-    public bool CanEditOscDevice => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
+    public bool CanEditOSCDevice => Protocol == ControlDeviceProtocol.OSC && DeviceInstanceId is not null && PeriodicSendId is null;
 
-    public bool CanTestOsc => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
+    public bool CanTestOSC => Protocol == ControlDeviceProtocol.OSC && DeviceInstanceId is not null && PeriodicSendId is null;
 
-    public bool CanTestMidi => Protocol == ControlDeviceProtocol.Midi && DeviceInstanceId is not null;
+    public bool CanTestMIDI => Protocol == ControlDeviceProtocol.MIDI && DeviceInstanceId is not null;
 
-    public bool CanEditMidiDevice => Protocol == ControlDeviceProtocol.Midi && DeviceInstanceId is not null;
+    public bool CanEditMIDIDevice => Protocol == ControlDeviceProtocol.MIDI && DeviceInstanceId is not null;
 
     public ICommand? AddProjectScriptCommand { get; }
 
@@ -235,11 +235,11 @@ public sealed class ControlStructureRowViewModel
 
     public ICommand? RemoveLayerCommand { get; }
 
-    public ICommand? AddOscListenerCommand { get; }
+    public ICommand? AddOSCListenerCommand { get; }
 
-    public ICommand? EditOscListenerCommand { get; }
+    public ICommand? EditOSCListenerCommand { get; }
 
-    public ICommand? RemoveOscListenerCommand { get; }
+    public ICommand? RemoveOSCListenerCommand { get; }
 
     public ICommand? AddPeriodicSendCommand { get; }
 
@@ -247,15 +247,15 @@ public sealed class ControlStructureRowViewModel
 
     public ICommand? RemovePeriodicSendCommand { get; }
 
-    public ICommand? EditOscDeviceCommand { get; }
+    public ICommand? EditOSCDeviceCommand { get; }
 
-    public ICommand? RemoveOscDeviceCommand { get; }
+    public ICommand? RemoveOSCDeviceCommand { get; }
 
-    public ICommand? TestOscCommand { get; }
+    public ICommand? TestOSCCommand { get; }
 
-    public ICommand? TestMidiCommand { get; }
+    public ICommand? TestMIDICommand { get; }
 
-    public ICommand? EditMidiDeviceCommand { get; }
+    public ICommand? EditMIDIDeviceCommand { get; }
 }
 
 public sealed record ControlX32CommandRowViewModel(

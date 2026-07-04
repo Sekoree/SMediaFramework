@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
@@ -14,6 +14,7 @@
     <ItemGroup>
         <PackageReference Include="Avalonia"/>
         <PackageReference Include="Avalonia.AvaloniaEdit" />
+        <PackageReference Include="Avalonia.Controls.ColorPicker" />
         <PackageReference Include="Avalonia.Desktop"/>
         <PackageReference Include="Avalonia.Themes.Fluent"/>
         <PackageReference Include="Avalonia.Fonts.Inter"/>
@@ -28,18 +29,38 @@
         <PackageReference Include="SkiaSharp" />
     </ItemGroup>
 
+    <!-- Repointed to the rewritten (next/) framework. Old→new module map:
+         Effects→Compositor, FFmpeg→Decode.FFmpeg, PortAudio→Audio.PortAudio, MiniAudio→Audio.MiniAudio,
+         SDL3→Present.SDL3, Avalonia→Present.Avalonia, Playback→Session; plus the new tiers Time/Routing/
+         Players/Gpu the old monolithic Core/Playback have been split into. -->
     <ItemGroup>
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Avalonia\S.Media.Avalonia.csproj" />
+        <!-- Windows-Classic visual theme (Avalonia-12 port lives in-repo, see External/Classic.Avalonia). -->
+        <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme\Classic.Avalonia.Theme.csproj" />
+        <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme.ColorPicker\Classic.Avalonia.Theme.ColorPicker.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Effects\S.Media.Effects.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.MiniAudio\S.Media.MiniAudio.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Time\S.Media.Time.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Routing\S.Media.Routing.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Players\S.Media.Players.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Gpu\S.Media.Gpu.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Compositor\S.Media.Compositor.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Session\S.Media.Session.csproj" />
+        <!-- Subtitle overlay bridge (sidecar/container/bitmap → IVideoOverlaySource) + libass. HaPlay is a host,
+             so like S.Media.Interop it may reference both Decode.FFmpeg and Subtitles. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Subtitles\S.Media.Subtitles.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Interop\S.Media.Interop\S.Media.Interop.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Interop\S.Abi\S.Abi.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.YouTube\S.Media.Source.YouTube.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.MMD\S.Media.Source.MMD.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.PortAudio\S.Media.Audio.PortAudio.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.MiniAudio\S.Media.Audio.MiniAudio.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.NDI\S.Media.NDI.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Playback\S.Media.Playback.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.SDL3\S.Media.Present.SDL3.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.SDL3.Compositor\S.Media.Present.SDL3.Compositor.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.Avalonia\S.Media.Present.Avalonia.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Control\S.Control\S.Control.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Extras\MIDI\PMLib\PMLib.csproj" />
-        <ProjectReference Include="..\..\MediaFramework\Extras\OSC\OSCLib\OSCLib.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Control\S.Control.Abstractions\S.Control.Abstractions.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\MIDI\PMLib\PMLib.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\OSC\OSCLib\OSCLib.csproj" />
     </ItemGroup>
 </Project>

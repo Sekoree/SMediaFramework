@@ -8,7 +8,7 @@ namespace HaPlay.Tests;
 
 public sealed class OutputPresetVideoSourceTests
 {
-    [Fact]
+    [FFmpegNativeFact] // needs the real swscale UYVY→BGRA path — skips where FFmpeg natives are unusable
     public void TryReadNextFrame_ConvertsUyvyLiveInput_ToBgraPresetRaster()
     {
         const int width = 4;

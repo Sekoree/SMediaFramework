@@ -1,5 +1,5 @@
 using S.Media.Core.Audio;
-using S.Media.Core.Clock;
+using S.Media.Time;
 
 namespace HaPlay.Playback;
 
@@ -7,8 +7,10 @@ namespace HaPlay.Playback;
 /// Decorates an <see cref="IAudioOutput"/> with lightweight peak metering.
 /// Measures the peak sample magnitude on every <see cref="Submit"/> call and
 /// exposes it as a thread-safe dB value that the UI can poll.
+/// Disposal-transparent: disposing the wrapper disposes the inner output (when it is disposable), so a
+/// session-owned lease output can be wrapped without changing who releases the device.
 /// </summary>
-internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput
+internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IDisposable
 {
     protected readonly IAudioOutput Inner;
     private float _peakLinear;
@@ -43,6 +45,8 @@ internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabiliti
         if (Inner is IFlushableOutput flushable)
             flushable.Flush();
     }
+
+    public void Dispose() => (Inner as IDisposable)?.Dispose();
 
     /// <summary>Peak level in dB since the last call to <see cref="ReadAndResetPeakDb"/>.
     /// Returns negative infinity when silent.</summary>

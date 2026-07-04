@@ -12,20 +12,20 @@ public enum VideoSyncPresentOutcome
 
 /// <summary>
 /// A video output that <strong>buffers</strong> submitted frames and presents them on an
-/// <em>external</em> schedule (a <see cref="VideoPresentSyncGroup"/>) instead of its own cadence, so
+/// <em>external</em> schedule (a <c>VideoPresentSyncGroup</c>) instead of its own cadence, so
 /// several physical outputs can present the frame for one shared reference timestamp in lock-step.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is the video half of the multi-output genlock work (issues-doc #2, Option&nbsp;B, Phase&nbsp;2b in
 /// <c>Doc/HaPlay-MultiOutput-Sync.md</c>). The audio half disciplines each device's sample rate
-/// (<c>AdaptiveRateAudioOutput</c> driven by <see cref="S.Media.Core.Clock.OutputSyncGroup"/>); this is the
+/// (<c>AdaptiveRateAudioOutput</c> driven by <c>OutputSyncGroup</c>); this is the
 /// "synchronized drop/repeat across outputs" the architecture doc lists as not-implemented — the piece
 /// that actually makes two outputs present the <em>same pixels on the same tick</em> for a stitched canvas.
 /// </para>
 /// <para>
-/// The default implementation is <see cref="SyncPresentVideoOutput"/>; the scheduler is
-/// <see cref="VideoPresentSyncGroup"/>. "Ready"/present operate on <strong>unpresented</strong> buffered
+/// The default implementation is <c>SyncPresentVideoOutput</c>; the scheduler is
+/// <c>VideoPresentSyncGroup</c>. "Ready"/present operate on <strong>unpresented</strong> buffered
 /// frames: a member is only "advance-ready" when it holds a frame the display has not shown yet.
 /// </para>
 /// </remarks>

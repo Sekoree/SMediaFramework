@@ -35,6 +35,18 @@ public sealed class CompositionPlacementCanvas : Control
     public static readonly StyledProperty<double> AspectRatioProperty =
         AvaloniaProperty.Register<CompositionPlacementCanvas, double>(nameof(AspectRatio), 16.0 / 9.0);
 
+    /// <summary>Normalized (0..1) tight bounds of the selected TEXT cue's rendered text within its canvas, or
+    /// <c>null</c> for a non-text cue. Drawn as a dashed outline inside each placement box so the operator sees the
+    /// actual text extent inside the placed frame (the text sits at its FontSizePx size within the full canvas).</summary>
+    public static readonly StyledProperty<Rect?> TextBoundsProperty =
+        AvaloniaProperty.Register<CompositionPlacementCanvas, Rect?>(nameof(TextBounds));
+
+    public Rect? TextBounds
+    {
+        get => GetValue(TextBoundsProperty);
+        set => SetValue(TextBoundsProperty, value);
+    }
+
     private readonly List<CueVideoPlacementViewModel> _watched = new();
     private CueVideoPlacementViewModel? _drag;
     private bool _resizing;
@@ -43,7 +55,7 @@ public sealed class CompositionPlacementCanvas : Control
 
     static CompositionPlacementCanvas()
     {
-        AffectsRender<CompositionPlacementCanvas>(SelectedPlacementProperty, AspectRatioProperty);
+        AffectsRender<CompositionPlacementCanvas>(SelectedPlacementProperty, AspectRatioProperty, TextBoundsProperty);
     }
 
     public IEnumerable? Placements
@@ -139,6 +151,20 @@ public sealed class CompositionPlacementCanvas : Control
                 : new Pen(new SolidColorBrush(Color.FromArgb(0x99, 0xC0, 0xC0, 0xC0)), 1);
             ctx.FillRectangle(fill, box);
             ctx.DrawRectangle(null, stroke, box);
+
+            // Text cue: outline the actual rendered-text extent inside the placed frame, so the operator sizes/
+            // positions against the visible text rather than the (mostly empty) full text canvas.
+            if (TextBounds is { } tb && tb.Width > 0 && tb.Height > 0)
+            {
+                var textRect = new Rect(
+                    box.X + tb.X * box.Width, box.Y + tb.Y * box.Height,
+                    Math.Max(1, tb.Width * box.Width), Math.Max(1, tb.Height * box.Height));
+                var dash = new Pen(new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xD1, 0x66)), 1)
+                {
+                    DashStyle = new DashStyle([3, 3], 0),
+                };
+                ctx.DrawRectangle(null, dash, textRect);
+            }
 
             var label = $"L{p.LayerIndex.ToString(CultureInfo.InvariantCulture)}";
             var text = new FormattedText(label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,

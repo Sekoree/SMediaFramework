@@ -1,4 +1,3 @@
-using S.Media.Core.Audio;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -139,6 +138,11 @@ public class AudioRouterControlTests
 
         Assert.False(r.IsRunning);
         Assert.True(r.CompletedNaturally);
+        // IsRunning flips before the finishing thread's flush call — give the flush its own window instead of
+        // asserting the instant the flag drops (a preemption between the two flaked on the CI runner).
+        var flushDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (output.FlushCount <= flushBefore && DateTime.UtcNow < flushDeadline)
+            Thread.Sleep(10);
         Assert.True(output.FlushCount > flushBefore,
             "natural EOF should call IFlushableOutput.Flush from FinishRunLoopThreadLifetime");
     }
@@ -291,32 +295,41 @@ public class AudioRouterControlTests
         r.AddRoute("src", "out", ChannelMap.Identity(2), gain: 1f);
 
         r.Start();
-        Thread.Sleep(40);                     // let some steady-state chunks land
-        var chunksBeforeMutation = output.AllChunks.Count;
-        r.SetRouteGain("src", "out", 0.5f);
-        Thread.Sleep(40);
-        r.Stop();
 
-        // Between reading Count and calling SetRouteGain, the router can still
-        // deliver one steady-state chunk (gain 1.0). Scan forward — the ramp
-        // chunk has first≈4, last≈2.
-        var captured = output.AllChunks;
-        Assert.True(captured.Count > chunksBeforeMutation + 1,
-            $"need chunks after mutation start, countBefore={chunksBeforeMutation} total={captured.Count}");
+        // The capture output sits behind a pump that DROPS on overflow (non-primary outputs must not
+        // stall the router), so the one ramp chunk a mutation produces can be lost on a loaded CI
+        // runner. Each attempt re-establishes steady gain 1.0 and mutates down again — a fresh ramp
+        // chunk per attempt — until one is actually captured. The assertion itself stays exact.
         float[]? rampChunk = null;
         var rampIndex = -1;
-        for (var i = chunksBeforeMutation; i < captured.Count; i++)
+        List<float[]> captured = [];
+        var chunksBeforeMutation = 0;
+        for (var attempt = 0; attempt < 20 && rampChunk is null; attempt++)
         {
-            var c = captured[i];
-            var f = c[0];
-            var l = c[(chunk - 1) * 2];
-            if (l < f - 1.5f && f > 3.85f && l is > 1.85f and < 2.15f)
+            r.SetRouteGain("src", "out", 1f);
+            Thread.Sleep(40);                 // steady-state chunks at gain 1.0 (and the up-ramp, if retrying)
+            chunksBeforeMutation = output.AllChunks.Count;
+            r.SetRouteGain("src", "out", 0.5f);
+            Thread.Sleep(40);
+
+            // Between reading Count and calling SetRouteGain, the router can still
+            // deliver one steady-state chunk (gain 1.0). Scan forward — the ramp
+            // chunk has first≈4, last≈2.
+            captured = output.AllChunks.ToList();
+            for (var i = chunksBeforeMutation; i < captured.Count; i++)
             {
-                rampChunk = c;
-                rampIndex = i;
-                break;
+                var c = captured[i];
+                var f = c[0];
+                var l = c[(chunk - 1) * 2];
+                if (l < f - 1.5f && f is > 3.9f and < 4.05f && l is > 1.95f and < 2.1f)
+                {
+                    rampChunk = c;
+                    rampIndex = i;
+                    break;
+                }
             }
         }
+        r.Stop();
 
         Assert.True(rampChunk is not null,
             $"expected a ramp chunk after gain change; countBefore={chunksBeforeMutation} total={captured.Count}");

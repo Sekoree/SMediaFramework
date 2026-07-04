@@ -45,18 +45,18 @@
         </ComboBox>
       </Grid>
 
-      <Grid IsVisible="{Binding IsOscVisible}" ColumnDefinitions="90,*,*" ColumnSpacing="6">
-        <TextBlock Grid.Column="0" Text="{x:Static res:Strings.OscTabHeader}" VerticalAlignment="Center" />
-        <TextBox Grid.Column="1" Text="{Binding OscAddress, Mode=TwoWay}" PlaceholderText="{x:Static res:Strings.OscAddressPlaceholder}" />
-        <TextBox Grid.Column="2" Text="{Binding OscArguments, Mode=TwoWay}" PlaceholderText="{x:Static res:Strings.OscArgumentsPlaceholder}" />
+      <Grid IsVisible="{Binding IsOSCVisible}" ColumnDefinitions="90,*,*" ColumnSpacing="6">
+        <TextBlock Grid.Column="0" Text="{x:Static res:Strings.OSCTabHeader}" VerticalAlignment="Center" />
+        <TextBox Grid.Column="1" Text="{Binding OSCAddress, Mode=TwoWay}" PlaceholderText="{x:Static res:Strings.OSCAddressPlaceholder}" />
+        <TextBox Grid.Column="2" Text="{Binding OSCArguments, Mode=TwoWay}" PlaceholderText="{x:Static res:Strings.OSCArgumentsPlaceholder}" />
       </Grid>
 
-      <StackPanel IsVisible="{Binding IsMidiVisible}" Spacing="6">
+      <StackPanel IsVisible="{Binding IsMIDIVisible}" Spacing="6">
         <Grid ColumnDefinitions="90,*" ColumnSpacing="6">
-          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.MidiTabHeader}" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.MIDITabHeader}" VerticalAlignment="Center" />
           <ComboBox Grid.Column="1"
-                    ItemsSource="{Binding MidiCommandTypes}"
-                    SelectedItem="{Binding MidiCommandType, Mode=TwoWay}">
+                    ItemsSource="{Binding MIDICommandTypes}"
+                    SelectedItem="{Binding MIDICommandType, Mode=TwoWay}">
             <ComboBox.ItemTemplate>
               <DataTemplate>
                 <TextBlock Text="{Binding Converter={x:Static rootvm:EnumDisplayConverter.Instance}}" />
@@ -65,27 +65,27 @@
           </ComboBox>
         </Grid>
         <WrapPanel ItemSpacing="8" LineSpacing="6">
-          <StackPanel Width="82" IsVisible="{Binding IsMidiChannelVisible}">
+          <StackPanel Width="82" IsVisible="{Binding IsMIDIChannelVisible}">
             <TextBlock Text="{x:Static res:Strings.ChannelLabel}" FontSize="11" Opacity="0.7" />
-            <NumericUpDown Minimum="1" Maximum="16" Value="{Binding MidiChannel, Mode=TwoWay}" />
+            <NumericUpDown FormatString="0" Minimum="1" Maximum="16" Value="{Binding MIDIChannel, Mode=TwoWay}" />
           </StackPanel>
-          <StackPanel Width="112" IsVisible="{Binding IsMidiData1Visible}">
-            <TextBlock Text="{Binding MidiData1Label}" FontSize="11" Opacity="0.7" />
-            <NumericUpDown Minimum="{Binding MidiData1Minimum}"
-                           Maximum="{Binding MidiData1Maximum}"
-                           Value="{Binding MidiData1, Mode=TwoWay}" />
+          <StackPanel Width="112" IsVisible="{Binding IsMIDIData1Visible}">
+            <TextBlock Text="{Binding MIDIData1Label}" FontSize="11" Opacity="0.7" />
+            <NumericUpDown FormatString="0" Minimum="{Binding MIDIData1Minimum}"
+                           Maximum="{Binding MIDIData1Maximum}"
+                           Value="{Binding MIDIData1, Mode=TwoWay}" />
           </StackPanel>
-          <StackPanel Width="112" IsVisible="{Binding IsMidiData2Visible}">
-            <TextBlock Text="{Binding MidiData2Label}" FontSize="11" Opacity="0.7" />
-            <NumericUpDown Minimum="{Binding MidiData2Minimum}"
-                           Maximum="{Binding MidiData2Maximum}"
-                           Value="{Binding MidiData2, Mode=TwoWay}" />
+          <StackPanel Width="112" IsVisible="{Binding IsMIDIData2Visible}">
+            <TextBlock Text="{Binding MIDIData2Label}" FontSize="11" Opacity="0.7" />
+            <NumericUpDown FormatString="0" Minimum="{Binding MIDIData2Minimum}"
+                           Maximum="{Binding MIDIData2Maximum}"
+                           Value="{Binding MIDIData2, Mode=TwoWay}" />
           </StackPanel>
         </WrapPanel>
-        <Grid ColumnDefinitions="90,*" ColumnSpacing="6" IsVisible="{Binding IsMidiDataTextVisible}">
+        <Grid ColumnDefinitions="90,*" ColumnSpacing="6" IsVisible="{Binding IsMIDIDataTextVisible}">
           <TextBlock Grid.Column="0" Text="SysEx bytes" VerticalAlignment="Center" />
           <TextBox Grid.Column="1"
-                   Text="{Binding MidiDataText, Mode=TwoWay}"
+                   Text="{Binding MIDIDataText, Mode=TwoWay}"
                    PlaceholderText="F0 7D 00 F7" />
         </Grid>
       </StackPanel>

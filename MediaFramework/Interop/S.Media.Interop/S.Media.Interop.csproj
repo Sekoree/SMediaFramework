@@ -1,47 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- S.Media.Interop — the host that bundles backend modules (outbound C ABI s_media_player, NativeAOT shared
+         lib, Phase 7). It also carries cross-module host glue that needs more than one backend — e.g. the unified
+         subtitle factory (FFmpeg decode + libass render), which Session/Subtitles must not couple to directly. -->
+
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-
-        <!-- The whole point of this assembly: a self-contained NativeAOT shared library whose only public
-             surface is a C ABI (see NativeApi.cs). Building it as a normal managed DLL is enough to verify
-             the surface compiles; `dotnet publish -p:PublishAot=true` emits the native lib (s_media_player.so
-             / s_media_player.dll / .dylib) that other languages dlopen/LoadLibrary. The .NET GC then lives
-             entirely behind this boundary, isolated from the host program's memory management. -->
-        <PublishAot>true</PublishAot>
-        <NativeLib>Shared</NativeLib>
-
-        <!-- NativeAOT shared-lib name: s_media_player.so (Linux), s_media_player.dll (Windows), .dylib (macOS). -->
+        <!-- The outbound ABI ships as s_media_player.{so,dll} so the AOT native lib + the header (s_media_player.h)
+             line up; the namespace stays S.Media.Interop. -->
         <AssemblyName>s_media_player</AssemblyName>
-        <RootNamespace>S.Media.Interop</RootNamespace>
-
-        <!-- Background GC keeps a gen2 pause from stalling the audio drainer (see HaPlay.Desktop.csproj). -->
-        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+        <!-- Emit a native shared lib only when publishing AOT (dotnet publish -p:PublishAot=true). A normal build —
+             and project references to this assembly (e.g. the subtitle factory) — produce/consume the managed dll. -->
+        <NativeLib Condition="'$(PublishAot)' == 'true'">Shared</NativeLib>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Subtitles/S.Media.Subtitles.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
     </ItemGroup>
-
-    <ItemGroup>
-        <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.MiniAudio\S.Media.MiniAudio.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.NDI\S.Media.NDI.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <None Update="include\s_media_player.h" CopyToOutputDirectory="PreserveNewest" />
-    </ItemGroup>
-
-    <!-- Native dependency deployment is handled outside this project. MALib resolves libminiaudio lazily at
-         runtime; packaging/publish scripts should place the external native library next to the app or in the
-         platform native-library search path. -->
 
 </Project>

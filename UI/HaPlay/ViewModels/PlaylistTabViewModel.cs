@@ -13,6 +13,17 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
     [ObservableProperty]
     private string _name;
 
+    /// <summary>True while the tab header shows its rename TextBox (entered by double-click; left on
+    /// Enter/Escape/focus-loss). Plain clicks select the tab — the old always-editable header TextBox
+    /// swallowed every click, so set tabs could never actually be switched.</summary>
+    [ObservableProperty]
+    private bool _isRenaming;
+
+    /// <summary>Runtime-only (not persisted): true for the Set the player is currently playing from, so the
+    /// tab strip can mark it. The player owns this flag — see <c>MediaPlayerViewModel.RefreshPlayingTabIndicators</c>.</summary>
+    [ObservableProperty]
+    private bool _isPlaying;
+
     /// <summary>Phase C.5 (§6.8) — discriminated items (files + live inputs). Replaces the v1 flat
     /// <c>Paths</c> string list. The bound playlist ListBox renders items via
     /// <see cref="PlaylistItem.DisplayName"/>; live items add <see cref="PlaylistItem.KindGlyph"/>.</summary>

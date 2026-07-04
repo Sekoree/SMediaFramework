@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
-using S.Media.Core.Clock;
+using S.Media.Time;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
 using S.Media.Core.Video;
@@ -18,7 +18,7 @@ namespace S.Media.NDI;
 /// Combined NDI receive source: <see cref="Find"/> on the network, <see cref="Open"/> a source, then wire
 /// <see cref="Audio"/> / <see cref="Video"/> into <see cref="S.Media.Playback.MediaPlayer.OpenLive"/>.
 /// </summary>
-public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
+public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.NDISource");
 
@@ -47,8 +47,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private TimeSpan _nextVideoPts;
     private TimeSpan _videoRebaseBasePts;
     private TimeSpan _lastResolvedVideoPts;
-    private long _videoNdiTimingOriginTicks;
-    private bool _videoNdiTimingOriginSet;
+    private long _videoNDITimingOriginTicks;
+    private bool _videoNDITimingOriginSet;
     private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
     private bool _presentVideoByAbsoluteTimecode;
@@ -174,6 +174,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             Name = "NDISource",
         };
         _captureThread.Start();
+        Interlocked.Increment(ref _liveConnectionCount);
         timing?.SetOutcome($"source={source.Name} audio={_receiveAudio} video={_receiveVideo} bandwidth={ResolveBandwidth(options)} queue={_maxQueuedVideoFrames}");
     }
 
@@ -182,6 +183,13 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     public IVideoSource Video { get; }
 
     public IPlaybackClock IngestClock => _ingestClock;
+
+    private static int _liveConnectionCount;
+
+    /// <summary>Live NDI receiver connections process-wide (diagnostic). The shared <see cref="NDIDecoderProvider"/>
+    /// keeps this at one per distinct source even when both audio and video are opened — i.e. A and V share one
+    /// receiver rather than anchoring on two.</summary>
+    public static int LiveConnectionCount => Volatile.Read(ref _liveConnectionCount);
 
     public bool ReceiveAudio
     {
@@ -362,8 +370,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             _videoRebaseBasePts = nextPresentationTime;
             _lastResolvedVideoPts = nextPresentationTime;
             _hasLastResolvedVideoPts = false;
-            _videoNdiTimingOriginTicks = 0;
-            _videoNdiTimingOriginSet = false;
+            _videoNDITimingOriginTicks = 0;
+            _videoNDITimingOriginSet = false;
         }
     }
 
@@ -686,8 +694,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         else if (NDIFrameTiming.TryMapPresentationTime(
                      video.Timecode,
                      video.Timestamp,
-                     ref _videoNdiTimingOriginTicks,
-                     ref _videoNdiTimingOriginSet,
+                     ref _videoNDITimingOriginTicks,
+                     ref _videoNDITimingOriginSet,
                      out var relative))
         {
             var pts = _videoRebaseBasePts + relative;
@@ -726,6 +734,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             return;
         }
         _disposed = true;
+        Interlocked.Decrement(ref _liveConnectionCount);
         _state = NDIConnectionState.Disposed;
 
         NDICaptureThreadLifecycle.StopAndDispose(
@@ -782,8 +791,12 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         public void Dispose() => owner.Dispose();
     }
 
-    private sealed class VideoSourceAdapter(NDISource owner) : IVideoSource, IDisposable
+    private sealed class VideoSourceAdapter(NDISource owner) : ILiveVideoSource, IDisposable
     {
+        // The live seam (Doc 03): the player re-anchors the receiver's synthesized PTS to the play clock so
+        // NDI video presents Scheduled against the session master instead of latest-on-tick.
+        public void RebaseToLatest(TimeSpan playClockNow) => owner.RebaseToLatest(playClockNow);
+
         public VideoFormat Format =>
             owner._receiveVideo
                 ? owner.VideoFormat

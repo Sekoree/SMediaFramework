@@ -1,6 +1,6 @@
 using S.Media.Core.Video;
-using S.Media.Effects;
-using S.Media.FFmpeg;
+using S.Media.Compositor;
+using S.Media.Decode.FFmpeg;
 
 namespace HaPlay.Playback;
 
@@ -8,7 +8,7 @@ internal static class PlaybackVideoPipeline
 {
     /// <summary>
     /// When false (default), live NDI/video is converted to <see cref="PixelFormat.Bgra32"/> before
-    /// <see cref="S.Media.Playback.MediaPlayer.TryOpenLive"/> so local outputs use the same path as idle
+    /// <see cref="S.Media.Session.MediaPlayer.TryOpenLive"/> so local outputs use the same path as idle
     /// preview. When true, native UYVY is passed through (SDL GL; NDI frames use limited-range BT.709 metadata).
     /// Persisted via <see cref="HaPlay.Models.AppSettings"/>
     /// and overridable from the player UI.
@@ -44,7 +44,7 @@ internal static class PlaybackVideoPipeline
     }
 
     /// <summary>
-    /// Builds the <see cref="IVideoSource"/> fed to <see cref="S.Media.Playback.MediaPlayer.TryOpen"/> for file playback.
+    /// Builds the <see cref="IVideoSource"/> fed to <see cref="S.Media.Session.MediaPlayer.TryOpen"/> for file playback.
     /// </summary>
     public static IVideoSource BuildFileVideoSource(
         MediaContainerDecoder decoder,
@@ -70,7 +70,7 @@ internal static class PlaybackVideoPipeline
     }
 
     /// <summary>
-    /// Builds the <see cref="IVideoSource"/> fed to <see cref="S.Media.Playback.MediaPlayer.TryOpenLive"/>
+    /// Builds the <see cref="IVideoSource"/> fed to <see cref="S.Media.Session.MediaPlayer.TryOpenLive"/>
     /// so live inputs respect the same output-preset raster as files.
     /// </summary>
     public static IVideoSource BuildLiveVideoSource(

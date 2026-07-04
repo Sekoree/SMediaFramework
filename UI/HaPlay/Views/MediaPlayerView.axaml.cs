@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 using S.Media.Core;
@@ -97,6 +98,49 @@ public partial class MediaPlayerView : UserControl
             .ToList();
         if (paths.Count > 0)
             vm.AddDroppedFilesToPlaylist(paths);
+    }
+
+    /// <summary>Double-click on a set tab header enters rename mode (plain clicks select the tab).
+    /// Focus lands on the rename TextBox one layout pass later, once IsVisible has taken effect.</summary>
+    private void OnPlaylistTabDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is not Control { DataContext: PlaylistTabViewModel tab } panel)
+            return;
+        tab.IsRenaming = true;
+        e.Handled = true;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var box = panel.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
+            if (box is null)
+                return;
+            box.Focus();
+            box.SelectAll();
+        });
+    }
+
+    private void OnPlaylistTabRenameLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: PlaylistTabViewModel tab })
+            tab.IsRenaming = false;
+    }
+
+    private void OnPlaylistTabRenameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is TextBox { DataContext: PlaylistTabViewModel tab } && e.Key is Key.Return or Key.Escape)
+        {
+            tab.IsRenaming = false;
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Opens the HOLD idle-image dialog for this player (was a cramped flyout).</summary>
+    private void OnHoldImageSetupClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm
+            || TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+        var dialog = new Dialogs.HoldImageDialog { DataContext = vm };
+        dialog.Show(owner);
     }
 
     private void OnPlayerNameDoubleTapped(object? sender, TappedEventArgs e)

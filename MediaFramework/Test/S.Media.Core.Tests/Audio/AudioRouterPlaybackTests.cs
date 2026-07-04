@@ -1,5 +1,3 @@
-using S.Media.Core.Audio;
-using S.Media.Core.Clock;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;

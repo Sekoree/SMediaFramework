@@ -37,11 +37,6 @@ public sealed record HaPlayProject
 
     public List<ActionEndpoint> ActionEndpoints { get; init; } = new();
 
-    /// <summary>§8.2 — project-level shared headphones bus definitions. Players may reference one
-    /// of these by id via <see cref="MediaPlayerConfig.HeadphonesCueSharedBusId"/> to share a
-    /// monitor send across decks; otherwise they keep using a dedicated PortAudio line.</summary>
-    public List<SharedHeadphonesBus> SharedHeadphonesBuses { get; init; } = new();
-
     public List<CueList> CueLists { get; init; } = new();
 
     /// <summary>Soundboard tabs (touch-friendly sound clip grids).</summary>
@@ -70,9 +65,8 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(OutputGainConfig))]
 [JsonSerializable(typeof(InputChannelTrimConfig))]
 [JsonSerializable(typeof(ActionEndpoint))]
-[JsonSerializable(typeof(OscActionEndpoint))]
-[JsonSerializable(typeof(MidiActionEndpoint))]
-[JsonSerializable(typeof(SharedHeadphonesBus))]
+[JsonSerializable(typeof(OSCActionEndpoint))]
+[JsonSerializable(typeof(MIDIActionEndpoint))]
 [JsonSerializable(typeof(SoundboardConfig))]
 [JsonSerializable(typeof(SoundboardTileConfig))]
 [JsonSerializable(typeof(SoundboardsCollectionDocument))]
@@ -80,6 +74,7 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(CueNode))]
 [JsonSerializable(typeof(CueGroupNode))]
 [JsonSerializable(typeof(MediaCueNode))]
+[JsonSerializable(typeof(CueSubtitleSelection))]
 [JsonSerializable(typeof(ActionCueNode))]
 [JsonSerializable(typeof(CommentCueNode))]
 [JsonSerializable(typeof(CueComposition))]
@@ -91,18 +86,21 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
 [JsonSerializable(typeof(ImagePlaylistItem))]
+[JsonSerializable(typeof(SubtitlePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
+[JsonSerializable(typeof(YouTubePlaylistItem))]
+[JsonSerializable(typeof(MMDPlaylistItem))]
 [JsonSerializable(typeof(ControlGraphConfig))]
 [JsonSerializable(typeof(ControlNodeConfig))]
 [JsonSerializable(typeof(ControlConnectionConfig))]
 [JsonSerializable(typeof(ControlNodeSettings))]
 [JsonSerializable(typeof(PassthroughControlNodeSettings))]
-[JsonSerializable(typeof(MidiInputControlNodeSettings))]
-[JsonSerializable(typeof(OscInputControlNodeSettings))]
+[JsonSerializable(typeof(MIDIInputControlNodeSettings))]
+[JsonSerializable(typeof(OSCInputControlNodeSettings))]
 [JsonSerializable(typeof(MapRangeControlNodeSettings))]
 [JsonSerializable(typeof(ScriptTransformControlNodeSettings))]
-[JsonSerializable(typeof(OscOutputControlNodeSettings))]
-[JsonSerializable(typeof(MidiOutputControlNodeSettings))]
+[JsonSerializable(typeof(OSCOutputControlNodeSettings))]
+[JsonSerializable(typeof(MIDIOutputControlNodeSettings))]
 [JsonSerializable(typeof(X32ChannelFaderControlNodeSettings))]
 [JsonSerializable(typeof(X32CustomLayerConfig))]
 [JsonSerializable(typeof(X32CustomLayerSlotConfig))]
@@ -114,13 +112,12 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(ControlLayerProfile))]
 [JsonSerializable(typeof(ControlDeviceTaskProfile))]
 [JsonSerializable(typeof(ControlDeviceProfileBehaviors))]
-[JsonSerializable(typeof(ControlProtocolMaintenanceBehavior))]
-[JsonSerializable(typeof(ControlOscListenerConfig))]
+[JsonSerializable(typeof(ControlOSCListenerConfig))]
 [JsonSerializable(typeof(ControlMonitorOptions))]
 [JsonSerializable(typeof(ControlDeviceInstanceConfig))]
 [JsonSerializable(typeof(ControlDeviceBindingConfig))]
-[JsonSerializable(typeof(ControlPeriodicOscSendConfig))]
-[JsonSerializable(typeof(ControlOscArgumentConfig))]
+[JsonSerializable(typeof(ControlPeriodicOSCSendConfig))]
+[JsonSerializable(typeof(ControlOSCArgumentConfig))]
 [JsonSerializable(typeof(ControlLayerConfig))]
 [JsonSerializable(typeof(ControlScriptConfig))]
 [JsonSerializable(typeof(ControlScriptFailurePolicy))]

@@ -1,6 +1,6 @@
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
-using S.Media.Effects;
+using S.Media.Compositor;
 using Microsoft.Extensions.Logging;
 
 namespace HaPlay.Playback;

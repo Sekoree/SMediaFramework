@@ -1,8 +1,0 @@
-<Project>
-
-  <!-- Intentionally minimal. next/ is self-contained (D1) and deliberately does NOT inherit the
-       repo-root Directory.Build.targets (which stages the old tree's WinNatives). Per-module native
-       deployment (PortAudio, PortMidi, SDL3, FFmpeg, NDI, libass, …) is added in the phase that
-       introduces the native dependency — Phase 2 onward. -->
-
-</Project>

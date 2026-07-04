@@ -17,7 +17,7 @@ namespace HaPlay.ViewModels;
 
 public partial class CuePlayerViewModel : ViewModelBase
 {
-    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+    public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     private CancellationTokenSource? _transportRunCts;
 
@@ -82,8 +82,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         PreviewAudioDevices.Clear();
         PreviewAudioDevices.Add(new PreviewAudioDeviceOption(null, Strings.Format(nameof(Strings.DefaultDeviceLabel))));
-        foreach (var dev in S.Media.PortAudio.PortAudioDeviceCatalog.EnumerateOutputDevices())
-            PreviewAudioDevices.Add(new PreviewAudioDeviceOption(dev.GlobalDeviceIndex, dev.Name));
+        // Runs in the MainViewModel ctor — on a machine without the portaudio native library the
+        // enumeration throws DllNotFoundException and takes the whole process down before the first
+        // frame. MediaRuntime already degrades to other backends; the preview picker must too.
+        if (RuntimeModules.IsPortAudioAvailable)
+        {
+            foreach (var dev in S.Media.Audio.PortAudio.PortAudioDeviceCatalog.EnumerateOutputDevices())
+                PreviewAudioDevices.Add(new PreviewAudioDeviceOption(dev.GlobalDeviceIndex, dev.Name));
+        }
         SelectedPreviewAudioDevice ??= PreviewAudioDevices.FirstOrDefault();
     }
 
@@ -134,7 +140,20 @@ public partial class CuePlayerViewModel : ViewModelBase
         var ct = _waveformCts.Token;
         _ = Task.Run(async () =>
         {
-            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct);
+            // Progressive display: throttled partial snapshots fill the editor waveform in left-to-right.
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct, partial =>
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (ct.IsCancellationRequested)
+                        return;
+                    SelectedCueWaveform = partial;
+                    SelectedCueWaveformRevision++;
+                    OnPropertyChanged(nameof(HasSelectedCueWaveform));
+                });
+            });
             if (!ct.IsCancellationRequested)
             {
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -232,6 +251,11 @@ public partial class CuePlayerViewModel : ViewModelBase
     public IReadOnlyList<TextAlignH> TextHAlignOptions { get; } = Enum.GetValues<TextAlignH>();
 
     public IReadOnlyList<TextAlignV> TextVAlignOptions { get; } = Enum.GetValues<TextAlignV>();
+
+    /// <summary>Installed system font family names for the text-cue font dropdown. The dropdown actually binds to
+    /// the selected node's <c>FontFamilyOptions</c> (which also pins the cue's current family, e.g. the embedded
+    /// "Inter" default); this stays for anything that wants the plain system list.</summary>
+    public IReadOnlyList<string> AvailableFontFamilies => FontCatalog.SystemFamilies;
 
     [ObservableProperty]
     private CueListEditorViewModel? _selectedCueList;
@@ -551,6 +575,32 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.MediaSourceItem)   // text restyle replaces the source -> re-render
             or nameof(CueNodeViewModel.AudioTrackIndex))  // track change is part of the prepared-cue key
             OnWatchedCueEdited();
+
+        // A text/style edit replaces the TextPlaylistItem source; if that cue is playing, re-render its frame in
+        // place so the change shows immediately (the deferred document rebuild otherwise only lands on the next
+        // fire — see MainViewModel's reload deferral, which keeps the running cue from being torn down mid-edit).
+        if (e.PropertyName is nameof(CueNodeViewModel.MediaSourceItem))
+            PushActiveTextUpdate();
+    }
+
+    private static readonly Microsoft.Extensions.Logging.ILogger LiveTextTrace =
+        S.Media.Core.Diagnostics.MediaDiagnostics.CreateLogger("HaPlay.LiveText");
+
+    private void PushActiveTextUpdate()
+    {
+        var watched = _preRollWatchedCue;
+        var isText = watched?.MediaSourceItem is TextPlaylistItem;
+        var isActive = watched is not null && _activeCueIds.Contains(watched.Id);
+        Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(LiveTextTrace,
+            "PushActiveTextUpdate: watched={Watched} isText={IsText} isActive={IsActive} hasCallback={HasCb} activeCount={Count}",
+            watched?.Id, isText, isActive, UpdateActiveCueTextCallback is not null, _activeCueIds.Count);
+
+        if (watched is { } cue
+            && isText
+            && UpdateActiveCueTextCallback is { } callback
+            && isActive
+            && cue.ToModel() is MediaCueNode model)
+            _ = callback(cue.Id, model);
     }
 
     private void OnWatchedCueRouteCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -636,9 +686,21 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private void PushActiveVideoPlacementUpdate(CueVideoPlacementViewModel placement)
     {
-        if (_preRollWatchedCue is not { } cue
-            || UpdateActiveCueVideoPlacementCallback is not { } callback
-            || !_activeCueIds.Contains(cue.Id))
+        if (_preRollWatchedCue is not { } cue)
+            return;
+
+        // Not running yet: the edited placement lives only in the cue model, and the backing ShowSession
+        // document a GO fires from is NOT rebuilt on placement edits (only structural changes reload it).
+        // Flag it stale so the next fire reloads with the current placement — otherwise the cue fires with
+        // the placement captured at the last reload and the new geometry only takes hold once the operator
+        // nudges it again (which then takes the live path below). A running cue is updated live instead.
+        if (!_activeCueIds.Contains(cue.Id))
+        {
+            CueClipModelStaleCallback?.Invoke();
+            return;
+        }
+
+        if (UpdateActiveCueVideoPlacementCallback is not { } callback)
             return;
 
         var index = cue.VideoPlacements.IndexOf(placement);
@@ -901,7 +963,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>NDI media cues in the pre-roll window (§6.11).</summary>
-    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets()
+    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNDIPreConnectTargets()
     {
         var simultaneousGroup = GetStandbySimultaneousGroupTargets();
         if (simultaneousGroup.Count > 0)
@@ -945,6 +1007,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// cue lights up — the singular <see cref="CurrentCueNode"/> only tracks the last-started
     /// one for AutoFollow / transport-state purposes.</summary>
     private readonly HashSet<Guid> _activeCueIds = new();
+
+    /// <summary>True while any cue is currently playing (fired via <see cref="OnCueStarted"/>, not yet
+    /// <see cref="OnCueEnded"/>). The authoritative "is something playing" signal — used to defer the ShowSession
+    /// document rebuild on an in-place edit so it never stops a running cue (unlike a clock's <c>IsRunning</c>,
+    /// which is unreliable for a video-only held/text clip).</summary>
+    public bool HasActiveCues => _activeCueIds.Count > 0;
 
     /// <summary>Rows visible in the right-side Now Playing panel. Maintained by
     /// <see cref="OnCueStarted"/> / <see cref="OnCueEnded"/>; their progress fields update via
@@ -1076,9 +1144,19 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// selected cue is active. No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveCueVideoPlacementCallback { get; set; }
 
+    /// <summary>Host callback raised when an <em>idle</em> (not-yet-fired) cue's clip model is edited in a way
+    /// the backing show document captures only at (re)load — e.g. a video placement nudge. The host flags its
+    /// document stale so the next GO rebuilds it with the current model, instead of firing stale geometry. A
+    /// running cue is updated live via <see cref="UpdateActiveCueVideoPlacementCallback"/> and does not raise this.</summary>
+    public Action? CueClipModelStaleCallback { get; set; }
+
     /// <summary>Host callback for reconciling the selected cue's running audio routes after route
     /// row edits. No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, IReadOnlyList<CueAudioRoute>, Task>? UpdateActiveCueAudioRoutesCallback { get; set; }
+
+    /// <summary>Host callback to live-re-render a playing text cue after a text/style edit (so it updates in
+    /// place instead of only on the next fire). No-op in tests or when the cue is not playing.</summary>
+    public Func<Guid, MediaCueNode, Task>? UpdateActiveCueTextCallback { get; set; }
 
     /// <summary>Host callback — live-applies an output mapping (warp sections) to a running
     /// composition: (compositionId, outputLineId, mapping). No-op when the composition isn't live.</summary>
@@ -1235,12 +1313,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
-    /// <summary>Host callback — pre-roll cache membership changed. Snapshot lists the cue ids
+    /// <summary>Host callback — the set of warmed (standby-ready) cues changed. Snapshot lists the cue ids
     /// that are currently warmed. Walks every loaded cue node and sets <c>IsPreRollWarm</c>
     /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).
     /// <para>This method does not marshal threads on its own; the host wiring (MainViewModel)
     /// hops onto the UI dispatcher before invoking, because the underlying
-    /// <see cref="CuePreRollCache.EntriesChanged"/> can fire from any thread.</para>
+    /// <c>ShowSession.PreparedCuesChanged</c> can fire from any thread.</para>
     /// </summary>
     public void OnPreRollCacheChanged(IReadOnlyCollection<Guid> warmCueIds)
     {
@@ -1626,7 +1704,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 continue;
             if (!Guid.TryParse(node.EndpointIdText, out var missingId) || liveIds.Contains(missingId))
                 continue;
-            var kind = Enum.TryParse<CueActionKind>(node.Extra, out var k) ? k : CueActionKind.OscOut;
+            var kind = Enum.TryParse<CueActionKind>(node.Extra, out var k) ? k : CueActionKind.OSCOut;
             if (groups.TryGetValue(missingId, out var g))
                 groups[missingId] = (g.Count + 1, g.Kind);
             else

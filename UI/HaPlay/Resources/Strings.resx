@@ -45,9 +45,7 @@
   <data name="FallbackPathPlaceholder" xml:space="preserve">
     <value>PNG / JPEG path…</value>
   </data>
-  <data name="BrowseButton" xml:space="preserve">
-    <value>Browse…</value>
-  </data>
+
   <data name="ShowWhenNoMediaPlaying" xml:space="preserve">
     <value>Show when no media playing</value>
   </data>
@@ -138,16 +136,16 @@
   <data name="DensityLabel" xml:space="preserve">
     <value>Density</value>
   </data>
-  <data name="OscConnectionsHeader" xml:space="preserve">
+  <data name="OSCConnectionsHeader" xml:space="preserve">
     <value>OSC Targets</value>
   </data>
-  <data name="OscConnectionsHint" xml:space="preserve">
+  <data name="OSCConnectionsHint" xml:space="preserve">
     <value>Named OSC targets for action cues. Cues store endpoint GUIDs, not host/port.</value>
   </data>
   <data name="EndpointsHeader" xml:space="preserve">
     <value>Endpoints</value>
   </data>
-  <data name="AddOscButton" xml:space="preserve">
+  <data name="AddOSCButton" xml:space="preserve">
     <value>+ OSC</value>
   </data>
   <data name="EndpointEditorHeader" xml:space="preserve">
@@ -168,22 +166,22 @@
   <data name="SaveEndpointButton" xml:space="preserve">
     <value>Save Endpoint</value>
   </data>
-  <data name="MidiHeader" xml:space="preserve">
+  <data name="MIDIHeader" xml:space="preserve">
     <value>MIDI Ports</value>
   </data>
-  <data name="MidiHint" xml:space="preserve">
-    <value>Output endpoints for action cues and the local PortMidi device catalog.</value>
+  <data name="MIDIHint" xml:space="preserve">
+    <value>Output endpoints for action cues and the local PortMIDI device catalog.</value>
   </data>
-  <data name="MidiOutputEndpointsHeader" xml:space="preserve">
+  <data name="MIDIOutputEndpointsHeader" xml:space="preserve">
     <value>MIDI Output Endpoints</value>
   </data>
-  <data name="AddMidiButton" xml:space="preserve">
+  <data name="AddMIDIButton" xml:space="preserve">
     <value>+ MIDI</value>
   </data>
   <data name="DeviceIdLabel" xml:space="preserve">
     <value>Device Id</value>
   </data>
-  <data name="RefreshMidiButton" xml:space="preserve">
+  <data name="RefreshMIDIButton" xml:space="preserve">
     <value>Refresh MIDI</value>
   </data>
   <data name="UseSelectedButton" xml:space="preserve">
@@ -192,14 +190,14 @@
   <data name="ChannelLabel" xml:space="preserve">
     <value>Channel</value>
   </data>
-  <data name="MidiChannelHint" xml:space="preserve">
+  <data name="MIDIChannelHint" xml:space="preserve">
     <value>(0-based; 0 = MIDI channel 1)</value>
   </data>
   <data name="TestDeviceButton" xml:space="preserve">
     <value>Test device</value>
   </data>
-  <data name="PortMidiCatalogHeader" xml:space="preserve">
-    <value>PortMidi Device Catalog</value>
+  <data name="PortMIDICatalogHeader" xml:space="preserve">
+    <value>PortMIDI Device Catalog</value>
   </data>
   <data name="RefreshButton" xml:space="preserve">
     <value>Refresh</value>
@@ -292,7 +290,7 @@
     <value>Select a cue from the list to edit trigger, routing, media, or action settings.</value>
   </data>
   <data name="AddMediaButton" xml:space="preserve">
-    <value>+ Media</value>
+    <value>+ Media…</value>
   </data>
   <data name="AddActionButton" xml:space="preserve">
     <value>+ Action</value>
@@ -300,11 +298,11 @@
   <data name="AddCommentButton" xml:space="preserve">
     <value>+ Comment</value>
   </data>
-  <data name="AddNdiInputCueButton" xml:space="preserve">
-    <value>+ NDI</value>
+  <data name="AddNDIInputCueButton" xml:space="preserve">
+    <value>+ NDI input…</value>
   </data>
   <data name="AddPortAudioInputCueButton" xml:space="preserve">
-    <value>+ Audio In</value>
+    <value>+ Audio input…</value>
   </data>
   <data name="BrowseMediaButton" xml:space="preserve">
     <value>Browse media…</value>
@@ -684,16 +682,16 @@
   <data name="TargetConfigurationTitle" xml:space="preserve">
     <value>Action Targets</value>
   </data>
-  <data name="TargetOscTabHeader" xml:space="preserve">
+  <data name="TargetOSCTabHeader" xml:space="preserve">
     <value>OSC Targets</value>
   </data>
-  <data name="TargetMidiTabHeader" xml:space="preserve">
+  <data name="TargetMIDITabHeader" xml:space="preserve">
     <value>MIDI Targets</value>
   </data>
-  <data name="OscTabHeader" xml:space="preserve">
+  <data name="OSCTabHeader" xml:space="preserve">
     <value>OSC</value>
   </data>
-  <data name="MidiTabHeader" xml:space="preserve">
+  <data name="MIDITabHeader" xml:space="preserve">
     <value>MIDI</value>
   </data>
   <data name="RebindMissingOutputsTitle" xml:space="preserve">
@@ -756,22 +754,22 @@
   <data name="NoneIndependentOutputLabel" xml:space="preserve">
     <value>None — independent output</value>
   </data>
-  <data name="NdiSourceNameLabel" xml:space="preserve">
+  <data name="NDISourceNameLabel" xml:space="preserve">
     <value>NDI source name</value>
   </data>
-  <data name="NdiGroupsOptionalLabel" xml:space="preserve">
+  <data name="NDIGroupsOptionalLabel" xml:space="preserve">
     <value>NDI groups (optional)</value>
   </data>
-  <data name="NdiGroupsPlaceholder" xml:space="preserve">
+  <data name="NDIGroupsPlaceholder" xml:space="preserve">
     <value>e.g. HaPlay</value>
   </data>
   <data name="StreamsLabel" xml:space="preserve">
     <value>Streams</value>
   </data>
-  <data name="NdiAudioChannelCountLabel" xml:space="preserve">
+  <data name="NDIAudioChannelCountLabel" xml:space="preserve">
     <value>NDI audio channel count</value>
   </data>
-  <data name="NdiAudioSampleRateLabel" xml:space="preserve">
+  <data name="NDIAudioSampleRateLabel" xml:space="preserve">
     <value>NDI audio sample rate (Hz)</value>
   </data>
   <data name="VideoFormatLockOptionalLabel" xml:space="preserve">
@@ -793,7 +791,7 @@
     <value>Pick from NDI sources currently visible on the network.</value>
   </data>
   <data name="RescanButton" xml:space="preserve">
-    <value>↻ Rescan</value>
+    <value>Rescan</value>
   </data>
   <data name="ManualSourceNameLabel" xml:space="preserve">
     <value>Manual source name (e.g. MACHINE (Instance))</value>
@@ -822,7 +820,7 @@
   <data name="ZeroDisablesRetriesHint" xml:space="preserve">
     <value>0 disables retries.</value>
   </data>
-  <data name="NdiVideoOnlyBehaviorHint" xml:space="preserve">
+  <data name="NDIVideoOnlyBehaviorHint" xml:space="preserve">
     <value>Video-only items drive NDI video without audio. Audio+video items use separate receivers on the same source name.</value>
   </data>
   <data name="ActionCueKindLabel" xml:space="preserve">
@@ -831,10 +829,10 @@
   <data name="ActionCueEndpointLabel" xml:space="preserve">
     <value>Endpoint</value>
   </data>
-  <data name="OscAddressPlaceholder" xml:space="preserve">
+  <data name="OSCAddressPlaceholder" xml:space="preserve">
     <value>/address</value>
   </data>
-  <data name="OscArgumentsPlaceholder" xml:space="preserve">
+  <data name="OSCArgumentsPlaceholder" xml:space="preserve">
     <value>args</value>
   </data>
   <data name="AddPortAudioOutputDialogTitle" xml:space="preserve">
@@ -855,16 +853,16 @@
   <data name="EditLocalVideoOutputDialogTitle" xml:space="preserve">
     <value>Edit local video output</value>
   </data>
-  <data name="AddNdiOutputDialogTitle" xml:space="preserve">
+  <data name="AddNDIOutputDialogTitle" xml:space="preserve">
     <value>Add NDI output</value>
   </data>
-  <data name="EditNdiOutputDialogTitle" xml:space="preserve">
+  <data name="EditNDIOutputDialogTitle" xml:space="preserve">
     <value>Edit NDI output</value>
   </data>
-  <data name="AddNdiInputDialogTitle" xml:space="preserve">
+  <data name="AddNDIInputDialogTitle" xml:space="preserve">
     <value>Add NDI input</value>
   </data>
-  <data name="EditNdiInputDialogTitle" xml:space="preserve">
+  <data name="EditNDIInputDialogTitle" xml:space="preserve">
     <value>Edit NDI input</value>
   </data>
   <data name="EditActionCueDialogTitle" xml:space="preserve">
@@ -879,19 +877,19 @@
   <data name="ProgramOutputDefaultName" xml:space="preserve">
     <value>Program output</value>
   </data>
-  <data name="NdiProgramDefaultName" xml:space="preserve">
+  <data name="NDIProgramDefaultName" xml:space="preserve">
     <value>NDI program</value>
   </data>
-  <data name="NdiOutputDefaultSourceName" xml:space="preserve">
+  <data name="NDIOutputDefaultSourceName" xml:space="preserve">
     <value>HaPlay Output</value>
   </data>
   <data name="MicrophoneDefaultName" xml:space="preserve">
     <value>Microphone</value>
   </data>
-  <data name="NdiInputDefaultName" xml:space="preserve">
+  <data name="NDIInputDefaultName" xml:space="preserve">
     <value>NDI input</value>
   </data>
-  <data name="NdiLiveAudioResampleHint" xml:space="preserve">
+  <data name="NDILiveAudioResampleHint" xml:space="preserve">
     <value>NDI sample rate differs from this output — resampling adds delay and may cause drops. Set the PortAudio device to 48 kHz if the NDI source is 48 kHz.</value>
   </data>
   <data name="EngineInAppPreviewLabel" xml:space="preserve">
@@ -906,46 +904,46 @@
   <data name="EngineStandaloneWindowSubtitle" xml:space="preserve">
     <value>SDL3 — own thread, dedicated fullscreen-capable window</value>
   </data>
-  <data name="NdiPixelFormatAutoLabel" xml:space="preserve">
+  <data name="NDIPixelFormatAutoLabel" xml:space="preserve">
     <value>Auto (match source)</value>
   </data>
-  <data name="NdiPixelFormatUyvyLabel" xml:space="preserve">
+  <data name="NDIPixelFormatUyvyLabel" xml:space="preserve">
     <value>UYVY (4:2:2 packed)</value>
   </data>
-  <data name="NdiPixelFormatBgraLabel" xml:space="preserve">
+  <data name="NDIPixelFormatBgraLabel" xml:space="preserve">
     <value>BGRA32 (8-bit RGBA)</value>
   </data>
-  <data name="NdiPixelFormatRgbaLabel" xml:space="preserve">
+  <data name="NDIPixelFormatRgbaLabel" xml:space="preserve">
     <value>RGBA32 (8-bit RGBA)</value>
   </data>
-  <data name="NdiPixelFormatNv12Label" xml:space="preserve">
+  <data name="NDIPixelFormatNv12Label" xml:space="preserve">
     <value>NV12 (4:2:0 semi-planar)</value>
   </data>
-  <data name="NdiPixelFormatI420Label" xml:space="preserve">
+  <data name="NDIPixelFormatI420Label" xml:space="preserve">
     <value>I420 (4:2:0 planar)</value>
   </data>
-  <data name="NdiResolutionAutoLabel" xml:space="preserve">
+  <data name="NDIResolutionAutoLabel" xml:space="preserve">
     <value>Auto (match source)</value>
   </data>
-  <data name="NdiResolution1080Label" xml:space="preserve">
+  <data name="NDIResolution1080Label" xml:space="preserve">
     <value>1920 × 1080 (1080p)</value>
   </data>
-  <data name="NdiResolution720Label" xml:space="preserve">
+  <data name="NDIResolution720Label" xml:space="preserve">
     <value>1280 × 720 (720p)</value>
   </data>
-  <data name="NdiResolution4kLabel" xml:space="preserve">
+  <data name="NDIResolution4kLabel" xml:space="preserve">
     <value>3840 × 2160 (2160p / 4K)</value>
   </data>
-  <data name="NdiResolution576Label" xml:space="preserve">
+  <data name="NDIResolution576Label" xml:space="preserve">
     <value>1024 × 576 (576p widescreen)</value>
   </data>
-  <data name="NdiResolutionCustomLabel" xml:space="preserve">
+  <data name="NDIResolutionCustomLabel" xml:space="preserve">
     <value>{0} × {1}</value>
   </data>
-  <data name="NdiResolutionCustomEntryLabel" xml:space="preserve">
+  <data name="NDIResolutionCustomEntryLabel" xml:space="preserve">
     <value>Custom…</value>
   </data>
-  <data name="ValidationNdiResolutionInvalid" xml:space="preserve">
+  <data name="ValidationNDIResolutionInvalid" xml:space="preserve">
     <value>Custom resolution must be even numbers between 16 and 7680 × 4320.</value>
   </data>
   <data name="ValidationDisplayNameRequired" xml:space="preserve">
@@ -972,10 +970,10 @@
   <data name="ValidationWindowedSizeInvalid" xml:space="preserve">
     <value>Windowed mode needs a reasonable width and height (at least about 320×240).</value>
   </data>
-  <data name="ValidationNdiSourceNameRequired" xml:space="preserve">
+  <data name="ValidationNDISourceNameRequired" xml:space="preserve">
     <value>NDI source name is required.</value>
   </data>
-  <data name="ValidationNdiAudioChannelCountInvalid" xml:space="preserve">
+  <data name="ValidationNDIAudioChannelCountInvalid" xml:space="preserve">
     <value>NDI audio channel count must be between 1 and 64.</value>
   </data>
   <data name="ValidationAudioSampleRateInvalid" xml:space="preserve">
@@ -984,7 +982,7 @@
   <data name="ValidationDiscoveryPickOrManual" xml:space="preserve">
     <value>Pick a discovered source, or switch to manual name.</value>
   </data>
-  <data name="ValidationNdiSourceNameExample" xml:space="preserve">
+  <data name="ValidationNDISourceNameExample" xml:space="preserve">
     <value>Enter the NDI source name (e.g. 'MACHINE (Instance)').</value>
   </data>
   <data name="ValidationAudioOnlyAndVideoOnlyMutuallyExclusive" xml:space="preserve">
@@ -993,19 +991,19 @@
   <data name="ValidationRetryIntervalRange" xml:space="preserve">
     <value>Retry interval must be between 0 and 600 seconds.</value>
   </data>
-  <data name="NdiDiscoveryUnavailableStatus" xml:space="preserve">
+  <data name="NDIDiscoveryUnavailableStatus" xml:space="preserve">
     <value>NDI discovery unavailable (rc={0}). Switch to manual name.</value>
   </data>
-  <data name="NdiDiscoveryScanningStatus" xml:space="preserve">
+  <data name="NDIDiscoveryScanningStatus" xml:space="preserve">
     <value>Scanning…</value>
   </data>
-  <data name="NdiDiscoveryNoSourcesStatus" xml:space="preserve">
+  <data name="NDIDiscoveryNoSourcesStatus" xml:space="preserve">
     <value>No NDI sources visible yet — check sender power, network, and groups.</value>
   </data>
-  <data name="NdiDiscoverySourceCountStatus" xml:space="preserve">
+  <data name="NDIDiscoverySourceCountStatus" xml:space="preserve">
     <value>{0} source(s) visible.</value>
   </data>
-  <data name="NdiDiscoveryScanFailedStatus" xml:space="preserve">
+  <data name="NDIDiscoveryScanFailedStatus" xml:space="preserve">
     <value>Scan failed: {0}</value>
   </data>
   <data name="OutputManagementHeader" xml:space="preserve">
@@ -1026,7 +1024,7 @@
   <data name="AddLocalVideoButton" xml:space="preserve">
     <value>Add local video…</value>
   </data>
-  <data name="AddNdiButton" xml:space="preserve">
+  <data name="AddNDIButton" xml:space="preserve">
     <value>Add NDI…</value>
   </data>
   <data name="ClearHealthButton" xml:space="preserve">
@@ -1069,7 +1067,7 @@
     <value>Idle — no active playback on this line</value>
   </data>
   <data name="MediaPlayerSettingsButtonLabel" xml:space="preserve">
-    <value>⚙ Settings</value>
+    <value>Settings</value>
   </data>
   <data name="MediaPlayerSettingsTooltip" xml:space="preserve">
     <value>Save or load this player's configuration (.haplay.json), playlists, or remove the player.</value>
@@ -1150,25 +1148,25 @@
     <value>Applied downmix '{0}' to {1}.</value>
   </data>
   <data name="LoopToggleLabel" xml:space="preserve">
-    <value>🔁 Loop</value>
+    <value>Loop</value>
   </data>
   <data name="LoopToggleTooltip" xml:space="preserve">
     <value>Restart the current track when it ends.</value>
   </data>
   <data name="AutoAdvanceToggleLabel" xml:space="preserve">
-    <value>⏭ Auto-advance</value>
+    <value>Auto-advance</value>
   </data>
   <data name="AutoAdvanceToggleTooltip" xml:space="preserve">
     <value>When on, the next playlist entry loads and plays automatically when the current track ends.</value>
   </data>
   <data name="ShuffleToggleLabel" xml:space="preserve">
-    <value>🔀 Shuffle</value>
+    <value>Shuffle</value>
   </data>
   <data name="ShuffleToggleTooltip" xml:space="preserve">
     <value>When auto-advancing, play tracks in a random order (each once per cycle). Manual Next/Previous stay in list order.</value>
   </data>
   <data name="RepeatAllToggleLabel" xml:space="preserve">
-    <value>🔁 Repeat all</value>
+    <value>Repeat all</value>
   </data>
   <data name="RepeatAllToggleTooltip" xml:space="preserve">
     <value>When auto-advancing past the last track, wrap back to the first instead of stopping. (Loop repeats the single current track.)</value>
@@ -1210,7 +1208,7 @@
     <value>Load tab…</value>
   </data>
   <data name="AddFilesButton" xml:space="preserve">
-    <value>+ Add files…</value>
+    <value>+ Files…</value>
   </data>
   <data name="AddLiveInputButton" xml:space="preserve">
     <value>+ Live input…</value>
@@ -1219,10 +1217,10 @@
     <value>Add a live source (PortAudio capture device or NDI receiver) to this playlist tab.</value>
   </data>
   <data name="PortAudioInputMenuHeader" xml:space="preserve">
-    <value>PortAudio input…</value>
+    <value>+ Audio input…</value>
   </data>
-  <data name="NdiInputMenuHeader" xml:space="preserve">
-    <value>NDI input…</value>
+  <data name="NDIInputMenuHeader" xml:space="preserve">
+    <value>+ NDI input…</value>
   </data>
   <data name="RoutingSectionTitle" xml:space="preserve">
     <value>Routing</value>
@@ -1239,7 +1237,7 @@
   <data name="LocalVideoOutputMenuHeader" xml:space="preserve">
     <value>Local video output…</value>
   </data>
-  <data name="NdiOutputMenuHeader" xml:space="preserve">
+  <data name="NDIOutputMenuHeader" xml:space="preserve">
     <value>NDI output…</value>
   </data>
   <data name="AudioMatrixSectionTitle" xml:space="preserve">
@@ -1297,10 +1295,10 @@
     <value>(on)</value>
   </data>
   <data name="PlayPausePlayingLabel" xml:space="preserve">
-    <value>⏸ Pause</value>
+    <value>Pause</value>
   </data>
   <data name="PlayPausePausedLabel" xml:space="preserve">
-    <value>▶ Play</value>
+    <value>Play</value>
   </data>
   <data name="SourceKindIdle" xml:space="preserve">
     <value>Idle</value>
@@ -1351,10 +1349,13 @@
     <value>Apply edit while output is in use?</value>
   </data>
   <data name="OutputEditInUseApplyButton" xml:space="preserve">
-    <value>Apply (brief glitch)</value>
+    <value>Reconnect (brief glitch)</value>
+  </data>
+  <data name="OutputEditInUseContinueButton" xml:space="preserve">
+    <value>Save &amp; continue (may glitch)</value>
   </data>
   <data name="OutputEditInUseDialogMessageFormat" xml:space="preserve">
-    <value>'{0}' is currently delivering audio/video to a running player. Applying the edit will cause a brief silence / black-frame on that output (typically 1–2 frames). Continue?</value>
+    <value>'{0}' is currently delivering audio/video to a running player. Save &amp; continue applies the change live under the running output — best for cosmetic changes like Always-on-top, usually with no interruption. Reconnect re-establishes the output for structural changes (a brief silence / black-frame).</value>
   </data>
   <data name="OutputRemoveInUseDialogTitle" xml:space="preserve">
     <value>Remove output while in use?</value>
@@ -1395,7 +1396,7 @@
   <data name="DeviceWithIdFormat" xml:space="preserve">
     <value>Device {0}</value>
   </data>
-  <data name="MidiDeviceCatalogStatusFormat" xml:space="preserve">
+  <data name="MIDIDeviceCatalogStatusFormat" xml:space="preserve">
     <value>MIDI devices: {0} input, {1} output.</value>
   </data>
   <data name="PlayerNameFormat" xml:space="preserve">
@@ -1404,7 +1405,7 @@
   <data name="CueAutoFollowFailedFormat" xml:space="preserve">
     <value>Auto-follow failed: {0}</value>
   </data>
-  <data name="NdiPumpPressureStatusFormat" xml:space="preserve">
+  <data name="NDIPumpPressureStatusFormat" xml:space="preserve">
     <value>NDI output '{0}' dropped {1} frames in the last 5 s (total {2}) — receiver may be slow.</value>
   </data>
   <data name="ColorTagLabel" xml:space="preserve">
@@ -1432,10 +1433,10 @@
     <value>Files…</value>
   </data>
   <data name="PreviewCueButton" xml:space="preserve">
-    <value>▶ Preview</value>
+    <value>Preview</value>
   </data>
   <data name="StopPreviewCueButton" xml:space="preserve">
-    <value>■ Stop Preview</value>
+    <value>Stop Preview</value>
   </data>
   <data name="PreviewingCueStatusFormat" xml:space="preserve">
     <value>Previewing '{0}'. Click again to stop.</value>
@@ -1458,40 +1459,40 @@
   <data name="ActionKindNotWiredFormat" xml:space="preserve">
     <value>action kind '{0}' not wired</value>
   </data>
-  <data name="OscEndpointMissingFormat" xml:space="preserve">
+  <data name="OSCEndpointMissingFormat" xml:space="preserve">
     <value>OSC endpoint missing: {0}</value>
   </data>
-  <data name="OscSendResultFormat" xml:space="preserve">
+  <data name="OSCSendResultFormat" xml:space="preserve">
     <value>OSC {0}:{1}{2}</value>
   </data>
-  <data name="MidiEndpointMissingFormat" xml:space="preserve">
+  <data name="MIDIEndpointMissingFormat" xml:space="preserve">
     <value>MIDI endpoint missing: {0}</value>
   </data>
-  <data name="MidiNoOutputDevices" xml:space="preserve">
+  <data name="MIDINoOutputDevices" xml:space="preserve">
     <value>no MIDI output devices</value>
   </data>
-  <data name="MidiNoSuitableOutputDevice" xml:space="preserve">
+  <data name="MIDINoSuitableOutputDevice" xml:space="preserve">
     <value>no suitable MIDI output device</value>
   </data>
-  <data name="MidiEndpointDeviceNotFoundFormat" xml:space="preserve">
+  <data name="MIDIEndpointDeviceNotFoundFormat" xml:space="preserve">
     <value>MIDI endpoint device not found: {0}</value>
   </data>
   <data name="UnsetLabel" xml:space="preserve">
     <value>(unset)</value>
   </data>
-  <data name="MidiOpenFailedFormat" xml:space="preserve">
+  <data name="MIDIOpenFailedFormat" xml:space="preserve">
     <value>MIDI open failed: {0}</value>
   </data>
-  <data name="MidiWriteFailedFormat" xml:space="preserve">
+  <data name="MIDIWriteFailedFormat" xml:space="preserve">
     <value>MIDI write failed: {0}</value>
   </data>
-  <data name="MidiSendResultFormat" xml:space="preserve">
+  <data name="MIDISendResultFormat" xml:space="preserve">
     <value>MIDI {0} {1}</value>
   </data>
   <data name="DeviceHashIdFormat" xml:space="preserve">
     <value>#{0}</value>
   </data>
-  <data name="MidiInitFailedFormat" xml:space="preserve">
+  <data name="MIDIInitFailedFormat" xml:space="preserve">
     <value>MIDI init failed: {0}</value>
   </data>
   <data name="ProjectTitleUntitled" xml:space="preserve">
@@ -1530,61 +1531,193 @@
   <data name="ProjectSavedStatusFormat" xml:space="preserve">
     <value>Saved '{0}'.</value>
   </data>
+  <data name="ProjectShowSidecarsSavedFormat" xml:space="preserve">
+    <value>{0} show document(s) exported.</value>
+  </data>
+  <data name="ProjectShowSidecarFailedFormat" xml:space="preserve">
+    <value>Show document export skipped {0}: {1}</value>
+  </data>
+  <data name="AddYouTubeDialogTitle" xml:space="preserve">
+    <value>Add YouTube video</value>
+  </data>
+  <data name="EditYouTubeDialogTitle" xml:space="preserve">
+    <value>Edit YouTube video</value>
+  </data>
+  <data name="YouTubeUrlLabel" xml:space="preserve">
+    <value>Video URL or ID</value>
+  </data>
+  <data name="YouTubeResolveButton" xml:space="preserve">
+    <value>Resolve</value>
+  </data>
+  <data name="YouTubeUrlNotRecognized" xml:space="preserve">
+    <value>Not a recognizable YouTube URL or video id.</value>
+  </data>
+  <data name="YouTubeResolveFailedFormat" xml:space="preserve">
+    <value>Resolve failed: {0}</value>
+  </data>
+  <data name="YouTubeResolveFirstHint" xml:space="preserve">
+    <value>Resolve the video first to pick its streams.</value>
+  </data>
+  <data name="YouTubeSelectVideoStreamHint" xml:space="preserve">
+    <value>Select a video stream (or enable audio-only).</value>
+  </data>
+  <data name="YouTubeVideoStreamLabel" xml:space="preserve">
+    <value>Video stream</value>
+  </data>
+  <data name="YouTubeAudioStreamLabel" xml:space="preserve">
+    <value>Audio stream</value>
+  </data>
+  <data name="YouTubeSubtitleTrackLabel" xml:space="preserve">
+    <value>Subtitle track</value>
+  </data>
+  <data name="YouTubeNoSubtitlesOption" xml:space="preserve">
+    <value>(no subtitles)</value>
+  </data>
+  <data name="YouTubeAudioOnlyCheckbox" xml:space="preserve">
+    <value>Audio only (skip the video stream)</value>
+  </data>
+  <data name="YouTubeDownloadAndAddButton" xml:space="preserve">
+    <value>Download &amp; add</value>
+  </data>
+  <data name="YouTubePrepareFailedFormat" xml:space="preserve">
+    <value>Download/cache failed: {0}</value>
+  </data>
+  <data name="YouTubePhaseResolving" xml:space="preserve">
+    <value>Resolving streams…</value>
+  </data>
+  <data name="YouTubePhaseDownloadingVideo" xml:space="preserve">
+    <value>Downloading video stream…</value>
+  </data>
+  <data name="YouTubePhaseDownloadingAudio" xml:space="preserve">
+    <value>Downloading audio stream…</value>
+  </data>
+  <data name="YouTubePhaseRemuxing" xml:space="preserve">
+    <value>Combining into local asset…</value>
+  </data>
+  <data name="YouTubePhaseReady" xml:space="preserve">
+    <value>Ready (cached)</value>
+  </data>
+  <data name="YouTubeAlreadyCachedStatus" xml:space="preserve">
+    <value>This selection is already cached — adding is instant.</value>
+  </data>
+  <data name="YouTubeNotCachedStatus" xml:space="preserve">
+    <value>Not cached yet — the selected streams download when you add.</value>
+  </data>
+  <data name="AddYouTubeMenuItem" xml:space="preserve">
+    <value>+ YouTube video…</value>
+  </data>
+  <data name="AddMMDDialogTitle" xml:space="preserve">
+    <value>Add MMD scene</value>
+  </data>
+  <data name="EditMMDDialogTitle" xml:space="preserve">
+    <value>Edit MMD scene</value>
+  </data>
+  <data name="AddMMDMenuItem" xml:space="preserve">
+    <value>+ MMD scene…</value>
+  </data>
+  <data name="MMDModelPathLabel" xml:space="preserve">
+    <value>Model (.pmx)</value>
+  </data>
+  <data name="MMDMotionPathLabel" xml:space="preserve">
+    <value>Motion (.vmd, optional)</value>
+  </data>
+  <data name="MMDCameraMotionPathLabel" xml:space="preserve">
+    <value>Camera motion (.vmd, optional — overrides manual camera)</value>
+  </data>
+  <data name="MMDModelPathRequired" xml:space="preserve">
+    <value>Pick an existing .pmx model file.</value>
+  </data>
+  <data name="MMDPreviewFailedFormat" xml:space="preserve">
+    <value>Preview failed: {0}</value>
+  </data>
+  <data name="MMDCameraSectionLabel" xml:space="preserve">
+    <value>Camera placement</value>
+  </data>
+  <data name="MMDPreviewTimeLabel" xml:space="preserve">
+    <value>Preview time (s)</value>
+  </data>
+  <data name="MMDDistanceLabel" xml:space="preserve">
+    <value>Distance</value>
+  </data>
+  <data name="MMDTargetLabel" xml:space="preserve">
+    <value>Target X/Y/Z</value>
+  </data>
+  <data name="MMDRotationLabel" xml:space="preserve">
+    <value>Rotation X/Y/Z (°)</value>
+  </data>
+  <data name="MMDCameraPositionLabel" xml:space="preserve">
+    <value>Camera X/Y/Z</value>
+  </data>
+  <data name="MMDAntialiasLabel" xml:space="preserve">
+    <value>Anti-aliasing (MSAA)</value>
+  </data>
+  <data name="MMDPhysicsLabel" xml:space="preserve">
+    <value>Physics (hair/skirt)</value>
+  </data>
+  <data name="MMDFovLabel" xml:space="preserve">
+    <value>FOV (°)</value>
+  </data>
+  <data name="MMDRenderSizeLabel" xml:space="preserve">
+    <value>Render size</value>
+  </data>
+  <data name="BrowseButton" xml:space="preserve">
+    <value>Browse…</value>
+  </data>
   <data name="ProjectSaveFailedFormat" xml:space="preserve">
     <value>Save failed: {0}</value>
   </data>
-  <data name="TestingOscStatus" xml:space="preserve">
+  <data name="TestingOSCStatus" xml:space="preserve">
     <value>Testing OSC…</value>
   </data>
-  <data name="OscTestOkStatusFormat" xml:space="preserve">
+  <data name="OSCTestOkStatusFormat" xml:space="preserve">
     <value>OSC {0}</value>
   </data>
-  <data name="OscTestFailedStatusFormat" xml:space="preserve">
+  <data name="OSCTestFailedStatusFormat" xml:space="preserve">
     <value>OSC failed: {0}</value>
   </data>
-  <data name="OscTestFinishedStatus" xml:space="preserve">
+  <data name="OSCTestFinishedStatus" xml:space="preserve">
     <value>OSC test finished.</value>
   </data>
-  <data name="TestingMidiStatus" xml:space="preserve">
+  <data name="TestingMIDIStatus" xml:space="preserve">
     <value>Testing MIDI…</value>
   </data>
-  <data name="MidiTestOkStatusFormat" xml:space="preserve">
+  <data name="MIDITestOkStatusFormat" xml:space="preserve">
     <value>MIDI {0}</value>
   </data>
-  <data name="MidiTestFailedStatusFormat" xml:space="preserve">
+  <data name="MIDITestFailedStatusFormat" xml:space="preserve">
     <value>MIDI failed: {0}</value>
   </data>
-  <data name="MidiTestFinishedStatus" xml:space="preserve">
+  <data name="MIDITestFinishedStatus" xml:space="preserve">
     <value>MIDI test finished.</value>
   </data>
   <data name="UnknownEndpointKind" xml:space="preserve">
     <value>Unknown endpoint kind</value>
   </data>
-  <data name="OscEndpointNameFormat" xml:space="preserve">
+  <data name="OSCEndpointNameFormat" xml:space="preserve">
     <value>OSC {0}</value>
   </data>
-  <data name="MidiEndpointNameFormat" xml:space="preserve">
+  <data name="MIDIEndpointNameFormat" xml:space="preserve">
     <value>MIDI {0}</value>
   </data>
-  <data name="MidiActionRequiresMessage" xml:space="preserve">
+  <data name="MIDIActionRequiresMessage" xml:space="preserve">
     <value>MIDI action requires a message (e.g. 'noteon 60 100', 'pitchbend 0', or 'sysex F0 7D 00 F7').</value>
   </data>
-  <data name="MidiActionCommandMissing" xml:space="preserve">
+  <data name="MIDIActionCommandMissing" xml:space="preserve">
     <value>MIDI action command missing.</value>
   </data>
-  <data name="UnsupportedMidiCommandFormat" xml:space="preserve">
+  <data name="UnsupportedMIDICommandFormat" xml:space="preserve">
     <value>Unsupported MIDI command '{0}'. Use noteon/noteoff/cc/cc14/pc/polyaftertouch/aftertouch/pitchbend/sysex/mtc/songpos/songselect/tunerequest/clock/start/continue/stop/activesensing/reset/nrpn/rpn.</value>
   </data>
-  <data name="MidiSpecDescriptionFormat" xml:space="preserve">
+  <data name="MIDISpecDescriptionFormat" xml:space="preserve">
     <value>{0} ch{1}</value>
   </data>
-  <data name="MidiArgumentMissingFormat" xml:space="preserve">
+  <data name="MIDIArgumentMissingFormat" xml:space="preserve">
     <value>MIDI argument '{0}' is missing.</value>
   </data>
-  <data name="MidiArgumentInvalidFormat" xml:space="preserve">
+  <data name="MIDIArgumentInvalidFormat" xml:space="preserve">
     <value>MIDI argument '{0}' is invalid: '{1}'.</value>
   </data>
-  <data name="FailedToOpenPreconnectedNdi" xml:space="preserve">
+  <data name="FailedToOpenPreconnectedNDI" xml:space="preserve">
     <value>Failed to open pre-connected NDI.</value>
   </data>
   <data name="FailedToOpenPreconnectedPortAudio" xml:space="preserve">
@@ -1749,16 +1882,16 @@
   <data name="OutputKindLocalAudioLabel" xml:space="preserve">
     <value>Local audio</value>
   </data>
-  <data name="OutputKindNdiProgramLabel" xml:space="preserve">
+  <data name="OutputKindNDIProgramLabel" xml:space="preserve">
     <value>NDI program</value>
   </data>
   <data name="OutputKindTechnicalPortAudio" xml:space="preserve">
     <value>PortAudio</value>
   </data>
-  <data name="OutputKindTechnicalNdi" xml:space="preserve">
+  <data name="OutputKindTechnicalNDI" xml:space="preserve">
     <value>NDI</value>
   </data>
-  <data name="OutputKindTechnicalSdlOpenGl" xml:space="preserve">
+  <data name="OutputKindTechnicalSDLOpenGl" xml:space="preserve">
     <value>SDL3 OpenGL</value>
   </data>
   <data name="OutputKindTechnicalAvaloniaOpenGl" xml:space="preserve">
@@ -1779,13 +1912,13 @@
   <data name="OutputSummaryWindowSizeFormat" xml:space="preserve">
     <value> · {0}×{1}</value>
   </data>
-  <data name="OutputSummaryNdiVideoOnlyFormat" xml:space="preserve">
+  <data name="OutputSummaryNDIVideoOnlyFormat" xml:space="preserve">
     <value>“{0}” · video only</value>
   </data>
-  <data name="OutputSummaryNdiAudioOnlyFormat" xml:space="preserve">
+  <data name="OutputSummaryNDIAudioOnlyFormat" xml:space="preserve">
     <value>“{0}” · audio only · {1} ch @ {2} Hz</value>
   </data>
-  <data name="OutputSummaryNdiVideoAudioFormat" xml:space="preserve">
+  <data name="OutputSummaryNDIVideoAudioFormat" xml:space="preserve">
     <value>“{0}” · video+audio · NDI audio {1} ch @ {2} Hz</value>
   </data>
   <data name="VirtualOutputLabelWithNameFormat" xml:space="preserve">
@@ -1864,7 +1997,7 @@
     <value>Images</value>
   </data>
   <data name="AddImageButton" xml:space="preserve">
-    <value>+ Image</value>
+    <value>+ Image…</value>
   </data>
   <data name="AddTextButton" xml:space="preserve">
     <value>+ Text</value>
@@ -2089,7 +2222,7 @@
     <value>Preview output:</value>
   </data>
   <data name="PlaybackOptionsButton" xml:space="preserve">
-    <value>Options</value>
+    <value>Playback</value>
   </data>
   <data name="PlaybackOptionsTooltip" xml:space="preserve">
     <value>Loop, auto-advance, shuffle and repeat-all options for this player</value>
@@ -2211,10 +2344,10 @@
   <data name="SectionVideoOutputsLabel" xml:space="preserve">
     <value>Video outputs (local windows + NDI)</value>
   </data>
-  <data name="SectionMidiTargetsLabel" xml:space="preserve">
+  <data name="SectionMIDITargetsLabel" xml:space="preserve">
     <value>MIDI action targets</value>
   </data>
-  <data name="SectionOscTargetsLabel" xml:space="preserve">
+  <data name="SectionOSCTargetsLabel" xml:space="preserve">
     <value>OSC action targets</value>
   </data>
   <data name="SectionPlayersLabel" xml:space="preserve">
@@ -2301,7 +2434,7 @@
   <data name="ControlManualSendsTitle" xml:space="preserve">
     <value>Manual sends</value>
   </data>
-  <data name="IoTabOsc" xml:space="preserve">
+  <data name="IoTabOSC" xml:space="preserve">
     <value>OSC</value>
   </data>
   <data name="ExportLayerMenuHeader" xml:space="preserve">
@@ -2546,5 +2679,203 @@
   </data>
   <data name="CopiedToClipboardToastFormat" xml:space="preserve">
     <value>Copied {0}</value>
+  </data>
+  <data name="PlaylistContextProperties" xml:space="preserve">
+    <value>Properties…</value>
+  </data>
+  <data name="MediaPropertiesAppliedStatusFormat" xml:space="preserve">
+    <value>Updated {0} — applies on next play.</value>
+  </data>
+  <data name="PlaylistRemoveButtonLabel" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="HoldImageDialogTitle" xml:space="preserve">
+    <value>HOLD idle image</value>
+  </data>
+  <data name="PlayerMenuButtonLabel" xml:space="preserve">
+    <value>Player</value>
+  </data>
+  <data name="PlaylistGroupHeader" xml:space="preserve">
+    <value>Playlist</value>
+  </data>
+  <data name="PlaylistPropertiesButtonTooltip" xml:space="preserve">
+    <value>Details, tracks and per-kind settings for the selected playlist item</value>
+  </data>
+  <data name="MediaPropertiesDialogTitleFormat" xml:space="preserve">
+    <value>Properties — {0}</value>
+  </data>
+  <data name="MediaPropertiesTabDetails" xml:space="preserve">
+    <value>Details</value>
+  </data>
+  <data name="MediaPropertiesTabTracks" xml:space="preserve">
+    <value>Tracks</value>
+  </data>
+  <data name="MediaPropertiesTabScene" xml:space="preserve">
+    <value>Scene</value>
+  </data>
+  <data name="MediaPropertiesTabStreams" xml:space="preserve">
+    <value>Streams</value>
+  </data>
+  <data name="MediaPropertiesDetailsProbing" xml:space="preserve">
+    <value>Reading media details…</value>
+  </data>
+  <data name="MediaPropertiesDetailsUnavailableFormat" xml:space="preserve">
+    <value>Details unavailable: {0}</value>
+  </data>
+  <data name="MediaPropertiesStreamsHeader" xml:space="preserve">
+    <value>Streams</value>
+  </data>
+  <data name="MediaPropertiesAudioTrackLabel" xml:space="preserve">
+    <value>Audio track</value>
+  </data>
+  <data name="MediaPropertiesNoSelectableTracks" xml:space="preserve">
+    <value>This file has a single audio track and no subtitles.</value>
+  </data>
+  <data name="MediaPropertiesSubtitlesLabel" xml:space="preserve">
+    <value>Subtitles</value>
+  </data>
+  <data name="MediaPropertiesSubtitlesNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="MediaPropertiesSubtitleCountFormat" xml:space="preserve">
+    <value>{0} track(s) selected</value>
+  </data>
+  <data name="MediaPropertiesEditSubtitlesButton" xml:space="preserve">
+    <value>Choose subtitle tracks…</value>
+  </data>
+  <data name="MediaPropertiesEditSceneButton" xml:space="preserve">
+    <value>Edit scene…</value>
+  </data>
+  <data name="MediaPropertiesChangeStreamsButton" xml:space="preserve">
+    <value>Change streams…</value>
+  </data>
+  <data name="MediaPropertiesBakeButton" xml:space="preserve">
+    <value>Bake physics now</value>
+  </data>
+  <data name="MediaPropertiesBakeInProgress" xml:space="preserve">
+    <value>Baking physics…</value>
+  </data>
+  <data name="MediaPropertiesBakeDone" xml:space="preserve">
+    <value>Physics baked and cached — playback uses the pre-rendered simulation.</value>
+  </data>
+  <data name="MediaPropertiesBakeFailedFormat" xml:space="preserve">
+    <value>Bake failed: {0}</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusCached" xml:space="preserve">
+    <value>Physics bake cached — playback uses the pre-rendered simulation.</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusNotCached" xml:space="preserve">
+    <value>No physics bake cached yet — first playback bakes in the background.</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusNoMotion" xml:space="preserve">
+    <value>Physics baking needs a motion (VMD).</value>
+  </data>
+  <data name="MediaPropertiesBakeStatusDisabled" xml:space="preserve">
+    <value>Physics is disabled for this scene.</value>
+  </data>
+  <data name="MediaPropertiesCacheStateCached" xml:space="preserve">
+    <value>Downloaded and cached</value>
+  </data>
+  <data name="MediaPropertiesCacheStateNotCached" xml:space="preserve">
+    <value>Not cached — downloads before first play</value>
+  </data>
+  <data name="MediaPropertiesRowName" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="MediaPropertiesRowKind" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="MediaPropertiesRowLocation" xml:space="preserve">
+    <value>Location</value>
+  </data>
+  <data name="MediaPropertiesRowContainer" xml:space="preserve">
+    <value>Container</value>
+  </data>
+  <data name="MediaPropertiesRowDuration" xml:space="preserve">
+    <value>Duration</value>
+  </data>
+  <data name="MediaPropertiesRowBitrate" xml:space="preserve">
+    <value>Bit rate</value>
+  </data>
+  <data name="MediaPropertiesRowFileSize" xml:space="preserve">
+    <value>File size</value>
+  </data>
+  <data name="MediaPropertiesRowResolution" xml:space="preserve">
+    <value>Resolution</value>
+  </data>
+  <data name="MediaPropertiesRowFrameRate" xml:space="preserve">
+    <value>Frame rate</value>
+  </data>
+  <data name="MediaPropertiesRowModel" xml:space="preserve">
+    <value>Model</value>
+  </data>
+  <data name="MediaPropertiesRowMotion" xml:space="preserve">
+    <value>Motion</value>
+  </data>
+  <data name="MediaPropertiesRowCameraMotion" xml:space="preserve">
+    <value>Camera motion</value>
+  </data>
+  <data name="MediaPropertiesRowRenderSize" xml:space="preserve">
+    <value>Render size</value>
+  </data>
+  <data name="MediaPropertiesRowCamera" xml:space="preserve">
+    <value>Camera</value>
+  </data>
+  <data name="MediaPropertiesRowPhysics" xml:space="preserve">
+    <value>Physics</value>
+  </data>
+  <data name="MediaPropertiesRowAntialias" xml:space="preserve">
+    <value>Antialiasing</value>
+  </data>
+  <data name="MediaPropertiesRowVideoId" xml:space="preserve">
+    <value>Video ID</value>
+  </data>
+  <data name="MediaPropertiesRowAuthor" xml:space="preserve">
+    <value>Author</value>
+  </data>
+  <data name="MediaPropertiesRowVideoStream" xml:space="preserve">
+    <value>Video stream</value>
+  </data>
+  <data name="MediaPropertiesRowAudioStream" xml:space="preserve">
+    <value>Audio stream</value>
+  </data>
+  <data name="MediaPropertiesRowSubtitleLanguage" xml:space="preserve">
+    <value>Subtitle language</value>
+  </data>
+  <data name="MediaPropertiesRowCacheState" xml:space="preserve">
+    <value>Cache</value>
+  </data>
+  <data name="MediaPropertiesValueNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="MediaPropertiesValueOn" xml:space="preserve">
+    <value>On</value>
+  </data>
+  <data name="MediaPropertiesValueOff" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="MediaPropertiesKindFile" xml:space="preserve">
+    <value>Media file</value>
+  </data>
+  <data name="MediaPropertiesKindImage" xml:space="preserve">
+    <value>Image</value>
+  </data>
+  <data name="MediaPropertiesKindSubtitle" xml:space="preserve">
+    <value>Subtitle overlay</value>
+  </data>
+  <data name="MediaPropertiesKindText" xml:space="preserve">
+    <value>Text card</value>
+  </data>
+  <data name="MediaPropertiesKindMMD" xml:space="preserve">
+    <value>MMD scene</value>
+  </data>
+  <data name="MediaPropertiesKindYouTube" xml:space="preserve">
+    <value>YouTube</value>
+  </data>
+  <data name="MediaPropertiesKindNDI" xml:space="preserve">
+    <value>NDI input</value>
+  </data>
+  <data name="MediaPropertiesKindPortAudio" xml:space="preserve">
+    <value>Audio input</value>
   </data>
 </root>

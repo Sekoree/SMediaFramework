@@ -1,4 +1,3 @@
-using S.Media.Core.Audio;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -1327,5 +1326,74 @@ public class ChannelMapTests
         var map = ChannelMap.StereoToN(5);
         Assert.Equal(new int[] { 0, 1, 0, 1, 0 }, map.AsSpan().ToArray());
         Assert.Equal(2, map.RequiredInputChannels);
+    }
+
+    [Fact]
+    public void DefaultFor_EqualCounts_IsIdentity()
+    {
+        Assert.Equal(ChannelMap.Identity(2).AsSpan().ToArray(), ChannelMap.DefaultFor(2, 2).AsSpan().ToArray());
+        Assert.Equal(ChannelMap.Identity(6).AsSpan().ToArray(), ChannelMap.DefaultFor(6, 6).AsSpan().ToArray());
+    }
+
+    [Fact]
+    public void DefaultFor_MonoSource_FansOutToEveryOutputChannel()
+    {
+        // The headless-show crash case: a mono source into a stereo output must not require 2 inputs.
+        var map = ChannelMap.DefaultFor(inputChannels: 1, outputChannels: 2);
+        Assert.Equal(new[] { 0, 0 }, map.AsSpan().ToArray());
+        Assert.Equal(2, map.OutputChannels);
+        Assert.Equal(1, map.RequiredInputChannels);
+    }
+
+    [Fact]
+    public void DefaultFor_StereoSource_RepeatsLR()
+    {
+        var map = ChannelMap.DefaultFor(inputChannels: 2, outputChannels: 4);
+        Assert.Equal(new[] { 0, 1, 0, 1 }, map.AsSpan().ToArray());
+        Assert.Equal(2, map.RequiredInputChannels);
+    }
+
+    [Fact]
+    public void DefaultFor_WideSourceToFewerOutputs_TakesLeadingChannels()
+    {
+        var map = ChannelMap.DefaultFor(inputChannels: 6, outputChannels: 2);
+        Assert.Equal(new[] { 0, 1 }, map.AsSpan().ToArray());
+        Assert.Equal(2, map.OutputChannels);
+        Assert.Equal(2, map.RequiredInputChannels);
+    }
+
+    [Fact]
+    public void DefaultFor_WideNonMultipleSource_WrapsSourceChannels()
+    {
+        var map = ChannelMap.DefaultFor(inputChannels: 3, outputChannels: 5);
+        Assert.Equal(new[] { 0, 1, 2, 0, 1 }, map.AsSpan().ToArray());
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(1, 2)]
+    [InlineData(1, 6)]
+    [InlineData(2, 1)]
+    [InlineData(2, 2)]
+    [InlineData(2, 8)]
+    [InlineData(3, 2)]
+    [InlineData(5, 4)]
+    [InlineData(6, 6)]
+    [InlineData(8, 2)]
+    public void DefaultFor_AlwaysSatisfiesRouterContract(int input, int output)
+    {
+        var map = ChannelMap.DefaultFor(input, output);
+        Assert.Equal(output, map.OutputChannels);
+        // The router rejects a map needing more input channels than the source has; the default must
+        // never trip that, for any (source, output) channel-count pairing.
+        Assert.True(map.RequiredInputChannels <= input,
+            $"RequiredInputChannels {map.RequiredInputChannels} exceeds source channels {input}");
+    }
+
+    [Fact]
+    public void DefaultFor_NonPositiveCounts_Throw()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ChannelMap.DefaultFor(0, 2));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ChannelMap.DefaultFor(2, 0));
     }
 }

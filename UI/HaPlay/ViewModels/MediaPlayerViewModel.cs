@@ -17,7 +17,7 @@ using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.NDI;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.ViewModels;
 
@@ -28,13 +28,11 @@ internal sealed record VideoOutputRouteConflict(
 
 public partial class MediaPlayerViewModel : ViewModelBase
 {
-    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+    public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     private readonly OutputManagementViewModel _outputs;
     private readonly Func<MediaPlayerViewModel, Task>? _requestRemove;
-    private HaPlayPlaybackSession? _session;
     private IDisposable? _sleepInhibitLease;
-    private readonly PlaybackThroughputDiagnostics _throughputDiagnostics = new();
     private int _disposeStarted;
 
     /// <summary>
@@ -44,496 +42,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _preferLiveUyvyPassthrough;
 
-    /// <summary>Active playback session when media is loaded (for output health probes).</summary>
-    internal HaPlayPlaybackSession? PlaybackSession => _session;
     private DispatcherTimer? _loopTimer;
     private IdleLogoSlateSession? _idleSlate;
     private string? _idleSlateSig;
     private readonly DispatcherTimer _idleSlateSyncTimer;
-    /// <summary>Phase 2B — runs on a threadpool tick instead of the UI dispatcher so transport gate
-    /// holds don't stall the hold-image pump (NDI receivers would briefly freeze on every Pause/Play).</summary>
-    private Timer? _holdPumpTimer;
-    private int _holdPumpReentry;
     private PlaylistTabViewModel? _activePlaybackTab;
     private int _suppressVideoRouteConflictPrompt;
 
     internal Func<VideoOutputRouteConflict, Task<bool>> VideoOutputRouteConflictPrompt { get; set; } =
         DefaultVideoOutputRouteConflictPromptAsync;
 
-    /// <summary>When true, natural file-end raises <see cref="NaturalPlaybackEnded"/> instead of playlist auto-advance.</summary>
-    private bool _cuePlaybackActive;
-
-    /// <summary>Raised when a file-backed session reaches natural end (not live, not looping).</summary>
-    public event EventHandler? NaturalPlaybackEnded;
-
-    public void SetCuePlaybackActive(bool active)
-    {
-        _cuePlaybackActive = active;
-        if (!active)
-        {
-            _activeCueEndBehavior = CueEndBehavior.Stop;
-            CancelCueEnvelope();
-        }
-    }
-
-    /// <summary>Apply loop/end-behavior flags before opening a cue (§5.2).</summary>
-    public void ConfigureCueTransport(MediaCueNode cue)
-    {
-        _cuePlaybackActive = true;
-        _activeCueEndBehavior = cue.EndBehavior;
-        IsLooping = cue.Loop || cue.EndBehavior == CueEndBehavior.Loop;
-    }
-
-    private CueEndBehavior _activeCueEndBehavior = CueEndBehavior.Stop;
-
-    public void InvalidateCuePreRoll()
-    {
-        _cuePreRoll.InvalidateAll();
-        _ndiPreConnect.InvalidateAll();
-        _paPreConnect.InvalidateAll();
-    }
-
-    public HaPlayFilePlaybackOptions CurrentFilePlaybackOptions() =>
-        new(
-            OutputPreset,
-            TransitionMode,
-            TransitionDurationMs,
-            CustomOutputWidth: SanitizedCustomOutputWidth(),
-            CustomOutputHeight: SanitizedCustomOutputHeight());
-
-    public HaPlayFilePlaybackOptions FilePlaybackOptionsForCue(MediaCueNode cue) =>
-        new(OutputPreset, TransitionMode, TransitionDurationMs,
-            Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs),
-            SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight());
-
-    public void CancelCueEnvelope()
-    {
-        try { _cueEnvelopeCts?.Cancel(); } catch { /* best effort */ }
-        try { _cueEnvelopeCts?.Dispose(); } catch { /* best effort */ }
-        _cueEnvelopeCts = null;
-        _cueEnvelope = 1f;
-        _cueVideoOpacity = 1f;
-        _session?.SetLogoOutputOpacity(1f);
-    }
-
-    /// <summary>Ramps master×output compound gain for per-cue <see cref="MediaCueNode.FadeInMs"/> /
-    /// <see cref="MediaCueNode.FadeOutMs"/> (audio + video via logo opacity when video is routed).</summary>
-    public void BeginCueFades(MediaCueNode cue)
-    {
-        CancelCueEnvelope();
-        if (cue.FadeInMs <= 0 && cue.FadeOutMs <= 0)
-            return;
-        _cueEnvelopeCts = new CancellationTokenSource();
-        _ = RunCueEnvelopeAsync(cue, _cueEnvelopeCts.Token);
-    }
-
-    private async Task RunCueEnvelopeAsync(MediaCueNode cue, CancellationToken ct)
-    {
-        try
-        {
-            if (cue.FadeInMs > 0)
-            {
-                _cueEnvelope = 0f;
-                _cueVideoOpacity = 0f;
-                await ApplyCueEnvelopeToSessionAsync();
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (sw.ElapsedMilliseconds < cue.FadeInMs)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var t = (float)Math.Min(1.0, sw.ElapsedMilliseconds / (double)cue.FadeInMs);
-                    _cueEnvelope = t;
-                    _cueVideoOpacity = t;
-                    await ApplyCueEnvelopeToSessionAsync();
-                    await Task.Delay(20, ct).ConfigureAwait(false);
-                }
-                _cueEnvelope = 1f;
-                _cueVideoOpacity = 1f;
-                await ApplyCueEnvelopeToSessionAsync();
-            }
-
-            if (cue.FadeOutMs > 0)
-            {
-                var duration = await Dispatcher.UIThread.InvokeAsync(() => Duration);
-                if (duration <= TimeSpan.Zero)
-                    return;
-
-                var fadeOutStart = duration - TimeSpan.FromMilliseconds(cue.FadeOutMs);
-                while (!ct.IsCancellationRequested)
-                {
-                    var pos = await Dispatcher.UIThread.InvokeAsync(() => CurrentPosition);
-                    if (!IsPlaying || pos >= fadeOutStart)
-                        break;
-                    await Task.Delay(50, ct).ConfigureAwait(false);
-                }
-
-                var swOut = System.Diagnostics.Stopwatch.StartNew();
-                while (swOut.ElapsedMilliseconds < cue.FadeOutMs && !ct.IsCancellationRequested)
-                {
-                    var stillPlaying = await Dispatcher.UIThread.InvokeAsync(() => IsPlaying);
-                    if (!stillPlaying)
-                        break;
-                    var t = 1f - (float)Math.Min(1.0, swOut.ElapsedMilliseconds / (double)cue.FadeOutMs);
-                    _cueEnvelope = t;
-                    _cueVideoOpacity = t;
-                    await ApplyCueEnvelopeToSessionAsync();
-                    await Task.Delay(20, ct).ConfigureAwait(false);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            /* stop/panic/next cue */
-        }
-        finally
-        {
-            _cueEnvelope = 1f;
-            _cueVideoOpacity = 1f;
-            await ApplyCueEnvelopeToSessionAsync();
-        }
-    }
-
-    private float _cueVideoOpacity = 1f;
-
-    private async Task ApplyCueEnvelopeToSessionAsync()
-    {
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            ApplyAllOutputGainsToSession();
-            _session?.SetLogoOutputOpacity(_cueVideoOpacity);
-        });
-    }
-
-    /// <summary>GO path — adopt pre-opened file/NDI when cache matches; otherwise open normally.</summary>
-    public async Task<bool> TryPlayCueMediaAsync(MediaCueNode cue, CancellationToken ct = default)
-    {
-        if (cue.Source is null)
-            return false;
-
-        var adopted = cue.Source switch
-        {
-            NDIInputPlaylistItem ndi => await TryPlayNdiCueAsync(cue, ndi, ct).ConfigureAwait(false),
-            PortAudioInputPlaylistItem pa => await TryPlayPortAudioCueAsync(cue, pa, ct).ConfigureAwait(false),
-            _ => await TryPlayFileCueAsync(cue, ct).ConfigureAwait(false),
-        };
-
-        await ApplyCueTransportAsync(cue, ct).ConfigureAwait(false);
-        return adopted;
-    }
-
-    private async Task<bool> TryPlayFileCueAsync(MediaCueNode cue, CancellationToken ct)
-    {
-        var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
-        var fileOpts = FilePlaybackOptionsForCue(cue);
-        var cacheKey = CuePreRollCache.BuildCacheKey(cue.Source!, lines, fileOpts);
-        if (_cuePreRoll.TryTake(cue.Id, cacheKey, out var session, out var item) && session is not null && item is not null)
-        {
-            // Cue executors run on pool threads — observable property sets must go via the dispatcher.
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                _activePlaybackTab = SelectedPlaylistTab;
-                SelectedPlaylistItem = item;
-            });
-            await AdoptPreRolledSessionAsync(session, item, cue, ct).ConfigureAwait(false);
-            if (!IsPlaying)
-                await StartPlaybackAsync().ConfigureAwait(false);
-            return true;
-        }
-
-        _pendingCueFilePlayback = fileOpts;
-        try
-        {
-            await PlayPlaylistItemAsync(cue.Source!).ConfigureAwait(false);
-        }
-        finally
-        {
-            _pendingCueFilePlayback = null;
-        }
-
-        return false;
-    }
-
-    private async Task<bool> TryPlayNdiCueAsync(MediaCueNode cue, NDIInputPlaylistItem ndi, CancellationToken ct)
-    {
-        var cacheKey = NdiInputPreConnectCache.BuildCacheKey(ndi);
-        if (_ndiPreConnect.TryTake(cue.Id, cacheKey, out var receiver, out _))
-        {
-            await OpenPreconnectedNdiAsync(ndi, receiver!, cue, ct).ConfigureAwait(false);
-            if (!IsPlaying)
-                await StartPlaybackAsync().ConfigureAwait(false);
-            return true;
-        }
-
-        await PlayPlaylistItemAsync(ndi).ConfigureAwait(false);
-        return false;
-    }
-
-    private async Task OpenPreconnectedNdiAsync(
-        NDIInputPlaylistItem item,
-        NDISource receiver,
-        MediaCueNode cueRoutes,
-        CancellationToken ct)
-    {
-        _ = ct;
-        await WithPlaybackArcAsync(async () =>
-        {
-            await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
-
-            var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
-            HaPlayPlaybackSession? created = null;
-            string? createErr = null;
-            await Task.Run(() =>
-            {
-                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, receiver, out created, out createErr))
-                    created = null;
-            }).ConfigureAwait(false);
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (created is null)
-                {
-                    StatusMessage = createErr ?? "Failed to open pre-connected NDI.";
-                    try { receiver.Dispose(); } catch { /* best effort */ }
-                    return;
-                }
-
-                StopIdleSlate();
-                _outputs.StopPreviewsForPlayback(lines);
-                _currentPlaylistItem = item;
-                MediaFilePath = null;
-                OnPropertyChanged(nameof(CurrentMediaDisplay));
-                _session = created;
-                IsMediaLoaded = true;
-                Duration = TimeSpan.Zero;
-                StatusMessage = null;
-                created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
-                ApplyCueRouteOverrides(cueRoutes);
-                SyncMatrixSourceChannelsFromSession(created);
-                ResizeSelectedAudioMatrices(created);
-                RebuildAudioMatrixRows();
-                ApplyAllOutputMatricesToSession();
-                ApplyAllOutputGainsToSession();
-                EnsureLoopTimerStarted();
-            });
-        }).ConfigureAwait(false);
-    }
-
-    private async Task ApplyCueTransportAsync(MediaCueNode cue, CancellationToken ct)
-    {
-        if (_session?.IsLive != true)
-        {
-            var clip = CueClipWindow.From(cue, Duration);
-            if (clip.Start > TimeSpan.Zero)
-                await SeekToTimeAsync(clip.Start, ct).ConfigureAwait(false);
-        }
-
-        BeginCueFades(cue);
-    }
-
-    public async Task SeekToTimeAsync(TimeSpan position, CancellationToken ct = default)
-    {
-        if (_session is null || _session.IsLive || Duration <= TimeSpan.Zero)
-            return;
-
-        var t = position;
-        if (t < TimeSpan.Zero)
-            t = TimeSpan.Zero;
-        if (t > Duration)
-            t = Duration;
-
-        await WithPlaybackArcAsync(async () =>
-        {
-            ct.ThrowIfCancellationRequested();
-            var (session, playing, holdFb) = await Dispatcher.UIThread.InvokeAsync(() =>
-                (_session, IsPlaying, HoldFallbackVideo));
-            if (session is null)
-                return;
-
-            await RunFileSeekTransportAsync(session, t, playing, holdFb).ConfigureAwait(false);
-
-            if (!playing)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    CurrentPosition = t;
-                    if (Duration > TimeSpan.Zero)
-                        SeekSliderValue = t.Ticks * 1000.0 / Duration.Ticks;
-                });
-                return;
-            }
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (HoldFallbackVideo)
-                    StartHoldPumpTimer();
-                EnsureLoopTimerStarted();
-            });
-        }).ConfigureAwait(false);
-    }
-
-    private async Task<bool> TryPlayPortAudioCueAsync(MediaCueNode cue, PortAudioInputPlaylistItem pa, CancellationToken ct)
-    {
-        var cacheKey = PortAudioInputPreConnectCache.BuildCacheKey(pa);
-        if (_paPreConnect.TryTake(cue.Id, cacheKey, out var input, out _))
-        {
-            await OpenPreconnectedPortAudioAsync(pa, input!, cue, ct).ConfigureAwait(false);
-            if (!IsPlaying)
-                await StartPlaybackAsync().ConfigureAwait(false);
-            return true;
-        }
-
-        await PlayPlaylistItemAsync(pa).ConfigureAwait(false);
-        return false;
-    }
-
-    private async Task OpenPreconnectedPortAudioAsync(
-        PortAudioInputPlaylistItem item,
-        PortAudioInput input,
-        MediaCueNode cueRoutes,
-        CancellationToken ct)
-    {
-        _ = ct;
-        await WithPlaybackArcAsync(async () =>
-        {
-            await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
-
-            var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
-            HaPlayPlaybackSession? created = null;
-            string? createErr = null;
-            await Task.Run(() =>
-            {
-                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, input, out created, out createErr))
-                    created = null;
-            }).ConfigureAwait(false);
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (created is null)
-                {
-                    StatusMessage = createErr ?? "Failed to open pre-connected PortAudio.";
-                    try { input.Dispose(); } catch { /* best effort */ }
-                    return;
-                }
-
-                StopIdleSlate();
-                _outputs.StopPreviewsForPlayback(lines);
-                _currentPlaylistItem = item;
-                MediaFilePath = null;
-                OnPropertyChanged(nameof(CurrentMediaDisplay));
-                _session = created;
-                IsMediaLoaded = true;
-                Duration = TimeSpan.Zero;
-                StatusMessage = null;
-                created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
-                ApplyCueRouteOverrides(cueRoutes);
-                SyncMatrixSourceChannelsFromSession(created);
-                ResizeSelectedAudioMatrices(created);
-                RebuildAudioMatrixRows();
-                ApplyAllOutputMatricesToSession();
-                ApplyAllOutputGainsToSession();
-                EnsureLoopTimerStarted();
-            });
-        }).ConfigureAwait(false);
-    }
-
-    public async Task RefreshPortAudioPreConnectAsync(
-        IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> targets,
-        CancellationToken ct = default)
-    {
-        if (targets.Count == 0 || IsPlaying)
-            return;
-
-        var keepIds = targets.Select(t => t.CueId).ToHashSet();
-        foreach (var (cueId, item) in targets)
-        {
-            ct.ThrowIfCancellationRequested();
-            var cacheKey = PortAudioInputPreConnectCache.BuildCacheKey(item);
-            if (_paPreConnect.HasMatchingEntry(cueId, cacheKey))
-                continue;
-
-            PortAudioInput? input = null;
-            AudioFormat format = default;
-            string? err = null;
-            await Task.Run(() =>
-            {
-                if (!PortAudioInputConnector.TryOpen(item, out input, out format, out err))
-                    input = null;
-            }, ct).ConfigureAwait(false);
-
-            if (input is not null)
-                _paPreConnect.Store(cueId, cacheKey, input, format);
-        }
-
-        _paPreConnect.EvictExcept(keepIds, Math.Max(1, targets.Count));
-    }
-
-    public async Task RefreshNdiPreConnectAsync(
-        IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> targets,
-        CancellationToken ct = default)
-    {
-        if (targets.Count == 0 || IsPlaying)
-            return;
-
-        var keepIds = targets.Select(t => t.CueId).ToHashSet();
-        foreach (var (cueId, item) in targets)
-        {
-            ct.ThrowIfCancellationRequested();
-            var cacheKey = NdiInputPreConnectCache.BuildCacheKey(item);
-            if (_ndiPreConnect.HasMatchingEntry(cueId, cacheKey))
-                continue;
-
-            NDISource? receiver = null;
-            AudioFormat format = default;
-            string? err = null;
-            await Task.Run(() =>
-            {
-                if (!NdiInputConnector.TryConnectLive(item, out receiver, out format, out _, out err))
-                    receiver = null;
-            }, ct).ConfigureAwait(false);
-
-            if (receiver is not null)
-                _ndiPreConnect.Store(cueId, cacheKey, receiver, format);
-        }
-
-        _ndiPreConnect.EvictExcept(keepIds, Math.Max(1, targets.Count));
-    }
-
-    private HaPlayFilePlaybackOptions? _pendingCueFilePlayback;
-
-    public async Task RefreshCuePreRollAsync(
-        IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> targets,
-        CancellationToken ct = default)
-    {
-        if (targets.Count == 0 || IsPlaying)
-            return;
-
-        var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
-        var keepIds = targets.Select(t => t.CueId).ToHashSet();
-
-        foreach (var (cueId, item, fadeIn, fadeOut) in targets)
-        {
-            ct.ThrowIfCancellationRequested();
-            var fileOpts = new HaPlayFilePlaybackOptions(
-                OutputPreset, TransitionMode, TransitionDurationMs, fadeIn, fadeOut,
-                SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight());
-            var cacheKey = CuePreRollCache.BuildCacheKey(item, lines, fileOpts);
-            if (_cuePreRoll.HasMatchingEntry(cueId, cacheKey))
-                continue;
-
-            HaPlayPlaybackSession? created = null;
-            string? err = null;
-            await Task.Run(() =>
-            {
-                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path, fi.AudioTrackIndex) : null;
-                if (!HaPlayPlaybackSession.TryCreate(item, lines, _outputs, out created, out err, fileOpts, preOpened))
-                    created = null;
-            }, ct).ConfigureAwait(false);
-
-            if (created is not null)
-                _cuePreRoll.Store(cueId, cacheKey, created, item);
-        }
-
-        _cuePreRoll.EvictExcept(keepIds, Math.Max(1, targets.Count));
-    }
     private bool _syncingPlaylistTabState;
     private readonly ObservableCollection<PlaylistItem> _emptyPlaylistItems = new();
 
@@ -541,6 +59,29 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// active item across <see cref="PlaylistItem"/> kinds so navigation (next/prev/end-of-track
     /// auto-advance) works for both files and live inputs.</summary>
     private PlaylistItem? _currentPlaylistItem;
+
+    /// <summary>The playlist item currently loaded in the deck (playing or paused), or null when idle.
+    /// Drives the "now playing" row highlight and the playing-Set tab marker. Distinct from
+    /// <see cref="_currentPlaylistItem"/> (which the transport keeps for next/prev navigation even while
+    /// stopped) only in lifetime: this one clears the moment the deck returns to idle.</summary>
+    [ObservableProperty]
+    private PlaylistItem? _currentPlayingItem;
+
+    partial void OnCurrentPlayingItemChanged(PlaylistItem? value)
+    {
+        _ = value;
+        RefreshPlayingTabIndicators();
+    }
+
+    /// <summary>Marks the Set the player is playing from (<see cref="PlaylistTabViewModel.IsPlaying"/>).
+    /// Only the active-playback tab is flagged, and only while an item is actually loaded — so the marker
+    /// shows on the playing Set even when the user has switched to view a different Set.</summary>
+    private void RefreshPlayingTabIndicators()
+    {
+        var playingTab = CurrentPlayingItem is not null ? _activePlaybackTab : null;
+        foreach (var tab in PlaylistTabs)
+            tab.IsPlaying = ReferenceEquals(tab, playingTab);
+    }
 
     /// <summary>
     /// Trim settings loaded from config, keyed by input channel. Applied whenever the matrix is resized.
@@ -559,28 +100,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// </summary>
     private static readonly TimeSpan PlayWallTimeout = TimeSpan.FromSeconds(11);
     private volatile bool _isTransportBusy;
-    private readonly Playback.PlaylistDecoderCache _decoderCache = new();
-    private CancellationTokenSource? _preOpenCts;
-    private readonly CuePreRollCache _cuePreRoll = new();
-
-    /// <summary>Forwarded from the pre-roll cache so the Cue Player can light warming badges
-    /// on the affected rows (Phase 5.7.2). Snapshot of currently-warm cue ids.</summary>
-    public event Action<IReadOnlyCollection<Guid>>? CuePreRollChanged
-    {
-        add => _cuePreRoll.EntriesChanged += value;
-        remove => _cuePreRoll.EntriesChanged -= value;
-    }
-
-    /// <summary>Snapshot of currently-warm cue ids — used for initial UI sync.</summary>
-    public IReadOnlyCollection<Guid> CuePreRollSnapshot() => _cuePreRoll.SnapshotWarmCueIds();
-    private readonly NdiInputPreConnectCache _ndiPreConnect = new();
-    private readonly PortAudioInputPreConnectCache _paPreConnect = new();
-    private float _cueEnvelope = 1f;
-    private CancellationTokenSource? _cueEnvelopeCts;
 
     /// <summary>Phase C.5 (§6.9) — switch into the "waiting for source" state. Surfaces a status banner,
-    /// stamps the next retry deadline, and ensures the loop timer is running so the deadline ticks.
-    /// Caller has already cleared the failed <see cref="_session"/>.</summary>
+    /// stamps the next retry deadline, and ensures the loop timer is running so the deadline ticks.</summary>
     private void EnterWaitingForSource(PlaylistItem item, string reason)
     {
         _waitingItem = item;
@@ -619,35 +141,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _ => 0,
     };
 
-    /// <summary>Phase C.5 — return the active source's channel count regardless of whether it was
-    /// opened via container decoder (files) or via <see cref="MediaPlayer.TryOpenLive"/> (live items).
-    /// Live sessions surface the negotiated format on <see cref="HaPlayPlaybackSession.SourceAudioFormat"/>;
-    /// file sessions still have a real <c>Decoder</c> and can read it from there. Returns 0 when
-    /// nothing is loaded or the source has no known audio format.</summary>
-    private static int SourceChannelCountOrZero(HaPlayPlaybackSession? session)
-    {
-        if (session is null) return 0;
-        if (session.IsLive)
-            return session.SourceAudioFormat.Channels > 0 ? session.SourceAudioFormat.Channels : 0;
-        if (session.Player.HasContainerDecoder && session.Player.Decoder.Audio is { } a)
-            return a.Format.Channels;
-        return 0;
-    }
+    /// <summary>The matrix grid's input (source) channel count: the operator's explicit override when set,
+    /// else the last playing clip's channel count (pushed from the ShowSession transport snapshot via
+    /// <see cref="SetAudioMatrixSourceChannels"/>), clamped to the grid's supported range.</summary>
+    private int MatrixInputChannelCount => Math.Clamp(AudioMatrixSourceChannels, 1, 64);
 
-    private int MatrixInputChannelCountFor(HaPlayPlaybackSession? session)
+    private void ResizeSelectedAudioMatrices()
     {
-        if (_audioMatrixSourceChannelsExplicit)
-            return Math.Clamp(AudioMatrixSourceChannels, 1, 64);
-
-        var sourceChannels = SourceChannelCountOrZero(session);
-        return sourceChannels > 0
-            ? Math.Clamp(sourceChannels, 1, 64)
-            : Math.Clamp(AudioMatrixSourceChannels, 1, 64);
-    }
-
-    private void ResizeSelectedAudioMatrices(HaPlayPlaybackSession? session)
-    {
-        var inputChannels = MatrixInputChannelCountFor(session);
+        var inputChannels = MatrixInputChannelCount;
         var anyInputCountChanged = false;
         foreach (var binding in Outputs)
         {
@@ -661,18 +162,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // arrives). Same-count reloads keep whatever the operator hand-tuned for that layout.
         if (anyInputCountChanged)
             ApplyChannelPresetRuleIfMatching(inputChannels);
-    }
-
-    private void SyncMatrixSourceChannelsFromSession(HaPlayPlaybackSession? session)
-    {
-        if (_audioMatrixSourceChannelsExplicit)
-            return;
-
-        var sourceChannels = SourceChannelCountOrZero(session);
-        if (sourceChannels <= 0)
-            return;
-
-        SetAudioMatrixSourceChannels(sourceChannels, explicitValue: false, resize: false);
     }
 
     private void SetAudioMatrixSourceChannels(int channels, bool explicitValue, bool resize)
@@ -691,7 +180,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _audioMatrixSourceChannelsExplicit = explicitValue;
         if (resize)
         {
-            ResizeSelectedAudioMatrices(_session);
+            ResizeSelectedAudioMatrices();
             RebuildAudioMatrixRows();
             ApplyAllOutputMatricesToSession();
         }
@@ -703,9 +192,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// </summary>
     private int OutputChannelCountOrZero(OutputLineViewModel line)
     {
-        if (_session?.TryGetEffectiveOutputChannelCount(line, out var effective) == true)
-            return effective;
-
         return line.Definition switch
         {
             PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
@@ -771,7 +257,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Name = name;
         SyncOutputsCollection();
         _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
-        _outputs.SharedHeadphonesBusesChanged += OnSharedHeadphonesBusesChanged;
         // Phase B (§3.4) — also resync on definition changes (Edit) so clone-of transitions update
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
@@ -801,12 +286,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             ReleasePlaybackSleepInhibitor();
             _idleSlateSyncTimer.Stop();
-            StopHoldPumpTimer();
-            CancelCueEnvelope();
             try { _statusMessageClearCts?.Cancel(); } catch { /* best effort */ }
             try { _statusMessageClearCts?.Dispose(); } catch { /* best effort */ }
             _statusMessageClearCts = null;
-            CancelPreOpen();
             CancelWaveformExtraction();
             StopIdleSlate();
             UnsubscribeOutputEvents();
@@ -816,13 +298,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
         });
 
         await CloseSessionAsync().ConfigureAwait(false);
-    }
 
-    private void CancelPreOpen()
-    {
-        try { _preOpenCts?.Cancel(); } catch { /* best effort */ }
-        try { _preOpenCts?.Dispose(); } catch { /* best effort */ }
-        _preOpenCts = null;
+        // 8a.4 re-back: tear down the per-player ShowSession (poll stop + lease release on the UI thread; the
+        // session disposes on its own dispatcher). No observable-property writes here — the VM is going away.
+        await Dispatcher.UIThread.InvokeAsync(StopShowSessionPoll);
+        var playerSession = _playerShowSession;
+        _playerShowSession = null;
+        if (playerSession is not null)
+        {
+            try { await playerSession.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession dispose"); }
+        }
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            foreach (var held in _playerAcquiredLines)
+                _outputs.ReleaseVideoOutputForLine(held);
+            _playerAcquiredLines.Clear();
+        });
     }
 
     private void CancelWaveformExtraction()
@@ -879,7 +371,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void UnsubscribeOutputEvents()
     {
         _outputs.Outputs.CollectionChanged -= OnSharedOutputsCollectionChanged;
-        _outputs.SharedHeadphonesBusesChanged -= OnSharedHeadphonesBusesChanged;
         _outputs.RoutingTopologyChanged -= OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged -= OnOutputNamingChanged;
         _outputs.OutputLineRemoving -= OnOutputLineRemoving;
@@ -927,7 +418,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool ShouldHotAddAddedClone(OutputLineViewModel line)
     {
-        if (_session is null)
+        if (!ShowSessionHotSwapActive) // nothing playing
             return false;
         if (line.Definition is not LocalVideoOutputDefinition { CloneOfId: { } parentId })
             return false;
@@ -951,31 +442,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (!await Dispatcher.UIThread.InvokeAsync(() => line.IsPreviewRunning && ShouldHotAddAddedClone(line)))
             return;
 
-        await WithPlaybackArcAsync(() =>
-        {
-            var session = _session;
-            if (session is null || !ShouldRouteLine(line) || session.HasWiredLine(line))
-                return Task.CompletedTask;
-
-            if (!session.TryAddOutput(line, out var err))
-            {
-                if (!string.IsNullOrWhiteSpace(err))
-                    Dispatcher.UIThread.Post(() => StatusMessage = err);
-            }
-            else
-            {
-                TransportTrace.LogInformation("Hot-added clone output '{Name}' to running session", line.Definition.DisplayName);
-            }
-
-            return Task.CompletedTask;
-        }).ConfigureAwait(false);
-    }
-
-    private void OnSharedHeadphonesBusesChanged(object? sender, EventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        Dispatcher.UIThread.Post(RefreshHeadphonesCueTargets);
+        // Hot-add the clone to the live composition (HotAdd is idempotent + guards already-driven).
+        await WithPlaybackArcAsync(() => Dispatcher.UIThread.InvokeAsync(() =>
+            ShouldRouteLine(line) ? HotAddOutputToShowSessionAsync(line) : Task.CompletedTask)).ConfigureAwait(false);
     }
 
     private void OnRoutingTopologyChanged(object? sender, EventArgs e)
@@ -1027,8 +496,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Visual label for the Play/Pause toggle.</summary>
-    public string PlayPauseLabel => IsPlaying ? "⏸ Pause" : "▶ Play";
+    /// <summary>Text label for the Play/Pause toggle (the view pairs it with the matching icon).</summary>
+    public string PlayPauseLabel => IsPlaying ? "Pause" : "Play";
 
     public string DetachedWindowTitle => Resources.Strings.Format(
         nameof(Resources.Strings.DetachedPlayerTitleFormat), Name);
@@ -1050,21 +519,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         get
         {
-            if (!IsMediaLoaded || _session is null) return "Idle";
-            // Live items don't carry a container decoder; use negotiated live capabilities.
-            if (_session.IsLive)
+            if (!IsMediaLoaded || !ShowSessionActive) return "Idle";
+            // Derive the label from the item kind + the probed/observed streams (the item's declared
+            // stream selection for live inputs; the open-time video probe for files).
+            return _currentPlaylistItem switch
             {
-                if (_session.LiveHasVideo && _session.LiveHasAudio) return "Live video + audio";
-                if (_session.LiveHasVideo) return "Live video";
-                if (_session.LiveHasAudio) return "Live audio";
-                return "Live";
-            }
-            var hasVid = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasVideo;
-            var hasAud = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasAudio;
-            if (hasVid && hasAud) return "Video + audio";
-            if (hasVid) return "Video";
-            if (hasAud) return "Audio";
-            return "Empty";
+                NDIInputPlaylistItem { AudioOnly: true } => "Live audio",
+                NDIInputPlaylistItem { VideoOnly: true } => "Live video",
+                NDIInputPlaylistItem => "Live video + audio",
+                PortAudioInputPlaylistItem => "Live audio",
+                _ when _playerShowHasVideo => "Video + audio",
+                _ => "Audio",
+            };
         }
     }
 
@@ -1083,12 +549,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public IReadOnlyList<PlayerOutputPreset> OutputPresets { get; } = Enum.GetValues<PlayerOutputPreset>();
 
     public IReadOnlyList<PlayerTransitionMode> TransitionModes { get; } = Enum.GetValues<PlayerTransitionMode>();
-
-    public IReadOnlyList<HeadphonesCueTapPoint> HeadphonesCueTapPoints { get; } = Enum.GetValues<HeadphonesCueTapPoint>();
-
-    public ObservableCollection<HeadphonesCueTargetOption> HeadphonesCueTargets { get; } = new();
-
-    public bool HasHeadphonesCueOutputs => HeadphonesCueTargets.Count > 0;
 
     /// <summary>Phase C (§4.3.4) — combobox choices for the per-output channel-mix mode.</summary>
     public IReadOnlyList<AudioRouteMixMode> MixModes { get; } = Enum.GetValues<AudioRouteMixMode>();
@@ -1141,7 +601,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         ChannelPresetRules.Add(new ChannelPresetRule { SourceChannels = channels, Preset = NewRulePreset });
         // An applicable rule takes effect immediately when it matches the current source.
-        ApplyChannelPresetRuleIfMatching(MatrixInputChannelCountFor(_session));
+        ApplyChannelPresetRuleIfMatching(MatrixInputChannelCount);
     }
 
     /// <summary>P5c — save this output's matrix as a shareable framework preset file (.mfmix).</summary>
@@ -1341,24 +801,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     public bool IsCustomOutputPreset => OutputPreset == PlayerOutputPreset.Custom;
 
-    partial void OnOutputPresetChanged(PlayerOutputPreset value)
-    {
-        _ = value;
-        InvalidateCuePreRoll();
-    }
-
-    partial void OnTransitionModeChanged(PlayerTransitionMode value)
-    {
-        _ = value;
-        InvalidateCuePreRoll();
-    }
-
-    partial void OnTransitionDurationMsChanged(int value)
-    {
-        _ = value;
-        InvalidateCuePreRoll();
-    }
-
     [ObservableProperty]
     private PlayerTransitionMode _transitionMode = PlayerTransitionMode.Cut;
 
@@ -1368,32 +810,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private int _customOutputWidth = 1920;
 
-    partial void OnCustomOutputWidthChanged(int value)
-    {
-        _ = value;
-        InvalidateCuePreRoll();
-    }
-
     [ObservableProperty]
     private int _customOutputHeight = 1080;
-
-    partial void OnCustomOutputHeightChanged(int value)
-    {
-        _ = value;
-        InvalidateCuePreRoll();
-    }
-
-    [ObservableProperty]
-    private bool _headphonesCueEnabled;
-
-    [ObservableProperty]
-    private HeadphonesCueTargetOption? _selectedHeadphonesCueTarget;
-
-    [ObservableProperty]
-    private HeadphonesCueTapPoint _headphonesCueTapPoint = HeadphonesCueTapPoint.PreFader;
-
-    [ObservableProperty]
-    private double _headphonesCueGainDb;
 
     [ObservableProperty]
     private bool _isMediaLoaded;
@@ -1541,16 +959,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// for live sources, idle, and paused playback.</summary>
     public bool IsNearEndOfTrack =>
         IsPlaying
-        && _session is { IsLive: false }
+        && _currentPlaylistItem is { IsLive: false }
         && Duration > TimeSpan.Zero
         && RemainingTime <= LowTimeWarningThreshold;
 
     private static readonly TimeSpan LowTimeWarningThreshold = TimeSpan.FromSeconds(10);
 
     /// <summary>Phase C.5 (§6.5) — true when the loaded source has a finite, seekable duration. Files
-    /// with non-zero duration are seekable; live items (PortAudio capture, NDI receiver) are not. The
-    /// view hides the seek slider + three-clock readout when this is false.</summary>
-    public bool IsTransportSeekable => Duration > TimeSpan.Zero && _session?.IsLive != true;
+    /// with non-zero duration are seekable; live items (PortAudio capture, NDI receiver) are not (their
+    /// duration stays zero). The view hides the seek slider + three-clock readout when this is false.</summary>
+    public bool IsTransportSeekable => Duration > TimeSpan.Zero;
 
     /// <summary>Pre-formatted text bound by the view — Avalonia's <c>StringFormat=-{}{0:...}</c> with a leading minus
     /// is fragile (the binding silently fails). Formatting in the VM avoids the trap.</summary>
@@ -1576,40 +994,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     public void ResetVolume() => MasterVolumeDb = 0;
-
-    private void PreOpenAdjacentPlaylistItems()
-    {
-        _preOpenCts?.Cancel();
-        _preOpenCts?.Dispose();
-        _preOpenCts = new CancellationTokenSource();
-
-        // Follow the tab that's actually playing (which may not be the selected tab) so auto-advance
-        // finds the next decoder already warm.
-        var items = ActivePlaybackItems();
-        var current = _currentPlaylistItem;
-        if (current is null || items.Count == 0) return;
-
-        var idx = items.IndexOf(current);
-        if (idx < 0) return;
-
-        // Warm (the cache caps at MaxEntries): the item auto-advance will *actually* pick next —
-        // shuffle-aware, so shuffle playback no longer advances into a cold decoder — plus the linear
-        // neighbours manual Next/Previous use. Deduped so a non-shuffled next isn't opened twice.
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var targets = new List<(string Path, int? AudioTrackIndex)>(3);
-        void Add(PlaylistItem? item)
-        {
-            if (item is FilePlaylistItem f && seen.Add(f.Path))
-                targets.Add((f.Path, f.AudioTrackIndex));
-        }
-
-        Add(PeekAutoAdvanceNext(items));                  // unattended auto-advance target
-        if (idx + 1 < items.Count) Add(items[idx + 1]);  // manual Next (linear)
-        if (idx - 1 >= 0) Add(items[idx - 1]);            // manual Previous (linear)
-
-        if (targets.Count > 0)
-            _decoderCache.PreOpenAsync(targets, _preOpenCts.Token);
-    }
 
     private float[]? _waveformPeaks;
     private int _waveformRevision;
@@ -1655,7 +1039,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         try
         {
-            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, cts.Token).ConfigureAwait(false);
+            // Progressive display: partial snapshots land as they are analysed (throttled by the extractor),
+            // so the waveform fills in left-to-right behind the scrubber instead of popping in at the end.
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, cts.Token, partial =>
+            {
+                if (cts.IsCancellationRequested)
+                    return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ReferenceEquals(_waveformCts, cts))
+                        return;
+                    WaveformPeaks = partial;
+                    WaveformRevision++;
+                });
+            }).ConfigureAwait(false);
             // A superseding extraction (or a path clear) owns the flag once this token is cancelled, so
             // only the run that finishes naturally clears the "analysing" state.
             if (!cts.IsCancellationRequested)
@@ -1722,18 +1119,37 @@ public partial class MediaPlayerViewModel : ViewModelBase
         double.IsNegativeInfinity(PeakLevelDb) ? 0
         : Math.Clamp((PeakLevelDb + 60) / 72.0, 0, 1);
 
+    /// <summary>Metering taps wrapped around every deck audio-output lease (registered by the ShowSession
+    /// audio-output factory on the session thread, read by the UI poll) — the deck's VU source.</summary>
+    private readonly object _meterTapGate = new();
+    private readonly List<Playback.MeteringAudioOutput> _meterTaps = [];
+
+    private void RegisterMeterTap(Playback.MeteringAudioOutput tap)
+    {
+        lock (_meterTapGate)
+            _meterTaps.Add(tap);
+    }
+
+    private void UnregisterMeterTap(Playback.MeteringAudioOutput tap)
+    {
+        lock (_meterTapGate)
+            _meterTaps.Remove(tap);
+    }
+
     private void PollAudioMeters()
     {
-        var session = _session;
-        if (session is null) { PeakLevelDb = double.NegativeInfinity; return; }
+        Playback.MeteringAudioOutput[] taps;
+        lock (_meterTapGate)
+            taps = _meterTaps.Count > 0 ? _meterTaps.ToArray() : [];
 
-        var maxDb = double.NegativeInfinity;
-        foreach (var meter in session.AudioMeters)
+        var peak = double.NegativeInfinity;
+        foreach (var tap in taps)
         {
-            var db = meter.ReadAndResetPeakDb();
-            if (db > maxDb) maxDb = db;
+            var db = tap.ReadAndResetPeakDb();
+            if (db > peak) peak = db;
         }
-        PeakLevelDb = maxDb;
+
+        PeakLevelDb = peak;
     }
 
     private static string FormatClock(TimeSpan t) =>
@@ -1761,13 +1177,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsNearEndOfTrack));
         NotifyTransportCanExecuteChanged();
         SyncPlaybackSleepInhibitor();
-        if (value)
-            PreOpenAdjacentPlaylistItems();
     }
 
     private void SyncPlaybackSleepInhibitor()
     {
-        var shouldInhibit = IsPlaying && IsMediaLoaded && _session is not null;
+        var shouldInhibit = IsPlaying && IsMediaLoaded && ShowSessionActive;
         if (shouldInhibit)
         {
             _sleepInhibitLease ??= PlaybackSleepInhibitor.Default.Acquire($"Media player '{Name}' is playing");
@@ -1786,8 +1200,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     partial void OnMediaFilePathChanged(string? value)
     {
-        if (_session is not null || _isTransportBusy)
+        if (ShowSessionActive || _isTransportBusy)
         {
+            // The open path kicks StartWaveformExtraction explicitly once the transport settles.
             CancelWaveformExtraction();
             ResetWaveformDisplay();
             return;
@@ -1849,68 +1264,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
+        ShowItemPropertiesCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
         TogglePlayPauseCommand.NotifyCanExecuteChanged();
-        _ = RefreshSelectedItemAudioTrackChoicesAsync(value);
-    }
-
-    /// <summary>Audio-track entries for the playlist context menu ("Audio track" submenu). Filled
-    /// asynchronously when a multi-track file item is selected; empty otherwise (submenu hidden).</summary>
-    public ObservableCollection<PlaylistAudioTrackChoiceViewModel> SelectedItemAudioTrackChoices { get; } = new();
-
-    [ObservableProperty]
-    private bool _selectedItemHasMultipleAudioTracks;
-
-    private async Task RefreshSelectedItemAudioTrackChoicesAsync(PlaylistItem? value)
-    {
-        if (value is not FilePlaylistItem file)
-        {
-            SelectedItemAudioTrackChoices.Clear();
-            SelectedItemHasMultipleAudioTracks = false;
-            return;
-        }
-
-        var tracks = await Playback.CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(false);
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            // Selection may have moved on while probing — only publish for the still-selected item.
-            if (!ReferenceEquals(SelectedPlaylistItem, value))
-                return;
-
-            SelectedItemAudioTrackChoices.Clear();
-            if (tracks.Count >= 2)
-            {
-                SelectedItemAudioTrackChoices.Add(new PlaylistAudioTrackChoiceViewModel(
-                    this, null, Strings.AudioTrackAutomaticLabel, file.AudioTrackIndex is null));
-                foreach (var track in tracks)
-                    SelectedItemAudioTrackChoices.Add(new PlaylistAudioTrackChoiceViewModel(
-                        this, track.Index, track.ToDisplayString(), file.AudioTrackIndex == track.Index));
-            }
-
-            SelectedItemHasMultipleAudioTracks = SelectedItemAudioTrackChoices.Count > 0;
-        });
-    }
-
-    /// <summary>Replaces the selected file item with a copy carrying the chosen audio track. Applies on
-    /// the next open of the item (reload if it is currently playing).</summary>
-    internal void SetSelectedPlaylistItemAudioTrack(int? audioTrackIndex)
-    {
-        if (SelectedPlaylistItem is not FilePlaylistItem file || file.AudioTrackIndex == audioTrackIndex)
-            return;
-
-        var replacement = file with { AudioTrackIndex = audioTrackIndex };
-        var idx = PlaylistItems.IndexOf(file);
-        if (idx < 0)
-            return;
-
-        PlaylistItems[idx] = replacement;
-        if (ReferenceEquals(_currentPlaylistItem, file))
-            _currentPlaylistItem = replacement;
-        SelectedPlaylistItem = replacement;
-        // A neighbouring pre-open may hold a decoder keyed on the old track — drop it so the next
-        // open uses the new choice.
-        _decoderCache.InvalidateAll();
-        StatusMessage = Strings.Format(nameof(Strings.AudioTrackChangedStatusFormat), replacement.DisplayName);
     }
 
     partial void OnSelectedPlaylistTabChanged(PlaylistTabViewModel? oldValue, PlaylistTabViewModel? newValue)
@@ -1998,7 +1354,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (!_updatingAudioMatrixSourceChannels)
             _audioMatrixSourceChannelsExplicit = true;
 
-        ResizeSelectedAudioMatrices(_session);
+        ResizeSelectedAudioMatrices();
         RebuildAudioMatrixRows();
         ApplyAllOutputMatricesToSession();
     }
@@ -2027,43 +1383,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         OnPropertyChanged(nameof(HasNoOutputs));
         OnPropertyChanged(nameof(RoutingSummary));
-        RefreshHeadphonesCueTargets();
-    }
-
-    private void RefreshHeadphonesCueTargets()
-    {
-        var selectedKind = SelectedHeadphonesCueTarget?.Kind;
-        var selectedId = SelectedHeadphonesCueTarget?.Identity;
-
-        HeadphonesCueTargets.Clear();
-        foreach (var line in _outputs.PortAudioOutputLines)
-            HeadphonesCueTargets.Add(HeadphonesCueTargetOption.ForDirect(line));
-        foreach (var bus in _outputs.SharedHeadphonesBuses)
-            HeadphonesCueTargets.Add(HeadphonesCueTargetOption.ForBus(bus, _outputs.ResolveSharedBusOutput(bus.Id)));
-
-        SelectedHeadphonesCueTarget =
-            HeadphonesCueTargets.FirstOrDefault(t => t.Kind == selectedKind && t.Identity == selectedId)
-            ?? HeadphonesCueTargets.FirstOrDefault();
-        OnPropertyChanged(nameof(HasHeadphonesCueOutputs));
-    }
-
-    private void SelectHeadphonesCueTarget(Guid? directOutputId, Guid? sharedBusId)
-    {
-        if (sharedBusId is { } busId)
-        {
-            SelectedHeadphonesCueTarget = HeadphonesCueTargets.FirstOrDefault(
-                t => t.Kind == HeadphonesCueTargetOption.TargetKind.SharedBus && t.Identity == busId);
-            return;
-        }
-
-        if (directOutputId is { } outputId)
-        {
-            SelectedHeadphonesCueTarget = HeadphonesCueTargets.FirstOrDefault(
-                t => t.Kind == HeadphonesCueTargetOption.TargetKind.Direct && t.Identity == outputId);
-            return;
-        }
-
-        SelectedHeadphonesCueTarget = HeadphonesCueTargets.FirstOrDefault();
     }
 
     private int SanitizedCustomOutputWidth() => Math.Clamp(CustomOutputWidth, 16, 7680);
@@ -2306,12 +1625,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
             OnPropertyChanged(nameof(RoutingSummary));
             if (binding.IsSelected)
-                binding.Matrix.Resize(MatrixInputChannelCountFor(_session), OutputChannelCountOrZero(binding.Line));
+                binding.Matrix.Resize(MatrixInputChannelCount, OutputChannelCountOrZero(binding.Line));
             RebuildAudioMatrixRows();
-            // Hot toggle: if a session is running, mirror the checkbox change into the playback graph so
+            // Hot toggle: if playback is running, mirror the checkbox change into the playback graph so
             // routing takes effect without reload. Without this, ticking a new output mid-play did nothing
-            // until next Open / Play, and unticking left the route alive until the session was torn down.
-            if (_session is not null)
+            // until next Open / Play, and unticking left the route alive.
+            if (ShowSessionHotSwapActive)
                 _ = HotApplyRoutingToggleAsync(binding);
             SyncIdleSlate();
             return;
@@ -2338,17 +1657,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// </summary>
     private void ApplyOutputMixModeToSession(PlayerOutputBinding binding)
     {
-        var session = _session;
         if (binding.Matrix.OutputChannelCount > 0 && binding.Matrix.InputChannelCount > 0)
         {
             binding.Matrix.ApplyPreset(binding.MixMode);
             ApplyOutputMatrixToSession(binding);
-            return;
         }
-        if (session is null) return;
-        var gain = EffectiveGain(binding);
-        if (!session.TrySetOutputChannelMap(binding.Line, binding.MixMode, gain, out var err) && !string.IsNullOrWhiteSpace(err))
-            StatusMessage = err;
+        // An unsized matrix has nothing to apply yet; the preset lands when the grid sizes at the next open.
     }
 
     /// <summary>
@@ -2358,32 +1672,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// </summary>
     private void ApplyOutputMatrixToSession(PlayerOutputBinding binding)
     {
-        var session = _session;
-        if (session is null) return;
-        var compound = CompoundEnvelope(binding);
-        if (!session.TrySetOutputMatrix(binding.Line, BuildEffectiveRouteCells(binding), compound, out var err) &&
-            !string.IsNullOrWhiteSpace(err))
-            StatusMessage = err;
-    }
-
-    private IReadOnlyList<AudioMatrixCellConfig> BuildEffectiveRouteCells(PlayerOutputBinding binding)
-    {
-        var routed = new List<AudioMatrixCellConfig>();
-        foreach (var c in binding.Matrix.Cells)
-        {
-            var (trimDb, trimMuted) = InputTrimValues(c.InputChannel);
-            if (c.Muted || trimMuted)
-                continue;
-
-            routed.Add(new AudioMatrixCellConfig
-            {
-                InputChannel = c.InputChannel,
-                OutputChannel = c.OutputChannel,
-                GainDb = c.GainDb + trimDb,
-                Muted = false,
-            });
-        }
-        return routed;
+        _ = binding; // the ShowSession re-apply rebuilds every line's routes from the current bindings
+        ReapplyDeckAudioToShowSessionIfActive();
     }
 
     /// <summary>Linear master × per-output gain (envelope) applied on top of every cell's own gain.</summary>
@@ -2391,69 +1681,22 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         if (MasterMuted || binding.IsMuted) return 0f;
         var db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
-        return (float)Math.Pow(10.0, db / 20.0) * _cueEnvelope;
+        return (float)Math.Pow(10.0, db / 20.0);
     }
 
-    /// <summary>
-    /// Phase C (§4.3.4) — click-free gain ride across the line's cell routes. Falls back to the legacy
-    /// single-route gain path when the line has no cell routes installed.
-    /// </summary>
+    /// <summary>Click-free gain ride for one line — the ShowSession re-apply carries the compound gain on
+    /// every route, so a single full re-apply covers it.</summary>
     private void ApplyOutputCompoundGainToSession(OutputLineViewModel line)
     {
-        var session = _session;
-        if (session is null) return;
-        var binding = Outputs.FirstOrDefault(b => b.Line == line);
-        if (binding is null) return;
-
-        var compound = CompoundEnvelope(binding);
-        // Matrix path: ride per-cell. Returns false when no cells installed → fall through to legacy path.
-        if (session.TrySetOutputMatrixCompoundGain(line, compound, out var err))
-            return;
-        if (!string.IsNullOrWhiteSpace(err))
-            StatusMessage = err;
-        ApplyOutputGainToSession(line);
+        _ = line;
+        ReapplyDeckAudioToShowSessionIfActive();
     }
 
-    private void ApplyAllOutputGainsToSession()
-    {
-        foreach (var binding in Outputs)
-            ApplyOutputCompoundGainToSession(binding.Line);
-    }
+    private void ApplyAllOutputGainsToSession() => ReapplyDeckAudioToShowSessionIfActive();
 
-    /// <summary>
-    /// Phase C (§4.3.4) — re-stamp every wired route's <c>ChannelMap</c> from the binding's mix mode.
-    /// Used at session-open (after WireAudio's default identity map is in place) so a player whose
-    /// outputs were saved with non-default mix modes comes back identically on next open.
-    /// </summary>
-    private void ApplyAllOutputMixModesToSession()
-    {
-        var session = _session;
-        if (session is null) return;
-        foreach (var binding in Outputs)
-        {
-            if (!binding.IsSelected) continue;
-            var gain = EffectiveGain(binding);
-            if (!session.TrySetOutputChannelMap(binding.Line, binding.MixMode, gain, out var err) &&
-                !string.IsNullOrWhiteSpace(err))
-                StatusMessage = err;
-        }
-    }
-
-    /// <summary>
-    /// Phase C (§4.3.4) — push the full per-cell matrix into the session for every selected output.
-    /// Replaces the legacy <see cref="ApplyAllOutputMixModesToSession"/> path at the per-cell layer.
-    /// </summary>
-    private void ApplyAllOutputMatricesToSession()
-    {
-        var session = _session;
-        if (session is null) return;
-        foreach (var binding in Outputs)
-        {
-            if (!binding.IsSelected) continue;
-            if (binding.Matrix.InputChannelCount == 0) continue; // matrix not yet sized
-            ApplyOutputMatrixToSession(binding);
-        }
-    }
+    /// <summary>Pushes the full per-cell matrix for every selected output into the running clip (one full
+    /// ShowSession route re-apply covers all lines).</summary>
+    private void ApplyAllOutputMatricesToSession() => ReapplyDeckAudioToShowSessionIfActive();
 
     /// <summary>
     /// Phase C (§4.3.4) — rebuild <see cref="AudioMatrixRows"/> from the currently-selected bindings.
@@ -2570,21 +1813,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasAudioMatrixRoutes));
     }
 
-    private void ApplyOutputGainToSession(OutputLineViewModel line)
-    {
-        var session = _session;
-        if (session is null)
-            return;
-
-        var binding = Outputs.FirstOrDefault(b => b.Line == line);
-        if (binding is null)
-            return;
-
-        var gain = EffectiveGain(binding);
-        if (!session.TrySetOutputGain(line, gain, out var err) && !string.IsNullOrWhiteSpace(err))
-            StatusMessage = err;
-    }
-
     private float EffectiveGain(PlayerOutputBinding binding)
     {
         if (MasterMuted || binding.IsMuted)
@@ -2606,39 +1834,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task OnOutputLineReconfiguringAsync(OutputLineViewModel line)
     {
-        await WithPlaybackArcAsync(() =>
-        {
-            _session?.TryRemoveOutput(line, out _);
-            return Task.CompletedTask;
-        }).ConfigureAwait(false);
+        // The line's runtime is about to be swapped (Edit dialog): detach it from the live composition so
+        // nothing submits into a runtime that is seconds from disposal.
+        if (ShowSessionHotSwapActive)
+            await Dispatcher.UIThread.InvokeAsync(() => HotRemoveOutputFromShowSessionAsync(line)).ConfigureAwait(false);
     }
 
     private async Task OnOutputLineReconfiguredAsync(OutputLineViewModel line)
     {
-        await WithPlaybackArcAsync(() =>
-        {
-            if (_session is not null && ShouldRouteLine(line))
-            {
-                if (_session.TryAddOutput(line, out var err))
-                {
-                    // Re-stamp the matrix on the freshly-wired route; falls back to the legacy single-route
-                    // ChannelMap when the matrix hasn't been sized yet (first hot-add before session play).
-                        var binding = Outputs.FirstOrDefault(b => b.Line == line);
-                        if (binding is not null)
-                        {
-                            SyncMatrixSourceChannelsFromSession(_session);
-                            binding.Matrix.Resize(MatrixInputChannelCountFor(_session),
-                                OutputChannelCountOrZero(binding.Line));
-                            ApplyOutputMatrixToSession(binding);
-                        }
-                    ApplyOutputCompoundGainToSession(line);
-                }
-                else if (!string.IsNullOrWhiteSpace(err))
-                    Dispatcher.UIThread.Post(() => StatusMessage = err);
-            }
-
-            return Task.CompletedTask;
-        }).ConfigureAwait(false);
+        // The line came back with a fresh runtime: re-attach it (video + audio routes) if it is still routed.
+        if (ShowSessionHotSwapActive && ShouldRouteLine(line))
+            await Dispatcher.UIThread.InvokeAsync(() => HotAddOutputToShowSessionAsync(line)).ConfigureAwait(false);
     }
 
     private void ApplyBindingGainFromConfig(IReadOnlyDictionary<string, OutputGainConfig> gains)
@@ -2653,7 +1859,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             // Persisted cells must be usable before media is opened and before the output is selected.
             // Size the binding now so a saved 5.1 matrix can be edited immediately and survives later toggles.
             if (gain.MatrixCells.Count > 0 && binding.Matrix.InputChannelCount == 0)
-                binding.Matrix.Resize(MatrixInputChannelCountFor(_session), OutputChannelCountOrZero(binding.Line));
+                binding.Matrix.Resize(MatrixInputChannelCount, OutputChannelCountOrZero(binding.Line));
             if (gain.MatrixCells.Count > 0)
                 binding.Matrix.ApplyConfig(gain.MatrixCells);
         }
@@ -2674,58 +1880,30 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var targets = new List<OutputLineViewModel> { line };
         targets.AddRange(_outputs.GetClonesOf(line.Definition.Id));
 
-        await WithPlaybackArcAsync(() =>
+        // Hot add/remove each target on the LIVE composition. Hold the playback arc so a toggle can't race
+        // Stop/switch, and marshal the (UI-affine) acquire/attach to the UI thread — the arc runs its action
+        // off-thread.
+        if (!ShowSessionHotSwapActive)
+            return;
+        await WithPlaybackArcAsync(async () =>
         {
-            var session = _session;
-            if (session is null)
-                return Task.CompletedTask;
-
             foreach (var target in targets)
             {
-                if (add)
-                {
-                    if (!session.TryAddOutput(target, out var err))
-                    {
-                        // Common error: line not yet acquirable (preview not running, NDI carrier missing).
-                        // Surface as a banner so the user knows the route didn't take.
-                        if (!string.IsNullOrEmpty(err))
-                            Dispatcher.UIThread.Post(() => StatusMessage = err);
-                    }
-                    else
-                    {
-                        // Size + push the matrix so cell routes install before the first chunk; fall back to
-                        // legacy compound-gain path when the matrix hasn't been sized yet.
-                        var b = Outputs.FirstOrDefault(o => o.Line == target);
-                        if (b is not null)
-                        {
-                            SyncMatrixSourceChannelsFromSession(session);
-                            b.Matrix.Resize(MatrixInputChannelCountFor(session), OutputChannelCountOrZero(b.Line));
-                            ApplyOutputMatrixToSession(b);
-                        }
-                        ApplyOutputCompoundGainToSession(target);
-                    }
-                }
-                else
-                {
-                    session.TryRemoveOutput(target, out _);
-                }
+                var t = target;
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                    add ? HotAddOutputToShowSessionAsync(t) : HotRemoveOutputFromShowSessionAsync(t));
             }
-
-            return Task.CompletedTask;
         }).ConfigureAwait(false);
     }
 
     private void OnOutputLineRemoving(object? sender, OutputLineViewModel line)
     {
-        // Synchronous: the management VM is about to dispose the runtime. Drop our route now so the
-        // router doesn't keep submitting to a output that's seconds away from disposal.
-        var session = _session;
-        if (session is null) return;
-        try { session.TryRemoveOutput(line, out _); }
-        catch { /* best effort — removal must not block teardown */ }
-
-        // Clones tied to this parent are removed alongside (Outputs.Remove fires separate events for
-        // each clone, so they'll route through this handler in turn).
+        // The management VM is about to dispose the runtime: detach the line from the live composition +
+        // release it now so nothing submits into an output that's seconds away from disposal. The detach hops
+        // the session dispatcher (best-effort, fire-and-forget) but the runtime is only disposed "seconds
+        // away", so it completes first. Clones tied to this parent route through this handler in turn.
+        if (ShowSessionHotSwapActive)
+            _ = HotRemoveOutputFromShowSessionAsync(line);
     }
 
     /// <summary>
@@ -2746,27 +1924,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
         return result;
     }
 
-    /// <summary>Phase B (§3.6) — true when this player has the line wired into its session AND the
-    /// session is currently in <see cref="IsPlaying"/> state. Used by the Edit confirm prompt.</summary>
+    /// <summary>Phase B (§3.6) — true when this player is playing AND drives the line (video acquisition or
+    /// an audio route to its device). Used by the Edit confirm prompt.</summary>
     public bool IsActivelyPlayingThroughLine(OutputLineViewModel line) =>
-        IsPlaying && _session?.HasWiredLine(line) == true;
+        IsPlaying && ShowSessionActive
+        && (_playerAcquiredLines.Contains(line.Definition.Id)
+            || _playerAcquiredAudioLines.Contains(line.Definition.Id)
+            || (Outputs.FirstOrDefault(b => b.Line == line)?.IsSelected ?? false));
 
-    public bool IsHoldingAnyOutputLine(IReadOnlySet<Guid> outputLineIds)
-    {
-        if (_session is null || outputLineIds.Count == 0)
-            return false;
-
-        return _outputs.Outputs.Any(line =>
-            outputLineIds.Contains(line.Definition.Id) && _session.HasWiredLine(line));
-    }
-
-    public Task ReleaseSessionForExternalPlaybackAsync() =>
-        WithPlaybackArcAsync(() => CloseSessionCoreInnerAsync(deferIdleSync: false));
-
-    /// <summary>
-    /// Apply cue-level audio routing overrides onto this player's matrix model.
-    /// Uses cue virtual output channel numbers (VOut 1..N) mapped in current selected-output order.
-    /// </summary>
     /// <summary>Maps saved output display names that are missing on this machine to replacements.</summary>
     public void RemapSelectedOutputs(IReadOnlyDictionary<string, string> missingToReplacement)
     {
@@ -2787,14 +1952,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RebuildAudioMatrixRows();
         ApplyAllOutputMatricesToSession();
         ApplyAllOutputGainsToSession();
-    }
-
-    /// <summary>Phase 4 retired the cue-as-MediaPlayer-overlay path — cue audio routing now lives on
-    /// <c>MediaCueNode.AudioRoutes</c> and is honored by the future <c>CuePlaybackEngine</c> (Phase 4.6).
-    /// This stub stays so the existing executor wiring compiles until 4.6 lands and removes the call site.</summary>
-    public void ApplyCueRouteOverrides(MediaCueNode cue)
-    {
-        _ = cue;
     }
 
     /// <summary>Phase A — public snapshot for project save (§7). Internally still calls the same builder
@@ -2828,15 +1985,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         TransitionDurationMs = TransitionDurationMs,
         CustomOutputWidth = SanitizedCustomOutputWidth(),
         CustomOutputHeight = SanitizedCustomOutputHeight(),
-        HeadphonesCueEnabled = HeadphonesCueEnabled,
-        HeadphonesCueOutputId = SelectedHeadphonesCueTarget?.Kind == HeadphonesCueTargetOption.TargetKind.Direct
-            ? SelectedHeadphonesCueTarget.Identity
-            : null,
-        HeadphonesCueSharedBusId = SelectedHeadphonesCueTarget?.Kind == HeadphonesCueTargetOption.TargetKind.SharedBus
-            ? SelectedHeadphonesCueTarget.Identity
-            : null,
-        HeadphonesCueTapPoint = HeadphonesCueTapPoint,
-        HeadphonesCueGainDb = Math.Clamp(HeadphonesCueGainDb, -60.0, 12.0),
         SelectedOutputDisplayNames = Outputs
             .Where(b => b.IsSelected)
             .Select(b => b.Line.Definition.DisplayName)
@@ -2924,6 +2072,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         MediaFilePath = config.MediaFilePath;
         _currentPlaylistItem = null;
+        CurrentPlayingItem = null;
         OnPropertyChanged(nameof(CurrentMediaDisplay));
         var selectedIndex = Math.Clamp(config.SelectedPlaylistTabIndex, 0, PlaylistTabs.Count - 1);
         SelectedPlaylistTab = PlaylistTabs[selectedIndex];
@@ -2937,10 +2086,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         TransitionDurationMs = config.TransitionDurationMs <= 0 ? 500 : config.TransitionDurationMs;
         CustomOutputWidth = Math.Clamp(config.CustomOutputWidth, 16, 7680);
         CustomOutputHeight = Math.Clamp(config.CustomOutputHeight, 16, 4320);
-        HeadphonesCueEnabled = config.HeadphonesCueEnabled;
-        HeadphonesCueTapPoint = config.HeadphonesCueTapPoint;
-        HeadphonesCueGainDb = Math.Clamp(config.HeadphonesCueGainDb, -60.0, 12.0);
-
         var wanted = new HashSet<string>(config.SelectedOutputDisplayNames, StringComparer.OrdinalIgnoreCase);
         var missing = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
         SuppressVideoRouteConflictPrompt(() =>
@@ -2971,10 +2116,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
             .ToDictionary(g => g.Key, g => g.Last());
         RebuildInputTrimRows(AudioMatrixInputChannelCount);
         RebuildAudioMatrixRouteRows();
-        RefreshHeadphonesCueTargets();
-        SelectHeadphonesCueTarget(config.HeadphonesCueOutputId, config.HeadphonesCueSharedBusId);
-        if (HeadphonesCueEnabled && SelectedHeadphonesCueTarget?.ResolvedLine is null)
-            HeadphonesCueEnabled = false;
 
         StatusMessage = missing.Count > 0
             ? $"Loaded. Missing outputs: {string.Join(", ", missing)}."
@@ -3009,53 +2150,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private async Task CloseSessionCoreInnerAsync(bool deferIdleSync, bool resetPlayingUi = true)
     {
         SDebug.ChangeTrace.Step("CloseSession: UI detach begin");
-        var snapshot = await Dispatcher.UIThread.InvokeAsync(() =>
+        await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            CancelCueEnvelope();
-            StopHoldPumpTimer();
             _loopTimer?.Stop();
             _loopTimer = null;
-            var snap = _session;
-            if (snap is not null)
-            {
-                try { snap.Player.PlayClock.PositionChanged -= OnClockPositionChanged; }
-                catch { /* best effort */ }
-                UnhookVideoFaultRecovery(snap);
-                _session = null;
-                _throughputDiagnostics.Reset();
-            }
-            return snap;
         });
-        SDebug.ChangeTrace.Step(snapshot is null ? "CloseSession: no session" : "CloseSession: UI detach done");
-
-        if (snapshot is not null)
-        {
-            await CancelSpeculativeMediaWorkBeforeSessionDisposeAsync().ConfigureAwait(false);
-
-            // Pause is bounded, but session disposal is a required boundary before opening another file.
-            // Leaving a half-disposed FFmpeg/D3D11 graph in the background can race the next open.
-            await RunRequiredTransportAsync(() =>
-            {
-                try
-                {
-                    SDebug.ChangeTrace.Step("CloseSession: Router.Pause begin");
-                    using var pauseCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                    try { snapshot.Router.PauseSkippingSharedMuxFlush(pauseCts.Token); }
-                    catch (OperationCanceledException) { /* bounded */ }
-                    catch (ObjectDisposedException) { /* already torn down */ }
-                    SDebug.ChangeTrace.Step("CloseSession: Router.Pause done");
-                }
-                catch { /* best effort */ }
-
-                try
-                {
-                    SDebug.ChangeTrace.Step("CloseSession: Dispose begin");
-                    snapshot.Dispose();
-                    SDebug.ChangeTrace.Step("CloseSession: Dispose done");
-                }
-                catch { /* best effort */ }
-            }, TimeSpan.FromSeconds(8), "CloseSession transport dispose");
-        }
+        await CancelWaveformExtractionAndWaitAsync().ConfigureAwait(false);
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -3068,7 +2168,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             // runs (on the next open), and the WaitingForSource retry state owns its own lifecycle, so
             // only reset when we're not actively waiting for a live source to return.
             if (LoadState != PlayerLoadState.WaitingForSource)
+            {
                 LoadState = PlayerLoadState.Idle;
+                // A hard close (not a reload arc) clears the now-playing markers; WaitingForSource keeps them
+                // (the retry loop owns that state and re-lights them on each attempt).
+                if (resetPlayingUi) CurrentPlayingItem = null;
+            }
             PlayCommand.NotifyCanExecuteChanged();
             PauseCommand.NotifyCanExecuteChanged();
             StopCommand.NotifyCanExecuteChanged();
@@ -3076,13 +2181,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (!deferIdleSync) SyncIdleSlate();
         });
         SDebug.ChangeTrace.Step("CloseSession: UI cleanup done");
-    }
-
-    private async Task CancelSpeculativeMediaWorkBeforeSessionDisposeAsync()
-    {
-        await Dispatcher.UIThread.InvokeAsync(CancelPreOpen);
-        await CancelWaveformExtractionAndWaitAsync().ConfigureAwait(false);
-        await Task.Run(_decoderCache.InvalidateAll).ConfigureAwait(false);
     }
 
     private bool CanLoadMedia()
@@ -3094,63 +2192,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
             return true;
         if (_currentPlaylistItem is FilePlaylistItem f && File.Exists(f.Path))
             return true;
+        // Registry-URI items (youtube:// prepared-cache assets, mmd:// scenes): accepted unconditionally —
+        // the open path surfaces its own actionable error (reliable-mode "not prepared", missing model
+        // file). Gating them here silently no-ops the play with nothing in the log (the 2026-07-03
+        // "YouTube item is instantly done" report: this gate predated both item kinds).
+        if (_currentPlaylistItem is YouTubePlaylistItem or MMDPlaylistItem)
+            return true;
         return _currentPlaylistItem is null
                && !string.IsNullOrWhiteSpace(MediaFilePath)
                && File.Exists(MediaFilePath!);
-    }
-
-    private async Task AdoptPreRolledSessionAsync(
-        HaPlayPlaybackSession session,
-        PlaylistItem item,
-        MediaCueNode cueRoutes,
-        CancellationToken ct)
-    {
-        _ = ct;
-        await WithPlaybackArcAsync(async () =>
-        {
-            await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
-
-            var holdFb = await Dispatcher.UIThread.InvokeAsync<bool>(() =>
-            {
-                StopIdleSlate();
-                _outputs.StopPreviewsForPlayback(SelectedOutputLines());
-                _currentPlaylistItem = item;
-                MediaFilePath = item is FilePlaylistItem f ? f.Path : null;
-                OnPropertyChanged(nameof(CurrentMediaDisplay));
-
-                _session = session;
-                IsMediaLoaded = true;
-                StatusMessage = null;
-                Duration = session.Player.HasContainerDecoder
-                           && session.Player.Decoder.Audio is ISeekableSource a
-                    ? a.Duration
-                    : TimeSpan.Zero;
-
-                session.Player.PlayClock.PositionChanged += OnClockPositionChanged;
-                if (!string.IsNullOrWhiteSpace(FallbackImagePath))
-                    session.ApplyFallbackImage(FallbackImagePath);
-                session.SetHoldFallback(HoldFallbackVideo);
-
-                ApplyCueRouteOverrides(cueRoutes);
-                SyncMatrixSourceChannelsFromSession(session);
-                ResizeSelectedAudioMatrices(session);
-                RebuildAudioMatrixRows();
-                ApplyAllOutputMatricesToSession();
-                ApplyAllOutputGainsToSession();
-
-                if (HoldFallbackVideo)
-                {
-                    try { session.PumpHoldFrames(session.Player.PlayClock.CurrentPosition); }
-                    catch { /* best effort */ }
-                }
-
-                EnsureLoopTimerStarted();
-                return HoldFallbackVideo;
-            });
-
-            if (holdFb)
-                await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
-        });
     }
 
     private async Task OpenOrReloadAsync()
@@ -3185,130 +2235,19 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
             if (item is null) return;
 
-            HaPlayPlaybackSession? created = null;
-            string? createErr = null;
-            var fileOpts = _pendingCueFilePlayback ?? CurrentFilePlaybackOptions();
-            _cuePreRoll.InvalidateAll();
-            SDebug.ChangeTrace.Step("OpenOrReload: cue pre-roll invalidated");
+            // The per-player ShowSession is the ONLY playback runtime (the legacy engine is deleted). The
+            // open handles live retry internally (waiting-for-source); false = a real open failure.
+            if (await TryOpenViaShowSessionAsync(item, selected))
+                return;
 
-            var decoderCacheHit = false;
-            await Task.Run(() =>
+            await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                SDebug.ChangeTrace.Step("OpenOrReload: TryCreate begin (thread pool)");
-                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path, fi.AudioTrackIndex) : null;
-                decoderCacheHit = preOpened is not null;
-                if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr, fileOpts, preOpened))
-                    created = null;
-                SDebug.ChangeTrace.Step(
-                    $"OpenOrReload: TryCreate end (cache={(decoderCacheHit ? "hit" : "miss")}, ok={created is not null})");
-            }).ConfigureAwait(false);
-
-            var holdFbAfterOpen = await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                SDebug.ChangeTrace.Step("OpenOrReload: UI bind session begin");
-                if (created is null)
-                {
-                    if (item.IsLive && GetRetrySeconds(item) > 0)
-                    {
-                        EnterWaitingForSource(item, createErr ?? "source unavailable");
-                    }
-                    else
-                    {
-                        StatusMessage = createErr ?? "Failed to open media.";
-                        LastLoadError = $"{item.DisplayName}: {createErr ?? "failed to open media"}";
-                        LoadState = PlayerLoadState.Failed;
-                    }
-                    SyncIdleSlate();
-                    SDebug.ChangeTrace.Step($"OpenOrReload: create failed ({createErr ?? "unknown"})");
-                    return false;
-                }
-
-                ExitWaitingForSource();
-                _session = created;
-                IsMediaLoaded = true;
-                // Play-what-you-can: a session can open with some lines skipped (dead NDI carrier,
-                // held PortAudio device) — keep playing but tell the operator which lines are silent.
-                StatusMessage = created.OpenWarnings.Count > 0 ? string.Join(" ", created.OpenWarnings) : null;
-                LastLoadError = null;
-                LoadState = PlayerLoadState.Ready;
-                Duration = item.IsLive
-                    ? TimeSpan.Zero
-                    : (created.Player.HasContainerDecoder
-                        && created.Player.Decoder.Audio is ISeekableSource a
-                        ? a.Duration
-                        : TimeSpan.Zero);
-
-                created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
-                // Normal (non-cue) file playback: recover automatically if the decode loop faults (e.g. a flaky
-                // hardware decoder) by latching to software decode and reloading. Cue-opened sessions are watched
-                // by the session itself (gate latch) but not auto-reloaded here — the cue engine owns their lifecycle.
-                HookVideoFaultRecovery(created);
-                if (!string.IsNullOrWhiteSpace(FallbackImagePath))
-                    created.ApplyFallbackImage(FallbackImagePath);
-                created.SetHoldFallback(HoldFallbackVideo);
-
-                SyncMatrixSourceChannelsFromSession(created);
-                ResizeSelectedAudioMatrices(created);
-                SDebug.ChangeTrace.Step($"OpenOrReload: matrix resized (srcCh={MatrixInputChannelCountFor(created)})");
-
-                RebuildAudioMatrixRows();
-                SDebug.ChangeTrace.Step("OpenOrReload: RebuildAudioMatrixRows");
-
-                ApplyAllOutputMatricesToSession();
-                SDebug.ChangeTrace.Step("OpenOrReload: ApplyAllOutputMatricesToSession");
-
-                ApplyAllOutputGainsToSession();
-                SDebug.ChangeTrace.Step("OpenOrReload: ApplyAllOutputGainsToSession");
-
-                if (HoldFallbackVideo)
-                {
-                    try { created.PumpHoldFrames(created.Player.PlayClock.CurrentPosition); }
-                    catch { /* best effort */ }
-                }
-
-                EnsureLoopTimerStarted();
-                SDebug.ChangeTrace.Step("OpenOrReload: UI bind session done");
-                return HoldFallbackVideo;
+                StatusMessage = $"Failed to open {item.DisplayName}.";
+                LastLoadError = $"{item.DisplayName}: failed to open media";
+                LoadState = PlayerLoadState.Failed;
+                SyncIdleSlate();
             });
-
-            if (created is null) return;
-
-            if (resumeAfterOpen)
-            {
-                var s = created;
-                var hf = holdFbAfterOpen;
-                var ok = await RunBoundedAsync(() =>
-                {
-                    SDebug.ChangeTrace.Step("OpenOrReload: resume Play begin");
-                    s.PrepareOutputsBeforePlay(hf);
-                    SDebug.ChangeTrace.Step("OpenOrReload: PrepareOutputsBeforePlay");
-                    s.PrepareLiveTransportBeforePlay();
-                    SDebug.ChangeTrace.Step("OpenOrReload: PrepareLiveTransportBeforePlay");
-                    s.ResetAllUnderrunBaselines();
-                    SDebug.ChangeTrace.Step("OpenOrReload: ResetAllUnderrunBaselines");
-                    s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
-                    SDebug.ChangeTrace.Step("OpenOrReload: Router.Play (resume)");
-                }, PlayWallTimeout, "OpenOrReload resume Play");
-
-                if (!ok)
-                {
-                    await Dispatcher.UIThread.InvokeAsync(() =>
-                    {
-                        IsPlaying = false;
-                        StatusMessage = "Playback failed to resume after loading.";
-                    });
-                    SDebug.ChangeTrace.Step("OpenOrReload: resume Play TIMED OUT");
-                }
-            }
-
-            if (holdFbAfterOpen)
-            {
-                await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
-                SDebug.ChangeTrace.Step("OpenOrReload: StartHoldPumpTimer");
-            }
-
-            await Dispatcher.UIThread.InvokeAsync(() => StartWaveformExtraction(MediaFilePath));
-            SDebug.ChangeTrace.Step("OpenOrReload: waveform extraction started");
+            SDebug.ChangeTrace.Step("OpenOrReload: ShowSession open failed");
         }).ConfigureAwait(false);
     }
 
@@ -3321,229 +2260,25 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _loopTimer.Start();
     }
 
-    private void StartHoldPumpTimer()
-    {
-        if (_session is { RequiresHoldPump: false })
-            return;
-        if (_holdPumpTimer is not null)
-            return;
-        var period = TimeSpan.FromSeconds(1.0 / 30.0);
-        _holdPumpTimer = new Timer(OnHoldPumpTick, null, period, period);
-    }
-
-    private void StopHoldPumpTimer()
-    {
-        var t = Interlocked.Exchange(ref _holdPumpTimer, null);
-        t?.Dispose();
-    }
-
-    private void OnHoldPumpTick(object? state)
-    {
-        // Drop-not-queue if a previous tick is still in flight (output Submit can briefly block on NDI
-        // SDK lock). Better to skip a frame than to stack tick handlers.
-        if (Interlocked.CompareExchange(ref _holdPumpReentry, 1, 0) != 0)
-            return;
-        try
-        {
-            var session = _session;
-            if (session is null || !IsMediaLoaded || !HoldFallbackVideo)
-                return;
-            var pt = session.Player.PlayClock.CurrentPosition;
-            try { session.PumpHoldFrames(pt); }
-            catch { /* best effort — output torn down mid-tick */ }
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _holdPumpReentry, 0);
-        }
-    }
-
-    private void OnClockPositionChanged(object? sender, TimeSpan e) =>
-        Dispatcher.UIThread.Post(() =>
-        {
-            CurrentPosition = e;
-            // Don't fight the user: while they're scrubbing the slider (or the committed seek arc is
-            // still running) the thumb position is owned by the drag, not the playhead. Resuming clock
-            // write-back once the arc finishes snaps the slider to the (correct, post-seek) position.
-            if (Duration > TimeSpan.Zero && !IsScrubbing && !_seekArcRunning)
-                SeekSliderValue = e.Ticks * 1000.0 / Duration.Ticks;
-            PollAudioMeters();
-        }, DispatcherPriority.Normal);
-
-    // The loop timer also drives natural-end detection for loop wrap + playlist auto-advance, so a
-    // fixed 500 ms poll means a track can run up to ~500 ms past its end before the next one starts.
-    // Near the end of a finite file we tighten the cadence so the boundary fires within ~one fast
-    // tick; live/idle stay relaxed to keep the dispatcher quiet.
     private static readonly TimeSpan LoopPollRelaxed = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan LoopPollNearEnd = TimeSpan.FromMilliseconds(60);
-    private static readonly TimeSpan LoopPollNearEndWindow = TimeSpan.FromSeconds(1.5);
 
-    private void OnLoopTimerTick(object? sender, EventArgs e)
-    {
-        AdjustLoopTimerCadence();
-        _ = ProcessLoopTimerTickAsync();
-    }
-
-    /// <summary>Speeds up the loop poll when a finite file is within <see cref="LoopPollNearEndWindow"/>
-    /// of its end so loop wrap / auto-advance fires promptly; relaxes back otherwise. Runs on the UI
-    /// thread (DispatcherTimer tick).</summary>
-    private void AdjustLoopTimerCadence()
-    {
-        if (_loopTimer is null) return;
-        var nearEnd = IsPlaying
-            && _session is { IsLive: false }
-            && Duration > TimeSpan.Zero
-            && RemainingTime <= LoopPollNearEndWindow;
-        var target = nearEnd ? LoopPollNearEnd : LoopPollRelaxed;
-        if (_loopTimer.Interval != target)
-            _loopTimer.Interval = target;
-    }
+    private void OnLoopTimerTick(object? sender, EventArgs e) => _ = ProcessLoopTimerTickAsync();
 
     private async Task ProcessLoopTimerTickAsync()
     {
-        // Phase C.5 (§6.9) — drive the reconnect retry loop. Has priority over the playback advance
-        // logic below since no _session exists while we're waiting. The retry tries to re-open the
-        // last-known live item; on success the normal play path continues.
+        // Phase C.5 (§6.9) — drive the reconnect retry loop; the ShowSession open fires on success (the
+        // retry re-opens the last-known live item). Playback progression itself — natural end / loop /
+        // playlist auto-advance — is owned by the ShowSession poll (OnShowSessionPollTick).
         if (IsWaitingForSource && _waitingItem is not null && DateTime.UtcNow >= _nextRetryAt)
         {
             var item = _waitingItem;
             _currentPlaylistItem = item;
+            CurrentPlayingItem = item; // keep the marker lit while a live source retries
             // Push the next deadline forward immediately so a slow open doesn't fire a retry storm
             // when the dispatcher catches up.
             var retrySec = GetRetrySeconds(item);
             _nextRetryAt = DateTime.UtcNow.AddSeconds(Math.Max(retrySec, 1));
             await OpenOrReloadAsync().ConfigureAwait(false);
-
-            // If the open succeeded, we exited waiting AND _session is set — start the source naturally.
-            if (_session is not null && !IsPlaying)
-                await StartPlaybackAsync().ConfigureAwait(false);
-            return;
         }
-
-        if (_session is null || !IsMediaLoaded || !IsPlaying)
-            return;
-
-        var statsSession = _session;
-        var statsLines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
-        _throughputDiagnostics.TryLogPeriodic(statsSession, statsLines);
-
-        // Phase C.5 — live sessions never playlist-auto-advance (§6.5). Cue AutoFollow still fires when
-        // the operator stops transport or the capture/receiver disconnects.
-        if (_session.IsLive)
-        {
-            if (IsPlaying && _cuePlaybackActive && _session.IsLiveSourceDisconnected)
-                await NotifyCuePlaybackNaturallyEndedAsync().ConfigureAwait(false);
-            return;
-        }
-
-        var holdFb = HoldFallbackVideo;
-
-        if (!await _playbackArc.WaitAsync(0).ConfigureAwait(false))
-            return;
-
-        var advancePlaylist = false;
-        var resumePlayForPlaylist = false;
-        try
-        {
-            var session = _session;
-            if (session is null) return;
-
-            if ((_activePlaybackTab?.IsLooping ?? IsLooping))
-            {
-                // Use audio's natural completion when an audio router is present (covers both audio-only
-                // and audio+video sources). Falls back to video for video-only files where audio is null.
-                var loopReady = session.Player.AudioRouter is { } loopAr
-                    ? !loopAr.IsRunning && loopAr.CompletedNaturally
-                    : session.Player.Video.CompletedNaturally;
-                if (!loopReady) return;
-                await RunBoundedCancelableAsync(ct =>
-                    {
-                        session.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
-                        // No NDI warmup on loop wrap — receivers are already locked on and a silence gap would
-                        // be audible between the last and first samples of the loop.
-                        session.PrepareOutputsBeforePlay(holdFb);
-                        session.PrepareLiveTransportBeforePlay();
-                        session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
-                    },
-                    innerTimeout: TimeSpan.FromSeconds(3),
-                    outerTimeout: TimeSpan.FromSeconds(5));
-
-                if (HoldFallbackVideo) StartHoldPumpTimer();
-                EnsureLoopTimerStarted();
-                return;
-            }
-
-            var fileEnded = session.Player.AudioRouter is { } ar
-                ? !ar.IsRunning && ar.CompletedNaturally
-                : session.Player.Video.CompletedNaturally;
-            if (!fileEnded) return;
-
-            var (cuePlaybackActive, endBehavior) = await Dispatcher.UIThread.InvokeAsync(() =>
-                (_cuePlaybackActive, _activeCueEndBehavior));
-            if (cuePlaybackActive)
-            {
-                await NotifyCuePlaybackNaturallyEndedAsync(endBehavior, session).ConfigureAwait(false);
-                return;
-            }
-
-            resumePlayForPlaylist = IsPlaying;
-            advancePlaylist = _activePlaybackTab?.AutoAdvance ?? AutoAdvancePlaylist;
-            await RunBoundedCancelableAsync(session.Router.PauseSkippingSharedMuxFlush,
-                innerTimeout: TimeSpan.FromSeconds(1.5),
-                outerTimeout: TimeSpan.FromSeconds(2.5));
-        }
-        finally
-        {
-            _playbackArc.Release();
-        }
-
-        if (!advancePlaylist)
-        {
-            // Router is paused but UI's IsPlaying still says "playing" — sync so the toggle reflects state.
-            await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
-            return;
-        }
-
-        var shouldLoadNext = await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            if (_session is null || !IsMediaLoaded) return false;
-            IsPlaying = false;
-            if (!TryGetAutoAdvanceItem(out var nextItem)) return false;
-            _ = PrepareCurrentItemAsync(nextItem);
-            if (_activePlaybackTab is not null)
-                _activePlaybackTab.SelectedItem = nextItem;
-            if (ReferenceEquals(_activePlaybackTab, SelectedPlaylistTab))
-                SelectedPlaylistItem = nextItem;
-            return true;
-        });
-        if (!shouldLoadNext) return;
-
-        await OpenOrReloadAsync();
-
-        if (!resumePlayForPlaylist) return;
-
-        await WithPlaybackArcAsync(async () =>
-        {
-            var (s, holdForPrime) = await Dispatcher.UIThread.InvokeAsync(() => (_session, HoldFallbackVideo));
-            if (s is null) return;
-
-            var ok = await RunBoundedAsync(() =>
-            {
-                // Playlist advance — receivers may have drained between tracks.
-                s.PrepareOutputsBeforePlay(holdForPrime);
-                s.PrepareLiveTransportBeforePlay();
-                s.ResetAllUnderrunBaselines();
-                s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
-            }, PlayWallTimeout, "Playlist advance Play");
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!ok) return;
-                IsPlaying = true;
-                if (HoldFallbackVideo) StartHoldPumpTimer();
-                EnsureLoopTimerStarted();
-            });
-        }).ConfigureAwait(false);
     }
-
 }

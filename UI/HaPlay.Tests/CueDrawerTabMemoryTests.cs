@@ -31,7 +31,7 @@ public sealed class CueDrawerTabMemoryTests
             window.Show();
             try
             {
-                vm.AddMediaCueCommand.Execute(null);
+                vm.AddEmptyMediaCue();
                 var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
                 vm.SelectedCueNode = null;
                 vm.AddGroupCommand.Execute(null);

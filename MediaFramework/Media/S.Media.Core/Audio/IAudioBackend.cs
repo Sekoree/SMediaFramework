@@ -31,8 +31,8 @@ public sealed record AudioBackendOptions(
 /// layer a new backend must implement — the frame-level graph (<see cref="AudioRouter"/>) is already
 /// backend-neutral, seeing only <see cref="IAudioOutput"/> / <see cref="IAudioSource"/> (and their optional
 /// capability interfaces like <see cref="IClockedOutput"/>), never a concrete backend type. A new backend is
-/// therefore a peer of PortAudio, not a translation of it. Register implementations with
-/// <see cref="AudioBackends"/>.
+/// therefore a peer of PortAudio, not a translation of it. Register implementations via the media
+/// registry (<c>IMediaRegistryBuilder.AddAudioBackend</c>); query them via <c>IMediaRegistry.AudioBackends</c>.
 /// </summary>
 public interface IAudioBackend
 {

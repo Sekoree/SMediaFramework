@@ -51,7 +51,7 @@ public sealed class Bcf2000GuideScriptsTests
                     Id = deviceId,
                     Name = "BCF2000",
                     ProfileId = "behringer.bcf2000",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                     IsEnabled = true,
                     Binding = new ControlDeviceBindingConfig { Alias = "bcf" },
                 },
@@ -60,9 +60,9 @@ public sealed class Bcf2000GuideScriptsTests
                     Id = Guid.NewGuid(),
                     Name = "X32",
                     ProfileId = "behringer.x32.osc",
-                    Protocol = ControlDeviceProtocol.Osc,
+                    Protocol = ControlDeviceProtocol.OSC,
                     IsEnabled = true,
-                    Binding = new ControlDeviceBindingConfig { Alias = "x32", OscHost = "127.0.0.1", OscPort = 10023 },
+                    Binding = new ControlDeviceBindingConfig { Alias = "x32", OSCHost = "127.0.0.1", OSCPort = 10023 },
                 },
             ],
             Scripts =
@@ -79,9 +79,9 @@ public sealed class Bcf2000GuideScriptsTests
             new InMemoryControlScriptSourceProvider(sources),
             new ControlScriptRuntimeServices(NullControlScriptCommandSink.Instance, new ControlValueCache()));
 
-        // A MidiControlChange matches none of the MidiNote triggers, so no handler body runs — but
+        // A MIDIControlChange matches none of the MIDINote triggers, so no handler body runs — but
         // arming + dispatch makes the runtime compile every configured script (and its required helper).
-        runtime.DispatchControlEvent(new MidiControlEvent(
+        runtime.DispatchControlEvent(new MIDIControlEvent(
             DateTimeOffset.UtcNow, deviceId, deviceId, Guid.NewGuid(),
             Channel: 1, Controller: 99, Value: 0, HighResolution14Bit: false));
 
@@ -121,7 +121,7 @@ public sealed class Bcf2000GuideScriptsTests
                 {
                     Id = deviceId,
                     Name = "BCF2000",
-                    Protocol = ControlDeviceProtocol.Midi,
+                    Protocol = ControlDeviceProtocol.MIDI,
                     IsEnabled = true,
                     Binding = new ControlDeviceBindingConfig { Alias = "bcf" },
                 },
@@ -138,10 +138,10 @@ public sealed class Bcf2000GuideScriptsTests
                     [
                         new ControlScriptTriggerConfig
                         {
-                            Kind = ControlScriptTriggerKind.MidiNote,
+                            Kind = ControlScriptTriggerKind.MIDINote,
                             FunctionName = "onLayerNav",
                             DeviceInstanceId = deviceId,
-                            MidiNote = 51,
+                            MIDINote = 51,
                         },
                     ],
                 },
@@ -156,7 +156,7 @@ public sealed class Bcf2000GuideScriptsTests
         // Press the "next layer" button (note 51) -> onLayerNav runs. It calls layerNames.length(); if that
         // array were named UPPERCASE, Mond wouldn't pass it as `this` and this would throw at runtime with
         // "Array.length: missing instance argument". (Compile-only checks don't catch that.)
-        var result = runtime.DispatchControlEvent(new MidiNoteControlEvent(
+        var result = runtime.DispatchControlEvent(new MIDINoteControlEvent(
             DateTimeOffset.UtcNow, deviceId, deviceId, Guid.NewGuid(),
             Channel: 1, Note: 51, Velocity: 127, IsNoteOn: true));
 
@@ -183,10 +183,10 @@ public sealed class Bcf2000GuideScriptsTests
             [
                 new ControlScriptTriggerConfig
                 {
-                    Kind = ControlScriptTriggerKind.MidiNote,
+                    Kind = ControlScriptTriggerKind.MIDINote,
                     FunctionName = function,
                     DeviceInstanceId = deviceId,
-                    MidiNote = 1,
+                    MIDINote = 1,
                 },
             ],
         };

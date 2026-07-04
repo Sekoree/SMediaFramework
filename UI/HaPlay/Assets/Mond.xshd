@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <SyntaxDefinition name="Mond" extensions=".mnd"
                   xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
-  <Color name="Comment" foreground="#6A9955" />
-  <Color name="String" foreground="#CE9178" />
-  <Color name="Number" foreground="#B5CEA8" />
-  <Color name="Keyword" foreground="#569CD6" />
-  <Color name="Literal" foreground="#569CD6" />
-  <Color name="Api" foreground="#4EC9B0" />
+  <Color name="Comment" foreground="#008000" />
+  <Color name="String" foreground="#A31515" />
+  <Color name="Number" foreground="#098658" />
+  <Color name="Keyword" foreground="#0000C0" />
+  <Color name="Literal" foreground="#0000C0" />
+  <Color name="Api" foreground="#267F99" />
 
   <RuleSet ignoreCase="false">
     <Span color="Comment" begin="//" />

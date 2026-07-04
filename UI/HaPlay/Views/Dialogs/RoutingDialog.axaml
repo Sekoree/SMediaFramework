@@ -28,9 +28,9 @@
                         Command="{Binding AddPortAudioOutputCommand}" />
               <MenuItem Header="{x:Static res:Strings.LocalVideoOutputMenuHeader}"
                         Command="{Binding AddLocalVideoOutputCommand}" />
-              <MenuItem Header="{x:Static res:Strings.NdiOutputMenuHeader}"
+              <MenuItem Header="{x:Static res:Strings.NDIOutputMenuHeader}"
                         Command="{Binding AddNDIOutputCommand}"
-                        IsVisible="{Binding IsNdiAvailable}" />
+                        IsVisible="{Binding IsNDIAvailable}" />
             </MenuFlyout>
           </Button.Flyout>
         </Button>

@@ -1,5 +1,5 @@
 using S.Media.Core.Video;
-using S.Media.SDL3;
+using S.Media.Present.SDL3;
 using Xunit;
 
 namespace HaPlay.Tests;

@@ -7,12 +7,12 @@ namespace HaPlay.Tests;
 public sealed class ControlSystemRuntimeSessionTests
 {
     [Fact]
-    public async Task TickAsync_RunsScriptPeriodicTriggersAndDevicePeriodicOscSends()
+    public async Task TickAsync_RunsScriptPeriodicTriggersAndDevicePeriodicOSCSends()
     {
         var x32Id = Guid.NewGuid();
         var scriptId = Guid.NewGuid();
         var triggerId = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = new ControlSystemRuntimeSession(
             new ControlSystemConfig
             {
@@ -23,17 +23,17 @@ public sealed class ControlSystemRuntimeSessionTests
                     {
                         Id = x32Id,
                         Name = "X32",
-                        Protocol = ControlDeviceProtocol.Osc,
+                        Protocol = ControlDeviceProtocol.OSC,
                         IsEnabled = true,
                         Binding = new ControlDeviceBindingConfig
                         {
                             Alias = "x32",
-                            OscHost = "192.168.2.76",
-                            OscPort = 10023,
+                            OSCHost = "192.168.2.76",
+                            OSCPort = 10023,
                         },
-                        PeriodicOscSends =
+                        PeriodicOSCSends =
                         [
-                            new ControlPeriodicOscSendConfig
+                            new ControlPeriodicOSCSendConfig
                             {
                                 Name = "/xremote",
                                 Address = "/xremote",
@@ -79,11 +79,11 @@ public sealed class ControlSystemRuntimeSessionTests
         var second = await session.TickAsync(now.AddMilliseconds(8000));
 
         Assert.True(Assert.Single(first.ScriptResult.Invocations).Succeeded);
-        Assert.True(Assert.Single(first.PeriodicOscResults).Succeeded);
+        Assert.True(Assert.Single(first.PeriodicOSCResults).Succeeded);
         Assert.Empty(tooSoon.ScriptResult.Invocations);
-        Assert.Empty(tooSoon.PeriodicOscResults);
+        Assert.Empty(tooSoon.PeriodicOSCResults);
         Assert.True(Assert.Single(second.ScriptResult.Invocations).Succeeded);
-        Assert.True(Assert.Single(second.PeriodicOscResults).Succeeded);
+        Assert.True(Assert.Single(second.PeriodicOSCResults).Succeeded);
         Assert.Collection(
             sender.Sent,
             sent => Assert.Equal("/heartbeat", sent.Address),
@@ -93,11 +93,11 @@ public sealed class ControlSystemRuntimeSessionTests
     }
 
     [Fact]
-    public async Task ExposesMidiDispatcherForDecodedInput()
+    public async Task ExposesMIDIDispatcherForDecodedInput()
     {
         var midiId = Guid.NewGuid();
         var x32Id = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = new ControlSystemRuntimeSession(
             new ControlSystemConfig
             {
@@ -108,25 +108,25 @@ public sealed class ControlSystemRuntimeSessionTests
                     {
                         Id = midiId,
                         Name = "X-Touch Mini",
-                        Protocol = ControlDeviceProtocol.Midi,
+                        Protocol = ControlDeviceProtocol.MIDI,
                         IsEnabled = true,
                         Binding = new ControlDeviceBindingConfig
                         {
                             Alias = "xtouch",
-                            MidiInputDeviceName = "X-Touch MINI",
+                            MIDIInputDeviceName = "X-Touch MINI",
                         },
                     },
                     new ControlDeviceInstanceConfig
                     {
                         Id = x32Id,
                         Name = "X32",
-                        Protocol = ControlDeviceProtocol.Osc,
+                        Protocol = ControlDeviceProtocol.OSC,
                         IsEnabled = true,
                         Binding = new ControlDeviceBindingConfig
                         {
                             Alias = "x32",
-                            OscHost = "192.168.2.76",
-                            OscPort = 10023,
+                            OSCHost = "192.168.2.76",
+                            OSCPort = 10023,
                         },
                     },
                 ],
@@ -143,11 +143,11 @@ public sealed class ControlSystemRuntimeSessionTests
                         [
                             new ControlScriptTriggerConfig
                             {
-                                Kind = ControlScriptTriggerKind.MidiNote,
+                                Kind = ControlScriptTriggerKind.MIDINote,
                                 FunctionName = "onLayerButton",
                                 DeviceInstanceId = midiId,
-                                MidiChannel = 1,
-                                MidiNote = 84,
+                                MIDIChannel = 1,
+                                MIDINote = 84,
                             },
                         ],
                     },
@@ -164,8 +164,8 @@ public sealed class ControlSystemRuntimeSessionTests
             }),
             sender);
 
-        var results = await session.MidiDevices.DispatchNoteAsync(
-            new ControlMidiInputIdentity(DeviceName: "X-Touch MINI"),
+        var results = await session.MIDIDevices.DispatchNoteAsync(
+            new ControlMIDIInputIdentity(DeviceName: "X-Touch MINI"),
             channel: 1,
             note: 84,
             velocity: 127,
@@ -178,33 +178,33 @@ public sealed class ControlSystemRuntimeSessionTests
     }
 
     [Fact]
-    public async Task StartAsync_DrivesPeriodicOscSendsOnBackgroundTickLoopUntilStopped()
+    public async Task StartAsync_DrivesPeriodicOSCSendsOnBackgroundTickLoopUntilStopped()
     {
         var x32Id = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         var session = new ControlSystemRuntimeSession(
             new ControlSystemConfig
             {
                 IsArmed = true,
                 // No app listeners: this test exercises the tick loop, not socket binding.
-                OscListeners = [],
+                OSCListeners = [],
                 Devices =
                 [
                     new ControlDeviceInstanceConfig
                     {
                         Id = x32Id,
                         Name = "X32",
-                        Protocol = ControlDeviceProtocol.Osc,
+                        Protocol = ControlDeviceProtocol.OSC,
                         IsEnabled = true,
                         Binding = new ControlDeviceBindingConfig
                         {
                             Alias = "x32",
-                            OscHost = "192.168.2.76",
-                            OscPort = 10023,
+                            OSCHost = "192.168.2.76",
+                            OSCPort = 10023,
                         },
-                        PeriodicOscSends =
+                        PeriodicOSCSends =
                         [
-                            new ControlPeriodicOscSendConfig
+                            new ControlPeriodicOSCSendConfig
                             {
                                 Name = "/xremote",
                                 Address = "/xremote",
@@ -242,7 +242,7 @@ public sealed class ControlSystemRuntimeSessionTests
     {
         var x32Id = Guid.NewGuid();
         var layerId = Guid.NewGuid();
-        var sender = new RecordingOscSender();
+        var sender = new RecordingOSCSender();
         await using var session = new ControlSystemRuntimeSession(
             new ControlSystemConfig
             {
@@ -254,9 +254,9 @@ public sealed class ControlSystemRuntimeSessionTests
                     {
                         Id = x32Id,
                         Name = "X32",
-                        Protocol = ControlDeviceProtocol.Osc,
+                        Protocol = ControlDeviceProtocol.OSC,
                         IsEnabled = true,
-                        Binding = new ControlDeviceBindingConfig { Alias = "x32", OscHost = "192.168.2.76", OscPort = 10023 },
+                        Binding = new ControlDeviceBindingConfig { Alias = "x32", OSCHost = "192.168.2.76", OSCPort = 10023 },
                     },
                 ],
                 Scripts =
@@ -298,13 +298,13 @@ public sealed class ControlSystemRuntimeSessionTests
         Assert.Contains(sender.Sent, s => s.Address == "/layer-armed");
     }
 
-    private sealed class RecordingOscSender : IControlOscSender
+    private sealed class RecordingOSCSender : IControlOSCSender
     {
         private readonly object _gate = new();
-        private readonly List<SentOscMessage> _sent = new();
+        private readonly List<SentOSCMessage> _sent = new();
 
         // Snapshot under lock: the background tick loop sends from another thread.
-        public IReadOnlyList<SentOscMessage> Sent
+        public IReadOnlyList<SentOSCMessage> Sent
         {
             get
             {
@@ -324,14 +324,14 @@ public sealed class ControlSystemRuntimeSessionTests
         {
             lock (_gate)
             {
-                _sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+                _sent.Add(new SentOSCMessage(host, port, address, arguments.ToArray()));
             }
 
             return ValueTask.CompletedTask;
         }
     }
 
-    private sealed record SentOscMessage(
+    private sealed record SentOSCMessage(
         string Host,
         int Port,
         string Address,

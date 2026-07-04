@@ -35,8 +35,8 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(IsLocalVideo));
         OnPropertyChanged(nameof(IsNotLocalVideo));
-        OnPropertyChanged(nameof(IsNdi));
-        OnPropertyChanged(nameof(IsNotNdi));
+        OnPropertyChanged(nameof(IsNDI));
+        OnPropertyChanged(nameof(IsNotNDI));
         OnPropertyChanged(nameof(IsClone));
         OnPropertyChanged(nameof(SupportsMediaPlayerRouting));
         OnPropertyChanged(nameof(IndentMargin));
@@ -74,9 +74,9 @@ public partial class OutputLineViewModel : ViewModelBase
 
     public bool IsNotLocalVideo => Definition is not LocalVideoOutputDefinition;
 
-    public bool IsNdi => Definition is NDIOutputDefinition;
+    public bool IsNDI => Definition is NDIOutputDefinition;
 
-    public bool IsNotNdi => Definition is not NDIOutputDefinition;
+    public bool IsNotNDI => Definition is not NDIOutputDefinition;
 
     /// <summary>True when this line is a clone of another local-video line (§3.4).</summary>
     public bool IsClone =>
@@ -231,8 +231,8 @@ public partial class OutputLineViewModel : ViewModelBase
     public string KindLabel => Definition.Kind switch
     {
         ManagedOutputKind.PortAudio => Strings.OutputKindLocalAudioLabel,
-        ManagedOutputKind.NDI => Strings.OutputKindNdiProgramLabel,
-        ManagedOutputKind.SdlOpenGlVideo => Strings.EngineStandaloneWindowLabel,
+        ManagedOutputKind.NDI => Strings.OutputKindNDIProgramLabel,
+        ManagedOutputKind.SDLOpenGlVideo => Strings.EngineStandaloneWindowLabel,
         ManagedOutputKind.AvaloniaOpenGlVideo => Strings.EngineInAppPreviewLabel,
         _ => Definition.Kind.ToString(),
     };
@@ -240,8 +240,8 @@ public partial class OutputLineViewModel : ViewModelBase
     public string KindTechnicalLabel => Definition switch
     {
         PortAudioOutputDefinition p => p.EffectiveAudioBackendName,
-        NDIOutputDefinition => Strings.OutputKindTechnicalNdi,
-        LocalVideoOutputDefinition { Engine: VideoOutputEngine.SdlOpenGl } => Strings.OutputKindTechnicalSdlOpenGl,
+        NDIOutputDefinition => Strings.OutputKindTechnicalNDI,
+        LocalVideoOutputDefinition { Engine: VideoOutputEngine.SDLOpenGl } => Strings.OutputKindTechnicalSDLOpenGl,
         LocalVideoOutputDefinition => Strings.OutputKindTechnicalAvaloniaOpenGl,
         _ => Definition.Kind.ToString(),
     };
@@ -261,11 +261,11 @@ public partial class OutputLineViewModel : ViewModelBase
                 : ""),
         NDIOutputDefinition n => n.StreamMode switch
         {
-            NDIOutputStreamMode.VideoOnly => Strings.Format(nameof(Strings.OutputSummaryNdiVideoOnlyFormat), n.SourceName),
+            NDIOutputStreamMode.VideoOnly => Strings.Format(nameof(Strings.OutputSummaryNDIVideoOnlyFormat), n.SourceName),
             NDIOutputStreamMode.AudioOnly =>
-                Strings.Format(nameof(Strings.OutputSummaryNdiAudioOnlyFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
+                Strings.Format(nameof(Strings.OutputSummaryNDIAudioOnlyFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
             _ =>
-                Strings.Format(nameof(Strings.OutputSummaryNdiVideoAudioFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
+                Strings.Format(nameof(Strings.OutputSummaryNDIVideoAudioFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
         },
         _ => Definition.DisplayName,
     };

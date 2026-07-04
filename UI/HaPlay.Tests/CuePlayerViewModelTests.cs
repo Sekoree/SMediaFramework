@@ -10,7 +10,7 @@ namespace HaPlay.Tests;
 public sealed class CuePlayerViewModelTests
 {
     [Fact]
-    public void AvailableOutputBuckets_ClassifyNdiByStreamMode()
+    public void AvailableOutputBuckets_ClassifyNDIByStreamMode()
     {
         var vm = new CuePlayerViewModel();
         var videoAndAudio = Line(new NDIOutputDefinition(
@@ -37,14 +37,14 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void AddAudioRoute_UsesNdiChannelCount()
+    public void AddAudioRoute_UsesNDIChannelCount()
     {
         var vm = new CuePlayerViewModel();
         var ndi = Line(new NDIOutputDefinition(
             Guid.NewGuid(), "NDI 4ch", "src", null, NDIOutputStreamMode.AudioOnly, 4, 48000));
         vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { ndi });
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         for (var i = 0; i < 5; i++)
             vm.AddAudioRouteCommand.Execute(null);
@@ -58,7 +58,7 @@ public sealed class CuePlayerViewModelTests
     public void LiveInputMediaSource_SeedsCueTabCapabilityMetadata()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         media.MediaSourceItem = new PortAudioInputPlaylistItem("Scarlett") { Channels = 4 };
@@ -128,7 +128,7 @@ public sealed class CuePlayerViewModelTests
         Assert.NotNull(groupVm);
         Assert.Equal(CueNodeKind.Group, groupVm.Kind);
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var mediaVm = vm.SelectedCueNode;
         Assert.NotNull(mediaVm);
         Assert.Equal(CueNodeKind.Media, mediaVm.Kind);
@@ -202,7 +202,7 @@ public sealed class CuePlayerViewModelTests
                 {
                     Number = "2",
                     Label = "GO",
-                    ActionKind = CueActionKind.OscOut,
+                    ActionKind = CueActionKind.OSCOut,
                     AddressOrMessage = "/go",
                 },
             },
@@ -231,7 +231,7 @@ public sealed class CuePlayerViewModelTests
         var binding = Assert.Single(vm.VisibleVideoOutputs);
         Assert.Equal(comp.Id, binding.CompositionId);
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         vm.AddVideoPlacementCommand.Execute(null);
         Assert.Single(media.VideoPlacements);
@@ -408,7 +408,7 @@ public sealed class CuePlayerViewModelTests
     {
         var vm = new CuePlayerViewModel();
         vm.AddCompositionCommand.Execute(null);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         vm.AddVideoPlacementCommand.Execute(null);
         var placement = vm.SelectedVideoPlacement!;
 
@@ -437,7 +437,7 @@ public sealed class CuePlayerViewModelTests
         };
 
         vm.AddCompositionCommand.Execute(null);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         vm.AddVideoPlacementCommand.Execute(null);
         var placement = vm.SelectedVideoPlacement;
@@ -463,7 +463,7 @@ public sealed class CuePlayerViewModelTests
         vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => Task.CompletedTask;
 
         vm.AddCompositionCommand.Execute(null);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         vm.AddVideoPlacementCommand.Execute(null);
         var placement = vm.SelectedVideoPlacement;
@@ -488,7 +488,7 @@ public sealed class CuePlayerViewModelTests
             return Task.CompletedTask;
         };
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         var route = new CueAudioRouteViewModel
         {
@@ -512,11 +512,11 @@ public sealed class CuePlayerViewModelTests
     public void RemoveStandbyCue_AdvancesToNextRemainingCue()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var third = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         vm.SelectedCueNode = second;
@@ -538,10 +538,10 @@ public sealed class CuePlayerViewModelTests
             Guid.NewGuid(), "Main", 0, "ALSA", 0, "dev", 2, 48000));
         vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { output });
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         first.SourceAudioChannels = 2;
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         second.SourceAudioChannels = 2;
         vm.UpdateSelection([first, second]);
@@ -825,11 +825,11 @@ public sealed class CuePlayerViewModelTests
     public void MoveSelectedCue_ShiftsWithinParentCollection()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var third = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         // Move third up — expect order [first, third, second].
@@ -855,7 +855,7 @@ public sealed class CuePlayerViewModelTests
     public void MoveCueNode_MovesIntoAndOutOfGroupWhenEditModeEnabled()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         vm.AddGroupCommand.Execute(null);
         var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
@@ -884,7 +884,7 @@ public sealed class CuePlayerViewModelTests
     public void DuplicateSelectedCue_InsertsCopyAfterOriginalWithFreshId()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var original = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         original.Label = "to-clone";
         original.AudioRoutes.Add(new CueAudioRouteViewModel { OutputChannel = 3, GainDb = -6 });
@@ -905,10 +905,10 @@ public sealed class CuePlayerViewModelTests
     public void NowPlaying_StartedAndEnded_MaintainsActiveCuesCollection()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue1.DurationMs = 30_000;
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue2.DurationMs = 10_000;
 
@@ -937,7 +937,7 @@ public sealed class CuePlayerViewModelTests
     public void NowPlaying_CancelCommand_ForwardsToHostCallback()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         var cancelled = new List<Guid>();
@@ -959,11 +959,11 @@ public sealed class CuePlayerViewModelTests
     public void NowPlaying_UpcomingCues_FiltersOutCurrentlyActive()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue3 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         vm.StandbyCueNode = cue1;
@@ -987,7 +987,7 @@ public sealed class CuePlayerViewModelTests
         for (var i = 0; i < 13; i++)
         {
             vm.SelectedCueNode = group;
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             cue.Label = $"Stem {i + 1}";
             children.Add(cue);
@@ -1004,9 +1004,9 @@ public sealed class CuePlayerViewModelTests
     public void Drawer_MultiSelectFlag_TrueWhenMultipleSelected()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         vm.UpdateSelection(new[] { first });
@@ -1021,9 +1021,9 @@ public sealed class CuePlayerViewModelTests
     public void GoAdvancesFromStandbyToNextCue()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null); // cue 1
+        vm.AddEmptyMediaCue(); // cue 1
         var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null); // cue 2
+        vm.AddEmptyMediaCue(); // cue 2
         var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         vm.SelectedCueNode = cue1;
@@ -1040,25 +1040,28 @@ public sealed class CuePlayerViewModelTests
     public async Task GoAdvancesSelectionToNextFireableCue()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         // Firing the standby cue moves the selection (not just standby) to what plays next.
         vm.SelectedCueNode = cue1;
         vm.StandbySelectedCommand.Execute(null);
         vm.GoCommand.Execute(null);
-        // Let the dispatched trigger-plan run settle — its steps update CurrentCueNode async and
-        // must NOT move the selection back to the fired cue.
-        await Task.Delay(50);
+        // Wait for the dispatched trigger-plan run to settle (fixed 50 ms sleeps flake on a loaded
+        // runner) — its steps update CurrentCueNode async and must NOT move the selection back to
+        // the fired cue.
+        await WaitUntilAsync(
+            () => ReferenceEquals(vm.CurrentCueNode, cue1) && ReferenceEquals(vm.SelectedCueNode, cue2),
+            timeoutMs: 20_000);
         Assert.Same(cue1, vm.CurrentCueNode);
         Assert.Same(cue2, vm.SelectedCueNode);
         Assert.Same(cue2, vm.StandbyCueNode);
 
         // Last cue in the list: nothing after it, selection stays on the fired cue.
         vm.GoCommand.Execute(null);
-        await Task.Delay(50);
+        await WaitUntilAsync(() => ReferenceEquals(vm.CurrentCueNode, cue2), timeoutMs: 20_000);
         Assert.Same(cue2, vm.CurrentCueNode);
         Assert.Same(cue2, vm.SelectedCueNode);
     }
@@ -1076,7 +1079,7 @@ public sealed class CuePlayerViewModelTests
         actionCue.PreWaitMs = 0;
 
         vm.SelectedCueNode = group;
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var mediaCue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         mediaCue.PreWaitMs = 80;
 
@@ -1150,7 +1153,7 @@ public sealed class CuePlayerViewModelTests
     public void PauseAndGoResume_InvokePlaybackPauseCallback()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.SourceOrAction = "/tmp/test.mp4";
         var states = new List<bool>();
@@ -1173,7 +1176,7 @@ public sealed class CuePlayerViewModelTests
     public async Task Go_InvokesMediaCueExecutor()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.SourceOrAction = "/tmp/test.mp3";
 
@@ -1187,7 +1190,9 @@ public sealed class CuePlayerViewModelTests
 
         vm.StandbySelectedCommand.Execute(null);
         vm.GoCommand.Execute(null);
-        await Task.Delay(20);
+        // GO runs the trigger plan asynchronously — wait for the executor instead of a fixed delay
+        // (a 20 ms sleep flaked on the loaded CI runner). Exits as soon as the call lands.
+        await WaitUntilAsync(() => Volatile.Read(ref callCount) == 1, timeoutMs: 20_000);
 
         Assert.Equal(1, callCount);
     }
@@ -1212,7 +1217,7 @@ public sealed class CuePlayerViewModelTests
         var endpointId = Guid.NewGuid();
         action.EndpointIdText = endpointId.ToString();
         action.SourceOrAction = "/lighting/go";
-        action.Extra = CueActionKind.OscOut.ToString();
+        action.Extra = CueActionKind.OSCOut.ToString();
 
         var snapshot = vm.BuildCueListsSnapshot();
         var node = Assert.IsType<ActionCueNode>(Assert.Single(snapshot[0].Nodes));
@@ -1220,19 +1225,19 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void ActionCueBuilderDialogViewModel_Osc_ComposesCommandAndEndpoint()
+    public void ActionCueBuilderDialogViewModel_OSC_ComposesCommandAndEndpoint()
     {
         var vm = new ActionCueBuilderDialogViewModel();
-        var endpoint = new OscActionEndpoint { Name = "OSC A", Host = "127.0.0.1", Port = 9000 };
-        vm.Load("Action", CueActionKind.OscOut, null, endpoint.Id, [endpoint]);
-        vm.OscAddress = "/lights/go";
-        vm.OscArguments = "1 true";
+        var endpoint = new OSCActionEndpoint { Name = "OSC A", Host = "127.0.0.1", Port = 9000 };
+        vm.Load("Action", CueActionKind.OSCOut, null, endpoint.Id, [endpoint]);
+        vm.OSCAddress = "/lights/go";
+        vm.OSCArguments = "1 true";
 
         Assert.True(vm.TryBuild(out var endpointId, out var actionKind, out var commandText, out var error));
 
         Assert.Null(error);
         Assert.Equal(endpoint.Id, endpointId);
-        Assert.Equal(CueActionKind.OscOut, actionKind);
+        Assert.Equal(CueActionKind.OSCOut, actionKind);
         Assert.Equal("/lights/go 1 true", commandText);
     }
 
@@ -1240,9 +1245,9 @@ public sealed class CuePlayerViewModelTests
     public void Go_WithAutoContinue_IncludesFollowingCueInPlan()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         second.TriggerMode = CueTriggerMode.AutoContinue;
         second.PreWaitMs = 25;
@@ -1259,7 +1264,7 @@ public sealed class CuePlayerViewModelTests
     public void MediaCue_MediaSourceItem_RoundTripsInSnapshot()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         media.MediaSourceItem = new FilePlaylistItem("/show/clip.mp4");
         media.SourceOrAction = "/show/clip.mp4";
@@ -1305,7 +1310,7 @@ public sealed class CuePlayerViewModelTests
         var audioOutputId = Guid.NewGuid();
         var compositionId = Guid.NewGuid();
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         first.MediaSourceItem = new FilePlaylistItem("/a.mp4");
         first.StartOffsetMs = 80 * 60 * 1000;
@@ -1325,7 +1330,7 @@ public sealed class CuePlayerViewModelTests
             Opacity = 0.75,
         });
 
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         second.MediaSourceItem = new NDIInputPlaylistItem("Studio-PC (Output 1)");
 
@@ -1353,7 +1358,7 @@ public sealed class CuePlayerViewModelTests
         for (var i = 0; i < 13; i++)
         {
             vm.SelectedCueNode = group;
-            vm.AddMediaCueCommand.Execute(null);
+            vm.AddEmptyMediaCue();
             var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
             cue.MediaSourceItem = new FilePlaylistItem($"/stem-{i + 1}.wav");
             children.Add(cue);
@@ -1369,16 +1374,16 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void GetNdiPreConnectTargets_IncludesNdiMediaFromStandby()
+    public void GetNDIPreConnectTargets_IncludesNDIMediaFromStandby()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         media.MediaSourceItem = new NDIInputPlaylistItem("Studio-PC (Output 1)");
         vm.SelectedCueNode = media;
         vm.StandbySelectedCommand.Execute(null);
 
-        var targets = vm.GetNdiPreConnectTargets();
+        var targets = vm.GetNDIPreConnectTargets();
         var t = Assert.Single(targets);
         Assert.Equal(media.Id, t.CueId);
         Assert.Equal("Studio-PC (Output 1)", t.Item.SourceName);
@@ -1388,7 +1393,7 @@ public sealed class CuePlayerViewModelTests
     public void MediaCue_StartOffsetAndEndBehavior_RoundTripInSnapshot()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         media.StartOffsetMs = 1500;
         media.EndOffsetMs = 2500;
@@ -1457,7 +1462,7 @@ public sealed class CuePlayerViewModelTests
     {
         var missing = Guid.NewGuid();
         var vm = new CuePlayerViewModel();
-        vm.SetActionEndpoints([new OscActionEndpoint { Name = "Live", Host = "127.0.0.1", Port = 9000 }]);
+        vm.SetActionEndpoints([new OSCActionEndpoint { Name = "Live", Host = "127.0.0.1", Port = 9000 }]);
         vm.AddActionCueCommand.Execute(null);
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.EndpointIdText = missing.ToString();
@@ -1472,7 +1477,7 @@ public sealed class CuePlayerViewModelTests
     public void RemapActionEndpoints_UpdatesCueEndpointId()
     {
         var missing = Guid.NewGuid();
-        var replacement = new OscActionEndpoint { Name = "New", Host = "127.0.0.1", Port = 9001 };
+        var replacement = new OSCActionEndpoint { Name = "New", Host = "127.0.0.1", Port = 9001 };
         var vm = new CuePlayerViewModel();
         vm.SetActionEndpoints([replacement]);
         vm.AddActionCueCommand.Execute(null);
@@ -1489,7 +1494,7 @@ public sealed class CuePlayerViewModelTests
     public void MediaCue_FadeFields_RoundTripInSnapshot()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         media.FadeInMs = 1200;
         media.FadeOutMs = 800;
@@ -1503,7 +1508,7 @@ public sealed class CuePlayerViewModelTests
     public void MediaCue_AutoFollow_RoundTripsInSnapshot()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.TriggerMode = CueTriggerMode.AutoFollow;
 
@@ -1519,7 +1524,7 @@ public sealed class CuePlayerViewModelTests
         var vm = new CuePlayerViewModel();
         var pa = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA", 0, "HostApi", 0, "Dev", 2, 48000));
         vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { pa });
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         vm.AddAudioRouteCommand.Execute(null);
 
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
@@ -1537,7 +1542,7 @@ public sealed class CuePlayerViewModelTests
         var otherVm = new CuePlayerViewModel();
         otherVm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { otherInstanceLine });
         vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { first, second });
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         vm.AddAudioRouteCommand.Execute(null);
 
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
@@ -1552,7 +1557,7 @@ public sealed class CuePlayerViewModelTests
     {
         // Phase 5.7.2 — warming snapshot from the cache pushes IsPreRollWarm onto matching nodes.
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         Assert.False(cue.IsPreRollWarm);
 
@@ -1596,7 +1601,7 @@ public sealed class CuePlayerViewModelTests
     public void PreRollState_Stale_HasDistinctGlyphTooltipAndIsNotWarm()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         cue.PreRollState = PreparedCueState.Ready;
@@ -1615,7 +1620,7 @@ public sealed class CuePlayerViewModelTests
     public void OnPreparedCueStatesChanged_MapsStaleStateOntoNode()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         vm.OnPreparedCueStatesChanged(new[] { new CuePreparationStatus(cue.Id, PreparedCueState.Stale, null) });
@@ -1628,7 +1633,7 @@ public sealed class CuePlayerViewModelTests
     {
         // Phase 5.8.1 — ColorTag persists through ToModel/FromModel for every cue kind.
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         media.ColorTag = 4;
         vm.AddActionCueCommand.Execute(null);
@@ -1646,9 +1651,9 @@ public sealed class CuePlayerViewModelTests
     {
         // Multi-select tagging: command sets the tag on every node in SelectedCueNodes.
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
         vm.UpdateSelection(new[] { first, second });
@@ -1662,7 +1667,7 @@ public sealed class CuePlayerViewModelTests
     public void IsCueScrubberVisible_WhenSelectedCueIsActive()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         Assert.False(vm.IsCueScrubberVisible);
 
@@ -1677,7 +1682,7 @@ public sealed class CuePlayerViewModelTests
     public void OnPreviewEnded_ClearsPreviewingCueId()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         vm.PreviewingCueId = cue.Id;
         vm.OnPreviewEnded(cue.Id);
@@ -1688,7 +1693,7 @@ public sealed class CuePlayerViewModelTests
     public void SeekActiveCueFromScrubber_ForwardsToCallback()
     {
         var vm = new CuePlayerViewModel();
-        vm.AddMediaCueCommand.Execute(null);
+        vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.DurationMs = 60_000;
         cue.StartOffsetMs = 10_000;
@@ -1727,21 +1732,21 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void ActionCueBuilderDialogViewModel_Midi_ComposesCommand()
+    public void ActionCueBuilderDialogViewModel_MIDI_ComposesCommand()
     {
         var vm = new ActionCueBuilderDialogViewModel();
-        var endpoint = new MidiActionEndpoint { Name = "MIDI A" };
-        vm.Load("Action", CueActionKind.MidiOut, null, endpoint.Id, [endpoint]);
-        vm.MidiCommandType = CueMidiCommandType.ControlChange;
-        vm.MidiChannel = 2;
-        vm.MidiData1 = 7;
-        vm.MidiData2 = 110;
+        var endpoint = new MIDIActionEndpoint { Name = "MIDI A" };
+        vm.Load("Action", CueActionKind.MIDIOut, null, endpoint.Id, [endpoint]);
+        vm.MIDICommandType = CueMIDICommandType.ControlChange;
+        vm.MIDIChannel = 2;
+        vm.MIDIData1 = 7;
+        vm.MIDIData2 = 110;
 
         Assert.True(vm.TryBuild(out var endpointId, out var actionKind, out var commandText, out var error));
 
         Assert.Null(error);
         Assert.Equal(endpoint.Id, endpointId);
-        Assert.Equal(CueActionKind.MidiOut, actionKind);
+        Assert.Equal(CueActionKind.MIDIOut, actionKind);
         Assert.Equal("ch2 cc 7 110", commandText);
     }
 }

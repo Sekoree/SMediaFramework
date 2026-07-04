@@ -885,21 +885,13 @@
       "id": "xair.xremote",
       "displayName": "Maintain /xremote",
       "isDefaultEnabled": true,
-      "kind": 1,
+      "kind": 0,
       "address": "/xremote",
       "intervalMs": 8000,
       "arguments": []
     }
   ],
   "behaviors": {
-    "protocolMaintenance": {
-      "renewIntervalMs": 8000,
-      "maintenanceAddresses": [
-        "/xremote",
-        "/subscribe",
-        "/meters"
-      ]
-    },
     "meterBlobDecoder": "x32"
   }
 }

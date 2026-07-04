@@ -42,7 +42,7 @@ public sealed class LevelMeterControl : Control
         if (w <= 0 || h <= 0) return;
 
         var rect = new Rect(0, 0, w, h);
-        ctx.DrawRectangle(BackgroundBrush, null, rect, 2, 2);
+        ctx.DrawRectangle(BackgroundBrush, null, rect);
 
         var level = Math.Clamp(Level, 0, 1);
         if (level <= 0) return;
@@ -55,6 +55,6 @@ public sealed class LevelMeterControl : Control
         else brush = GreenBrush;
 
         var fillRect = new Rect(0, 0, fillW, h);
-        ctx.DrawRectangle(brush, null, fillRect, 2, 2);
+        ctx.DrawRectangle(brush, null, fillRect);
     }
 }

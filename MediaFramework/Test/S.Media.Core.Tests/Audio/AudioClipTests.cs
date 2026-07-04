@@ -1,32 +1,24 @@
 using S.Media.Core.Audio;
-using S.Media.Core.Diagnostics;
-using S.Media.FFmpeg;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
 
-public sealed class AudioClipTests : IDisposable
+public sealed class AudioClipTests
 {
-    private readonly string _stereoWav;
-
-    public AudioClipTests()
-    {
-        _stereoWav = Path.Combine(Path.GetTempPath(), $"sm_clip_{Guid.NewGuid():N}.wav");
-        SineWav.Write(_stereoWav, sampleRate: 48000, channels: 2, frequencyHz: 440, durationSeconds: 0.1);
-        MediaFrameworkRuntime.Init().UseFFmpeg();
-    }
-
-    public void Dispose()
-    {
-        MediaFrameworkRuntime.Shutdown();
-        if (File.Exists(_stereoWav))
-            File.Delete(_stereoWav);
-    }
-
     [Fact]
-    public void OpenFile_MixdownToMono_ReducesChannels()
+    public void LoadFromSource_MixdownToMono_ReducesChannels()
     {
-        var clip = AudioClip.OpenFile(_stereoWav, mixdown: new ChannelMap([0]));
+        // Pure-Core: drain a synthetic stereo PCM source through AudioClip's mixdown (the decode→clip
+        // convenience that needs FFmpeg lives at the registry/Session layer now).
+        var format = new AudioFormat(48_000, 2);
+        const int frames = 4_800;
+        var data = new float[frames * format.Channels];
+        for (var i = 0; i < data.Length; i++)
+            data[i] = 0.25f;
+        var source = new PcmBufferAudioSource(format, data, frames);
+
+        var clip = AudioClip.LoadFromSource(source, mixdown: new ChannelMap([0]));
+
         Assert.Equal(1, clip.Format.Channels);
         Assert.True(clip.SamplesPerChannel > 0);
     }

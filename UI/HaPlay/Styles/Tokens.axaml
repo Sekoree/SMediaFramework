@@ -33,10 +33,12 @@
       <SolidColorBrush x:Key="AccentDanger" Color="#C62828" />
       <SolidColorBrush x:Key="ChipNeutral" Color="#22808080" />
 
-      <!-- Status-line / toast severity foregrounds -->
-      <SolidColorBrush x:Key="StatusInfoFg" Color="#90A4AE" />
-      <SolidColorBrush x:Key="StatusWarnFg" Color="#FFD54F" />
-      <SolidColorBrush x:Key="StatusErrorFg" Color="#FF8A80" />
+      <!-- Status-line / toast severity foregrounds. Dark shades: these draw on the Classic theme's
+           light-gray surfaces (the old light tints came from the dark-Fluent era and read as
+           washed-out white there). -->
+      <SolidColorBrush x:Key="StatusInfoFg" Color="#37474F" />
+      <SolidColorBrush x:Key="StatusWarnFg" Color="#8A5A00" />
+      <SolidColorBrush x:Key="StatusErrorFg" Color="#B71C1C" />
     </ResourceDictionary>
   </Styles.Resources>
 
@@ -61,11 +63,11 @@
     <Setter Property="FontSize" Value="13" />
   </Style>
 
-  <!-- ===== Surfaces ===== -->
+  <!-- ===== Surfaces ===== (square corners — the Classic theme has no rounded chrome) -->
   <Style Selector="Border.Card">
     <Setter Property="BorderBrush" Value="{StaticResource BorderSubtle}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="CornerRadius" Value="0" />
     <Setter Property="Padding" Value="{StaticResource SpaceM}" />
     <Setter Property="Background" Value="{StaticResource SurfaceRaised}" />
   </Style>
@@ -75,7 +77,7 @@
     <Setter Property="Padding" Value="10,6" />
   </Style>
   <Style Selector="Border.Chip">
-    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="CornerRadius" Value="0" />
     <Setter Property="Padding" Value="6,2" />
     <Setter Property="VerticalAlignment" Value="Center" />
     <Setter Property="Background" Value="{StaticResource ChipNeutral}" />

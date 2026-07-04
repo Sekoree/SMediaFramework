@@ -1,6 +1,6 @@
 using HaPlay.OutputPreview;
 using HaPlay.ViewModels;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -182,7 +182,7 @@ public sealed class OutputManagementViewModelTests
         var id = Guid.NewGuid();
         vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
         {
-            new LocalVideoOutputDefinition(id, "Program", VideoOutputEngine.SdlOpenGl,
+            new LocalVideoOutputDefinition(id, "Program", VideoOutputEngine.SDLOpenGl,
                 VideoSurfaceMode.Windowed, 0, 1280, 720),
         });
 
@@ -202,7 +202,7 @@ public sealed class OutputManagementViewModelTests
         var windowedId = Guid.NewGuid();
         vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
         {
-            new LocalVideoOutputDefinition(fullscreenId, "Program", VideoOutputEngine.SdlOpenGl,
+            new LocalVideoOutputDefinition(fullscreenId, "Program", VideoOutputEngine.SDLOpenGl,
                 VideoSurfaceMode.FullScreen, 0, null, null),
             new LocalVideoOutputDefinition(windowedId, "Preview", VideoOutputEngine.AvaloniaOpenGl,
                 VideoSurfaceMode.Windowed, 0, 1280, 720),
@@ -233,12 +233,12 @@ public sealed class OutputManagementViewModelTests
             SampleRate: 48000);
         var devices = new[]
         {
-            new PortAudioOutputDeviceEntry(5, 0, "Different speakers", 2, 48000),
-            new PortAudioOutputDeviceEntry(12, 0, "Main speakers", 2, 48000),
+            new PortAudioOutputDeviceEntry(5, 0, "Different speakers", 2, 48000, false),
+            new PortAudioOutputDeviceEntry(12, 0, "Main speakers", 2, 48000, false),
         };
         var hostApis = new[]
         {
-            new PortAudioHostApiEntry(0, "ALSA", 0, 2),
+            new PortAudioHostApiEntry(0, "ALSA", 0, 2, -1),
         };
 
         var resolved = PortAudioOutputRuntime.ResolveCurrentOutputDevice(saved, devices, hostApis);
@@ -261,11 +261,11 @@ public sealed class OutputManagementViewModelTests
             SampleRate: 48000);
         var devices = new[]
         {
-            new PortAudioOutputDeviceEntry(5, 0, "Different speakers", 2, 48000),
+            new PortAudioOutputDeviceEntry(5, 0, "Different speakers", 2, 48000, false),
         };
         var hostApis = new[]
         {
-            new PortAudioHostApiEntry(0, "ALSA", 0, 1),
+            new PortAudioHostApiEntry(0, "ALSA", 0, 1, -1),
         };
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -287,11 +287,11 @@ public sealed class OutputManagementViewModelTests
             SampleRate: 48000);
         var devices = new[]
         {
-            new PortAudioOutputDeviceEntry(12, 0, "Main speakers", 1, 48000),
+            new PortAudioOutputDeviceEntry(12, 0, "Main speakers", 1, 48000, false),
         };
         var hostApis = new[]
         {
-            new PortAudioHostApiEntry(0, "ALSA", 0, 1),
+            new PortAudioHostApiEntry(0, "ALSA", 0, 1, -1),
         };
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -309,13 +309,13 @@ public sealed class OutputManagementViewModelTests
         var cloneBId = Guid.NewGuid();
         vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
         {
-            new LocalVideoOutputDefinition(parentId, "Program", VideoOutputEngine.SdlOpenGl,
+            new LocalVideoOutputDefinition(parentId, "Program", VideoOutputEngine.SDLOpenGl,
                 VideoSurfaceMode.FullScreen, 0, null, null),
             new LocalVideoOutputDefinition(cloneAId, "Confidence", VideoOutputEngine.AvaloniaOpenGl,
                 VideoSurfaceMode.Windowed, 0, 640, 360, CloneOfId: parentId),
             new LocalVideoOutputDefinition(cloneBId, "Wing", VideoOutputEngine.AvaloniaOpenGl,
                 VideoSurfaceMode.Windowed, 1, 1280, 720, CloneOfId: parentId),
-            new LocalVideoOutputDefinition(Guid.NewGuid(), "Other", VideoOutputEngine.SdlOpenGl,
+            new LocalVideoOutputDefinition(Guid.NewGuid(), "Other", VideoOutputEngine.SDLOpenGl,
                 VideoSurfaceMode.Windowed, 0, 800, 600),
         });
 
@@ -334,11 +334,11 @@ public sealed class OutputManagementViewModelTests
         var otherId = Guid.NewGuid();
         vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
         {
-            new LocalVideoOutputDefinition(parentId, "Program", VideoOutputEngine.SdlOpenGl,
+            new LocalVideoOutputDefinition(parentId, "Program", VideoOutputEngine.SDLOpenGl,
                 VideoSurfaceMode.FullScreen, 0, null, null),
             new LocalVideoOutputDefinition(cloneId, "Confidence", VideoOutputEngine.AvaloniaOpenGl,
                 VideoSurfaceMode.Windowed, 0, 640, 360, CloneOfId: parentId),
-            new LocalVideoOutputDefinition(otherId, "Other", VideoOutputEngine.SdlOpenGl,
+            new LocalVideoOutputDefinition(otherId, "Other", VideoOutputEngine.SDLOpenGl,
                 VideoSurfaceMode.Windowed, 0, 800, 600),
         });
 

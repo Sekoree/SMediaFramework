@@ -1,4 +1,3 @@
-using S.Media.Core.Audio;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -46,6 +45,44 @@ public class AudioRouterTests
         using var r = new AudioRouter(SampleRate);
         Assert.Throws<InvalidOperationException>(() =>
             r.AddSource(new TestSource(new AudioFormat(44100, 2))));
+    }
+
+    [Fact]
+    public void Route_MonoSourceToStereoOutput_DefaultMapUpmixes()
+    {
+        // Regression: the default route must derive its channel map from the *source* (mono), not size
+        // it to the output (stereo). Sizing to the output made AddRoute reject "map requires 2 input
+        // channels but source has 1", which crashed the headless show on mono media.
+        using var r = new AudioRouter(SampleRate);
+        var src = r.AddSource(new TestSource(Mono));
+        var outp = r.AddOutput(new TestOutput(Stereo));
+
+        var routeId = r.Route(src, outp);
+
+        Assert.False(string.IsNullOrEmpty(routeId));
+    }
+
+    [Fact]
+    public void RouteLast_MonoSourceToStereoOutput_DefaultMapUpmixes()
+    {
+        using var r = new AudioRouter(SampleRate);
+        r.AddSource(new TestSource(Mono));
+        r.AddOutput(new TestOutput(Stereo));
+
+        var routeId = r.RouteLast();
+
+        Assert.False(string.IsNullOrEmpty(routeId));
+    }
+
+    [Fact]
+    public void Connect_StereoSourceToMonoOutput_DefaultMapDoesNotThrow()
+    {
+        // Connect is the fourth default-route entry point; its default map must also be source-derived.
+        using var r = new AudioRouter(SampleRate);
+        var src = r.AddSource(new TestSource(Stereo));
+        var outp = r.AddOutput(new TestOutput(Mono));
+
+        r.Connect(src, outp);
     }
 
     [Fact]

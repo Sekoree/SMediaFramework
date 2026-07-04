@@ -12,84 +12,84 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
     public string DialogTitle { get; private set; } = Strings.EditActionCueDialogTitle;
 
     [ObservableProperty]
-    private CueActionKind _actionKind = CueActionKind.OscOut;
+    private CueActionKind _actionKind = CueActionKind.OSCOut;
 
     [ObservableProperty]
     private ActionEndpoint? _selectedEndpoint;
 
     [ObservableProperty]
-    private string _oscAddress = Strings.OscAddressPlaceholder;
+    private string _oSCAddress = Strings.OSCAddressPlaceholder;
 
     [ObservableProperty]
-    private string _oscArguments = "1";
+    private string _oSCArguments = "1";
 
     [ObservableProperty]
-    private CueMidiCommandType _midiCommandType = CueMidiCommandType.NoteOn;
+    private CueMIDICommandType _mIDICommandType = CueMIDICommandType.NoteOn;
 
     [ObservableProperty]
-    private int _midiChannel = 1;
+    private int _mIDIChannel = 1;
 
     [ObservableProperty]
-    private int _midiData1 = 60;
+    private int _mIDIData1 = 60;
 
     [ObservableProperty]
-    private int _midiData2 = 100;
+    private int _mIDIData2 = 100;
 
     [ObservableProperty]
-    private string _midiDataText = CueMidiActionMessage.DefaultSysExDataText;
+    private string _mIDIDataText = CueMIDIActionMessage.DefaultSysExDataText;
 
     [ObservableProperty]
     private string? _validationMessage;
 
-    public bool IsOscVisible => ActionKind == CueActionKind.OscOut;
-    public bool IsMidiVisible => ActionKind == CueActionKind.MidiOut;
+    public bool IsOSCVisible => ActionKind == CueActionKind.OSCOut;
+    public bool IsMIDIVisible => ActionKind == CueActionKind.MIDIOut;
 
     public IReadOnlyList<CueActionKind> ActionKinds { get; } = Enum.GetValues<CueActionKind>();
-    public IReadOnlyList<CueMidiCommandType> MidiCommandTypes { get; } = CueMidiActionMessage.CommandTypes;
+    public IReadOnlyList<CueMIDICommandType> MIDICommandTypes { get; } = CueMIDIActionMessage.CommandTypes;
 
     public ObservableCollection<ActionEndpoint> Endpoints { get; } = new();
 
-    public bool IsMidiChannelVisible => CueMidiActionMessage.UsesChannel(MidiCommandType);
-    public bool IsMidiData1Visible => CueMidiActionMessage.UsesData1(MidiCommandType);
-    public bool IsMidiData2Visible => CueMidiActionMessage.UsesData2(MidiCommandType);
-    public bool IsMidiDataTextVisible => CueMidiActionMessage.UsesDataText(MidiCommandType);
-    public string MidiData1Label => CueMidiActionMessage.Data1Label(MidiCommandType);
-    public string MidiData2Label => CueMidiActionMessage.Data2Label(MidiCommandType);
-    public int MidiData1Minimum => CueMidiActionMessage.Data1Minimum(MidiCommandType);
-    public int MidiData1Maximum => CueMidiActionMessage.Data1Maximum(MidiCommandType);
-    public int MidiData2Minimum => CueMidiActionMessage.Data2Minimum(MidiCommandType);
-    public int MidiData2Maximum => CueMidiActionMessage.Data2Maximum(MidiCommandType);
+    public bool IsMIDIChannelVisible => CueMIDIActionMessage.UsesChannel(MIDICommandType);
+    public bool IsMIDIData1Visible => CueMIDIActionMessage.UsesData1(MIDICommandType);
+    public bool IsMIDIData2Visible => CueMIDIActionMessage.UsesData2(MIDICommandType);
+    public bool IsMIDIDataTextVisible => CueMIDIActionMessage.UsesDataText(MIDICommandType);
+    public string MIDIData1Label => CueMIDIActionMessage.Data1Label(MIDICommandType);
+    public string MIDIData2Label => CueMIDIActionMessage.Data2Label(MIDICommandType);
+    public int MIDIData1Minimum => CueMIDIActionMessage.Data1Minimum(MIDICommandType);
+    public int MIDIData1Maximum => CueMIDIActionMessage.Data1Maximum(MIDICommandType);
+    public int MIDIData2Minimum => CueMIDIActionMessage.Data2Minimum(MIDICommandType);
+    public int MIDIData2Maximum => CueMIDIActionMessage.Data2Maximum(MIDICommandType);
 
     partial void OnActionKindChanged(CueActionKind value)
     {
         _ = value;
-        OnPropertyChanged(nameof(IsOscVisible));
-        OnPropertyChanged(nameof(IsMidiVisible));
+        OnPropertyChanged(nameof(IsOSCVisible));
+        OnPropertyChanged(nameof(IsMIDIVisible));
         RefreshEndpointChoices(SelectedEndpoint?.Id, selectFirstWhenMissing: true);
     }
 
-    partial void OnMidiCommandTypeChanged(CueMidiCommandType value)
+    partial void OnMIDICommandTypeChanged(CueMIDICommandType value)
     {
-        var defaults = CueMidiActionMessage.Defaults(value);
-        MidiData1 = Math.Clamp(MidiData1, CueMidiActionMessage.Data1Minimum(value), CueMidiActionMessage.Data1Maximum(value));
-        MidiData2 = Math.Clamp(MidiData2, CueMidiActionMessage.Data2Minimum(value), CueMidiActionMessage.Data2Maximum(value));
-        if (!CueMidiActionMessage.UsesData1(value))
-            MidiData1 = defaults.Data1;
-        if (!CueMidiActionMessage.UsesData2(value))
-            MidiData2 = defaults.Data2;
-        if (CueMidiActionMessage.UsesDataText(value) && string.IsNullOrWhiteSpace(MidiDataText))
-            MidiDataText = defaults.DataText;
+        var defaults = CueMIDIActionMessage.Defaults(value);
+        MIDIData1 = Math.Clamp(MIDIData1, CueMIDIActionMessage.Data1Minimum(value), CueMIDIActionMessage.Data1Maximum(value));
+        MIDIData2 = Math.Clamp(MIDIData2, CueMIDIActionMessage.Data2Minimum(value), CueMIDIActionMessage.Data2Maximum(value));
+        if (!CueMIDIActionMessage.UsesData1(value))
+            MIDIData1 = defaults.Data1;
+        if (!CueMIDIActionMessage.UsesData2(value))
+            MIDIData2 = defaults.Data2;
+        if (CueMIDIActionMessage.UsesDataText(value) && string.IsNullOrWhiteSpace(MIDIDataText))
+            MIDIDataText = defaults.DataText;
 
-        OnPropertyChanged(nameof(IsMidiChannelVisible));
-        OnPropertyChanged(nameof(IsMidiData1Visible));
-        OnPropertyChanged(nameof(IsMidiData2Visible));
-        OnPropertyChanged(nameof(IsMidiDataTextVisible));
-        OnPropertyChanged(nameof(MidiData1Label));
-        OnPropertyChanged(nameof(MidiData2Label));
-        OnPropertyChanged(nameof(MidiData1Minimum));
-        OnPropertyChanged(nameof(MidiData1Maximum));
-        OnPropertyChanged(nameof(MidiData2Minimum));
-        OnPropertyChanged(nameof(MidiData2Maximum));
+        OnPropertyChanged(nameof(IsMIDIChannelVisible));
+        OnPropertyChanged(nameof(IsMIDIData1Visible));
+        OnPropertyChanged(nameof(IsMIDIData2Visible));
+        OnPropertyChanged(nameof(IsMIDIDataTextVisible));
+        OnPropertyChanged(nameof(MIDIData1Label));
+        OnPropertyChanged(nameof(MIDIData2Label));
+        OnPropertyChanged(nameof(MIDIData1Minimum));
+        OnPropertyChanged(nameof(MIDIData1Maximum));
+        OnPropertyChanged(nameof(MIDIData2Minimum));
+        OnPropertyChanged(nameof(MIDIData2Maximum));
     }
 
     public void Load(
@@ -110,10 +110,10 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
         ActionKind = actionKind;
         RefreshEndpointChoices(endpointId, selectFirstWhenMissing: true);
 
-        if (actionKind == CueActionKind.OscOut)
-            LoadOsc(addressOrMessage);
+        if (actionKind == CueActionKind.OSCOut)
+            LoadOSC(addressOrMessage);
         else
-            LoadMidi(addressOrMessage);
+            LoadMIDI(addressOrMessage);
     }
 
     public bool TryBuild(out Guid? endpointId, out CueActionKind actionKind, out string commandText, out string? error)
@@ -123,24 +123,24 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
         commandText = string.Empty;
         error = null;
 
-        if (ActionKind == CueActionKind.OscOut)
+        if (ActionKind == CueActionKind.OSCOut)
         {
-            var address = string.IsNullOrWhiteSpace(OscAddress) ? Strings.OscAddressPlaceholder : OscAddress.Trim();
+            var address = string.IsNullOrWhiteSpace(OSCAddress) ? Strings.OSCAddressPlaceholder : OSCAddress.Trim();
             if (!address.StartsWith('/'))
                 address = "/" + address;
-            commandText = string.IsNullOrWhiteSpace(OscArguments)
+            commandText = string.IsNullOrWhiteSpace(OSCArguments)
                 ? address
-                : $"{address} {OscArguments.Trim()}";
+                : $"{address} {OSCArguments.Trim()}";
             ValidationMessage = null;
             return true;
         }
 
-        commandText = CueMidiActionMessage.BuildCommandText(
-            MidiCommandType,
-            MidiChannel,
-            MidiData1,
-            MidiData2,
-            MidiDataText);
+        commandText = CueMIDIActionMessage.BuildCommandText(
+            MIDICommandType,
+            MIDIChannel,
+            MIDIData1,
+            MIDIData2,
+            MIDIDataText);
         ValidationMessage = null;
         return true;
     }
@@ -162,33 +162,33 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
     private bool MatchesActionKind(ActionEndpoint endpoint) =>
         ActionKind switch
         {
-            CueActionKind.OscOut => endpoint is OscActionEndpoint,
-            CueActionKind.MidiOut => endpoint is MidiActionEndpoint,
+            CueActionKind.OSCOut => endpoint is OSCActionEndpoint,
+            CueActionKind.MIDIOut => endpoint is MIDIActionEndpoint,
             _ => false,
         };
 
-    private void LoadOsc(string? raw)
+    private void LoadOSC(string? raw)
     {
         var text = raw?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(text))
         {
-            OscAddress = Strings.OscAddressPlaceholder;
-            OscArguments = "1";
+            OSCAddress = Strings.OSCAddressPlaceholder;
+            OSCArguments = "1";
             return;
         }
 
         var split = text.Split(' ', 2, StringSplitOptions.TrimEntries);
-        OscAddress = split[0];
-        OscArguments = split.Length > 1 ? split[1] : string.Empty;
+        OSCAddress = split[0];
+        OSCArguments = split.Length > 1 ? split[1] : string.Empty;
     }
 
-    private void LoadMidi(string? raw)
+    private void LoadMIDI(string? raw)
     {
-        var state = CueMidiActionMessage.ParseEditorState(raw);
-        MidiCommandType = state.CommandType;
-        MidiChannel = state.Channel;
-        MidiData1 = state.Data1;
-        MidiData2 = state.Data2;
-        MidiDataText = state.DataText;
+        var state = CueMIDIActionMessage.ParseEditorState(raw);
+        MIDICommandType = state.CommandType;
+        MIDIChannel = state.Channel;
+        MIDIData1 = state.Data1;
+        MIDIData2 = state.Data2;
+        MIDIDataText = state.DataText;
     }
 }

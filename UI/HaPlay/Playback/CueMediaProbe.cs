@@ -1,4 +1,4 @@
-using S.Media.FFmpeg;
+using S.Media.Decode.FFmpeg;
 
 namespace HaPlay.Playback;
 
@@ -15,7 +15,8 @@ internal readonly record struct CueMediaProbeResult(
     int SourceFrameRateDen,
     int SourceVideoWidth,
     int SourceVideoHeight,
-    IReadOnlyList<MediaStreamInfo> AudioTracks);
+    IReadOnlyList<MediaStreamInfo> AudioTracks,
+    IReadOnlyList<MediaStreamInfo> SubtitleTracks);
 
 internal static class CueMediaProbe
 {
@@ -69,7 +70,8 @@ internal static class CueMediaProbe
                     SourceFrameRateDen: fpsDen,
                     SourceVideoWidth: videoWidth,
                     SourceVideoHeight: videoHeight,
-                    AudioTracks: ListDecodableAudioTracks(decoder.Streams));
+                    AudioTracks: ListDecodableAudioTracks(decoder.Streams),
+                    SubtitleTracks: ListSubtitleTracks(decoder.Streams));
             }
             finally
             {
@@ -84,6 +86,26 @@ internal static class CueMediaProbe
 
     private static IReadOnlyList<MediaStreamInfo> ListDecodableAudioTracks(IReadOnlyList<MediaStreamInfo> streams) =>
         streams.Where(s => s.Kind == MediaStreamKind.Audio && s.IsDecodable).ToArray();
+
+    private static IReadOnlyList<MediaStreamInfo> ListSubtitleTracks(IReadOnlyList<MediaStreamInfo> streams) =>
+        streams.Where(s => s.Kind == MediaStreamKind.Subtitle).ToArray();
+
+    /// <summary>Stream-table-only probe of the embedded subtitle tracks (for the cue subtitle picker on cues
+    /// loaded from disk). Empty on failure.</summary>
+    public static async Task<IReadOnlyList<MediaStreamInfo>> TryProbeSubtitleTracksAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return [];
+        try
+        {
+            var streams = await Task.Run(() => MediaContainerDecoder.ProbeStreams(path)).ConfigureAwait(false);
+            return ListSubtitleTracks(streams);
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
     /// <summary>
     /// Lightweight stream-table-only probe (no decoder build) for filling the audio-track picker on

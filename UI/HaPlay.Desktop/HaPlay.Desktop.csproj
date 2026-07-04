@@ -5,8 +5,17 @@
         See https://docs.avaloniaui.net/docs/guides/platforms/platform-specific-code/dotnet for more details.-->
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
+        <!-- AOT re-audited 2026-07-02 (NXT-15): linux-x64 publish is clean apart from the one known Mond
+             IL2026 (StackFrame — error-trace detail only), and the published app launches, renders, and
+             tears down (Pa_Terminate + host dispose) under the HAPLAY_SMOKE gate. dotnet run stays JIT;
+             only `dotnet publish` pays the AOT compile. -->
         <PublishAot>true</PublishAot>
-        <AssemblyName>HaPlay_Test</AssemblyName>
+        <!-- The exe assembly can't be "HaPlay" (the UI library owns that name; avares://HaPlay/... resource
+             URIs target it) and the project-name default "HaPlay.Desktop" makes file managers mistake the
+             binary for an XDG ".Desktop" entry. Ship a plain, distinct binary name instead. A case-only
+             variant (HAPlay) would collide with HaPlay.dll on case-insensitive filesystems, so keep it clear.
+             The launch smokes in .github/workflows/next-build.yml reference this exact name. -->
+        <AssemblyName>HaPlayer</AssemblyName>
 
         <!-- Real-time audio latency hint (COMPLEMENTARY, not the fix). The AOT-only audio drops were
              actually a router pacing flaw — fixed by primary-output backpressure in AudioRouter.OutputPump

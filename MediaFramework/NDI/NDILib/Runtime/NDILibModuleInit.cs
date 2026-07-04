@@ -17,4 +17,3 @@ internal static class NDILibModuleInit
     internal static void Initialize() => NDILibraryResolver.Install();
 #pragma warning restore CA2255
 }
-

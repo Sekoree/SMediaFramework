@@ -17,7 +17,7 @@ namespace HaPlay.ViewModels;
 
 public sealed partial class CueNodeViewModel : ObservableObject
 {
-    private const int DefaultNdiInputAudioChannels = 2;
+    private const int DefaultNDIInputAudioChannels = 2;
 
     public CueNodeViewModel(CueNodeKind kind)
     {
@@ -90,12 +90,17 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(IsImageCue));
         OnPropertyChanged(nameof(TextContent));
         OnPropertyChanged(nameof(TextFontFamily));
+        OnPropertyChanged(nameof(FontFamilyOptions));
+        OnPropertyChanged(nameof(TextBounds));
         OnPropertyChanged(nameof(TextFontSizePx));
         OnPropertyChanged(nameof(TextBold));
         OnPropertyChanged(nameof(TextItalic));
         OnPropertyChanged(nameof(TextColorHex));
         OnPropertyChanged(nameof(TextBackgroundHex));
         OnPropertyChanged(nameof(TextOutlineHex));
+        OnPropertyChanged(nameof(TextColor));
+        OnPropertyChanged(nameof(TextBackgroundColor));
+        OnPropertyChanged(nameof(TextOutlineColor));
         OnPropertyChanged(nameof(TextOutlineWidthPx));
         OnPropertyChanged(nameof(TextHAlign));
         OnPropertyChanged(nameof(TextVAlign));
@@ -120,10 +125,39 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 SourceHasAudio = !ndi.VideoOnly;
                 SourceAudioChannels = ndi.VideoOnly
                     ? 0
-                    : Math.Max(SourceAudioChannels, DefaultNdiInputAudioChannels);
+                    : Math.Max(SourceAudioChannels, DefaultNDIInputAudioChannels);
                 SourceHasVideo = !ndi.AudioOnly;
                 SourceVideoIsAttachedPicture = false;
                 if (ndi.AudioOnly)
+                {
+                    SourceFrameRateNum = 0;
+                    SourceFrameRateDen = 0;
+                    SourceVideoWidth = 0;
+                    SourceVideoHeight = 0;
+                }
+                break;
+            // An MMD scene is a pure video source (30 fps BGRA at the scene's render size, no audio
+            // leg) — without these flags the drawer never offers the Video tab, so the cue could not
+            // be placed on a composition at all.
+            case MMDPlaylistItem mmd:
+                SourceHasVideo = true;
+                SourceHasAudio = false;
+                SourceAudioChannels = 0;
+                SourceVideoIsAttachedPicture = false;
+                SourceFrameRateNum = 30;
+                SourceFrameRateDen = 1;
+                SourceVideoWidth = mmd.RenderWidth;
+                SourceVideoHeight = mmd.RenderHeight;
+                break;
+            // A prepared YouTube item plays from the local cache like a file. Conservative defaults
+            // here (stereo audio, video unless deliberately audio-only) so the Audio/Video tabs show
+            // immediately; the add path refines them by probing the cached asset when it exists.
+            case YouTubePlaylistItem yt:
+                SourceHasVideo = !yt.AudioOnly;
+                SourceHasAudio = true;
+                SourceAudioChannels = Math.Max(SourceAudioChannels, 2);
+                SourceVideoIsAttachedPicture = false;
+                if (yt.AudioOnly)
                 {
                     SourceFrameRateNum = 0;
                     SourceFrameRateDen = 0;
@@ -145,6 +179,17 @@ public sealed partial class CueNodeViewModel : ObservableObject
         get => TextSource?.FontFamily ?? "Inter";
         set { if (TextSource is { } t && t.FontFamily != value && !string.IsNullOrWhiteSpace(value)) MutateText(_ => _ with { FontFamily = value }); }
     }
+
+    /// <summary>Font families for the dropdown: the installed system fonts plus this cue's current family pinned at
+    /// the top (so the embedded "Inter" default — which isn't an OS system font — still shows and stays selected).</summary>
+    public IReadOnlyList<string> FontFamilyOptions => FontCatalog.WithCurrent(TextFontFamily);
+
+    /// <summary>The tight bounding box of this text cue's rendered text, as fractions (0..1) of its canvas — for
+    /// the placement editor to outline the actual text extent inside the placed frame. Null for a non-text cue.</summary>
+    public Avalonia.Rect? TextBounds =>
+        TextSource is { } t && HaPlay.Playback.TextFrameRenderer.MeasureNormalizedBounds(t) is { } b
+            ? new Avalonia.Rect(b.X, b.Y, b.W, b.H)
+            : null;
 
     public double TextFontSizePx
     {
@@ -182,6 +227,27 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set { if (TextSource is { } t) MutateText(_ => _ with { OutlineArgb = ParseHex(value, t.OutlineArgb) }); }
     }
 
+    // Avalonia.Media.Color views over the ARGB fields for the ColorPicker controls (kept in sync with the *Hex
+    // strings, which stay for scripting/round-trip). A no-op guard avoids a set→render loop when the picker
+    // re-emits the same colour.
+    public Avalonia.Media.Color TextColor
+    {
+        get => ToColor(TextSource?.ColorArgb ?? 0xFFFFFFFF);
+        set { if (TextSource is { } t && FromColor(value) != t.ColorArgb) MutateText(_ => _ with { ColorArgb = FromColor(value) }); }
+    }
+
+    public Avalonia.Media.Color TextBackgroundColor
+    {
+        get => ToColor(TextSource?.BackgroundArgb ?? 0);
+        set { if (TextSource is { } t && FromColor(value) != t.BackgroundArgb) MutateText(_ => _ with { BackgroundArgb = FromColor(value) }); }
+    }
+
+    public Avalonia.Media.Color TextOutlineColor
+    {
+        get => ToColor(TextSource?.OutlineArgb ?? 0xFF000000);
+        set { if (TextSource is { } t && FromColor(value) != t.OutlineArgb) MutateText(_ => _ with { OutlineArgb = FromColor(value) }); }
+    }
+
     public double TextOutlineWidthPx
     {
         get => TextSource?.OutlineWidthPx ?? 0;
@@ -207,6 +273,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     private static string ToHex(uint argb) => $"#{argb:X8}";
+
+    private static Avalonia.Media.Color ToColor(uint argb) =>
+        Avalonia.Media.Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
+
+    private static uint FromColor(Avalonia.Media.Color c) =>
+        ((uint)c.A << 24) | ((uint)c.R << 16) | ((uint)c.G << 8) | c.B;
 
     private static uint ParseHex(string? value, uint fallback)
     {
@@ -251,7 +323,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     /// Replaces the picker entries from a probe and re-resolves the persisted choice: same
     /// index+signature first, then signature alone (stream table shifted), else automatic.
     /// </summary>
-    public void SetAudioTrackChoices(IReadOnlyList<S.Media.FFmpeg.MediaStreamInfo> tracks)
+    public void SetAudioTrackChoices(IReadOnlyList<S.Media.Decode.FFmpeg.MediaStreamInfo> tracks)
     {
         var persistedIndex = AudioTrackIndex;
         var persistedSignature = AudioTrackSignature;
@@ -266,6 +338,99 @@ public sealed partial class CueNodeViewModel : ObservableObject
             ?? AudioTrackChoices.FirstOrDefault(c => c.Signature is not null && c.Signature == persistedSignature)
             ?? AudioTrackChoices[0];
         OnPropertyChanged(nameof(HasMultipleAudioTracks));
+    }
+
+    /// <summary>Persisted subtitle selections from the loaded cue. Used to restore the picker's checked state
+    /// and to preserve sidecar selections / style overrides not editable in the embedded-track picker.</summary>
+    public IReadOnlyList<HaPlay.Models.CueSubtitleSelection> PersistedSubtitles { get; init; } = [];
+
+    /// <summary>Embedded subtitle tracks for this cue's source, each with its own none/one/many toggle.</summary>
+    public ObservableCollection<CueSubtitleTrackChoice> SubtitleTrackChoices { get; } = new();
+
+    /// <summary>The subtitle tab shows only when the source carries at least one embedded subtitle track.</summary>
+    public bool HasSubtitleTracks => SubtitleTrackChoices.Count > 0;
+
+    /// <summary>Cue-level subtitle font override applied to all selected tracks (libass fallback family).
+    /// Empty keeps each document's own font.</summary>
+    [ObservableProperty]
+    private string? _subtitleFontFamily;
+
+    /// <summary>Cue-level subtitle size multiplier (1.0 = document default). Null keeps the document sizing.</summary>
+    [ObservableProperty]
+    private double? _subtitleFontScale;
+
+    /// <summary>NumericUpDown-friendly (decimal?) view of <see cref="SubtitleFontScale"/>.</summary>
+    public decimal? SubtitleFontScaleValue
+    {
+        get => SubtitleFontScale is { } s ? (decimal)s : null;
+        set => SubtitleFontScale = value is null ? null : (double)value;
+    }
+
+    partial void OnSubtitleFontScaleChanged(double? value) => OnPropertyChanged(nameof(SubtitleFontScaleValue));
+
+    /// <summary>Alignment options for the subtitle picker (ASS numpad). First entry keeps the document default.</summary>
+    public IReadOnlyList<SubtitleAlignmentChoice> SubtitleAlignmentChoices { get; } =
+    [
+        new(null, "Default"),
+        new(1, "Bottom-left"), new(2, "Bottom-center"), new(3, "Bottom-right"),
+        new(4, "Middle-left"), new(5, "Middle-center"), new(6, "Middle-right"),
+        new(7, "Top-left"), new(8, "Top-center"), new(9, "Top-right"),
+    ];
+
+    /// <summary>Cue-level alignment override applied to all selected text tracks.</summary>
+    [ObservableProperty]
+    private SubtitleAlignmentChoice? _selectedSubtitleAlignment;
+
+    /// <summary>Replaces the subtitle picker entries from a probe, restoring the checked state and the cue-level
+    /// font overrides from the persisted selections (matched by stream index).</summary>
+    public void SetSubtitleTrackChoices(IReadOnlyList<S.Media.Decode.FFmpeg.MediaStreamInfo> tracks)
+    {
+        var selectedIndices = PersistedSubtitles
+            .Where(s => s.IsEmbedded)
+            .Select(s => s.StreamIndex!.Value)
+            .ToHashSet();
+
+        SubtitleTrackChoices.Clear();
+        foreach (var t in tracks)
+            SubtitleTrackChoices.Add(new CueSubtitleTrackChoice(t.Index, t.ToDisplayString(), selectedIndices.Contains(t.Index)));
+
+        // Restore the cue-level style overrides from whichever persisted selection carried them.
+        var styled = PersistedSubtitles.FirstOrDefault(
+            s => s.FontFamily is not null || s.FontScale is not null || s.Alignment is not null);
+        SubtitleFontFamily = styled?.FontFamily;
+        SubtitleFontScale = styled?.FontScale;
+        SelectedSubtitleAlignment =
+            SubtitleAlignmentChoices.FirstOrDefault(a => a.Value == styled?.Alignment) ?? SubtitleAlignmentChoices[0];
+
+        OnPropertyChanged(nameof(HasSubtitleTracks));
+    }
+
+    /// <summary>Builds the model's subtitle selection list from the checked embedded tracks, preserving any
+    /// persisted style overrides for those tracks plus any sidecar selections (not shown in this picker).
+    /// Returns the persisted list unchanged when the picker hasn't been populated (no probe yet) so a save
+    /// from a never-opened cue can't drop selections.</summary>
+    public IReadOnlyList<HaPlay.Models.CueSubtitleSelection> BuildSubtitleSelections()
+    {
+        if (SubtitleTrackChoices.Count == 0)
+            return PersistedSubtitles;
+
+        var family = string.IsNullOrWhiteSpace(SubtitleFontFamily) ? null : SubtitleFontFamily.Trim();
+        var result = new List<HaPlay.Models.CueSubtitleSelection>();
+        foreach (var choice in SubtitleTrackChoices.Where(c => c.IsSelected))
+        {
+            result.Add(new HaPlay.Models.CueSubtitleSelection
+            {
+                StreamIndex = choice.StreamIndex,
+                Label = choice.Label,
+                FontFamily = family,
+                FontScale = SubtitleFontScale,
+                Alignment = SelectedSubtitleAlignment?.Value,
+            });
+        }
+
+        // Sidecar selections aren't represented in the embedded-track picker — round-trip them untouched.
+        result.AddRange(PersistedSubtitles.Where(s => !s.IsEmbedded));
+        return result;
     }
 
     [ObservableProperty]
@@ -420,7 +585,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     public CueActionKind ActionKind
     {
-        get => Enum.TryParse<CueActionKind>(Extra, out var kind) ? kind : CueActionKind.OscOut;
+        get => Enum.TryParse<CueActionKind>(Extra, out var kind) ? kind : CueActionKind.OSCOut;
         set => Extra = value.ToString();
     }
 
@@ -713,6 +878,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceAudioChannels = m.AudioChannels,
                     AudioTrackIndex = m.AudioTrackIndex,
                     AudioTrackSignature = m.AudioTrackSignature,
+                    PersistedSubtitles = m.Subtitles,
                     SourceVideoIsAttachedPicture = m.VideoIsAttachedPicture,
                     SourceFrameRateNum = m.SourceFrameRateNum,
                     SourceFrameRateDen = m.SourceFrameRateDen,
@@ -798,6 +964,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 AudioChannels = Math.Max(0, SourceAudioChannels),
                 AudioTrackIndex = AudioTrackIndex,
                 AudioTrackSignature = AudioTrackSignature,
+                Subtitles = BuildSubtitleSelections(),
                 VideoIsAttachedPicture = SourceVideoIsAttachedPicture,
                 SourceFrameRateNum = Math.Max(0, SourceFrameRateNum),
                 SourceFrameRateDen = Math.Max(0, SourceFrameRateDen),
@@ -821,7 +988,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
-                ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OscOut,
+                ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OSCOut,
             },
             _ => new CommentCueNode
             {

@@ -14,4 +14,7 @@ public sealed class AudioSourceOpenOptions
 
     /// <summary>When true, spools the stream to a temp file instead of AVIO (fallback path).</summary>
     public bool SpoolToDisk { get; init; }
+
+    /// <summary>Explicit audio stream index, or <c>-1</c> to disable audio in backends that support it.</summary>
+    public int? AudioStreamIndex { get; init; }
 }

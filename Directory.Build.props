@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- Repo-root common build settings for MFPlayer (the v2 rewrite, promoted from next/ to the root
+       2026-07-04; the old parallel tree was removed). Design docs live in ./Next/. Directory.Build.targets
+       is intentionally minimal. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- The framework must stay NativeAOT-clean (S.Media.Interop ships s_media_player). This turns the
+         trim/AOT analyzers on for every library at build time (D15); test + tool projects opt out. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+
+</Project>

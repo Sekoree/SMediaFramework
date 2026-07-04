@@ -1,5 +1,3 @@
-using S.Media.Core.Diagnostics;
-
 namespace S.Media.Core.Video;
 
 /// <summary>
@@ -44,17 +42,6 @@ public interface IDeinterlacer : IDisposable
     int Process(VideoFrame frame, Span<VideoFrame?> outputs);
 }
 
-/// <summary>
-/// Process-wide hook for the production deinterlacer. <c>S.Media.FFmpeg</c> installs a yadif-based
-/// implementation at <c>FFmpegRuntime.EnsureInitialized()</c>. When no factory is registered,
-/// callers should fall back to <see cref="BobDeinterlacer"/> (always available in Core).
-/// </summary>
-public static class VideoDeinterlacerRegistry
-{
-    /// <summary>
-    /// Creates a deinterlacer. Resolution order is scoped factory, process-wide
-    /// <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/>, then the built-in <see cref="BobDeinterlacer"/> fallback.
-    /// </summary>
-    public static IDeinterlacer Create(VideoFormat input, Func<VideoFormat, IDeinterlacer>? scopedFactory = null) =>
-        scopedFactory?.Invoke(input) ?? MediaFrameworkPlugins.VideoDeinterlacerFactory?.Invoke(input) ?? new BobDeinterlacer(input);
-}
+// Phase 1: the old `VideoDeinterlacerRegistry` (a process-wide hook over MediaFrameworkPlugins) is
+// removed — deinterlacers are resolved through `IMediaRegistry`, with the built-in `BobDeinterlacer`
+// fallback (see Registry/). The interface above and `BobDeinterlacer` stay in Core.

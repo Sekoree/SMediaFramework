@@ -233,6 +233,36 @@ public sealed record CueGroupNode : CueNode
     public List<CueNode> Children { get; init; } = new();
 }
 
+/// <summary>
+/// One subtitle track selected for a media cue. Exactly one of <see cref="StreamIndex"/> (an embedded container
+/// subtitle stream — see <c>MediaStreamInfo.Index</c>) or <see cref="Path"/> (a sidecar file) identifies the
+/// source. The optional overrides apply to text formats that support styling (ASS, or any format FFmpeg decodes
+/// to ASS events); they are ignored for bitmap (PGS/DVB) subtitles.
+/// </summary>
+public sealed record CueSubtitleSelection
+{
+    /// <summary>Embedded container stream index; <c>null</c> for a sidecar selection.</summary>
+    public int? StreamIndex { get; init; }
+
+    /// <summary>Sidecar subtitle file path; <c>null</c> for an embedded selection.</summary>
+    public string? Path { get; init; }
+
+    /// <summary>Display label for the picker (language / title / codec).</summary>
+    public string? Label { get; init; }
+
+    /// <summary>Override font family (libass fallback family); <c>null</c> keeps the document's styling.</summary>
+    public string? FontFamily { get; init; }
+
+    /// <summary>Font size scale (1.0 = document default); <c>null</c> keeps the document's sizing.</summary>
+    public double? FontScale { get; init; }
+
+    /// <summary>libass numpad alignment 1–9 (e.g. 2 = bottom-center); <c>null</c> keeps the document's alignment.</summary>
+    public int? Alignment { get; init; }
+
+    /// <summary>True for an embedded container stream, false for a sidecar file.</summary>
+    public bool IsEmbedded => StreamIndex.HasValue;
+}
+
 public sealed record MediaCueNode : CueNode
 {
     public PlaylistItem? Source { get; init; }
@@ -266,6 +296,11 @@ public sealed record MediaCueNode : CueNode
     /// The Video tab still shows so the cover art can be placed into a composition, but with a
     /// hint that it's a still image.</summary>
     public bool VideoIsAttachedPicture { get; init; }
+
+    /// <summary>Subtitle tracks to render over this cue's video — none / one / many. Each is an embedded
+    /// container stream (<see cref="CueSubtitleSelection.StreamIndex"/>) or a sidecar file
+    /// (<see cref="CueSubtitleSelection.Path"/>), with optional font/placement overrides. Empty = no subtitles.</summary>
+    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
 
     /// <summary>Probed source frame rate (numerator / denominator). 0/0 when unknown or no video.</summary>
     public int SourceFrameRateNum { get; init; }
@@ -304,7 +339,7 @@ public sealed record MediaCueNode : CueNode
 
 public sealed record ActionCueNode : CueNode
 {
-    public CueActionKind ActionKind { get; init; } = CueActionKind.OscOut;
+    public CueActionKind ActionKind { get; init; } = CueActionKind.OSCOut;
 
     public Guid? EndpointId { get; init; }
 
@@ -399,8 +434,8 @@ public enum CueEndBehavior
 
 public enum CueActionKind
 {
-    OscOut,
-    MidiOut,
+    OSCOut,
+    MIDIOut,
 }
 
 [JsonSourceGenerationOptions(
@@ -411,6 +446,7 @@ public enum CueActionKind
 [JsonSerializable(typeof(CueNode))]
 [JsonSerializable(typeof(CueGroupNode))]
 [JsonSerializable(typeof(MediaCueNode))]
+[JsonSerializable(typeof(CueSubtitleSelection))]
 [JsonSerializable(typeof(ActionCueNode))]
 [JsonSerializable(typeof(CommentCueNode))]
 [JsonSerializable(typeof(CueComposition))]
@@ -422,7 +458,10 @@ public enum CueActionKind
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
 [JsonSerializable(typeof(ImagePlaylistItem))]
+[JsonSerializable(typeof(SubtitlePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
+[JsonSerializable(typeof(YouTubePlaylistItem))]
+[JsonSerializable(typeof(MMDPlaylistItem))]
 [JsonSerializable(typeof(CueListsCollectionDocument))]
 [JsonSerializable(typeof(CueCompositionsDocument))]
 [JsonSerializable(typeof(List<CueList>))]

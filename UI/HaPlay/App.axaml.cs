@@ -12,9 +12,9 @@ using HaPlay.Views;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
-using S.Media.FFmpeg;
-using S.Media.MiniAudio;
-using S.Media.PortAudio;
+using S.Media.Decode.FFmpeg;
+using S.Media.Audio.MiniAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay;
 
@@ -40,10 +40,29 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             Trace.LogDebug("App lifetime: classic desktop");
+            var mainVm = new MainViewModel();
             desktop.MainWindow = new MainWindow
             {
-                DataContext = new MainViewModel()
+                DataContext = mainVm
             };
+            // At shutdown, tear down the ShowSession cue re-back first, then dispose the media host so the
+            // modules' native runtime holds are released deterministically (NXT-05 — sessions that borrow the
+            // registry must go first; the host is the last thing out). Wired to BOTH lifetime events: a forced
+            // Shutdown() skips ShutdownRequested but still raises Exit — the teardown is idempotent, so the
+            // normal path (request → exit) just runs it once with a no-op second call.
+            var toreDown = 0;
+            void Teardown()
+            {
+                if (System.Threading.Interlocked.Exchange(ref toreDown, 1) != 0)
+                    return;
+                mainVm.ShutdownCleanup();
+                MediaRuntime.Shutdown();
+            }
+
+            desktop.ShutdownRequested += (_, _) => Teardown();
+            desktop.Exit += (_, _) => Teardown();
+
+            WireSmokeSelfExit(desktop);
         }
         else if (ApplicationLifetime is IActivityApplicationLifetime singleViewFactoryApplicationLifetime)
         {
@@ -65,43 +84,51 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Registers framework plugins once at startup so file/stream source factories, audio backends, and the
-    /// adaptive-rate output wrapper are wired on <see cref="MediaFrameworkPlugins"/>. The wrapper backs
-    /// <see cref="S.Media.Core.Audio.AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/> (multi-output
-    /// drift correction); without this call that method throws. Idempotent and best-effort — a failure
-    /// degrades to prior behaviour rather than blocking startup.
+    /// CI launch gate (NXT-15): with <c>HAPLAY_SMOKE=1</c> the app renders its first real frame and then
+    /// shuts itself down through the NORMAL teardown path (ShutdownRequested → ShowSession cleanup →
+    /// MediaRuntime.Shutdown), so the smoke gates startup wiring AND clean exit, not just "a process ran".
+    /// Exit 0 = frame rendered + clean shutdown; a watchdog hard-exits 2 when no frame appears in time so a
+    /// wedged launch fails the gate instead of hanging the runner.
+    /// </summary>
+    private static void WireSmokeSelfExit(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        var smoke = System.Environment.GetEnvironmentVariable("HAPLAY_SMOKE");
+        if (smoke is not ("1" or "true"))
+            return;
+
+        var exited = 0;
+        desktop.MainWindow!.Opened += (_, _) =>
+            // RequestAnimationFrame fires after a compositor frame actually renders — the "a real frame was
+            // drawn" signal the old rebuild app's smoke had and the ported app lacked (review NXT-15).
+            Avalonia.Controls.TopLevel.GetTopLevel(desktop.MainWindow)?.RequestAnimationFrame(_ =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (System.Threading.Interlocked.Exchange(ref exited, 1) != 0)
+                        return;
+                    Trace.LogInformation("HAPLAY_SMOKE: first frame rendered — shutting down (exit 0)");
+                    // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke must
+                    // exercise the app's real teardown (ShowSession cleanup + MediaRuntime.Shutdown).
+                    desktop.TryShutdown(0);
+                }));
+
+        _ = System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(45)).ContinueWith(_ =>
+        {
+            if (System.Threading.Interlocked.Exchange(ref exited, 1) != 0)
+                return;
+            Trace.LogError("HAPLAY_SMOKE: no frame rendered within 45s — hard exit 2");
+            System.Environment.Exit(2);
+        });
+    }
+
+    /// <summary>
+    /// Builds the process-wide <see cref="MediaRuntime.Registry"/> once at startup (the rewritten framework's
+    /// composition root: FFmpeg + PortAudio + MiniAudio + NDI modules). Replaces the old static
+    /// MediaFrameworkRuntime/MediaFrameworkPlugins plugin setup. Best-effort per module (see MediaRuntime).
     /// </summary>
     private static void InitializeMediaFramework()
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.InitializeMediaFramework", slowWarningMs: 1000);
-        var builder = MediaFrameworkRuntime.Init();
-        try
-        {
-            builder.UseFFmpeg();
-        }
-        catch (System.Exception ex)
-        {
-            Trace.LogWarning(ex, "HaPlay media framework init failed during UseFFmpeg; continuing with degraded plugin availability");
-        }
-
-        try
-        {
-            builder.UsePortAudio();
-        }
-        catch (System.Exception ex)
-        {
-            Trace.LogWarning(ex, "HaPlay media framework init failed during UsePortAudio; PortAudio devices will be unavailable");
-        }
-
-        try
-        {
-            builder.UseMiniAudio();
-        }
-        catch (System.Exception ex)
-        {
-            Trace.LogWarning(ex, "HaPlay media framework init failed during UseMiniAudio; miniaudio devices will be unavailable");
-        }
-
-        timing?.SetOutcome($"audio-backends={string.Join(",", AudioBackends.All.Select(b => b.Name))}");
+        MediaRuntime.Initialize();
+        timing?.SetOutcome($"audio-backends={string.Join(",", MediaRuntime.Registry.AudioBackends.Select(b => b.Name))}");
     }
 }

@@ -33,7 +33,9 @@ public sealed class WaveformControl : Control
         set => SetValue(RevisionProperty, value);
     }
 
-    private static readonly IBrush BarBrush = new SolidColorBrush(Color.Parse("#FFF"));
+    // Translucent dark — the waveform draws directly on the Classic theme's light-gray chrome
+    // (the old solid white came from the dark-Fluent era and was invisible there).
+    private static readonly IBrush BarBrush = new SolidColorBrush(Color.Parse("#66000000"));
 
     public override void Render(DrawingContext ctx)
     {

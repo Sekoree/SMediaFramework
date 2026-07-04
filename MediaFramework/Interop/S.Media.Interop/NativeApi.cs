@@ -1,222 +1,373 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
-using S.Media.Core.Diagnostics;
-using S.Media.FFmpeg;
-using S.Media.MiniAudio;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
+using S.Media.Core.Audio;
+using S.Media.Core.Registry;
+using S.Media.Decode.FFmpeg;
+using S.Media.Session;
 
 namespace S.Media.Interop;
 
 /// <summary>
-/// The C ABI of the media framework. Every entry point is a <see cref="UnmanagedCallersOnlyAttribute"/>
-/// static with a blittable signature so it exports as a plain C symbol from the NativeAOT shared library
-/// (<c>s_media_player.so</c> / <c>s_media_player.dll</c>). The matching declarations live in
-/// <c>include/s_media_player.h</c>.
+/// The outbound C ABI (<c>s_media_player.h</c>) — `[UnmanagedCallersOnly]` exports over the headless
+/// <see cref="ShowSession"/>, AOT-published as <c>s_media_player.so</c>/<c>.dll</c>. Each export is sync over the
+/// session's async dispatcher (block on the returned task — the dispatcher runs on its own thread, so no deadlock).
+/// Nothing throws across the boundary: failures set a thread-local last error (see <see cref="mfp_last_error"/>)
+/// and return a negative status / null handle. Handles are <see cref="GCHandle"/>s to a <see cref="SessionBox"/>.
 /// </summary>
-/// <remarks>
-/// Contract for callers in any language:
-/// <list type="bullet">
-/// <item>Call <c>mfp_initialize</c> once before anything else and <c>mfp_shutdown</c> once at the end.</item>
-/// <item>Player handles are opaque pointers. Every successful <c>mfp_open_file</c> must be matched by a
-/// <c>mfp_close</c>; calling any function with a closed/garbage handle returns an error, it does not crash.</item>
-/// <item>Functions never throw across the boundary — they return an <c>int</c> status (0 = OK, negative =
-/// error) and stash a human-readable message retrievable with <c>mfp_last_error</c> (thread-local).</item>
-/// <item>Time is in 100-ns ticks (<see cref="TimeSpan.Ticks"/>): 10,000,000 ticks = 1 second.</item>
-/// </list>
-/// </remarks>
-internal static unsafe partial class NativeApi
+internal static unsafe class NativeApi
 {
-    // --- status codes (part of the ABI; append only) ---------------------------------------------
-    private const int Ok = 0;
-    private const int ErrGeneric = -1;
-    private const int ErrInvalidArg = -2;
-    private const int ErrInvalidHandle = -3;
-    private const int ErrOpenFailed = -4;
-    private const int ErrNotInitialized = -5;
+    private const int MfpOk = 0;
+    private const int MfpErrGeneric = -1;
+    private const int MfpErrInvalidArg = -2;
+    private const int MfpErrInvalidHandle = -3;
+    private const int MfpErrLoadFailed = -4;
+    private const int MfpErrNotInitialized = -5;
 
-    /// <summary>Sentinel device indices for <c>mfp_open_file</c>'s <c>audio_device_index</c> parameter.</summary>
-    internal const int DefaultAudioDevice = -1;
-    internal const int NoAudioDevice = -2;
+    private const int MfpStateIdle = 0;
+    private const int MfpStatePlaying = 1;
 
-    [ThreadStatic] private static string? _lastError;
-    private static int _initialized;
+    private static volatile bool s_initialized;
 
-    // --- lifecycle -------------------------------------------------------------------------------
+    [ThreadStatic] private static string? s_lastError;
+    [ThreadStatic] private static nint s_lastErrorNative;
 
-    /// <summary>Initializes FFmpeg + PortAudio (idempotent). Returns 0 on success.</summary>
+    // Session handles are opaque, monotonically-increasing tokens into a synchronized table — NEVER raw
+    // GCHandle pointers handed back by (untrusted) C callers. A stale, random, or double-freed token simply
+    // isn't in the table, so it is rejected without ever dereferencing caller-supplied memory (NXT-08). Ids
+    // are never reused (64-bit monotonic), so there is no ABA window that a separate generation would guard.
+    private static readonly Lock s_handleGate = new();
+    private static readonly Dictionary<nint, SessionBox> s_handles = new();
+    private static nint s_nextHandle; // 0 is reserved as the null/invalid handle; first issued is 1
+
+    private sealed class SessionBox
+    {
+        public required ShowSession Session;
+
+        /// <summary>The per-session owning host (NXT-05). Disposing it releases the session's module native-runtime
+        /// holds (PortAudio <c>Pa_Terminate</c>/NDI); create/destroy churn no longer ratchets those refs up forever.</summary>
+        public required MediaHost Host;
+    }
+
+    // ----------------------------------------------------------------- global lifecycle ------------
+
     [UnmanagedCallersOnly(EntryPoint = "mfp_initialize")]
-    public static int Initialize()
+    private static int Initialize()
     {
-        try
-        {
-            if (Interlocked.Exchange(ref _initialized, 1) == 0)
-                MediaFrameworkRuntime.Init().UseFFmpeg().UsePortAudio().UseMiniAudio();
-            return Ok;
-        }
-        catch (Exception ex)
-        {
-            Interlocked.Exchange(ref _initialized, 0);
-            return Fail(ex, ErrGeneric);
-        }
+        s_initialized = true; // FFmpeg/PortAudio init lazily on first use; this just gates the handle calls.
+        ClearLastError();
+        return MfpOk;
     }
 
-    /// <summary>Releases framework runtimes. Close all players first.</summary>
+    /// <summary>Destroys every live session deterministically, then closes the runtime. The old behaviour only
+    /// flipped a flag — after which destruction was refused, so live sessions and their native resources leaked
+    /// (NXT-08). No-throw across the boundary.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_shutdown")]
-    public static void Shutdown()
+    private static void Shutdown()
     {
         try
         {
-            if (Interlocked.Exchange(ref _initialized, 0) == 1)
-                MediaFrameworkRuntime.Shutdown();
-        }
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "S.Media.Interop.Shutdown");
-        }
-    }
-
-    // --- open / close ----------------------------------------------------------------------------
-
-    /// <summary>
-    /// Opens a local media file. <paramref name="withVideoWindow"/> != 0 opens an SDL video window when the
-    /// file has video; <paramref name="audioDeviceIndex"/> selects a PortAudio device (-1 = default,
-    /// -2 = no audio). On success writes an opaque handle to <paramref name="outHandle"/> and returns 0.
-    /// </summary>
-    [UnmanagedCallersOnly(EntryPoint = "mfp_open_file")]
-    public static int OpenFile(byte* utf8Path, int withVideoWindow, int audioDeviceIndex, IntPtr* outHandle)
-    {
-        if (outHandle is null)
-            return Fail("outHandle is null", ErrInvalidArg);
-        *outHandle = IntPtr.Zero;
-
-        if (Volatile.Read(ref _initialized) == 0)
-            return Fail("mfp_initialize has not been called", ErrNotInitialized);
-        if (utf8Path is null)
-            return Fail("path is null", ErrInvalidArg);
-
-        var path = Marshal.PtrToStringUTF8((IntPtr)utf8Path);
-        if (string.IsNullOrEmpty(path))
-            return Fail("path is empty", ErrInvalidArg);
-
-        try
-        {
-            if (!PlayerInstance.TryOpen(path, withVideoWindow != 0, audioDeviceIndex, out var instance, out var error)
-                || instance is null)
+            SessionBox[] live;
+            lock (s_handleGate)
             {
-                return Fail(error ?? "open failed", ErrOpenFailed);
+                live = s_handles.Values.ToArray();
+                s_handles.Clear();
             }
-
-            *outHandle = Handles.Alloc(instance);
-            return Ok;
+            foreach (var box in live)
+            {
+                try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                catch { /* teardown best-effort */ }
+                box.Host.Dispose(); // release native runtime holds (NXT-05)
+            }
+            s_initialized = false;
+            FreeLastErrorNative();
         }
-        catch (Exception ex)
-        {
-            return Fail(ex, ErrOpenFailed);
-        }
+        catch { /* no-throw boundary across the ABI */ }
     }
 
-    /// <summary>Closes a player handle and frees its resources. Safe to call with a null handle.</summary>
-    [UnmanagedCallersOnly(EntryPoint = "mfp_close")]
-    public static void Close(IntPtr handle) => Handles.Free(handle, dispose: true);
+    [UnmanagedCallersOnly(EntryPoint = "mfp_abi_version")]
+    private static uint AbiVersion() => 1u;
 
-    // --- transport -------------------------------------------------------------------------------
-
-    [UnmanagedCallersOnly(EntryPoint = "mfp_play")]
-    public static int Play(IntPtr handle) => Invoke(handle, static p => p.Play());
-
-    [UnmanagedCallersOnly(EntryPoint = "mfp_pause")]
-    public static int Pause(IntPtr handle) => Invoke(handle, static p => p.Pause());
-
-    [UnmanagedCallersOnly(EntryPoint = "mfp_seek")]
-    public static int Seek(IntPtr handle, long positionTicks)
-    {
-        if (positionTicks < 0)
-            return Fail("positionTicks must be >= 0", ErrInvalidArg);
-        return Invoke(handle, p => p.Seek(TimeSpan.FromTicks(positionTicks)));
-    }
-
-    // --- queries (return the value directly; sentinel on bad handle) -----------------------------
-
-    /// <summary>Current playhead in ticks, or -1 on an invalid handle.</summary>
-    [UnmanagedCallersOnly(EntryPoint = "mfp_get_position_ticks")]
-    public static long GetPositionTicks(IntPtr handle) =>
-        Resolve(handle) is { } p ? p.PositionTicks : -1L;
-
-    /// <summary>Media duration in ticks (0 for live / unknown), or -1 on an invalid handle.</summary>
-    [UnmanagedCallersOnly(EntryPoint = "mfp_get_duration_ticks")]
-    public static long GetDurationTicks(IntPtr handle) =>
-        Resolve(handle) is { } p ? p.DurationTicks : -1L;
-
-    /// <summary>Playback state (see <see cref="PlayerState"/>), or -1 on an invalid handle.</summary>
-    [UnmanagedCallersOnly(EntryPoint = "mfp_get_state")]
-    public static int GetState(IntPtr handle) =>
-        Resolve(handle) is { } p ? (int)p.State : -1;
-
-    /// <summary>1 when the media has played to its end, 0 otherwise, -1 on an invalid handle.</summary>
-    [UnmanagedCallersOnly(EntryPoint = "mfp_is_ended")]
-    public static int IsEnded(IntPtr handle) =>
-        Resolve(handle) is { } p ? (p.IsEnded ? 1 : 0) : -1;
-
-    // --- diagnostics -----------------------------------------------------------------------------
-
-    /// <summary>
-    /// Copies the calling thread's last error message (UTF-8, NUL-terminated) into <paramref name="buffer"/>
-    /// and returns the byte length that was needed (excluding the NUL). Pass a null buffer / 0 length to
-    /// query the required size first. Returns 0 when there is no error.
-    /// </summary>
+    /// <summary>The last error string for the calling thread, or "" if none. The returned pointer is owned by
+    /// the library and is valid <strong>only until the next <c>mfp_*</c> call on this thread</strong> (it is
+    /// freed and re-issued on each call) — C callers must copy it immediately (NXT-17). Never throws.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_last_error")]
-    public static int LastError(byte* buffer, int bufferLen)
+    private static byte* LastError()
     {
-        var msg = _lastError;
-        if (string.IsNullOrEmpty(msg))
+        try
         {
-            if (buffer is not null && bufferLen > 0)
-                buffer[0] = 0;
+            FreeLastErrorNative();
+            s_lastErrorNative = Marshal.StringToCoTaskMemUTF8(s_lastError ?? string.Empty);
+            return (byte*)s_lastErrorNative;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ----------------------------------------------------------------- session ---------------------
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_create")]
+    private static nint SessionCreate()
+    {
+        if (!s_initialized)
+        {
+            SetLastError("mfp_initialize() has not been called.");
             return 0;
         }
 
-        var encoded = Encoding.UTF8.GetBytes(msg);
-        if (buffer is null || bufferLen <= 0)
-            return encoded.Length;
-
-        // Copy as much as fits, always leaving room for the NUL terminator. A truncated message may clip a
-        // multi-byte sequence at the very end, which is harmless for a NUL-terminated diagnostic string.
-        var copy = Math.Min(encoded.Length, bufferLen - 1);
-        encoded.AsSpan(0, copy).CopyTo(new Span<byte>(buffer, copy));
-        buffer[copy] = 0;
-        return encoded.Length;
-    }
-
-    // --- helpers ---------------------------------------------------------------------------------
-
-    private static int Invoke(IntPtr handle, Action<PlayerInstance> action)
-    {
-        var instance = Resolve(handle);
-        if (instance is null)
-            return Fail("invalid player handle", ErrInvalidHandle);
         try
         {
-            action(instance);
-            return Ok;
+            var host = MediaHost.Build(b => b.Use(new FFmpegModule()).Use(new PortAudioModule()));
+
+            // Headless by default — a show runner that drives transport + composition without owning an audio device
+            // (CI-safe, no flaky-ALSA/device dependency). Audio-out on a real backend is a later create-with-audio option.
+            var session = new ShowSession(host.Registry, audioBackend: null);
+
+            var box = new SessionBox { Session = session, Host = host };
+            ClearLastError();
+            return RegisterSession(box);
         }
         catch (Exception ex)
         {
-            return Fail(ex, ErrGeneric);
+            SetLastError($"mfp_session_create failed: {ex}");
+            return 0;
         }
     }
 
-    private static PlayerInstance? Resolve(IntPtr handle) => Handles.Resolve<PlayerInstance>(handle);
-
-    private static int Fail(string message, int code)
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_destroy")]
+    private static void SessionDestroy(nint session)
     {
-        _lastError = message;
-        return code;
+        try
+        {
+            if (!TryRemove(session, out var box))
+                return; // unknown / already-destroyed handle → idempotent no-op (no throw, no double-free)
+            try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch { /* teardown is best-effort */ }
+            box.Host.Dispose(); // release the session's PortAudio/NDI runtime holds (NXT-05)
+        }
+        catch { /* no-throw boundary across the ABI */ }
     }
 
-    private static int Fail(Exception ex, int code)
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_load_show")]
+    private static int SessionLoadShow(nint session, byte* showJson)
     {
-        _lastError = ex.Message;
-        MediaDiagnostics.LogError(ex, "S.Media.Interop");
-        return code;
+        if (!TryResolve(session, out var box))
+            return MfpErrInvalidHandle;
+        try
+        {
+            var json = Utf8(showJson);
+            box.Session.LoadDocument(ShowDocument.FromJson(json));
+            ClearLastError();
+            return MfpOk;
+        }
+        catch (Exception ex)
+        {
+            SetLastError($"mfp_session_load_show failed: {ex}");
+            return MfpErrLoadFailed;
+        }
+    }
+
+    // ----------------------------------------------------------------- transport -------------------
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_go")]
+    private static int SessionGo(nint session, byte* groupId) =>
+        Run(session, groupId, static (s, g) =>
+            (g is null ? s.GoAsync() : s.GoAsync(g)).GetAwaiter().GetResult());
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_fire_cue")]
+    private static int SessionFireCue(nint session, byte* cueId)
+    {
+        if (!TryResolve(session, out var box))
+            return MfpErrInvalidHandle;
+        var id = Utf8(cueId);
+        if (string.IsNullOrEmpty(id))
+            return MfpErrInvalidArg;
+        return Run(box, () => box.Session.FireCueAsync(id).GetAwaiter().GetResult());
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_seek")]
+    private static int SessionSeek(nint session, long positionTicks, byte* groupId) =>
+        Run(session, groupId, (s, g) =>
+            (g is null ? s.SeekAsync(TimeSpan.FromTicks(positionTicks)) : s.SeekAsync(TimeSpan.FromTicks(positionTicks), g))
+            .GetAwaiter().GetResult());
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_stop")]
+    private static int SessionStop(nint session, byte* groupId) =>
+        Run(session, groupId, static (s, g) =>
+            (g is null ? s.StopAsync() : s.StopAsync(g)).GetAwaiter().GetResult());
+
+    // ----------------------------------------------------------------- query -----------------------
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_position_ticks")]
+    private static long SessionPositionTicks(nint session, byte* groupId) =>
+        Snapshot(session, groupId, static s => s.ClipPosition.Ticks, MfpErrInvalidHandle);
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_duration_ticks")]
+    private static long SessionDurationTicks(nint session, byte* groupId) =>
+        Snapshot(session, groupId, static s => s.ClipDuration.Ticks, MfpErrInvalidHandle);
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_state")]
+    private static int SessionState(nint session, byte* groupId) =>
+        (int)Snapshot(session, groupId, static s => (long)(s.IsRunning ? MfpStatePlaying : MfpStateIdle), MfpErrInvalidHandle);
+
+    // ----------------------------------------------------------------- cues ------------------------
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_cue_count")]
+    private static int SessionCueCount(nint session)
+    {
+        if (!TryResolve(session, out var box))
+            return MfpErrInvalidHandle;
+        try
+        {
+            var count = box.Session.GetCueDefinitionsAsync().GetAwaiter().GetResult().Count;
+            ClearLastError();
+            return count;
+        }
+        catch (Exception ex)
+        {
+            SetLastError(ex.ToString());
+            return MfpErrGeneric;
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_session_cue_id")]
+    private static int SessionCueId(nint session, int index, byte* outBuf, int outCapacity)
+    {
+        if (!TryResolve(session, out var box))
+            return MfpErrInvalidHandle;
+        if (outBuf == null || outCapacity <= 0)
+            return MfpErrInvalidArg;
+        try
+        {
+            var cues = box.Session.GetCueDefinitionsAsync().GetAwaiter().GetResult();
+            if (index < 0 || index >= cues.Count)
+            {
+                SetLastError($"cue index {index} out of range [0,{cues.Count}).");
+                return MfpErrInvalidArg;
+            }
+            var bytes = System.Text.Encoding.UTF8.GetBytes(cues[index].Id);
+            if (bytes.Length + 1 > outCapacity)
+            {
+                SetLastError($"buffer too small for cue id ({bytes.Length + 1} > {outCapacity}).");
+                return MfpErrInvalidArg;
+            }
+            var dst = new Span<byte>(outBuf, outCapacity);
+            bytes.CopyTo(dst);
+            dst[bytes.Length] = 0; // NUL-terminate
+            ClearLastError();
+            return MfpOk;
+        }
+        catch (Exception ex)
+        {
+            SetLastError(ex.ToString());
+            return MfpErrGeneric;
+        }
+    }
+
+    // ----------------------------------------------------------------- helpers ---------------------
+
+    private static int Run(nint session, byte* groupId, Action<ShowSession, string?> action)
+    {
+        if (!TryResolve(session, out var box))
+            return MfpErrInvalidHandle;
+        var g = Utf8(groupId);
+        return Run(box, () => action(box.Session, string.IsNullOrEmpty(g) ? null : g));
+    }
+
+    private static int Run(SessionBox box, Action body)
+    {
+        try
+        {
+            body();
+            ClearLastError();
+            return MfpOk;
+        }
+        catch (Exception ex)
+        {
+            SetLastError(ex.ToString());
+            return MfpErrGeneric;
+        }
+    }
+
+    private static long Snapshot(nint session, byte* groupId, Func<TransportSnapshot, long> pick, long onBadHandle)
+    {
+        if (!TryResolve(session, out var box))
+            return onBadHandle;
+        try
+        {
+            var g = Utf8(groupId);
+            var snaps = box.Session.SnapshotAsync().GetAwaiter().GetResult();
+            var snap = string.IsNullOrEmpty(g)
+                ? (snaps.Count > 0 ? snaps[0] : null)
+                : snaps.FirstOrDefault(x => x.GroupId == g);
+            ClearLastError();
+            return snap is null ? 0 : pick(snap);
+        }
+        catch (Exception ex)
+        {
+            SetLastError(ex.ToString());
+            return MfpErrGeneric;
+        }
+    }
+
+    private static nint RegisterSession(SessionBox box)
+    {
+        lock (s_handleGate)
+        {
+            var handle = ++s_nextHandle; // monotonic, never reused → a freed token can never alias a live one
+            s_handles[handle] = box;
+            return handle;
+        }
+    }
+
+    /// <summary>Resolves a caller-supplied handle to its session by table lookup. Never dereferences the token
+    /// as a pointer, so a stale/garbage/double-freed handle is rejected safely instead of throwing across the
+    /// unmanaged boundary (NXT-08).</summary>
+    private static bool TryResolve(nint session, [NotNullWhen(true)] out SessionBox? box)
+    {
+        box = null;
+        if (!s_initialized)
+        {
+            SetLastError("mfp_initialize() has not been called.");
+            return false;
+        }
+        if (session == 0)
+        {
+            SetLastError("null session handle.");
+            return false;
+        }
+        lock (s_handleGate)
+            if (s_handles.TryGetValue(session, out box))
+                return true;
+        SetLastError("invalid or stale session handle.");
+        return false;
+    }
+
+    /// <summary>Atomically removes a handle from the table (for destruction). Returns false for an unknown or
+    /// already-removed handle, so double-destroy is a safe no-op. Does not gate on initialization so a session
+    /// can always be torn down.</summary>
+    private static bool TryRemove(nint session, [NotNullWhen(true)] out SessionBox? box)
+    {
+        box = null;
+        if (session == 0)
+            return false;
+        lock (s_handleGate)
+            return s_handles.Remove(session, out box);
+    }
+
+    private static string Utf8(byte* p) => p == null ? string.Empty : Marshal.PtrToStringUTF8((nint)p) ?? string.Empty;
+    private static void SetLastError(string message) => s_lastError = message;
+    private static void ClearLastError() => s_lastError = null;
+
+    private static void FreeLastErrorNative()
+    {
+        if (s_lastErrorNative != 0)
+        {
+            Marshal.FreeCoTaskMem(s_lastErrorNative);
+            s_lastErrorNative = 0;
+        }
     }
 }

@@ -1,8 +1,8 @@
 using System.Threading;
 using HaPlay.Playback;
 using S.Media.Core.Video;
-using S.Media.Effects;
-using S.Media.Playback;
+using S.Media.Compositor;
+using S.Media.Session;
 using Xunit;
 
 namespace HaPlay.Tests;

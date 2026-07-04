@@ -44,13 +44,13 @@ public sealed class EditDialogViewModelTests
         var id = Guid.NewGuid();
         var parentId = Guid.NewGuid();
         var parent = new LocalVideoOutputDefinition(
-            parentId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.FullScreen,
+            parentId, "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.FullScreen,
             ScreenIndex: 0, WindowWidth: null, WindowHeight: null);
         // Real flow: ShowEditLocalVideoAsync calls InitializeCloneParents before LoadFromExisting so
         // the dropdown can resolve the saved CloneOfId to a choice. Mirror that here.
         vm.InitializeCloneParents([parent]);
         vm.LoadFromExisting(new LocalVideoOutputDefinition(
-            id, "Clone", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            id, "Clone", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
             ScreenIndex: 0, WindowWidth: 640, WindowHeight: 360, CloneOfId: parentId));
 
         // User changes the display name only.
@@ -100,7 +100,7 @@ public sealed class EditDialogViewModelTests
         // Project file references a parent that no longer exists — dialog should degrade gracefully to
         // "None — independent output" so the user can either pick another parent or save as standalone.
         var saved = new LocalVideoOutputDefinition(
-            Guid.NewGuid(), "OrphanedClone", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            Guid.NewGuid(), "OrphanedClone", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
             ScreenIndex: 0, WindowWidth: 320, WindowHeight: 240, CloneOfId: Guid.NewGuid());
         vm.LoadFromExisting(saved);
 
