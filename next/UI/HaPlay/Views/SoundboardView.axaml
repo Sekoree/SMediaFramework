@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
              xmlns:views="using:HaPlay.Views"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -34,7 +35,9 @@
       <Setter Property="BorderBrush" Value="#7FDAAA3A" />
     </Style>
     <Style Selector="Border.tile.selected">
-      <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColor}" />
+      <!-- Classic Highlight — the old SystemAccentColor was a Fluent resource that no longer resolves. -->
+      <Setter Property="BorderBrush" Value="{DynamicResource {x:Static common:SystemColors.HighlightBrushKey}}" />
+      <Setter Property="BorderThickness" Value="2" />
     </Style>
   </UserControl.Styles>
 
@@ -81,9 +84,9 @@
       <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="8">
 
-          <!-- Selected tile -->
-          <TextBlock Text="{x:Static res:Strings.SoundboardTileSettingsHeader}"
-                     FontWeight="SemiBold" FontSize="14" />
+          <!-- Selected tile (classic group box) -->
+          <HeaderedContentControl Header="{x:Static res:Strings.SoundboardTileSettingsHeader}">
+           <StackPanel Spacing="6">
           <TextBlock Text="{x:Static res:Strings.SoundboardNoTileSelectedHint}"
                      TextWrapping="Wrap" Opacity="0.6"
                      IsVisible="{Binding SelectedTile, Converter={x:Static ObjectConverters.IsNull}}" />
@@ -134,12 +137,11 @@
             <Button Content="{x:Static res:Strings.SoundboardClearTileButton}"
                     Command="{Binding ClearSelectedTileCommand}" />
           </StackPanel>
+           </StackPanel>
+          </HeaderedContentControl>
 
-          <Separator Margin="0,4" />
-
-          <!-- Board settings + defaults -->
-          <TextBlock Text="{x:Static res:Strings.SoundboardBoardSettingsHeader}"
-                     FontWeight="SemiBold" FontSize="14" />
+          <!-- Board settings + defaults (classic group box) -->
+          <HeaderedContentControl Header="{x:Static res:Strings.SoundboardBoardSettingsHeader}" Margin="0,4,0,0">
           <StackPanel Spacing="6" IsVisible="{Binding SelectedBoard, Converter={x:Static ObjectConverters.IsNotNull}}">
             <TextBlock Text="{x:Static res:Strings.SoundboardBoardNameLabel}" Opacity="0.7" FontSize="11" />
             <TextBox Text="{Binding SelectedBoard.Name, Mode=TwoWay}" />
@@ -203,11 +205,13 @@
                       Command="{Binding ImportBoardsCommand}" />
             </WrapPanel>
           </StackPanel>
+          </HeaderedContentControl>
         </StackPanel>
       </ScrollViewer>
     </Border>
 
-    <!-- Tile grid. -->
+    <!-- Tile grid — one classic group box per board, headed by the board's name. -->
+    <HeaderedContentControl Header="{Binding SelectedBoard.Name}" Padding="6">
     <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}">
       <ItemsControl.ItemsPanel>
         <ItemsPanelTemplate>
@@ -221,10 +225,16 @@
                   Classes.playing="{Binding IsPlaying}"
                   Classes.fading="{Binding IsFading}"
                   Classes.editing="{Binding IsEditing}"
-                  Classes.selected="{Binding $parent[ItemsControl].((vm:SoundboardWorkspaceViewModel)DataContext).SelectedTile,
-                                     Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
                   Margin="3" CornerRadius="0" BorderThickness="1.5" MinHeight="84"
                   Tapped="OnTileTapped">
+            <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal selected-highlight
+                 never matched — compare via MultiBinding instead. -->
+            <Classes.selected>
+              <MultiBinding Converter="{x:Static views:AllEqualConverter.Instance}">
+                <Binding Path="$parent[ItemsControl].((vm:SoundboardWorkspaceViewModel)DataContext).SelectedTile" />
+                <Binding />
+              </MultiBinding>
+            </Classes.selected>
             <Border.ContextMenu>
               <ContextMenu>
                 <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
@@ -274,5 +284,6 @@
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+    </HeaderedContentControl>
   </DockPanel>
 </UserControl>

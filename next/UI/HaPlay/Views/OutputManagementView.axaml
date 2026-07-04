@@ -13,7 +13,7 @@
     <Style Selector="Border.card">
       <Setter Property="BorderBrush" Value="#22808080" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="CornerRadius" Value="0" />
       <Setter Property="Padding" Value="6" />
       <Setter Property="Background" Value="#08808080" />
     </Style>

@@ -106,6 +106,105 @@ public sealed class SoundboardViewModelTests
         Assert.Equal([tile.Id], stopped);
     }
 
+    /// <summary>The "tile with a fade-out never plays again" regression: a fade-out releases its
+    /// engine voice WITHOUT a VoiceEnded event, so the host must reset the tile (the coordinator's
+    /// voice-poll reconciliation / stop wrappers call OnSoundEnded). Once reset, a tap PLAYS again —
+    /// before the fix the tile sat in the fading state forever and every tap tried to stop it.</summary>
+    [Fact]
+    public async Task FadedOutTile_AfterHostReset_PlaysAgain()
+    {
+        var (vm, board) = CreateWorkspace();
+        var tile = BindTile(vm, board);
+        tile.FadeOutMs = 500;
+        var played = new List<Guid>();
+        vm.PlaySoundCallback = req => { played.Add(req.TileId); return Task.FromResult<string?>(null); };
+        vm.FadeOutSoundCallback = _ => Task.CompletedTask;
+
+        vm.OnSoundStarted(tile.Id);
+        await vm.TapTileAsync(tile); // second tap: starts the fade
+        Assert.True(tile.IsFading);
+
+        vm.OnSoundEnded(tile.Id); // the fade ramp released the voice — host reconciliation resets the tile
+        Assert.False(tile.IsPlaying);
+        Assert.False(tile.IsFading);
+
+        await vm.TapTileAsync(tile); // next tap must PLAY, not try to stop a dead voice
+        Assert.Equal([tile.Id], played);
+    }
+
+    [Fact]
+    public async Task StopAll_ResetsEveryTilesPlaybackState()
+    {
+        var (vm, board) = CreateWorkspace();
+        var a = BindTile(vm, board, index: 0);
+        var b = BindTile(vm, board, index: 1, path: "/tmp/Stinger Two.wav");
+        vm.OnSoundStarted(a.Id);
+        vm.OnSoundStarted(b.Id);
+
+        vm.OnAllSoundsEnded();
+
+        Assert.False(a.IsPlaying);
+        Assert.False(b.IsPlaying);
+        await Task.CompletedTask;
+    }
+
+    /// <summary>The "board settings not retained" regression: RefreshOutputOptions used to Clear()
+    /// the live ComboBox ItemsSources, which dropped the selection and wrote Guid.Empty back through
+    /// the TwoWay SelectedValue binding — wiping the board default output on every edit-mode entry
+    /// and output-list change. The merge keeps unchanged entries in place.</summary>
+    [Fact]
+    public void RefreshOutputOptions_DoesNotChurnUnchangedEntries()
+    {
+        var (vm, _) = CreateWorkspace();
+        vm.RefreshOutputOptions();
+        var tileBefore = vm.TileOutputOptions.ToList();
+        var boardBefore = vm.BoardOutputOptions.ToList();
+
+        var resets = 0;
+        vm.BoardOutputOptions.CollectionChanged += (_, e) =>
+        {
+            if (e.Action is System.Collections.Specialized.NotifyCollectionChangedAction.Reset
+                or System.Collections.Specialized.NotifyCollectionChangedAction.Remove)
+                resets++;
+        };
+
+        vm.RefreshOutputOptions(); // unchanged output set — must not remove/reset anything
+
+        Assert.Equal(0, resets);
+        Assert.Equal(tileBefore, vm.TileOutputOptions);
+        Assert.Equal(boardBefore, vm.BoardOutputOptions);
+    }
+
+    /// <summary>Board-level settings (grid size + tile defaults) must survive the project JSON
+    /// round-trip even when the board has no bound tiles and was never saved to a .haplayboards file.</summary>
+    [Fact]
+    public void BoardSettings_RoundTrip_ThroughProjectJson()
+    {
+        var (vm, board) = CreateWorkspace();
+        var defaultOutput = Guid.NewGuid();
+        board.Name = "FX board";
+        board.Rows = 3;
+        board.Columns = 5;
+        board.DefaultOutputLineId = defaultOutput;
+        board.DefaultVolume = 0.42;
+        board.DefaultFadeOutMs = 1250;
+        board.DefaultLoop = true;
+
+        var project = new HaPlayProject { Soundboards = { vm.BuildSnapshot()[0] } };
+        var loadedProject = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+
+        var restored = new SoundboardWorkspaceViewModel();
+        restored.ApplySnapshot(loadedProject.Soundboards);
+        var loaded = Assert.Single(restored.Boards);
+        Assert.Equal("FX board", loaded.Name);
+        Assert.Equal(3, loaded.Rows);
+        Assert.Equal(5, loaded.Columns);
+        Assert.Equal(defaultOutput, loaded.DefaultOutputLineId);
+        Assert.Equal(0.42, loaded.DefaultVolume, precision: 6);
+        Assert.Equal(1250, loaded.DefaultFadeOutMs);
+        Assert.True(loaded.DefaultLoop);
+    }
+
     [Fact]
     public async Task Tap_WhilePlayingWithoutFade_StopsImmediately()
     {

@@ -727,13 +727,10 @@
         <!-- Phase 5.3 — Now Playing panel: active cues (with progress + per-cue ✕) and the
              upcoming-queue preview. Width set generously so the operator can shrink via the
              splitter; multi-cue groups need room. -->
-        <Border Grid.Column="2" BorderBrush="#33808080" BorderThickness="1,0,0,0" Padding="6,4">
+        <HeaderedContentControl Grid.Column="2" Margin="4,0,0,0" Padding="6,4"
+                                Header="{x:Static res:Strings.NowPlayingHeader}">
           <DockPanel LastChildFill="True">
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
-              <TextBlock Grid.Column="0"
-                         Text="{x:Static res:Strings.NowPlayingHeader}"
-                         FontWeight="SemiBold"
-                         VerticalAlignment="Center" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                 <ToggleButton Classes="Dense"
                               IsChecked="{Binding NowPlayingSeekUnlocked}"
@@ -845,7 +842,7 @@
             </ItemsControl>
             </ScrollViewer>
           </DockPanel>
-        </Border>
+        </HeaderedContentControl>
       </Grid>
     </DockPanel>
   </DockPanel>

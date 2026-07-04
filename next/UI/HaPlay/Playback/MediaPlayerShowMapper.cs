@@ -30,7 +30,8 @@ public static class MediaPlayerShowMapper
         IReadOnlyList<ShowClipAudioRoute>? audioRoutes = null,
         int canvasWidth = 1920,
         int canvasHeight = 1080,
-        IReadOnlyList<CueSubtitleSelection>? subtitles = null)
+        IReadOnlyList<CueSubtitleSelection>? subtitles = null,
+        bool loop = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
 
@@ -51,6 +52,9 @@ public static class MediaPlayerShowMapper
                     // fallback, which must never happen for the deck — so coerce to an empty list.
                     AudioRoutes = audioRoutes ?? [],
                     Subtitles = MapSubtitles(subtitles, hasVideo),
+                    // Deck "Loop" toggle at open time — the framework restarts the clip seamlessly at EOF.
+                    // A loop toggled ON mid-play is honored by the deck's end-of-track poll instead (replay).
+                    Loop = loop,
                 },
             ],
             Compositions = hasVideo

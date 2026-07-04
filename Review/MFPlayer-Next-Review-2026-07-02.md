@@ -1107,6 +1107,82 @@ SessionSmoke exit 0; headless app launch clean):
    GainDb 0.# and the MMD camera doubles left free-form). Sln 1,519/0; HAPLAY_SMOKE exit 0;
    screenshots confirm antialiased text, centered collapsed rail, and the labelled Player menu.
 
+44. **NIT ROUND 2 (operator feedback, 2026-07-04) — five bugs + two visual asks.** (a) POPUP MENUS
+   WHITE TEXT (the "⚙ Player" menu, Routing's "Add output" menu): root cause in the vendored theme —
+   `PopupRoot`/`OverlayPopupHost` take Foreground from `ThemeForegroundBrush`, whose Accents/Base.axaml
+   **Dark** ThemeDictionary is #DEDEDE; popup TopLevels don't reliably inherit the app's forced Light
+   variant on dark-mode systems, so popup content went near-white while in-window text stayed black.
+   Fixed at the source: the Dark dictionary is REMOVED (Classic is a light theme; Dark lookups fall
+   back to Default). (b) SET TABS NOT SWITCHABLE: the TabStrip header template was an always-editable
+   TextBox that swallowed every click — now a TextBlock (click selects) with double-click entering a
+   rename TextBox (Enter/Escape/blur commits; `PlaylistTabViewModel.IsRenaming`). (c) DECK LOOP: the
+   end-of-track poll honored AutoAdvance but never IsLooping → "just stops". `MediaPlayerShowMapper`
+   now carries `loop:` into the clip (seamless framework loop when ON at open) and the poll replays
+   the current item when loop was toggled ON mid-play; loop-current wins over auto-advance.
+   (d) SOUNDBOARD FADE-OUT KILLED THE TILE: `FadeVoiceAsync`/`StopVoiceAsync` release their voice
+   WITHOUT `VoiceEnded` (documented natural-end-only contract), so a faded tile stayed
+   IsPlaying/IsFading forever and every later tap tried to stop a dead voice. The coordinator now
+   tracks its active tiles, the voice-progress poll reconciles them against the session snapshot
+   (missing voice → reset tile), and the stop/stop-all wrappers reset immediately (+ new VM
+   `OnAllSoundsEnded`). (e) BOARD SETTINGS "NOT RETAINED": `RefreshOutputOptions` Clear()ed the LIVE
+   ComboBox ItemsSources — the emptied ComboBox dropped its selection and wrote `Guid.Empty` back
+   through the TwoWay SelectedValue binding, silently wiping the board default output on every
+   edit-mode entry AND every output-list change during project load. Now a value-equality MERGE that
+   leaves unchanged entries untouched. (JSON round-trip of board settings verified intact by a new
+   test — persistence was never the problem.) (f) SIDEBAR ACTIVE VIEW: the old
+   `Classes.selected` binding used `ConverterParameter={Binding}` which NEVER resolves (parameters
+   aren't bindable) — the highlight had silently never applied. New `AllEqualConverter` MultiBinding +
+   the classic pressed-toggle look (RaiseReversed bevel + DiagonalBrushLight dither). (g) GROUP
+   BOXES: playlist + routing (deck), Now Playing (cue player), tile/board settings (soundboard) are
+   now classic etched `HeaderedContentControl` group boxes. Tests: +4 (faded-tile replays after host
+   reset, stop-all resets, board-settings project-JSON round-trip, options-merge no-churn) →
+   1,523/0; HAPLAY_SMOKE exit 0; screenshots verify group boxes + the pressed sidebar state.
+
+45. **NIT ROUND 3 (operator, 2026-07-04): board group boxes + real set tabs.** (a) Each soundboard's
+   tile grid now sits in a classic etched group box HEADED BY THE BOARD'S NAME (HeaderedContentControl,
+   Header bound to SelectedBoard.Name); en route, the tile selected-highlight was found dead twice
+   over — the same unbindable `ConverterParameter={Binding}` pattern as the sidebar (item 44) AND a
+   Fluent-only `SystemAccentColor` resource that no longer resolves — replaced with the
+   AllEqualConverter MultiBinding + the classic Highlight brush. (b) The playlist SET tabs are now
+   real notebook tabs: a `PlaylistSetTabTheme` ControlTheme for TabStripItem mirroring the classic
+   TabItem template (ClassicBorderDecorator BorderStyle=TabTop, selected tab pops forward with
+   ZIndex + negative margin), with the strip PADDED so the pop isn't clipped and — the part that
+   actually makes tabs read as tabs — the strip moved to sit DIRECTLY on the playlist pane (a lone
+   TabTop tab floating on flat gray is nearly invisible: its white top/left bevel vanishes against
+   the Control color; investigation included a headless-Skia pixel probe that exonerated
+   programmatic PathGeometry). The set add/remove buttons moved to the header row above. Diagnostic
+   fact worth keeping: `CaptureRenderedFrame` + `TranslatePoint` in an `Avalonia.Headless`+Skia
+   file-based probe gives pixel-exact verification of template rendering. Sln green + smoke exit 0.
+
+46. **THE FLAKY TEST HANG — CAUGHT LIVE AND FIXED (2026-07-04).** The operator's long-standing
+   "test run gets stuck, I kill it" reproduced during item 45's verification (testhost idle 21 min).
+   Forensics: `dotnet-stack report` showed xunit waiting for the assembly run with ZERO test code on
+   any thread; `dotnet-dump` + `dumpasync` named the pending test
+   (`MediaPlayerRoutingConflictTests.Selecting_video_output_already_selected_on_another_player_can_be_cancelled`,
+   parked forever on its first await); `dumpheap`/`printexception` produced the smoking gun — an
+   `InvalidOperationException` "The calling thread cannot access this object because a different
+   thread owns it" thrown from `DefaultRenderLoop.Add` inside
+   `HeadlessUnitTestSession.EnsureIsolatedApplication`. MECHANISM: Avalonia binds
+   `Dispatcher.UIThread` to the FIRST thread that touches it, process-wide. When a plain VM test
+   (VMs call `Dispatcher.UIThread.Post` freely) ran before any session-based test, UIThread bound to
+   an xunit worker; the shared per-assembly `HeadlessUnitTestSession`'s first Dispatch then crashed
+   its own loop initializing the headless app — and with the session loop dead, every later
+   session-based test awaited forever. Test ORDER decides whether it happens, and xunit's collection
+   order shifts whenever tests are added/renamed — hence the years of on-again-off-again hangs.
+   FIX: `HeadlessSessionFramework` (custom xunit `TestFramework`, `HeadlessSessionBootstrap.cs`)
+   warms the session before any test so the platform initializes ON the session thread and UIThread
+   belongs to it from the start. (First attempt via `[ModuleInitializer]` DEADLOCKED — the session
+   thread must call this module's `BuildAvaloniaApp`, which the loader blocks until the initializer
+   returns; documented in the file.) EN ROUTE, the "2 failed" flake was captured too and was item
+   42's own regression: `WorkspaceItem`'s static icons forced `AppIcons`' type initializer, whose
+   `StreamGeometry.Parse` needs `IPlatformRenderInterface` — platform-free code paths (settings
+   migration tests) touching `WorkspaceItem` first got a `TypeInitializationException`. Both types
+   now resolve icons LAZILY (parse on first use, always on a platform-bearing UI thread).
+   Verified: 10 consecutive clean HaPlay.Tests runs + full sln 1,523/0 + HAPLAY_SMOKE exit 0; one
+   unreproduced single-run testhost startup error observed mid-hardening (framework-ctor invocation
+   fragment) — watch for recurrence. Diagnostic recipe recorded in the theme memory:
+   dotnet-stack/dotnet-dump (`dumpasync` → pending test, `printexception` → poison exception).
+
 ## Verification appendix
 
 ```bash
@@ -1139,6 +1215,12 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-cue-mmd-youtube (item 41, 2026-07-03): 1,519 passed / 0 failed / 2 skipped
 # post-visual-overhaul (item 42, 2026-07-03): 1,519 passed / 0 failed / 2 skipped; HAPLAY_SMOKE exit 0 (xvfb)
 # post-nitpick round (item 43, 2026-07-04): 1,519 passed / 0 failed / 2 skipped; HAPLAY_SMOKE exit 0
+# post-nit round 2 (item 44, 2026-07-04): 1,523 passed / 0 failed / 2 skipped; HAPLAY_SMOKE exit 0
+#   (one parallel-run flake of 2 HaPlay tests observed once, green standalone + on repeat — the standing
+#    load-sensitivity note from item 40 applies; --blame-hang recipe below still the capture tool)
+# post-nit round 3 + hang fix (items 45-46, 2026-07-04): 1,523 passed / 0 failed / 2 skipped;
+#   HAPLAY_SMOKE exit 0; HaPlay.Tests 10x consecutive clean (the hang + the 2-fail flake are FIXED —
+#   both were UIThread-binding order bugs, see item 46)
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

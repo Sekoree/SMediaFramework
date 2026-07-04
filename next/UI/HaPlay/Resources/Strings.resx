@@ -2692,6 +2692,9 @@
   <data name="PlayerMenuButtonLabel" xml:space="preserve">
     <value>Player</value>
   </data>
+  <data name="PlaylistGroupHeader" xml:space="preserve">
+    <value>Playlist</value>
+  </data>
   <data name="PlaylistPropertiesButtonTooltip" xml:space="preserve">
     <value>Details, tracks and per-kind settings for the selected playlist item</value>
   </data>

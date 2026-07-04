@@ -75,6 +75,10 @@ public sealed class CueShowSessionCoordinator
     // soundboard tile → its configured fade-out (ms), captured at play so FadeOutSound (tile-only) can use it.
     private readonly Dictionary<Guid, int> _soundboardFadeMs = new();
 
+    /// <summary>Tiles this host started whose voice may still be live — the progress poll reconciles
+    /// it against the session's voice snapshot to catch releases that raise no VoiceEnded (fade-outs).</summary>
+    private readonly HashSet<Guid> _soundboardActiveTiles = new();
+
     public CueShowSessionCoordinator(
         CuePlayerViewModel cuePlayer,
         SoundboardWorkspaceViewModel soundboard,
@@ -381,6 +385,7 @@ public sealed class CueShowSessionCoordinator
                         .FirstOrDefault(d => d.Id == req.OutputLineId)?.EffectiveAudioBackendDeviceId;
                     _soundboardFadeMs[req.TileId] = req.FadeOutMs;
                     await _cueShowSession!.FireVoiceAsync(req.TileId.ToString(), req.FilePath, device, (float)req.Volume);
+                    _soundboardActiveTiles.Add(req.TileId);
                     Soundboard.OnSoundStarted(req.TileId);
                     StartSoundboardProgressPoll(); // drive per-tile countdown from the session's voice playheads
                     return null;
@@ -390,15 +395,34 @@ public sealed class CueShowSessionCoordinator
                     return ex.Message;
                 }
             };
-            Soundboard.StopSoundCallback = id => _cueShowSession!.StopVoiceAsync(id.ToString());
-            Soundboard.StopAllSoundsCallback = () => _cueShowSession!.StopAllVoicesAsync();
+            // Explicit stop/fade paths release their voice WITHOUT a VoiceEnded event (the framework's
+            // documented contract — VoiceEnded is natural-end only). The tile state must therefore be
+            // reset host-side: immediately on explicit stops, and via the progress poll for fade-outs
+            // (whose release lands asynchronously when the ramp reaches silence). Without this a
+            // faded/stopped tile stayed IsPlaying/IsFading forever and could never be re-triggered.
+            Soundboard.StopSoundCallback = async id =>
+            {
+                await _cueShowSession!.StopVoiceAsync(id.ToString()).ConfigureAwait(true);
+                _soundboardActiveTiles.Remove(id);
+                Soundboard.OnSoundEnded(id);
+            };
+            Soundboard.StopAllSoundsCallback = async () =>
+            {
+                await _cueShowSession!.StopAllVoicesAsync().ConfigureAwait(true);
+                _soundboardActiveTiles.Clear();
+                Soundboard.OnAllSoundsEnded();
+            };
             Soundboard.SetSoundVolumeCallback = (id, vol) => _ = _cueShowSession!.SetVoiceVolumeAsync(id.ToString(), (float)vol);
             Soundboard.FadeOutSoundCallback = id =>
                 _cueShowSession!.FadeVoiceAsync(id.ToString(), TimeSpan.FromMilliseconds(_soundboardFadeMs.GetValueOrDefault(id)));
             _cueShowSession.VoiceEnded += id =>
             {
                 if (Guid.TryParse(id, out var tileId))
-                    Dispatcher.UIThread.Post(() => Soundboard.OnSoundEnded(tileId));
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        _soundboardActiveTiles.Remove(tileId);
+                        Soundboard.OnSoundEnded(tileId);
+                    });
             };
 
             // A cue clip's NATURAL end (out-point stop / fade-out completed — never an operator stop) drives
@@ -790,6 +814,23 @@ public sealed class CueShowSessionCoordinator
                 return;
             }
             var voices = await _cueShowSession.GetVoiceProgressAsync().ConfigureAwait(true);
+
+            // Reconcile: any tile we started whose voice is gone ended WITHOUT a VoiceEnded event —
+            // that's how fade-outs finish (the ramp releases the voice silently). Reset those tiles
+            // here or they stay stuck in the playing/fading state and can never be re-triggered.
+            if (_soundboardActiveTiles.Count > 0)
+            {
+                var live = new HashSet<Guid>();
+                foreach (var v in voices)
+                    if (Guid.TryParse(v.VoiceId, out var liveId))
+                        live.Add(liveId);
+                foreach (var tileId in _soundboardActiveTiles.Where(t => !live.Contains(t)).ToArray())
+                {
+                    _soundboardActiveTiles.Remove(tileId);
+                    Soundboard.OnSoundEnded(tileId);
+                }
+            }
+
             if (voices.Count == 0)
             {
                 _soundboardProgressPoll?.Stop();

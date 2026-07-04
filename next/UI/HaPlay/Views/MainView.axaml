@@ -8,6 +8,7 @@
              xmlns:res="using:HaPlay.Resources"
              xmlns:views="using:HaPlay.Views"
              xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
+             xmlns:theme="clr-namespace:Classic.Avalonia.Theme;assembly=Classic.Avalonia.Theme"
              xmlns:controls="using:HaPlay.Views.Controls"
              mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
              x:Class="HaPlay.Views.MainView"
@@ -21,9 +22,14 @@
       <Setter Property="Margin" Value="4,2" />
       <Setter Property="Background" Value="Transparent" />
     </Style>
+    <!-- Active workspace = the classic pressed-toggle look (sunken bevel + dither), so the sidebar
+         clearly shows which view is selected. -->
     <Style Selector="Button.sidebar.selected">
-      <Setter Property="Background" Value="#22808080" />
       <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.sidebar.selected /template/ theme|ClassicBorderDecorator#ContentContainer">
+      <Setter Property="BorderStyle" Value="RaiseReversed" />
+      <Setter Property="Background" Value="{DynamicResource DiagonalBrushLight}" />
     </Style>
     <!-- Collapsed rail: icon-only buttons center their glyph instead of hugging the left edge. -->
     <Style Selector="Button.sidebar.collapsed">
@@ -126,12 +132,18 @@
           <ItemsControl.ItemTemplate>
             <DataTemplate DataType="models:WorkspaceItem">
               <Button Classes.sidebar="True"
-                      Classes.selected="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectedWorkspace,
-                                         Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
                       Classes.collapsed="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SidebarCollapsed}"
                       Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectWorkspaceCommand}"
                       CommandParameter="{Binding}"
                       ToolTip.Tip="{Binding Label}">
+                <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal approach never
+                     matched — the active workspace was never highlighted. Compare via MultiBinding. -->
+                <Classes.selected>
+                  <MultiBinding Converter="{x:Static views:AllEqualConverter.Instance}">
+                    <Binding Path="$parent[ItemsControl].((vm:MainViewModel)DataContext).SelectedWorkspace" />
+                    <Binding />
+                  </MultiBinding>
+                </Classes.selected>
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <PathIcon Data="{Binding Icon}" Classes="sidebar-glyph" />
                   <TextBlock Text="{Binding Label}"

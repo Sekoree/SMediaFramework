@@ -113,13 +113,34 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
                         .ToList()
                     ?? [];
 
-        TileOutputOptions.Clear();
-        TileOutputOptions.Add(new SoundboardOutputOption(Guid.Empty, Strings.SoundboardBoardDefaultOutputLabel));
-        BoardOutputOptions.Clear();
-        foreach (var option in lines)
+        // MERGE, never Clear(): these collections are live ItemsSources of ComboBoxes whose
+        // SelectedValue binds TwoWay into board/tile output ids. Emptying the collection makes the
+        // ComboBox drop its selection and write Guid.Empty back through the binding — which silently
+        // WIPED the board default output (and tile overrides) every time this ran: on entering edit
+        // mode, and on every output-list change during project load ("board settings not retained").
+        MergeOptions(TileOutputOptions,
+            [new SoundboardOutputOption(Guid.Empty, Strings.SoundboardBoardDefaultOutputLabel), .. lines]);
+        MergeOptions(BoardOutputOptions, lines);
+    }
+
+    /// <summary>Reconciles <paramref name="target"/> to <paramref name="desired"/> with minimal
+    /// changes (records compare by value, so unchanged lines are left untouched and any bound
+    /// ComboBox selection survives).</summary>
+    private static void MergeOptions(
+        ObservableCollection<SoundboardOutputOption> target, IReadOnlyList<SoundboardOutputOption> desired)
+    {
+        for (var i = target.Count - 1; i >= 0; i--)
+            if (!desired.Contains(target[i]))
+                target.RemoveAt(i);
+        for (var i = 0; i < desired.Count; i++)
         {
-            TileOutputOptions.Add(option);
-            BoardOutputOptions.Add(option);
+            var existing = target.IndexOf(desired[i]);
+            if (existing == i)
+                continue;
+            if (existing >= 0)
+                target.Move(existing, i);
+            else
+                target.Insert(i, desired[i]);
         }
     }
 
@@ -257,6 +278,15 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
     }
 
     public void OnSoundEnded(Guid tileId) => FindTile(tileId)?.ResetPlaybackState();
+
+    /// <summary>Resets every tile's playback state — explicit stop-all, or the host's voice poll saw
+    /// the engine go silent (fade-outs release their voice without a VoiceEnded event).</summary>
+    public void OnAllSoundsEnded()
+    {
+        foreach (var board in Boards)
+            foreach (var tile in board.Tiles)
+                tile.ResetPlaybackState();
+    }
 
     // ----- Edit commands ----------------------------------------------------------------------------
 

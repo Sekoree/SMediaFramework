@@ -7,9 +7,41 @@
              xmlns:models="using:HaPlay.Models"
              xmlns:res="using:HaPlay.Resources"
              xmlns:controls="using:HaPlay.Views.Controls"
+             xmlns:theme="clr-namespace:Classic.Avalonia.Theme;assembly=Classic.Avalonia.Theme"
+             xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
              mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="720"
              x:Class="HaPlay.Views.MediaPlayerView"
              x:DataType="vm:MediaPlayerViewModel">
+
+    <UserControl.Resources>
+        <!-- Classic notebook-tab look for the playlist set strip. The stock TabStripItem theme is
+             flat text (TabStrip has no tab chrome), which made the sets unrecognizable as tabs —
+             this mirrors the classic TabItem template (TabTop bevel, selected tab pops forward). -->
+        <ControlTheme x:Key="PlaylistSetTabTheme" TargetType="TabStripItem">
+            <Setter Property="Padding" Value="10,3" />
+            <Setter Property="Background" Value="{DynamicResource {x:Static common:SystemColors.ControlBrushKey}}" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlTextBrushKey}}" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <theme:ClassicBorderDecorator x:Name="ClassicBorder"
+                                                  Background="{TemplateBinding Background}"
+                                                  BorderBrush="{x:Static theme:ClassicBorderDecorator.ClassicBorderBrush}"
+                                                  BorderStyle="TabTop"
+                                                  BorderThickness="2">
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Margin="{TemplateBinding Padding}"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </theme:ClassicBorderDecorator>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:selected">
+                <Setter Property="ZIndex" Value="1" />
+                <Setter Property="Margin" Value="-2,-2,-2,-1" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+        </ControlTheme>
+    </UserControl.Resources>
 
     <UserControl.Styles>
         <Style Selector="TextBlock.section-title">
@@ -33,13 +65,13 @@
         <Style Selector="Border.card">
             <Setter Property="BorderBrush" Value="#22808080" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="0" />
             <Setter Property="Padding" Value="12" />
             <Setter Property="Background" Value="#08808080" />
         </Style>
         <!-- Small rounded pills for the playback-state + source-kind indicators. -->
         <Style Selector="Border.chip">
-            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="CornerRadius" Value="0" />
             <Setter Property="Padding" Value="6,2" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
@@ -52,7 +84,7 @@
         <!-- Count badge on the Options button. -->
         <Style Selector="Border.badge">
             <Setter Property="Background" Value="#2E7D32" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="0" />
             <Setter Property="MinWidth" Value="16" />
             <Setter Property="Height" Value="16" />
             <Setter Property="Padding" Value="4,0" />
@@ -329,23 +361,22 @@
             </StackPanel>
         </Border>
 
-        <!-- ============ Routing summary strip (pinned bottom) ============ -->
-        <Border DockPanel.Dock="Bottom" Classes="strip">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RoutingSectionTitle}"
-                           FontWeight="SemiBold" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Opacity="0.7" VerticalAlignment="Center"
+        <!-- ============ Routing summary (pinned bottom, classic group box) ============ -->
+        <HeaderedContentControl DockPanel.Dock="Bottom" Margin="0,6,0,0" Padding="8,4"
+                                Header="{x:Static res:Strings.RoutingSectionTitle}">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Opacity="0.7" VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"
                            Text="{Binding RoutingSummary}" />
-                <Button Grid.Column="2"
+                <Button Grid.Column="1"
                         Content="{x:Static res:Strings.RoutingEditButton}"
                         Command="{Binding OpenRoutingCommand}"
                         ToolTip.Tip="{x:Static res:Strings.RoutingEditTooltip}" />
             </Grid>
-        </Border>
+        </HeaderedContentControl>
 
-        <!-- ============ Playlist (fills remaining height) ============ -->
-        <Border Classes="card">
+        <!-- ============ Playlist (fills remaining height, classic group box) ============ -->
+        <HeaderedContentControl Header="{x:Static res:Strings.PlaylistGroupHeader}" Margin="0,6,0,0">
             <DockPanel LastChildFill="True">
 
                 <!-- Tabs row + consolidated "+ Add" menu, with the selection actions (remove /
@@ -389,30 +420,53 @@
                         </Button.Flyout>
                     </Button>
 
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                  VerticalScrollBarVisibility="Disabled">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="32"
+                                VerticalAlignment="Center"
+                                Command="{Binding AddPlaylistTabCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
+                        <Button Content="{x:Static res:Strings.RemoveTabButton}" MinWidth="32"
+                                VerticalAlignment="Center"
+                                Command="{Binding RemovePlaylistTabCommand}" />
+                    </StackPanel>
+                </DockPanel>
+
+                <!-- Set tabs sit DIRECTLY on the playlist pane (ZIndex above it) so the selected
+                     notebook tab visually merges with the list below — a free-floating strip on flat
+                     gray showed almost no tab chrome. Padding absorbs the selected tab's pop-forward
+                     negative margin so the bevel isn't clipped at the strip bounds. -->
+                <ScrollViewer DockPanel.Dock="Top" ZIndex="1" Margin="4,0,0,0"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled">
                             <TabStrip ItemsSource="{Binding PlaylistTabs}"
-                                      SelectedItem="{Binding SelectedPlaylistTab}">
+                                      SelectedItem="{Binding SelectedPlaylistTab}"
+                                      Padding="3,3,3,0"
+                                      ItemContainerTheme="{StaticResource PlaylistSetTabTheme}">
+                                <TabStrip.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="2" />
+                                    </ItemsPanelTemplate>
+                                </TabStrip.ItemsPanel>
                                 <TabStrip.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PlaylistTabViewModel">
-                                        <TextBox Text="{Binding Name, Mode=TwoWay}"
-                                                 MinWidth="64"
-                                                 BorderThickness="0"
-                                                 Background="Transparent" />
+                                        <!-- Label by default (clicks select the tab); double-click swaps in
+                                             the rename box. The old always-editable TextBox ate every click,
+                                             making set tabs impossible to switch. -->
+                                        <Panel Background="Transparent"
+                                               DoubleTapped="OnPlaylistTabDoubleTapped">
+                                            <TextBlock Text="{Binding Name}" MinWidth="64"
+                                                       VerticalAlignment="Center" Padding="2,0"
+                                                       IsVisible="{Binding !IsRenaming}" />
+                                            <TextBox Text="{Binding Name, Mode=TwoWay}"
+                                                     MinWidth="64"
+                                                     IsVisible="{Binding IsRenaming}"
+                                                     LostFocus="OnPlaylistTabRenameLostFocus"
+                                                     KeyDown="OnPlaylistTabRenameKeyDown" />
+                                        </Panel>
                                     </DataTemplate>
                                 </TabStrip.ItemTemplate>
                             </TabStrip>
-                            <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="32"
-                                    VerticalAlignment="Center"
-                                    Command="{Binding AddPlaylistTabCommand}"
-                                    ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
-                            <Button Content="{x:Static res:Strings.RemoveTabButton}" MinWidth="32"
-                                    VerticalAlignment="Center"
-                                    Command="{Binding RemovePlaylistTabCommand}" />
-                        </StackPanel>
-                    </ScrollViewer>
-                </DockPanel>
+                </ScrollViewer>
 
                 <!-- Reorder hint (hidden when compact). -->
                 <TextBlock DockPanel.Dock="Bottom" Classes="hide-compact"
@@ -421,7 +475,7 @@
 
                 <!-- Drag-to-reorder via Xaml.Behaviors (ListBox.draggable from the package styles).
                      External OS file drops are handled in code-behind. -->
-                <ListBox Name="PlaylistListBox" Classes="draggable" MinHeight="160"
+                <ListBox Name="PlaylistListBox" Classes="draggable" MinHeight="160" Margin="0,-1,0,0"
                          ItemsSource="{Binding PlaylistItems}"
                          SelectedItem="{Binding SelectedPlaylistItem, Mode=TwoWay}"
                          DoubleTapped="OnPlaylistItemDoubleTapped"
@@ -471,6 +525,6 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
             </DockPanel>
-        </Border>
+        </HeaderedContentControl>
     </DockPanel>
 </UserControl>

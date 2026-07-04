@@ -902,6 +902,7 @@ public static class Strings
     public static string PlaylistRemoveButtonLabel => Get(nameof(PlaylistRemoveButtonLabel));
     public static string HoldImageDialogTitle => Get(nameof(HoldImageDialogTitle));
     public static string PlayerMenuButtonLabel => Get(nameof(PlayerMenuButtonLabel));
+    public static string PlaylistGroupHeader => Get(nameof(PlaylistGroupHeader));
     public static string PlaylistPropertiesButtonTooltip => Get(nameof(PlaylistPropertiesButtonTooltip));
     public static string MediaPropertiesAppliedStatusFormat => Get(nameof(MediaPropertiesAppliedStatusFormat));
     public static string MediaPropertiesDialogTitleFormat => Get(nameof(MediaPropertiesDialogTitleFormat));

@@ -207,7 +207,8 @@ public partial class MediaPlayerViewModel
             await _playerShowSession.LoadDocumentAsync(
                 MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
                     (item as FilePlaylistItem)?.Subtitles
-                        ?? (item as YouTubePlaylistItem)?.Subtitles)).ConfigureAwait(true);
+                        ?? (item as YouTubePlaylistItem)?.Subtitles,
+                    loop: IsLooping)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
@@ -810,7 +811,12 @@ public partial class MediaPlayerViewModel
                     ref _showSessionEndConfirmTicks))
             {
                 StopShowSessionPoll();
-                if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
+                // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches
+                // this branch (the clip's Loop flag restarts it seamlessly inside the session); this
+                // replay covers loop toggled ON mid-play, when the running clip predates the flag.
+                if (IsLooping && _currentPlaylistItem is { } current)
+                    await PlayPlaylistItemAsync(current).ConfigureAwait(true);
+                else if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
                     await PlayPlaylistItemAsync(next).ConfigureAwait(true);
                 else
                     await ShowSessionStopAsync().ConfigureAwait(true);
