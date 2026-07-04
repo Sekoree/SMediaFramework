@@ -17,7 +17,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.ViewModels;
 
@@ -27,7 +27,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
 
-    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+    public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     private volatile IReadOnlyList<OutputDefinition> _definitionsSnapshot = Array.Empty<OutputDefinition>();
 
@@ -38,13 +38,69 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// the thread pool (it is uncancellable and the UI thread may be busy, e.g. behind a modal file dialog).</summary>
     public IReadOnlyList<OutputDefinition> DefinitionsSnapshot => _definitionsSnapshot;
 
-    /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
-    /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
-    public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();
+    /// <summary>Acquires the real <see cref="IVideoOutput"/> for an output line so a playback engine can render
+    /// onto it — the ShowSession cue re-back's video-output seam (mirrors how the cue engine acquires outputs).
+    /// MUST be called on the UI thread (realizes the SDL window / NDI sender). Returns null for a non-video line
+    /// or one with no realized runtime.</summary>
+    public IVideoOutput? AcquireVideoOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return null;
+        if (_localPreviews.TryGetValue(line, out var local))
+            return local.AcquireForPlayback();
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                return ndi.AcquireForPlayback(needsVideo: true, needsAudio: false)?.Video;
+        return null;
+    }
 
-    /// <summary>§8.2 — pre-filtered view of <see cref="Outputs"/> exposing only PortAudio lines.
-    /// Refreshed every time <see cref="Outputs"/> changes so the shared-bus PA picker stays in sync.</summary>
-    public ObservableCollection<OutputLineViewModel> PortAudioOutputLines { get; } = new();
+    /// <summary>Releases a video output acquired via <see cref="AcquireVideoOutputForLine"/> (single-holder, so
+    /// the ShowSession cue re-back MUST release before re-acquiring on a reload, else the line stays held). UI
+    /// thread. No-op for an unknown/non-video line.</summary>
+    public void ReleaseVideoOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return;
+        if (_localPreviews.TryGetValue(line, out var local))
+        {
+            local.ReleaseFromPlayback();
+            return;
+        }
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                ndi.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
+    }
+
+    /// <summary>Acquires the AUDIO side of an NDI output line's carrier — the SAME sender that carries the
+    /// composition's video — so a ShowSession clip can route audio into that NDI stream (the ShowSession audio
+    /// re-back for NDI lines). Returns the carrier's audio sink at its configured audio format, or null for a
+    /// non-NDI / unknown line or an audio-less NDI mode. UI thread; single-holder like the video side — release
+    /// with <see cref="ReleaseAudioOutputForLine"/>.</summary>
+    public IAudioOutput? AcquireAudioOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return null;
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                return ndi.AcquireForPlayback(needsVideo: false, needsAudio: true)?.Audio;
+        return null;
+    }
+
+    /// <summary>Releases an audio output acquired via <see cref="AcquireAudioOutputForLine"/>. UI thread. No-op
+    /// for a non-NDI / unknown line.</summary>
+    public void ReleaseAudioOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return;
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                ndi.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+    }
+
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NDIOutputPreviewRuntime> _ndiOutputs = new();
@@ -104,10 +160,6 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// </summary>
     public event EventHandler? RoutingTopologyChanged;
 
-    /// <summary>§8.2 — raised when the shared-bus list mutates or any bus's PortAudio target /
-    /// label changes. Player VMs use this to refresh their cue target picker.</summary>
-    public event EventHandler? SharedHeadphonesBusesChanged;
-
     // ----- Phase E (§8.1): aggregate health summary -------------------------------------------------
 
     /// <summary>Number of output lines currently driving at least one player session. 0 when the
@@ -127,7 +179,6 @@ public partial class OutputManagementViewModel : ViewModelBase
     public bool HasAggregateIssues => AggregateWarningCount + AggregateErrorCount > 0;
     public bool HasOutputs => Outputs.Count > 0;
     public bool HasNoOutputs => Outputs.Count == 0;
-    public bool HasAdvancedRoutingConfiguration => Outputs.Count > 0 || SharedHeadphonesBuses.Count > 0;
 
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
@@ -165,23 +216,13 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             OnPropertyChanged(nameof(HasOutputs));
             OnPropertyChanged(nameof(HasNoOutputs));
-            OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
             if (SelectedLine is { } sel && !Outputs.Contains(sel))
                 SelectedLine = null;
             SelectedLine ??= Outputs.FirstOrDefault();
             RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         };
-        // §8.2 — a removed PA output may have been a bus's target; raise the event so player VMs
-        // can re-resolve and mark buses without a backing PA output as broken.
-        Outputs.CollectionChanged += (_, _) =>
-        {
-            RebuildPortAudioOutputLines();
-            RaiseSharedHeadphonesBusesChanged();
-        };
         Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
-        RebuildPortAudioOutputLines();
         RebuildDefinitionsSnapshot();
-        SharedHeadphonesBuses.CollectionChanged += OnSharedHeadphonesBusesCollectionChanged;
     }
 
     // Keep DefinitionsSnapshot current: a line-up change (add/remove) or any line's Definition edit
@@ -207,85 +248,6 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private void RebuildDefinitionsSnapshot() =>
         _definitionsSnapshot = Outputs.Select(o => o.Definition).ToArray();
-
-    private void OnSharedHeadphonesBusesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        _ = sender;
-        if (e.OldItems is not null)
-            foreach (var removed in e.OldItems.OfType<SharedHeadphonesBusViewModel>())
-                removed.PropertyChanged -= OnSharedHeadphonesBusPropertyChanged;
-        if (e.NewItems is not null)
-            foreach (var added in e.NewItems.OfType<SharedHeadphonesBusViewModel>())
-                added.PropertyChanged += OnSharedHeadphonesBusPropertyChanged;
-        RaiseSharedHeadphonesBusesChanged();
-        OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
-    }
-
-    private void OnSharedHeadphonesBusPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        RaiseSharedHeadphonesBusesChanged();
-    }
-
-    private void RaiseSharedHeadphonesBusesChanged() =>
-        SharedHeadphonesBusesChanged?.Invoke(this, EventArgs.Empty);
-
-    private void RebuildPortAudioOutputLines()
-    {
-        PortAudioOutputLines.Clear();
-        foreach (var line in Outputs.Where(o => o.Definition is PortAudioOutputDefinition))
-            PortAudioOutputLines.Add(line);
-    }
-
-    [RelayCommand]
-    private void AddSharedHeadphonesBus()
-    {
-        var firstPa = Outputs.FirstOrDefault(o => o.Definition is PortAudioOutputDefinition)?.Definition.Id;
-        SharedHeadphonesBuses.Add(new SharedHeadphonesBusViewModel
-        {
-            Id = Guid.NewGuid(),
-            Label = Strings.Format(nameof(Strings.SharedHeadphonesBusNameFormat), SharedHeadphonesBuses.Count + 1),
-            PortAudioOutputId = firstPa,
-        });
-    }
-
-    [RelayCommand]
-    private void RemoveSharedHeadphonesBus(SharedHeadphonesBusViewModel? bus)
-    {
-        if (bus is null) return;
-        SharedHeadphonesBuses.Remove(bus);
-    }
-
-    /// <summary>Returns the PortAudio <see cref="OutputLineViewModel"/> backing the bus, or
-    /// <c>null</c> when the bus has no target / the target was removed (broken).</summary>
-    public OutputLineViewModel? ResolveSharedBusOutput(Guid busId)
-    {
-        var bus = SharedHeadphonesBuses.FirstOrDefault(b => b.Id == busId);
-        if (bus?.PortAudioOutputId is not { } paId)
-            return null;
-        return Outputs.FirstOrDefault(o => o.Definition.Id == paId && o.Definition is PortAudioOutputDefinition);
-    }
-
-    public IReadOnlyList<SharedHeadphonesBus> BuildSharedHeadphonesBusesSnapshot() =>
-        SharedHeadphonesBuses.Select(b => new SharedHeadphonesBus
-        {
-            Id = b.Id,
-            Label = b.Label,
-            PortAudioOutputId = b.PortAudioOutputId,
-        }).ToList();
-
-    public void ApplySharedHeadphonesBuses(IReadOnlyList<SharedHeadphonesBus> buses)
-    {
-        SharedHeadphonesBuses.Clear();
-        foreach (var b in buses)
-            SharedHeadphonesBuses.Add(new SharedHeadphonesBusViewModel
-            {
-                Id = b.Id,
-                Label = string.IsNullOrWhiteSpace(b.Label) ? Strings.SharedHeadphonesBusDefaultName : b.Label,
-                PortAudioOutputId = b.PortAudioOutputId,
-            });
-    }
 
     private void RaiseTopologyChanged() => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
 
@@ -319,9 +281,9 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B follow-up — raised *before* a line's runtime is torn down so any active
-    /// <c>HaPlayPlaybackSession</c> can call <c>TryRemoveOutput</c> first and avoid Submit'ing to a
-    /// disposed output. Subscribers must run synchronously: by the time the event returns, the runtime
+    /// Phase B follow-up — raised *before* a line's runtime is torn down so any active playback
+    /// can detach its route to that line first and avoid Submit'ing to a disposed output.
+    /// Subscribers must run synchronously: by the time the event returns, the runtime
     /// stop / dispose path is about to run.
     /// </summary>
     public event EventHandler<OutputLineViewModel>? OutputLineRemoving;
@@ -554,13 +516,17 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// </summary>
     /// <remarks>
     /// Hot semantics per §3.6: the runtime swap proceeds even if a playback session currently holds the
-    /// line. The session will see a brief silence/black-frame window; orchestration (UI confirm prompts,
-    /// session re-acquire) is the Phase B caller's concern.
+    /// line. With <paramref name="detachRoutes"/> = true (default) the session detaches its route around the
+    /// swap (the OutputLineReconfiguring/Reconfigured events) — a brief silence/black-frame, but a
+    /// guaranteed-consistent route afterward. With <paramref name="detachRoutes"/> = false those events are
+    /// skipped: the runtime applies the change in place under the still-attached route (cosmetic changes like
+    /// Always-on-top apply with no interruption; a structural change may briefly glitch the live route).
     /// </remarks>
     public async Task ReconfigureLineAsync(
         OutputLineViewModel line,
         OutputDefinition newDefinition,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool detachRoutes = true)
     {
         if (newDefinition.Id != line.Definition.Id)
             throw new ArgumentException(
@@ -571,7 +537,8 @@ public partial class OutputManagementViewModel : ViewModelBase
                 $"Cannot reconfigure {line.Definition.GetType().Name} with {newDefinition.GetType().Name} — output kind is immutable.",
                 nameof(newDefinition));
 
-        await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(false);
+        if (detachRoutes)
+            await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(false);
 
         switch (newDefinition)
         {
@@ -610,7 +577,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         // A clone-of change is the load-bearing topology change — fire the event so player VMs resync
         // their routing checkbox list (clones get hidden, parents get exposed).
         RaiseTopologyChanged();
-        await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(false);
+        if (detachRoutes)
+            await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(false);
     }
 
     private static async Task RaiseAsync(Func<OutputLineViewModel, Task>? handlers, OutputLineViewModel line)
@@ -669,8 +637,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         if (_localPreviews.ContainsKey(line))
             return;
 
-        ILocalVideoPreviewRuntime runtime = d.Engine == VideoOutputEngine.SdlOpenGl
-            ? new SdlLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow())
+        ILocalVideoPreviewRuntime runtime = d.Engine == VideoOutputEngine.SDLOpenGl
+            ? new SDLLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow())
             : new AvaloniaLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow());
 
         try
@@ -893,18 +861,27 @@ public partial class OutputManagementViewModel : ViewModelBase
         if (edited.Equals(line.Definition))
             return; // no changes
 
-        // §3.6: confirm only when a player is *actively playing through* this line.
+        // §3.6: confirm only when a player is *actively playing through* this line. The operator chooses
+        // whether to keep playing (apply live — no route teardown, best for cosmetic changes like
+        // Always-on-top) or reconnect the output (brief black-frame, for structural changes).
+        var detachRoutes = true;
         if (PlaybackUsageProbe?.Invoke(line) == true)
         {
-            var confirmed = await ConfirmGlitchyEditAsync(owner, line);
-            if (!confirmed)
-                return;
+            switch (await ConfirmGlitchyEditAsync(owner, line))
+            {
+                case OutputEditApplyMode.Cancel:
+                    return;
+                case OutputEditApplyMode.Live:
+                    detachRoutes = false;
+                    break;
+                // OutputEditApplyMode.Reconnect keeps the default detachRoutes = true.
+            }
         }
 
         try
         {
             using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "OutputManagement.EditSelectedAsync.ReconfigureLineAsync", slowWarningMs: 2000);
-            await ReconfigureLineAsync(line, edited, cancellationToken).ConfigureAwait(false);
+            await ReconfigureLineAsync(line, edited, cancellationToken, detachRoutes).ConfigureAwait(false);
             timing?.SetOutcome($"line={line.Definition.DisplayName}");
         }
         catch (Exception ex)
@@ -944,25 +921,43 @@ public partial class OutputManagementViewModel : ViewModelBase
         return await dlg.ShowDialog<NDIOutputDefinition?>(owner);
     }
 
-    private static async Task<bool> ConfirmGlitchyEditAsync(Window owner, OutputLineViewModel line)
+    /// <summary>Operator's answer to the "output in use" edit prompt.</summary>
+    private enum OutputEditApplyMode
+    {
+        /// <summary>Abort the edit.</summary>
+        Cancel,
+
+        /// <summary>Detach the route, reconfigure, re-attach — brief black-frame, consistent route.</summary>
+        Reconnect,
+
+        /// <summary>Apply live under the still-attached route — no interruption for cosmetic changes.</summary>
+        Live,
+    }
+
+    private static async Task<OutputEditApplyMode> ConfirmGlitchyEditAsync(Window owner, OutputLineViewModel line)
     {
         var dlg = new Window
         {
             Title = Strings.OutputEditInUseDialogTitle,
-            Width = 480,
-            Height = 200,
+            Width = 520,
+            Height = 220,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ShowInTaskbar = false,
         };
 
-        var ok = new Button { Content = Strings.OutputEditInUseApplyButton, IsDefault = true };
+        // "Save & continue" (apply live) is the default — most in-use edits are cosmetic (Always-on-top,
+        // window placement) and shouldn't interrupt playback. "Reconnect" is the deliberate choice for a
+        // structural change that needs the route re-established.
+        var continueLive = new Button { Content = Strings.OutputEditInUseContinueButton, IsDefault = true };
+        var reconnect = new Button { Content = Strings.OutputEditInUseApplyButton };
         var cancel = new Button { Content = Strings.CancelButton, IsCancel = true };
 
-        var tcs = new TaskCompletionSource<bool>();
-        ok.Click += (_, _) => { tcs.TrySetResult(true); dlg.Close(); };
-        cancel.Click += (_, _) => { tcs.TrySetResult(false); dlg.Close(); };
-        dlg.Closed += (_, _) => tcs.TrySetResult(false);
+        var tcs = new TaskCompletionSource<OutputEditApplyMode>();
+        continueLive.Click += (_, _) => { tcs.TrySetResult(OutputEditApplyMode.Live); dlg.Close(); };
+        reconnect.Click += (_, _) => { tcs.TrySetResult(OutputEditApplyMode.Reconnect); dlg.Close(); };
+        cancel.Click += (_, _) => { tcs.TrySetResult(OutputEditApplyMode.Cancel); dlg.Close(); };
+        dlg.Closed += (_, _) => tcs.TrySetResult(OutputEditApplyMode.Cancel);
 
         var buttons = new StackPanel
         {
@@ -972,7 +967,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             Margin = new Avalonia.Thickness(0, 16, 0, 0),
         };
         buttons.Children.Add(cancel);
-        buttons.Children.Add(ok);
+        buttons.Children.Add(reconnect);
+        buttons.Children.Add(continueLive);
         DockPanel.SetDock(buttons, Dock.Bottom);
 
         var message = new TextBlock
@@ -1104,25 +1100,13 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
-    private bool CanAddNDI() => IsNdiAvailable;
+    private bool CanAddNDI() => IsNDIAvailable;
 
     [RelayCommand]
     private void ClearHealth()
     {
-        var players = ActivePlayersProbe?.Invoke();
-        if (players is not null)
-        {
-            foreach (var player in players)
-            {
-                var session = player.PlaybackSession;
-                if (session is null)
-                    continue;
-
-                foreach (var line in Outputs)
-                    session.ResetHealthCounters(line);
-            }
-        }
-
+        // The ShowSession health probes read cumulative session counters (composition stats / audio pumps);
+        // clearing here just resets the panel's displayed state — the counters re-accumulate on the next poll.
         foreach (var line in Outputs)
         {
             line.Health = OutputLineHealthState.Unknown;
@@ -1149,11 +1133,12 @@ public partial class OutputManagementViewModel : ViewModelBase
             var anyWired = false;
             foreach (var player in players)
             {
-                var session = player.PlaybackSession;
-                if (session is null)
+                // Each deck drives lines through its per-player ShowSession (the only runtime since the
+                // legacy engine was deleted) — read the session-side composition/audio-pump health.
+                if (player.TryGetShowSessionLineHealthMetrics(line.Definition.Id) is not { } metrics)
                     continue;
+                var metricsDetail = FormatShowSessionHealthDetail(metrics);
 
-                var metrics = OutputLineHealthEvaluator.EvaluateWithMetrics(session, line);
                 if (metrics.State != OutputLineHealthState.Unknown)
                 {
                     anyWired = true;
@@ -1163,7 +1148,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 if (metrics.State > worst)
                 {
                     worst = metrics.State;
-                    detail = FormatHealthDetail(session, line, metrics.State);
+                    detail = metricsDetail;
                 }
             }
 
@@ -1225,44 +1210,13 @@ public partial class OutputManagementViewModel : ViewModelBase
             ? $"Cues: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch"
             : $"Cues: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
 
-    private static string? FormatHealthDetail(
-        HaPlayPlaybackSession session,
-        OutputLineViewModel line,
-        OutputLineHealthState state)
-    {
-        if (state == OutputLineHealthState.Unknown)
-            return null;
-
-        if (session.TryGetVideoHealthMetrics(line, out var vm))
-        {
-            return state switch
+    private static string FormatShowSessionHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
+        m.State == OutputLineHealthState.Healthy
+            ? (m.VideoSubmitted, m.AudioEnqueued) switch
             {
-                OutputLineHealthState.Healthy =>
-                    Strings.Format(nameof(Strings.OutputHealthVideoPumpOkFormat), vm.SubmittedFrames, vm.CurrentQueuedDepth, vm.MaxQueueDepth),
-                _ => Strings.Format(nameof(Strings.OutputHealthVideoDropsFormat), vm.DroppedFrames, vm.SubmittedFrames, vm.CurrentQueuedDepth, vm.MaxQueueDepth),
-            };
-        }
-
-        if (session.TryGetAudioHealthMetrics(line, out var st))
-        {
-            var detail = state switch
-            {
-                OutputLineHealthState.Healthy => Strings.Format(nameof(Strings.OutputHealthAudioPumpOkFormat), st.Processed),
-                _ => Strings.Format(nameof(Strings.OutputHealthAudioDropsFormat), st.Dropped, st.Enqueued),
-            };
-            if (session.TryGetPortAudioOutput(line, out var pa) && pa is not null)
-            {
-                var underrunDelta = session.GetPortAudioUnderrunDelta(line);
-                if (underrunDelta > 0)
-                {
-                    detail += " " + Strings.Format(nameof(Strings.OutputHealthPortAudioUnderrunsFormat), underrunDelta,
-                        pa.QueuedSamples);
-                }
+                (> 0, > 0) => $"Player: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch",
+                (_, > 0) => $"Player: {m.AudioEnqueued:N0} ch",
+                _ => $"Player: {m.VideoSubmitted:N0} f",
             }
-
-            return detail;
-        }
-
-        return state.ToString();
-    }
+            : $"Player: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
 }

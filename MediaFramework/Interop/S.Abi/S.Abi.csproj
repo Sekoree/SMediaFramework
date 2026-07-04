@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Abi — inbound native C-ABI plugin host (Phase 6). Loads shared-library plugins (include/mfp_plugin.h)
+         and adapts their vtables to the framework's managed interfaces. References the layers it adapts into:
+         Core/Time (media + clocks), Compositor (layer surfaces), and Session-free Control.Abstractions. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Control/S.Control.Abstractions/S.Control.Abstractions.csproj" />
+    </ItemGroup>
+
+</Project>

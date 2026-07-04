@@ -2,7 +2,7 @@ using System.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.OutputPreview;
 
@@ -39,7 +39,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     /// <summary>
     /// Raised after <see cref="ReconfigureAsync"/> swaps the underlying audio output.
     /// Any prior reference handed out by <see cref="AcquireForPlayback"/> is now stale; subscribers
-    /// (i.e. an in-flight <c>HaPlayPlaybackSession</c>) should release + re-acquire to pick up the new
+    /// holding an in-flight playback lease should release + re-acquire to pick up the new
     /// stream. Phase A wires the event but does not orchestrate the re-acquire — that's Phase B's job.
     /// </summary>
     public event EventHandler? Reconfigured;
@@ -186,7 +186,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         out PortAudioOutputDefinition resolvedDefinition)
     {
         var backendName = definition.EffectiveAudioBackendName;
-        if (!AudioBackends.TryGet(backendName, out var backend))
+        if (!MediaRuntime.TryGetAudioBackend(backendName, out var backend))
             throw new InvalidOperationException(
                 $"audio backend '{backendName}' is not registered; available: {FormatBackendNames()}");
 
@@ -254,7 +254,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 
     private static string FormatBackendNames()
     {
-        var names = AudioBackends.All.Select(b => b.Name).ToArray();
+        var names = MediaRuntime.Registry.AudioBackends.Select(b => b.Name).ToArray();
         return names.Length == 0 ? "(none)" : string.Join(", ", names);
     }
 

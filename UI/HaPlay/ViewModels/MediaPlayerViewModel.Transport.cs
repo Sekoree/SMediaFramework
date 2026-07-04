@@ -18,7 +18,7 @@ using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.NDI;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.ViewModels;
 
@@ -30,19 +30,22 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanPlay))]
     private async Task PlayAsync()
     {
-        // Stays on the dispatcher context: the code between awaits sets observable properties
-        // (StatusMessage / MediaFilePath / IsPlaying) whose change notifications must be raised on
-        // the UI thread. The helpers do their own Task.Run/InvokeAsync marshalling.
+        // When a source is already playing through the per-player ShowSession, Play resumes it (no re-open);
+        // a fresh play opens the selected item, which fires immediately.
+        if (ShowSessionActive)
+        {
+            if (!IsPlaying)
+                await ShowSessionPauseAsync(false);
+            return;
+        }
 
         // Phase 1C — auto-route: if the user clicks Play with no outputs selected, pick a sensible
         // default (first compatible output) so playback isn't silent on first run.
         await TryAutoRouteAsync();
 
-        // Auto-load: if nothing's loaded yet but the user has selected a playlist row, load + play in one click.
-        if (_session is null && SelectedPlaylistItem is { } selected)
+        // Auto-load: play the selected playlist row in one click.
+        if (SelectedPlaylistItem is { } selected)
         {
-            // File items must point at a readable path; live items short-circuit inside OpenOrReloadAsync
-            // until task #4 (live wiring) lands.
             if (selected is FilePlaylistItem f && !File.Exists(f.Path))
             {
                 StatusMessage = $"File missing: {f.Path}";
@@ -50,23 +53,18 @@ public partial class MediaPlayerViewModel
             }
             _activePlaybackTab = SelectedPlaylistTab;
             await PrepareCurrentItemAsync(selected);
-            IsPlaying = true; // signals OpenOrReloadAsync to resume after open
+            IsPlaying = true;
             await OpenOrReloadAsync();
-            return;
         }
-
-        await StartPlaybackAsync();
     }
 
     /// <summary>One-button transport: pause if playing, play otherwise.</summary>
     [RelayCommand(CanExecute = nameof(CanTogglePlayPause))]
     private Task TogglePlayPauseAsync() =>
-        IsPlaying && _session is not null ? PauseAsync() : PlayAsync();
+        IsPlaying && ShowSessionActive ? PauseAsync() : PlayAsync();
 
     private bool CanTogglePlayPause() =>
-        !_isTransportBusy &&
-        ((_session is not null && IsMediaLoaded) ||
-         (_session is null && SelectedPlaylistItem is not null));
+        !_isTransportBusy && (ShowSessionActive && IsMediaLoaded || SelectedPlaylistItem is not null);
 
     [RelayCommand(CanExecute = nameof(CanGoNext))]
     private async Task NextTrackAsync()
@@ -111,7 +109,7 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanAddNDIOutput))]
     private Task AddNDIOutputAsync() => AddOutputAndSelectAsync(() => _outputs.AddNDICommand.ExecuteAsync(null));
 
-    private bool CanAddNDIOutput() => IsNdiAvailable;
+    private bool CanAddNDIOutput() => IsNDIAvailable;
 
     private async Task AddOutputAndSelectAsync(Func<Task> addOutputAsync)
     {
@@ -153,7 +151,7 @@ public partial class MediaPlayerViewModel
             // Best-effort probe — failures fall back to "pick anything compatible".
             try
             {
-                var dec = await Task.Run(() => S.Media.FFmpeg.MediaContainerDecoder.Open(path))
+                var dec = await Task.Run(() => S.Media.Decode.FFmpeg.MediaContainerDecoder.Open(path))
                     .ConfigureAwait(false);
                 try
                 {
@@ -196,172 +194,38 @@ public partial class MediaPlayerViewModel
         return Outputs.FirstOrDefault(b => !WouldConflictWithAnotherPlayer(b));
     }
 
-    private async Task StartPlaybackAsync()
-    {
-        var ownedTrace = !SDebug.ChangeTrace.IsActive;
-        if (ownedTrace)
-            SDebug.ChangeTrace.Begin("StartPlayback");
-        SDebug.ChangeTrace.Step("StartPlaybackAsync entered");
-
-        await WithPlaybackArcAsync(async () =>
-        {
-            var (s, holdFb) = await Dispatcher.UIThread.InvokeAsync(() => (_session, HoldFallbackVideo));
-            if (s is null)
-            {
-                SDebug.ChangeTrace.Step("StartPlayback: no session");
-                return;
-            }
-
-            SDebug.ChangeTrace.Step("StartPlayback: session snapshot (UI)");
-            var ok = await RunBoundedAsync(() =>
-            {
-                SDebug.ChangeTrace.Step("StartPlayback: Play begin (thread pool)");
-                s.PrepareOutputsBeforePlay(holdFb);
-                SDebug.ChangeTrace.Step("StartPlayback: PrepareOutputsBeforePlay");
-                s.PrepareLiveTransportBeforePlay();
-                SDebug.ChangeTrace.Step("StartPlayback: PrepareLiveTransportBeforePlay");
-                s.ResetAllUnderrunBaselines();
-                SDebug.ChangeTrace.Step("StartPlayback: ResetAllUnderrunBaselines");
-                s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
-                SDebug.ChangeTrace.Step("StartPlayback: Router.Play");
-            }, PlayWallTimeout, "StartPlayback Play");
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!ok)
-                {
-                    SDebug.ChangeTrace.Step("StartPlayback: Play TIMED OUT");
-                    StatusMessage = "Playback failed to start. See debug log for details.";
-                    return;
-                }
-
-                IsPlaying = true;
-                if (HoldFallbackVideo) StartHoldPumpTimer();
-                EnsureLoopTimerStarted();
-                SDebug.ChangeTrace.Step("StartPlayback: UI flags updated");
-            });
-        }).ConfigureAwait(false);
-
-        if (ownedTrace)
-            SDebug.ChangeTrace.End("StartPlaybackAsync");
-    }
-
     private bool CanPlay() =>
-        !_isTransportBusy &&
-        ((_session is not null && IsMediaLoaded) ||
-         (_session is null && SelectedPlaylistItem is not null));
+        !_isTransportBusy && (ShowSessionActive && IsMediaLoaded || SelectedPlaylistItem is not null);
 
     [RelayCommand(CanExecute = nameof(CanTransport))]
-    private async Task PauseAsync()
-    {
-        SDebug.ChangeTrace.Begin("Pause");
-        await WithPlaybackArcAsync(async () =>
-        {
-            var s = await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!HoldFallbackVideo) StopHoldPumpTimer();
-                return _session;
-            });
-            if (s is null)
-            {
-                SDebug.ChangeTrace.End("Pause (no session)");
-                return;
-            }
-
-            SDebug.ChangeTrace.Step("Pause: UI flags updated (optimistic)");
-            await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
-
-            SDebug.ChangeTrace.Step("Pause: Router.Pause begin");
-            // Do not pass a cancellable token into video pause — cancelling mid-join marks the player
-            // terminal while the UI still shows a loaded session. Bound only the outer wall.
-            await RunBoundedAsync(
-                () => s.Router.PauseSkippingSharedMuxFlush(CancellationToken.None),
-                TimeSpan.FromSeconds(5),
-                "Pause transport");
-            SDebug.ChangeTrace.Step("Pause: Router.Pause done");
-
-            SDebug.ChangeTrace.End("Pause");
-        }).ConfigureAwait(false);
-    }
+    private Task PauseAsync() =>
+        ShowSessionActive ? ShowSessionPauseAsync(true) : Task.CompletedTask;
 
     [RelayCommand(CanExecute = nameof(CanStop))]
     private async Task StopAsync()
     {
-        SDebug.ChangeTrace.Begin("Stop");
-        await WithPlaybackArcAsync(async () =>
+        // Stop also cancels the waiting-for-source retry loop (Phase C.5): a waiting live input is
+        // "stopped" the moment the user clicks Stop; Play re-arms both the load and the retry.
+        await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            var (snap, doPump) = await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                StopHoldPumpTimer();
-                _loopTimer?.Stop();
-                _loopTimer = null;
-                IsPlaying = false;
-                // Phase C.5 — Stop also cancels the retry loop. A waiting NDI input is "stopped" the
-                // moment the user clicks Stop; Play would re-arm both the load and the retry.
-                ExitWaitingForSource();
-                StatusMessage = null;
-                return (_session, HoldFallbackVideo);
-            });
-            if (snap is null)
-            {
-                SDebug.ChangeTrace.End("Stop (no session)");
-                return;
-            }
+            _loopTimer?.Stop();
+            _loopTimer = null;
+            ExitWaitingForSource();
+            StatusMessage = null;
+        });
 
-            SDebug.ChangeTrace.Step($"Stop: transport begin (live={snap.IsLive})");
-            await RunBoundedCancelableAsync(ct =>
-                {
-                    if (snap.IsLive)
-                        snap.Router.PauseSkippingSharedMuxFlush(ct);
-                    else
-                        snap.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
-                    if (doPump)
-                    {
-                        try { snap.PumpHoldFrames(TimeSpan.Zero); }
-                        catch { /* best effort */ }
-                    }
-                },
-                innerTimeout: TimeSpan.FromSeconds(2),
-                outerTimeout: TimeSpan.FromSeconds(3));
-            SDebug.ChangeTrace.Step("Stop: transport done");
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (_session != snap) return;
-                CurrentPosition = TimeSpan.Zero;
-                SeekSliderValue = 0;
-                if (_cuePlaybackActive && snap.IsLive)
-                {
-                    _cuePlaybackActive = false;
-                    NaturalPlaybackEnded?.Invoke(this, EventArgs.Empty);
-                }
-            });
-            SDebug.ChangeTrace.End("Stop");
-        }).ConfigureAwait(false);
-    }
-
-    /// <summary>Raises <see cref="NaturalPlaybackEnded"/> for cue AutoFollow (file natural end, live stop, or live disconnect).</summary>
-    private async Task NotifyCuePlaybackNaturallyEndedAsync(
-        CueEndBehavior? endBehavior = null,
-        HaPlayPlaybackSession? session = null)
-    {
-        var (cueActive, behavior, liveSession) = await Dispatcher.UIThread.InvokeAsync(() =>
-            (_cuePlaybackActive, endBehavior ?? _activeCueEndBehavior, session ?? _session));
-        if (!cueActive || liveSession is null)
+        if (ShowSessionActive)
+        {
+            await ShowSessionStopAsync();
             return;
-
-        if (behavior == CueEndBehavior.FreezeLastFrame)
-        {
-            await RunBoundedCancelableAsync(liveSession.Router.PauseSkippingSharedMuxFlush,
-                innerTimeout: TimeSpan.FromSeconds(1.5),
-                outerTimeout: TimeSpan.FromSeconds(2.5));
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            _cuePlaybackActive = false;
             IsPlaying = false;
-            NaturalPlaybackEnded?.Invoke(this, EventArgs.Empty);
+            CurrentPosition = TimeSpan.Zero;
+            SeekSliderValue = 0;
+            SyncIdleSlate();
         });
     }
 
@@ -443,85 +307,12 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    private void HookVideoFaultRecovery(HaPlayPlaybackSession session) =>
-        session.VideoDecodeFaulted += OnSessionVideoDecodeFaulted;
+    private bool CanTransport() => !_isTransportBusy && ShowSessionActive;
 
-    private void UnhookVideoFaultRecovery(HaPlayPlaybackSession session) =>
-        session.VideoDecodeFaulted -= OnSessionVideoDecodeFaulted;
-
-    /// <summary>
-    /// Fires on the decode thread when a file session's video decode loop faults. <paramref name="switchedToSoftware"/>
-    /// is true only on the fault that flipped the process from hardware to software decode; on that one fault we
-    /// reload the current item once so it comes back via the (now software) decode path. Cue-driven playback is
-    /// skipped — the cue engine owns that lifecycle. The single-trip flag prevents a reload loop if software also fails.
-    /// </summary>
-    private void OnSessionVideoDecodeFaulted(HaPlayPlaybackSession faulted, bool switchedToSoftware)
-    {
-        if (!switchedToSoftware)
-            return;
-
-        _ = Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            if (!ReferenceEquals(_session, faulted) || _cuePlaybackActive)
-                return;
-            TransportTrace.LogWarning(
-                "Video decode faulted; reloading '{Item}' with software decode.",
-                SelectedPlaylistItem?.DisplayName ?? MediaFilePath ?? "current item");
-            await OpenOrReloadAsync();
-        });
-    }
-
-    /// <summary>
-    /// File seek + optional resume. Uses <see cref="CancellationToken.None"/> for the demux prime so a short
-    /// UI cancel cannot abort H.264 GOP catch-up while audio is already at the target.
-    /// </summary>
-    private static async Task RunFileSeekTransportAsync(
-        HaPlayPlaybackSession session,
-        TimeSpan target,
-        bool resumePlayback,
-        bool holdFallbackVideo)
-    {
-        await Task.Run(() =>
-        {
-            session.Router.SeekCoordinatedSkippingSharedMuxFlush(target, CancellationToken.None);
-            if (!resumePlayback)
-                return;
-            session.PrepareOutputsBeforePlay(holdFallbackVideo);
-            session.PrepareLiveTransportBeforePlay();
-            session.Player.PrewarmVideoAfterSeek();
-            session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
-        }).WaitAsync(FileSeekWallTimeout).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Two-tier timeout: pass <paramref name="innerTimeout"/> as a CancellationToken to <paramref name="action"/> (so framework
-    /// joins exit cooperatively), then enforce <paramref name="outerTimeout"/> with <see cref="Task.WaitAsync(TimeSpan)"/> as a
-    /// last-resort wall. Without the outer wall, a stuck native call would freeze the UI indefinitely.
-    /// </summary>
-    private static async Task<bool> RunBoundedCancelableAsync(Action<CancellationToken> action, TimeSpan innerTimeout, TimeSpan outerTimeout)
-    {
-        try
-        {
-            await Task.Run(() =>
-            {
-                using var cts = new CancellationTokenSource(innerTimeout);
-                try { action(cts.Token); }
-                catch (OperationCanceledException) { /* bounded */ }
-            }).WaitAsync(outerTimeout).ConfigureAwait(false);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private bool CanTransport() => !_isTransportBusy && _session is not null && IsMediaLoaded;
-
-    /// <summary>Phase C.5 — Stop is enabled while a session is loaded OR while a live item is in the
-    /// waiting-for-source state. Without the second clause, Stop can't cancel the retry loop on a
-    /// manual-name NDI item whose source never came online.</summary>
-    private bool CanStop() => !_isTransportBusy && ((_session is not null && IsMediaLoaded) || IsWaitingForSource);
+    /// <summary>Phase C.5 — Stop is enabled while playing OR while a live item is in the waiting-for-source
+    /// state. Without the second clause, Stop can't cancel the retry loop on a manual-name NDI item whose
+    /// source never came online.</summary>
+    private bool CanStop() => !_isTransportBusy && (IsWaitingForSource || ShowSessionActive);
 
     private readonly object _seekGate = new();
     private double? _pendingSeekValue;
@@ -530,7 +321,7 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private async Task SeekToSliderAsync()
     {
-        if (_session is null || Duration <= TimeSpan.Zero)
+        if (!ShowSessionActive || Duration <= TimeSpan.Zero)
             return;
 
         // Coalesce rapid scrub commits (each pointer release / arrow key-up calls this) to
@@ -574,26 +365,11 @@ public partial class MediaPlayerViewModel
 
     private async Task SeekToTargetAsync(double sliderValue)
     {
-        await WithPlaybackArcAsync(async () =>
-        {
-            var (session, playing, holdFb) = await Dispatcher.UIThread.InvokeAsync(() =>
-                (_session, IsPlaying, HoldFallbackVideo));
-            if (session is null) return;
-
-            var t = TimeSpan.FromTicks((long)(sliderValue * Duration.Ticks / 1000.0));
-
-            await RunFileSeekTransportAsync(session, t, playing, holdFb).ConfigureAwait(false);
-
-            if (!playing) return;
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (HoldFallbackVideo) StartHoldPumpTimer();
-                EnsureLoopTimerStarted();
-            });
-        }).ConfigureAwait(false);
+        if (ShowSessionActive && Duration > TimeSpan.Zero)
+            await ShowSessionSeekAsync(TimeSpan.FromTicks((long)(Duration.Ticks * sliderValue / 1000.0)));
     }
 
-    private bool CanSeek() => _session is not null && IsMediaLoaded && Duration > TimeSpan.Zero;
+    private bool CanSeek() => ShowSessionActive && IsMediaLoaded && Duration > TimeSpan.Zero;
 
     /// <summary>Phase C — Keyboard `,` jog backward 5 s. Routes through <see cref="SeekToSliderAsync"/>
     /// so the bounded-CT teardown timing matches a normal drag-end commit.</summary>
@@ -802,7 +578,11 @@ public partial class MediaPlayerViewModel
 
     private void SyncIdleSlate()
     {
-        if (IsMediaLoaded)
+        // Loaded media normally owns the outputs: the engine path holds its own LogoFallback wrappers and the
+        // ShowSession deck covers its composition with the hold top-layer. The EXCEPTION is ShowSession
+        // audio-only playback — it acquires no video lines, so the idle slate stays responsible for showing
+        // the hold image on them (legacy parity: audio track + logo on the video outputs).
+        if (IsMediaLoaded && !(ShowSessionActive && _playerAcquiredLines.Count == 0))
         {
             StopIdleSlate();
             return;

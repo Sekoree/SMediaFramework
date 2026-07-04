@@ -7,7 +7,7 @@ using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.Views;
 using S.Media.Core.Video;
-using S.Media.SDL3;
+using S.Media.Present.SDL3;
 
 namespace HaPlay.OutputPreview;
 
@@ -130,7 +130,7 @@ internal static class LocalVideoWindowPlacement
     }
 }
 
-internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
+internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 {
     private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
@@ -140,7 +140,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
     private int _closeHandlerPosted;
     private int _playbackHolders;
 
-    public SdlLocalVideoPreviewRuntime(
+    public SDLLocalVideoPreviewRuntime(
         LocalVideoOutputDefinition definition,
         OutputLineViewModel line,
         OutputManagementViewModel owner,
@@ -166,13 +166,13 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             {
                 // Local previews should preserve the source's aspect ratio (letterbox / pillarbox)
                 // instead of stretching to fill the window.
-                ViewportFit = S.Media.OpenGL.VideoViewportFit.Contain,
+                ViewportFit = S.Media.Gpu.VideoViewportFit.Contain,
             };
-            output.CloseRequested += OnSdlCloseRequested;
-            output.Resized += OnSdlResized;
+            output.CloseRequested += OnSDLCloseRequested;
+            output.Resized += OnSDLResized;
             var format = PreviewVideoFrames.PreviewFormat(iw, ih);
             output.Configure(format);
-            ApplySdlWindowPlacement(output, _definition, _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
+            ApplySDLWindowPlacement(output, _definition, _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
                 _definition.WindowWidth, _definition.WindowHeight);
             output.Submit(PreviewVideoFrames.CreateIdleFrame(format, _definition.BackgroundImagePath));
             Interlocked.Exchange(ref _sink, output);
@@ -182,7 +182,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
     public void SetFullscreen(bool fullscreen)
     {
         if (_sink is { } sink)
-            ApplySdlWindowPlacement(
+            ApplySDLWindowPlacement(
                 sink,
                 _definition,
                 fullscreen,
@@ -202,8 +202,8 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         var sink = Interlocked.Exchange(ref _sink, null);
         if (sink is not null)
         {
-            sink.CloseRequested -= OnSdlCloseRequested;
-            sink.Resized -= OnSdlResized;
+            sink.CloseRequested -= OnSDLCloseRequested;
+            sink.Resized -= OnSDLResized;
             sink.Dispose();
         }
     }
@@ -229,7 +229,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             var output = _sink;
             if (output is null)
                 return;
-            ApplySdlWindowPlacement(
+            ApplySDLWindowPlacement(
                 output,
                 newDefinition,
                 newDefinition.SurfaceMode == VideoSurfaceMode.FullScreen,
@@ -248,7 +248,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         }, cancellationToken);
     }
 
-    private void ApplySdlWindowPlacement(
+    private void ApplySDLWindowPlacement(
         SDL3GLVideoOutput output,
         LocalVideoOutputDefinition definition,
         bool fullscreen,
@@ -318,7 +318,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         Interlocked.Exchange(ref _playbackHolders, 0);
     }
 
-    private void OnSdlCloseRequested(object? sender, EventArgs e)
+    private void OnSDLCloseRequested(object? sender, EventArgs e)
     {
         if (Interlocked.CompareExchange(ref _closeHandlerPosted, 1, 0) != 0)
             return;
@@ -330,8 +330,8 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 var sink = Interlocked.Exchange(ref _sink, null);
                 if (sink is not null)
                 {
-                    sink.CloseRequested -= OnSdlCloseRequested;
-                    sink.Resized -= OnSdlResized;
+                    sink.CloseRequested -= OnSDLCloseRequested;
+                    sink.Resized -= OnSDLResized;
                     sink.Dispose();
                 }
             }
@@ -344,7 +344,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         });
     }
 
-    private void OnSdlResized(object? sender, (int Width, int Height) size)
+    private void OnSDLResized(object? sender, (int Width, int Height) size)
     {
         if (!TryRecordWindowedResize(size.Width, size.Height))
             return;
@@ -407,7 +407,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             win.Width = w;
             win.Height = h;
             // Preserve aspect ratio for the embedded Avalonia GL control too.
-            win.Video.ViewportFit = S.Media.OpenGL.VideoViewportFit.Contain;
+            win.Video.ViewportFit = S.Media.Gpu.VideoViewportFit.Contain;
             LocalVideoWindowPlacement.Apply(win, _definition, _screenReference, null);
             var format = PreviewVideoFrames.PreviewFormat(w, h);
             win.Video.Configure(format);

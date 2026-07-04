@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Audio.MiniAudio — IAudioBackend over miniaudio (MALib). Registered into the media registry
+         via MiniAudioModule (no static AudioBackends global, P2). The native libminiaudio is host-supplied
+         and loads lazily on first device use. -->
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../S.Media.Routing/S.Media.Routing.csproj" />
+        <ProjectReference Include="../../Audio/MALib/MALib.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="MALib" />
+        <Using Include="S.Media.Core" />
+        <Using Include="S.Media.Core.Audio" />
+        <Using Include="S.Media.Core.Diagnostics" />
+        <Using Include="S.Media.Core.Registry" />
+        <Using Include="S.Media.Time" />
+        <Using Include="S.Media.Routing" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.MiniAudio.Tests" />
+    </ItemGroup>
+
+</Project>

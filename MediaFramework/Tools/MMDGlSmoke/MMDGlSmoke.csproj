@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Source.MMD/S.Media.Source.MMD.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+</Project>

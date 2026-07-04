@@ -1,0 +1,43 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.RebindMissingControlMIDIDevicesDialog"
+        x:DataType="vm:RebindMissingControlMIDIDevicesDialogViewModel"
+        Title="Resolve MIDI Devices"
+        Width="640" Height="440"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="480" MinHeight="280">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Skip" Click="SkipClick" IsCancel="True" />
+      <Button Content="Apply" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12" Opacity="0.85"
+               Text="Some MIDI devices could not be matched to a current port. Pick the right port for each, or Skip to leave them unbound." />
+
+    <ListBox ItemsSource="{Binding Rows}">
+      <ListBox.ItemTemplate>
+        <DataTemplate DataType="vm:ControlMIDIDeviceResolutionRowViewModel">
+          <Grid ColumnDefinitions="*,*" ColumnSpacing="8" Margin="0,4">
+            <StackPanel Grid.Column="0" Spacing="2">
+              <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+              <TextBlock FontSize="11" Opacity="0.65" Text="{Binding StatusText}" TextWrapping="Wrap" />
+            </StackPanel>
+            <ComboBox Grid.Column="1"
+                      HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding Options}"
+                      SelectedItem="{Binding SelectedOption, Mode=TwoWay}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate DataType="vm:ControlMIDIPortOption">
+                  <TextBlock Text="{Binding Display}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </Grid>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </DockPanel>
+</Window>

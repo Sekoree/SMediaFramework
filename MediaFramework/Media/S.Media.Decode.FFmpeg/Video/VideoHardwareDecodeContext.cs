@@ -1,0 +1,424 @@
+using System.Runtime.InteropServices;
+using Vortice;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
+
+namespace S.Media.Decode.FFmpeg.Video;
+
+/// <summary>Optional flags for <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>.</summary>
+/// <remarks>
+/// <para>
+/// <see cref="DecoderThreadCount"/> configures one libav <c>AVCodecContext</c> (applied in <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>).
+/// Multi-instance decode, process-wide caps, or hardware vs software fan-out are host concerns (audio-side parallel notes: <c>AudioFileDecoderOpenOptions</c>).
+/// </para>
+/// </remarks>
+public sealed class VideoDecoderOpenOptions
+{
+    /// <summary>When true, try libav hardware acceleration before falling back to software decode (default).</summary>
+    public bool TryHardwareAcceleration { get; init; } = true;
+
+    /// <summary>
+    /// FFmpeg decoder thread count for frame/slice threading on software decode.
+    /// Zero picks a bounded default from <see cref="Environment.ProcessorCount"/> (ignored when hardware decode is active).
+    /// </summary>
+    public int DecoderThreadCount { get; init; }
+
+    /// <summary>
+    /// Hardware device types to try in order. When empty, a platform default list is used
+    /// (VAAPI on Linux, D3D11VA / QSV on Windows).
+    /// </summary>
+    public IReadOnlyList<HardwareVideoDeviceType> PreferredDeviceTypes { get; init; } = [];
+
+    /// <summary>
+    /// When <see cref="TryHardwareAcceleration"/> is true on Linux and the codec advertises DRM PRIME,
+    /// keep decode on dma-bufs (no libav CPU <c>av_hwframe_transfer_data</c> copy) for EGL / GL upload.
+    /// </summary>
+    public bool RetainDmabufForGl { get; init; }
+
+    /// <summary>
+    /// When <see cref="TryHardwareAcceleration"/> is true on Windows with D3D11VA and the codec advertises
+    /// <c>AV_PIX_FMT_D3D11</c>, keep libav output on D3D11 surfaces and export DXGI NT shared handles for GL / interop.
+    /// </summary>
+    public bool RetainD3D11SharedHandleForGl { get; init; }
+
+    /// <summary>
+    /// When true together with <see cref="RetainD3D11SharedHandleForGl"/>, build <see cref="Win32SharedNv12Backing"/>
+    /// from DXGI NT shared handles only (omit non-owning libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers on the backing).
+    /// GL import then uses <c>OpenSharedResource</c> on a host-owned D3D11 device (e.g. SDL <c>D3D11GlInteropDeviceHost</c> or
+    /// <see cref="IVideoOutputD3D11GlBorrowSetup"/>). Incompatible with lazy true zero-host that binds the uploader solely from the first frame's
+    /// <c>LibavD3D11DeviceComPtr</c> — keep SDL's interop device or a pre-bound renderer device when this is enabled.
+    /// </summary>
+    /// <remarks>
+    /// Same behavior when the environment variable <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> is <c>1</c> or <c>true</c> (with
+    /// <see cref="RetainD3D11SharedHandleForGl"/>); see <see cref="IsWin32Nv12SharedHandleOnlyRequested"/>.
+    /// </remarks>
+    public bool Win32Nv12SharedHandleOnlyExport { get; init; }
+
+    /// <summary>
+    /// Maximum demuxed audio packets buffered ahead of the audio decoder. Default 192 — enough for
+    /// well-behaved containers; raise for HEVC 4K with deep B-frame reorder buffers when the demux
+    /// thread otherwise blocks waiting for the video queue to drain. <c>0</c> falls back to the default.
+    /// </summary>
+    public int AudioPacketQueueDepth { get; init; }
+
+    /// <summary>
+    /// Maximum demuxed video packets buffered ahead of the video decoder. Default 384 — tight for
+    /// some HEVC 4K streams with 16+ reference frames; raise if the demuxer pauses noticeably while
+    /// the decoder works through a long GOP. <c>0</c> falls back to the default.
+    /// </summary>
+    public int VideoPacketQueueDepth { get; init; }
+
+    /// <summary>
+    /// AVIO read buffer for local-file opens, in bytes. <c>0</c> uses FFmpeg's native file protocol (small
+    /// ~32 KB reads). When &gt; 0, the file is opened through a custom AVIO with this buffer size so each
+    /// read pulls a large block — markedly better sustained throughput on high-per-IOP-latency media (USB /
+    /// external drives), where many small reads can't keep the demux fed. Suggested 1–4 MB. Ignored for
+    /// stream/URI opens (those already supply their own I/O).
+    /// </summary>
+    public int FileReadBufferBytes { get; init; }
+
+    /// <summary>
+    /// Explicit audio stream to decode, as a container stream index (<see cref="MediaStreamInfo.Index"/>).
+    /// <c>null</c> = automatic election (<c>av_find_best_stream</c>, current behavior).
+    /// <see cref="MediaStreamSelection.Disabled"/> disables audio entirely (no packets demuxed, no decoder
+    /// opened). An explicit index that is out of range / not audio / not decodable logs a warning and falls
+    /// back to automatic election — a stale persisted track choice must not make a file unplayable.
+    /// </summary>
+    public int? AudioStreamIndex { get; init; }
+
+    /// <summary>
+    /// Explicit video stream to decode, same semantics as <see cref="AudioStreamIndex"/>.
+    /// <see cref="MediaStreamSelection.Disabled"/> makes a video file behave like an audio-only file (stub
+    /// video source) at zero video-decode cost — use for audio-only playback of video containers.
+    /// </summary>
+    public int? VideoStreamIndex { get; init; }
+
+    /// <summary>
+    /// Returns whether shared-handle-only Win32 NV12 export is requested via <see cref="Win32Nv12SharedHandleOnlyExport"/> or
+    /// <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> (<c>1</c> / <c>true</c>). Callers still require <see cref="RetainD3D11SharedHandleForGl"/>.
+    /// </summary>
+    public static bool IsWin32Nv12SharedHandleOnlyRequested(VideoDecoderOpenOptions? options)
+    {
+        if (options?.Win32Nv12SharedHandleOnlyExport == true)
+            return true;
+        var v = Environment.GetEnvironmentVariable("MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY");
+        return v is not null && (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+    }
+}
+
+/// <summary>Portable hardware device enum (mirrors <see cref="AVHWDeviceType"/>).</summary>
+public enum HardwareVideoDeviceType
+{
+    Vaapi = AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI,
+    D3D11Va = AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA,
+    Dxva2 = AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2,
+    Qsv = AVHWDeviceType.AV_HWDEVICE_TYPE_QSV,
+    Cuda = AVHWDeviceType.AV_HWDEVICE_TYPE_CUDA,
+    Vulkan = AVHWDeviceType.AV_HWDEVICE_TYPE_VULKAN,
+}
+
+/// <summary>Libav hardware decode helper: device context, <c>get_format</c> hook, and CPU transfer scratch.</summary>
+/// <remarks>
+/// <para>
+/// <see cref="Dispose"/> frees the scratch <c>AVFrame</c>, hardware device buffer ref, and the pinning <see cref="GCHandle"/> in order.
+/// <strong>Debug</strong> builds log per-step failures via <see cref="MediaDiagnostics.LogError"/>; <strong>Release</strong> continues best-effort
+/// (same policy as <see cref="VideoRouter.Dispose"/>).
+/// </para>
+/// </remarks>
+internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
+{
+    // AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX
+    private const int HwConfigMethodHwDeviceCtx = 0x01;
+
+    /// <summary>
+    /// Value for <c>AVCodecContext.extra_hw_frames</c> when decoded GPU surfaces are retained for zero-copy GL
+    /// upload (RetainD3D11SharedHandleForGl / RetainDmabufForGl). Every retained frame pins one surface from the
+    /// decoder's FIXED hardware pool, so the pool must hold the DPB <em>plus</em> the whole downstream pipeline at
+    /// once — VideoPlayer's jitter buffer (up to 16) + VideoOutputPump (3) + a couple in flight in the compositor.
+    /// Without this head-room the pool drains after ~one queue's worth of frames and the next
+    /// <c>avcodec_send_packet</c> fails with <c>AVERROR_INVALIDDATA</c>, faulting the decode loop. Must exceed the
+    /// maximum number of frames held downstream simultaneously; raise it if the consumer queue grows.
+    /// </summary>
+    internal const int RetainedFramePoolHeadroom = 24;
+
+    private GCHandle _self;
+    private AVBufferRef* _deviceRef;
+    private AVPixelFormat _hwPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+    private AVFrame* _swScratch;
+    private bool _disposed;
+
+    private VideoHardwareDecodeContext(AVBufferRef* deviceRef, AVPixelFormat hwPixFmt)
+    {
+        _deviceRef = deviceRef;
+        _hwPixFmt = hwPixFmt;
+        _swScratch = av_frame_alloc();
+        if (_swScratch == null)
+            throw new OutOfMemoryException("av_frame_alloc (hw scratch)");
+    }
+
+    /// <summary>Delegate instance reachable for libav (do not discard).</summary>
+    private static readonly AVCodecContext_get_format HwGetFormat = HwGetFormatImpl;
+
+    public static VideoHardwareDecodeContext? TryCreate(AVCodec* codec, AVCodecContext* codecCtx,
+        IReadOnlyList<HardwareVideoDeviceType> preferredOrder,
+        bool preferLinuxDrmPrimeForGl,
+        bool preferWindowsD3D11SharedHandleForGl)
+    {
+        if (preferredOrder.Count == 0 && PreferSoftwareDecodeByDefault(codec->id))
+            return null;
+
+        var order = preferredOrder.Count > 0
+            ? preferredOrder
+            : DefaultDeviceOrder();
+
+        var dmabufPrefer = preferLinuxDrmPrimeForGl && OperatingSystem.IsLinux();
+        var d3d11Prefer = preferWindowsD3D11SharedHandleForGl && OperatingSystem.IsWindows();
+
+        foreach (var devEnum in order)
+        {
+            var devType = (AVHWDeviceType)devEnum;
+            AVBufferRef* devRef = null;
+            var ret = av_hwdevice_ctx_create(&devRef, devType, null, null, 0);
+            if (ret < 0 || devRef == null)
+                continue;
+
+            if (!TryFindHwPixFmt(codec, devType, dmabufPrefer, d3d11Prefer, out var hwPix))
+            {
+                av_buffer_unref(&devRef);
+                continue;
+            }
+
+            var ctx = new VideoHardwareDecodeContext(devRef, hwPix);
+            ctx._self = GCHandle.Alloc(ctx);
+            codecCtx->opaque = (void*)GCHandle.ToIntPtr(ctx._self);
+            codecCtx->get_format =
+                HwGetFormat;
+            codecCtx->hw_device_ctx = av_buffer_ref(devRef);
+            return ctx;
+        }
+
+        return null;
+    }
+
+    internal bool OutputsDrmPrimeGpuFrame =>
+        _hwPixFmt == AVPixelFormat.AV_PIX_FMT_DRM_PRIME;
+
+    internal bool OutputsD3D11GpuFrame =>
+        _hwPixFmt is AVPixelFormat.AV_PIX_FMT_D3D11 or AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD;
+
+    /// <summary>
+    /// Libav's D3D11VA <c>ID3D11Device</c> pointer (COM) from <c>AVHWDeviceContext</c>, when this context uses D3D11VA.
+    /// Use for Win32 NV12 GL upload without creating a second D3D11 device in the video output.
+    /// </summary>
+    internal nint TryGetD3D11DeviceComPtr()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!OutputsD3D11GpuFrame || _deviceRef == null)
+            return 0;
+        var pData = _deviceRef->data;
+        if (pData == null)
+            return 0;
+        var hw = (AVHWDeviceContext*)pData;
+        if (hw->type != AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA || hw->hwctx == null)
+            return 0;
+        var d3d = (AVD3D11VADeviceContext*)hw->hwctx;
+        return (nint)d3d->device;
+    }
+
+    /// <summary>DXGI adapter LUID for the libav D3D11 device (packed <see langword="long"/>), when D3D11VA is active.</summary>
+    internal bool TryGetD3D11AdapterLuid(out long adapterLuidPacked)
+    {
+        adapterLuidPacked = 0;
+        var p = TryGetD3D11DeviceComPtr();
+        if (p == 0)
+            return false;
+
+        try
+        {
+            using var dev = AddRefAndWrapDevice(p);
+            using var dxgiDevice = dev.QueryInterfaceOrNull<IDXGIDevice>();
+            if (dxgiDevice is null)
+                return false;
+
+            using var adapter = dxgiDevice.GetAdapter();
+            using var adapter1 = adapter.QueryInterfaceOrNull<IDXGIAdapter1>();
+            if (adapter1 is null)
+                return false;
+
+            var desc = adapter1.Description1;
+            adapterLuidPacked = PackLuid(desc.Luid);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static long PackLuid(Luid luid) =>
+        unchecked((long)(((ulong)(uint)luid.HighPart << 32) | luid.LowPart));
+
+    private static global::Vortice.Direct3D11.ID3D11Device AddRefAndWrapDevice(nint borrowedDeviceComPtr)
+    {
+        Marshal.AddRef(borrowedDeviceComPtr);
+        try
+        {
+            return new global::Vortice.Direct3D11.ID3D11Device(borrowedDeviceComPtr);
+        }
+        catch
+        {
+            Marshal.Release(borrowedDeviceComPtr);
+            throw;
+        }
+    }
+
+    private static IReadOnlyList<HardwareVideoDeviceType> DefaultDeviceOrder()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return
+            [
+                HardwareVideoDeviceType.D3D11Va, HardwareVideoDeviceType.Qsv, HardwareVideoDeviceType.Dxva2,
+                HardwareVideoDeviceType.Cuda,
+            ];
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            return [HardwareVideoDeviceType.Vaapi, HardwareVideoDeviceType.Vulkan];
+        return [HardwareVideoDeviceType.Vaapi];
+    }
+
+    private static bool TryFindHwPixFmt(AVCodec* codec, AVHWDeviceType devType, bool preferDrmPrime,
+        bool preferWindowsD3D11SharedHandle,
+        out AVPixelFormat hwPixFmt)
+    {
+        hwPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+        AVPixelFormat drmPrime = AVPixelFormat.AV_PIX_FMT_NONE;
+        AVPixelFormat d3d11Out = AVPixelFormat.AV_PIX_FMT_NONE;
+        AVPixelFormat other = AVPixelFormat.AV_PIX_FMT_NONE;
+
+        for (var i = 0;; i++)
+        {
+            var cfg = avcodec_get_hw_config(codec, i);
+            if (cfg == null)
+                break;
+
+            if ((cfg->methods & HwConfigMethodHwDeviceCtx) == 0)
+                continue;
+
+            if (cfg->device_type != devType)
+                continue;
+
+            var px = cfg->pix_fmt;
+            if (px == AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
+                drmPrime = px;
+            else if (px is AVPixelFormat.AV_PIX_FMT_D3D11 or AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+                d3d11Out = px;
+            else if (px != AVPixelFormat.AV_PIX_FMT_NONE && other == AVPixelFormat.AV_PIX_FMT_NONE)
+                other = px;
+        }
+
+        if (preferDrmPrime && drmPrime != AVPixelFormat.AV_PIX_FMT_NONE)
+        {
+            hwPixFmt = drmPrime;
+            return true;
+        }
+
+        if (preferWindowsD3D11SharedHandle && devType == AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA &&
+            d3d11Out != AVPixelFormat.AV_PIX_FMT_NONE)
+        {
+            hwPixFmt = d3d11Out;
+            return true;
+        }
+
+        hwPixFmt = other != AVPixelFormat.AV_PIX_FMT_NONE ? other : drmPrime;
+        if (hwPixFmt == AVPixelFormat.AV_PIX_FMT_NONE && d3d11Out != AVPixelFormat.AV_PIX_FMT_NONE)
+            hwPixFmt = d3d11Out;
+        return hwPixFmt != AVPixelFormat.AV_PIX_FMT_NONE;
+    }
+
+    internal static bool PreferSoftwareDecodeByDefault(AVCodecID codecId) =>
+        // FFmpeg exposes a Vulkan path for ProRes on some Linux systems, but for playback we immediately
+        // transfer those frames back to CPU memory. That path disables the decoder's frame/slice threading
+        // and can be slower than real time after deep seeks; the threaded software decoder is the stable
+        // default unless the host explicitly requests a hardware device order.
+        codecId == AVCodecID.AV_CODEC_ID_PRORES;
+
+    public AVPixelFormat HwAccelPixFmt => _hwPixFmt;
+
+    private static AVPixelFormat HwGetFormatImpl(AVCodecContext* avctx, AVPixelFormat* fmt)
+    {
+        if (avctx->opaque == null) return AVPixelFormat.AV_PIX_FMT_NONE;
+        var h = GCHandle.FromIntPtr((nint)avctx->opaque);
+        if (!h.IsAllocated || h.Target is not VideoHardwareDecodeContext ctx)
+            return AVPixelFormat.AV_PIX_FMT_NONE;
+
+        var want = ctx._hwPixFmt;
+        for (var p = fmt; *p != AVPixelFormat.AV_PIX_FMT_NONE; p++)
+        {
+            if (*p == want)
+                return *p;
+        }
+        return AVPixelFormat.AV_PIX_FMT_NONE;
+    }
+
+    /// <summary>CPU copy of a hardware frame — <paramref name="hwFrame"/> stays valid for the caller.</summary>
+    public AVFrame* TransferToScratch(AVFrame* hwFrame)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(hwFrame);
+        av_frame_unref(_swScratch);
+        var ret = av_hwframe_transfer_data(_swScratch, hwFrame, 0);
+        FFmpegException.ThrowIfError(ret, nameof(av_hwframe_transfer_data));
+        // av_hwframe_transfer_data copies ONLY pixel data, not frame properties. Without this the scratch
+        // frame's best_effort_timestamp / pts are AV_NOPTS_VALUE, so callers (ResolveVideoPts) silently fall
+        // back to a frame-counter PTS. That counter is re-anchored to the seek target on every seek, which
+        // mislabels the post-seek keyframe as the target — leaving hardware-decoded video one GOP behind the
+        // (correctly timestamped) audio. Copy props so hw frames carry the same timestamps as software ones.
+        var propRet = av_frame_copy_props(_swScratch, hwFrame);
+        FFmpegException.ThrowIfError(propRet, nameof(av_frame_copy_props));
+        return _swScratch;
+    }
+
+    /// <summary>Clear hooks on <paramref name="codecCtx"/> — does not dispose this context (caller still owns).</summary>
+    public void DetachFromCodec(AVCodecContext* codecCtx)
+    {
+        codecCtx->get_format = null;
+        codecCtx->opaque = null;
+        var hw = codecCtx->hw_device_ctx;
+        if (hw != null)
+        {
+            var tmp = hw;
+            av_buffer_unref(&tmp);
+            codecCtx->hw_device_ctx = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        if (_swScratch != null)
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() =>
+            {
+                var f = _swScratch;
+                av_frame_free(&f);
+            }, "VideoHardwareDecodeContext.Dispose: scratch AVFrame");
+            _swScratch = null;
+        }
+
+        if (_deviceRef != null)
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() =>
+            {
+                var dev = _deviceRef;
+                av_buffer_unref(&dev);
+            }, "VideoHardwareDecodeContext.Dispose: device AVBufferRef");
+            _deviceRef = null;
+        }
+
+        if (_self.IsAllocated)
+        {
+            MediaDiagnostics.SwallowDisposeErrors(_self.Free, "VideoHardwareDecodeContext.Dispose: GCHandle.Free");
+        }
+    }
+}

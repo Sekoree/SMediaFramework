@@ -1,15 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- Phase 3 GL gate: create an SDL3 GL context like the SDL3 output does, print GL strings, and
+         report WGL_NV_DX_interop availability (zero-copy D3D11<->GL). References Present.SDL3 to pull
+         SDL3-CS + the native SDL3 deployment. Tool/composition-root: AOT analyzers off (it's not a lib). -->
+
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <IsAotCompatible>false</IsAotCompatible>
     </PropertyGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
     </ItemGroup>
 
     <ItemGroup>

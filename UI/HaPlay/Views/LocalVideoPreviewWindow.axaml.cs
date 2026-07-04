@@ -1,5 +1,5 @@
 using Avalonia.Controls;
-using S.Media.Avalonia;
+using S.Media.Present.Avalonia;
 
 namespace HaPlay.Views;
 

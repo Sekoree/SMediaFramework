@@ -1,5 +1,5 @@
 using S.Media.Core.Video;
-using S.Media.FFmpeg.Video;
+using S.Media.Decode.FFmpeg.Video;
 
 namespace HaPlay.Playback;
 

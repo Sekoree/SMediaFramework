@@ -1,6 +1,7 @@
+using S.Media.FFmpeg.Common;
 using S.Media.Core.Video;
-using S.Media.FFmpeg;
-using S.Media.FFmpeg.Video;
+using S.Media.Decode.FFmpeg;
+using S.Media.Decode.FFmpeg.Video;
 using StbImageSharp;
 
 namespace HaPlay.Playback;

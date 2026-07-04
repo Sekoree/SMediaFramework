@@ -1,41 +1,36 @@
-# Basic (C#) Media Framework & Demo Player App
+# MFPlayer.Next — source tree
 
-## Testing
-There is currently a basic test build on the Releases page for WIndows and Linux to find bugs:<br>
-https://github.com/Sekoree/MFPlayer/releases/latest<br>
+The parallel rewrite tree planned in [`../Next/`](../Next/README.md). It builds independently of the
+old `MFPlayer.sln`, which is left untouched.
 
-## The Framework
+## Build / test / AOT smoke
 
-Initially this started as a silly way of adding an FFmpeg decoder to [OwnAudioSharp](https://github.com/ModernMube/OwnAudioSharp) which then lead to a hacked together addon that made it play video as well.<br>
-Realizing that was a bad idea but liking OwnAudioSharps overall structure this came to be.<br>
-<br>
-### Core Stuff
-Decoding is done via FFmpeg and then fed through various syncing layers to either PortAudio for audio or SDL3, Avalonia or NDI outputs for video (Yes I know NDI audio too).<br>
-A bit of mixing functionality for (mostly audio) to route N amount of channel to M amount of outputs.<br>
-- See the Media Player and Cue Player of the HaPlayer demo app<br>
+    dotnet build  next/MFPlayer.sln -c Release
+    dotnet test   next/MediaFramework/Test/S.Media.Arch.Tests/S.Media.Arch.Tests.csproj
+    dotnet publish next/MediaFramework/Tools/AotSmoke/AotSmoke.csproj -c Release -r linux-x64 -p:PublishAot=true
 
-### Core Extras
-Mainly the composition things. Helpful when just displaying one type of media at a time isnt enough, supporting layers, images, text inculding positioning.<br>
- See Cue Player stuff in the HaPlayer demo app<br>
+(Windows: `-r win-x64`. Linux NativeAOT needs `clang` + `zlib1g-dev`.)
 
-### Other Extras
-Aka. the OSC and MIDI library. Why? I'm forsed to use tablet mixers at work currently, so these are for gluing random MIDI controllers to mixer OSC commands.<br>
-Also I love [Mond](https://github.com/Rohansi/Mond), an extremely cool scripting runtime for .Net that does support NativeAOT.<br>
-- See the Control parts of the HaPlayer demo app<br>
+## ⚠️ One generation per process (D1 / OQ6)
 
-### HaPlayer
-Started out as a quick and dirty way to test playback and all sorts of functions.<br>
-The UI and UX is a crime against humanity, but I also havent spent much time at it yet as I still focus on core framework stability.<br>
-(most parts were mostly a claude or codex "I need to test this, can you add X")<br>
+next/ keeps carried-forward assembly names where a module remains the same logical module
+(`S.Media.Core`, `S.Media.NDI`, …); split/renamed modules intentionally use their new names
+(`S.Media.Decode.FFmpeg`, `S.Media.Present.SDL3`, …). There is no collision **as long as old and next
+are never loaded into the same process**. Never reference an old-tree assembly from next/ (or
+vice-versa). If a transitional process must bridge the two, cross the boundary via the `s_media_player`
+C ABI (native — no managed identity clash), never by loading both managed sets.
 
-### Disclaimer
-I did use a lot of AI tools for this, mainly to experiemnt to see whats possible (or the usual ffmpeg boilerplate to get stream data etc. or OpenGL shaders).<br>
+## Layout
 
-### Main Dependencies
-(I'll probably forget something)<br>
-Avalonia (for the UI)<br>
-FFmpeg(.AutoGen)<br>
-SkiaSharp (inherited from Avalonia, used for text stuff)<br>
-SDL3-CS (for video output, so things arent strictly tied to the Avalonia dispatcher)<br>
-Mond (for the scripting parts of the "Control" area)<br>
-NDI (to professionally™ send audio and video over the network)<br>
+| Path | Contents |
+|---|---|
+| `MediaFramework/Media/*` | framework (Core, Time, Routing, Gpu, Compositor, Players, Session) + backend modules |
+| `MediaFramework/Control/S.Control` | MIDI/OSC/Mond control surface |
+| `MediaFramework/Interop/{S.Media.Interop, S.Abi}` | outbound C ABI + inbound native plugin host |
+| `MediaFramework/Test/*` | tests (arch-test today) |
+| `MediaFramework/Tools/*` | smoke/parity harness (AotSmoke today) |
+
+Dependencies point **down only**, enforced by `S.Media.Arch.Tests` against
+[`../Next/01-Architecture-and-Principles.md`](../Next/01-Architecture-and-Principles.md) §3. Build
+settings live in `Directory.Build.props`; package versions in `Directory.Packages.props`. Work the
+phases from [`../Next/09-Phase-Checklists.md`](../Next/09-Phase-Checklists.md).

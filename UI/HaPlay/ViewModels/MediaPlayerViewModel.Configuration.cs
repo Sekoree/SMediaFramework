@@ -16,7 +16,7 @@ using HaPlay.Resources;
 using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.NDI;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.ViewModels;
 
@@ -55,7 +55,7 @@ public partial class MediaPlayerViewModel
     {
         var owner = TryGetMainWindow();
         if (owner is null) return;
-        ResizeSelectedAudioMatrices(_session);
+        ResizeSelectedAudioMatrices();
         RebuildAudioMatrixRows();
         ApplyAllOutputMatricesToSession();
         var dialog = new Views.Dialogs.AudioMatrixDialog { DataContext = this };

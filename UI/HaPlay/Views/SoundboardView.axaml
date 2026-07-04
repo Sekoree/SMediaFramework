@@ -1,5 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
+             xmlns:views="using:HaPlay.Views"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
@@ -33,7 +35,9 @@
       <Setter Property="BorderBrush" Value="#7FDAAA3A" />
     </Style>
     <Style Selector="Border.tile.selected">
-      <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColor}" />
+      <!-- Classic Highlight — the old SystemAccentColor was a Fluent resource that no longer resolves. -->
+      <Setter Property="BorderBrush" Value="{DynamicResource {x:Static common:SystemColors.HighlightBrushKey}}" />
+      <Setter Property="BorderThickness" Value="2" />
     </Style>
   </UserControl.Styles>
 
@@ -75,14 +79,14 @@
 
     <!-- Edit panel (right). -->
     <Border DockPanel.Dock="Right" Width="280" Margin="8,0,0,0"
-            BorderBrush="#33808080" BorderThickness="1" CornerRadius="6" Padding="10"
+            BorderBrush="#33808080" BorderThickness="1" CornerRadius="0" Padding="10"
             IsVisible="{Binding IsEditMode}">
       <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="8">
 
-          <!-- Selected tile -->
-          <TextBlock Text="{x:Static res:Strings.SoundboardTileSettingsHeader}"
-                     FontWeight="SemiBold" FontSize="14" />
+          <!-- Selected tile (classic group box) -->
+          <HeaderedContentControl Header="{x:Static res:Strings.SoundboardTileSettingsHeader}">
+           <StackPanel Spacing="6">
           <TextBlock Text="{x:Static res:Strings.SoundboardNoTileSelectedHint}"
                      TextWrapping="Wrap" Opacity="0.6"
                      IsVisible="{Binding SelectedTile, Converter={x:Static ObjectConverters.IsNull}}" />
@@ -124,7 +128,7 @@
             </Grid>
 
             <TextBlock Text="{x:Static res:Strings.SoundboardTileFadeOutLabel}" Opacity="0.7" FontSize="11" />
-            <NumericUpDown Minimum="0" Maximum="60000" Increment="250"
+            <NumericUpDown FormatString="0" Minimum="0" Maximum="60000" Increment="250"
                            Value="{Binding SelectedTile.FadeOutMs, Mode=TwoWay}" />
 
             <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
@@ -133,12 +137,11 @@
             <Button Content="{x:Static res:Strings.SoundboardClearTileButton}"
                     Command="{Binding ClearSelectedTileCommand}" />
           </StackPanel>
+           </StackPanel>
+          </HeaderedContentControl>
 
-          <Separator Margin="0,4" />
-
-          <!-- Board settings + defaults -->
-          <TextBlock Text="{x:Static res:Strings.SoundboardBoardSettingsHeader}"
-                     FontWeight="SemiBold" FontSize="14" />
+          <!-- Board settings + defaults (classic group box) -->
+          <HeaderedContentControl Header="{x:Static res:Strings.SoundboardBoardSettingsHeader}" Margin="0,4,0,0">
           <StackPanel Spacing="6" IsVisible="{Binding SelectedBoard, Converter={x:Static ObjectConverters.IsNotNull}}">
             <TextBlock Text="{x:Static res:Strings.SoundboardBoardNameLabel}" Opacity="0.7" FontSize="11" />
             <TextBox Text="{Binding SelectedBoard.Name, Mode=TwoWay}" />
@@ -146,12 +149,12 @@
             <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
               <StackPanel Grid.Column="0" Spacing="4">
                 <TextBlock Text="{x:Static res:Strings.SoundboardRowsLabel}" Opacity="0.7" FontSize="11" />
-                <NumericUpDown Minimum="1" Maximum="12" Increment="1"
+                <NumericUpDown FormatString="0" Minimum="1" Maximum="12" Increment="1"
                                Value="{Binding SelectedBoard.Rows, Mode=TwoWay}" />
               </StackPanel>
               <StackPanel Grid.Column="1" Spacing="4">
                 <TextBlock Text="{x:Static res:Strings.SoundboardColumnsLabel}" Opacity="0.7" FontSize="11" />
-                <NumericUpDown Minimum="1" Maximum="12" Increment="1"
+                <NumericUpDown FormatString="0" Minimum="1" Maximum="12" Increment="1"
                                Value="{Binding SelectedBoard.Columns, Mode=TwoWay}" />
               </StackPanel>
             </Grid>
@@ -180,7 +183,7 @@
             </Grid>
 
             <TextBlock Text="{x:Static res:Strings.SoundboardTileFadeOutLabel}" Opacity="0.7" FontSize="11" />
-            <NumericUpDown Minimum="0" Maximum="60000" Increment="250"
+            <NumericUpDown FormatString="0" Minimum="0" Maximum="60000" Increment="250"
                            Value="{Binding SelectedBoard.DefaultFadeOutMs, Mode=TwoWay}" />
 
             <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
@@ -202,11 +205,13 @@
                       Command="{Binding ImportBoardsCommand}" />
             </WrapPanel>
           </StackPanel>
+          </HeaderedContentControl>
         </StackPanel>
       </ScrollViewer>
     </Border>
 
-    <!-- Tile grid. -->
+    <!-- Tile grid — one classic group box per board, headed by the board's name. -->
+    <HeaderedContentControl Header="{Binding SelectedBoard.Name}" Padding="6">
     <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}">
       <ItemsControl.ItemsPanel>
         <ItemsPanelTemplate>
@@ -220,10 +225,16 @@
                   Classes.playing="{Binding IsPlaying}"
                   Classes.fading="{Binding IsFading}"
                   Classes.editing="{Binding IsEditing}"
-                  Classes.selected="{Binding $parent[ItemsControl].((vm:SoundboardWorkspaceViewModel)DataContext).SelectedTile,
-                                     Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
-                  Margin="3" CornerRadius="6" BorderThickness="1.5" MinHeight="84"
+                  Margin="3" CornerRadius="0" BorderThickness="1.5" MinHeight="84"
                   Tapped="OnTileTapped">
+            <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal selected-highlight
+                 never matched — compare via MultiBinding instead. -->
+            <Classes.selected>
+              <MultiBinding Converter="{x:Static views:AllEqualConverter.Instance}">
+                <Binding Path="$parent[ItemsControl].((vm:SoundboardWorkspaceViewModel)DataContext).SelectedTile" />
+                <Binding />
+              </MultiBinding>
+            </Classes.selected>
             <Border.ContextMenu>
               <ContextMenu>
                 <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
@@ -244,9 +255,9 @@
                              TextTrimming="CharacterEllipsis" MaxLines="3"
                              TextAlignment="Center"
                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                  <TextBlock Text="⟳" FontSize="12" Opacity="0.6"
-                             HorizontalAlignment="Right" VerticalAlignment="Top"
-                             IsVisible="{Binding Loop}" />
+                  <PathIcon Data="{x:Static views:AppIcons.Loop}" Width="11" Height="11" Opacity="0.6"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                            IsVisible="{Binding Loop}" />
                 </Grid>
                 <ProgressBar Grid.Row="1" Height="8" MinWidth="0" Margin="0,4,0,2"
                              Minimum="0" Maximum="100"
@@ -273,5 +284,6 @@
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+    </HeaderedContentControl>
   </DockPanel>
 </UserControl>

@@ -1,10 +1,14 @@
-using S.Media.Core.Diagnostics;
-
 namespace S.Media.Core.Audio;
 
 /// <summary>
 /// In-memory PCM clip shared by many <see cref="AudioClipVoice"/> instances (soundboard / cue grid).
 /// </summary>
+/// <remarks>
+/// Core owns the resident-PCM container and voice minting only. Decoding a file/stream into a clip is a
+/// decoder concern, so the <c>open a URI → AudioClip</c> convenience lives at the registry/Session layer
+/// (it calls <see cref="LoadFromSource"/> with a source from <c>IMediaRegistry.TryOpenAudio</c> and, for
+/// resampling, the registry's resampler factory) — Core never references a decoder (P2/P3).
+/// </remarks>
 public sealed class AudioClip
 {
     private readonly float[] _interleaved;
@@ -25,40 +29,6 @@ public sealed class AudioClip
 
     internal ReadOnlyMemory<float> Interleaved => _interleaved;
 
-    /// <summary>Decodes a media file into a resident PCM buffer. Requires FFmpeg init.</summary>
-    public static AudioClip OpenFile(string path, int? targetSampleRate = null, ChannelMap? mixdown = null)
-    {
-        var source = AudioSource.OpenFile(path);
-        try
-        {
-            return LoadFromSource(source, targetSampleRate, mixdown);
-        }
-        finally
-        {
-            DisposeSource(source);
-        }
-    }
-
-    /// <summary>Decodes a media stream into a resident PCM buffer. Requires FFmpeg init.</summary>
-    public static AudioClip OpenStream(Stream stream, int? targetSampleRate = null, ChannelMap? mixdown = null)
-    {
-        var source = AudioSource.OpenStream(stream);
-        try
-        {
-            return LoadFromSource(source, targetSampleRate, mixdown);
-        }
-        finally
-        {
-            DisposeSource(source);
-        }
-    }
-
-    private static void DisposeSource(IAudioSource source)
-    {
-        if (source is IDisposable d)
-            d.Dispose();
-    }
-
     /// <summary>Wraps caller-owned interleaved float PCM (length must be a multiple of channel count).</summary>
     public static AudioClip FromSamples(AudioFormat format, ReadOnlyMemory<float> interleaved)
     {
@@ -75,22 +45,32 @@ public sealed class AudioClip
     public AudioClipVoice CreateVoice(AudioClipVoiceOptions? options = null) =>
         new(this, options ?? AudioClipVoiceOptions.Default);
 
-    private static AudioClip LoadFromSource(IAudioSource source, int? targetSampleRate, ChannelMap? mixdown)
+    /// <summary>
+    /// Drains <paramref name="source"/> (caller-owned — not disposed here) into a resident PCM clip,
+    /// optionally mixing down and resampling. Resampling to <paramref name="targetSampleRate"/> needs a
+    /// <paramref name="resamplerFactory"/> (wire <c>IMediaRegistry.CreateResampler</c>); Core has no decoder.
+    /// </summary>
+    public static AudioClip LoadFromSource(
+        IAudioSource source,
+        int? targetSampleRate = null,
+        ChannelMap? mixdown = null,
+        Func<IAudioSource, int, IAudioSource>? resamplerFactory = null)
     {
+        ArgumentNullException.ThrowIfNull(source);
         var (format, interleaved, samplesPerChannel) = DecodeToPcm(source);
         if (mixdown is { } map)
             (format, interleaved, samplesPerChannel) = ApplyMixdown(format, interleaved, samplesPerChannel, map);
 
         if (targetSampleRate is { } rate && rate != format.SampleRate)
         {
-            if (MediaFrameworkPlugins.AudioResampleSourceWrapper is not { } factory)
+            if (resamplerFactory is not { } factory)
                 throw new InvalidOperationException(
-                    "AudioClip: targetSampleRate requires FFmpeg init (MediaFrameworkRuntime.Init().UseFFmpeg()).");
+                    "AudioClip: targetSampleRate requires a resamplerFactory (wire IMediaRegistry.CreateResampler).");
             var pcm = new PcmBufferAudioSource(format, interleaved, samplesPerChannel);
             var wrapped = factory(pcm, rate);
             try
             {
-                return LoadFromSource(wrapped, targetSampleRate: null, mixdown: null);
+                return LoadFromSource(wrapped);
             }
             finally
             {

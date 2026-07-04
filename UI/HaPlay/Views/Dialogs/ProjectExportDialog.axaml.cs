@@ -30,8 +30,8 @@ public partial class ProjectExportDialog : Window
         [
             new SectionChoice(ProjectSections.OutputsAudio, Strings.SectionAudioOutputsLabel, true),
             new SectionChoice(ProjectSections.OutputsVideo, Strings.SectionVideoOutputsLabel, true),
-            new SectionChoice(ProjectSections.TargetsMidi, Strings.SectionMidiTargetsLabel, false),
-            new SectionChoice(ProjectSections.TargetsOsc, Strings.SectionOscTargetsLabel, false),
+            new SectionChoice(ProjectSections.TargetsMIDI, Strings.SectionMIDITargetsLabel, false),
+            new SectionChoice(ProjectSections.TargetsOSC, Strings.SectionOSCTargetsLabel, false),
             new SectionChoice(ProjectSections.Players, Strings.SectionPlayersLabel, false),
             new SectionChoice(ProjectSections.CueLists, Strings.SectionCueListsLabel, false),
             new SectionChoice(ProjectSections.Soundboards, Strings.SectionSoundboardsLabel, false),

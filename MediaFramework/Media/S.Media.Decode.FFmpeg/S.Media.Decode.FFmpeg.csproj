@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Decode.FFmpeg — demux + audio/video decode (hw decode, swscale converter, yadif),
+         source-side resample, the FFmpeg-backed audio output wrappers (AdaptiveRateAudioOutput /
+         ResamplingAudioOutput), and the FFmpegModule + FFmpegDecoderProvider that register these through
+         the media registry (replacing the old global slots, P2). References S.Media.Time for IPlaybackClock
+         forwarding in the resampling output wrappers (see Next/01 §3). -->
+
+    <ItemGroup>
+        <PackageReference Include="FFmpeg.AutoGen" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="Vortice.Direct3D11" />
+        <PackageReference Include="Vortice.DXGI" />
+    </ItemGroup>
+
+    <!-- FFmpeg 8.x native runtime (avcodec-62/avformat-62/…) bundled as a NuGet native-asset package —
+         it ships win-x64 only, so on a `-r win-x64` publish its DLLs deploy next to the app where the
+         default DllImport search + FFmpeg.AutoGen's DynamicallyLoadedBindings pick them up (matches
+         AutoGen 8.1.0). Linux/macOS publishes get no runtime asset from it (system/CI-provided FFmpeg). -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+        <PackageReference Include="FFmpeg.GPL" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../S.Media.FFmpeg.Common/S.Media.FFmpeg.Common.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="FFmpeg.AutoGen" />
+        <Using Include="FFmpeg.AutoGen.ffmpeg" Static="true" />
+        <Using Include="S.Media.Core" />
+        <Using Include="S.Media.Core.Audio" />
+        <Using Include="S.Media.Core.Video" />
+        <Using Include="S.Media.Core.Diagnostics" />
+        <Using Include="S.Media.Core.Registry" />
+        <Using Include="S.Media.Time" />
+        <Using Include="S.Media.FFmpeg.Common" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
+    </ItemGroup>
+
+</Project>

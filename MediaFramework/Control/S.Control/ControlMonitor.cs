@@ -101,21 +101,21 @@ public sealed record ControlMonitorRecord
 
     public string? Address { get; init; }
 
-    public List<ControlMonitorOscArgumentRecord> OscArguments { get; init; } = new();
+    public List<ControlMonitorOSCArgumentRecord> OSCArguments { get; init; } = new();
 
-    public int? MidiChannel { get; init; }
+    public int? MIDIChannel { get; init; }
 
-    public ControlMidiMessageType? MidiMessageType { get; init; }
+    public ControlMIDIMessageType? MIDIMessageType { get; init; }
 
-    public int? MidiController { get; init; }
+    public int? MIDIController { get; init; }
 
-    public int? MidiNote { get; init; }
+    public int? MIDINote { get; init; }
 
-    public int? MidiValue { get; init; }
+    public int? MIDIValue { get; init; }
 
-    public int? MidiParameter { get; init; }
+    public int? MIDIParameter { get; init; }
 
-    public bool? MidiHighResolution14Bit { get; init; }
+    public bool? MIDIHighResolution14Bit { get; init; }
 
     public string? Message { get; init; }
 
@@ -124,7 +124,7 @@ public sealed record ControlMonitorRecord
     public byte[]? RawBytes { get; init; }
 }
 
-public sealed record ControlMonitorOscArgumentRecord
+public sealed record ControlMonitorOSCArgumentRecord
 {
     public string Kind { get; init; } = string.Empty;
 
@@ -138,7 +138,7 @@ public sealed record ControlMonitorOscArgumentRecord
 
     public byte[]? BlobValue { get; init; }
 
-    public static ControlMonitorOscArgumentRecord FromOscArgument(OSCArgument argument) =>
+    public static ControlMonitorOSCArgumentRecord FromOSCArgument(OSCArgument argument) =>
         argument.Type switch
         {
             OSCArgumentType.Int32 => new() { Kind = nameof(OSCArgumentType.Int32), IntegerValue = argument.AsInt32() },
@@ -154,7 +154,7 @@ public sealed record ControlMonitorOscArgumentRecord
             _ => new() { Kind = argument.Type.ToString() },
         };
 
-    public static ControlMonitorOscArgumentRecord FromCachedValue(ControlCachedValue value) =>
+    public static ControlMonitorOSCArgumentRecord FromCachedValue(ControlCachedValue value) =>
         value.Kind switch
         {
             ControlCachedValueKind.Number => new() { Kind = nameof(OSCArgumentType.Double64), FloatValue = value.NumberValue },
@@ -165,17 +165,17 @@ public sealed record ControlMonitorOscArgumentRecord
             _ => new() { Kind = value.Kind.ToString() },
         };
 
-    public static ControlMonitorOscArgumentRecord FromScriptArgument(ControlScriptOscArgument argument) =>
+    public static ControlMonitorOSCArgumentRecord FromScriptArgument(ControlScriptOSCArgument argument) =>
         argument.Type switch
         {
-            ControlScriptOscArgumentType.Float32 => new() { Kind = nameof(ControlScriptOscArgumentType.Float32), FloatValue = argument.NumberValue },
-            ControlScriptOscArgumentType.Double64 => new() { Kind = nameof(ControlScriptOscArgumentType.Double64), FloatValue = argument.NumberValue },
-            ControlScriptOscArgumentType.Int32 => new() { Kind = nameof(ControlScriptOscArgumentType.Int32), IntegerValue = (long)argument.NumberValue },
-            ControlScriptOscArgumentType.Int64 => new() { Kind = nameof(ControlScriptOscArgumentType.Int64), IntegerValue = (long)argument.NumberValue },
-            ControlScriptOscArgumentType.String => new() { Kind = nameof(ControlScriptOscArgumentType.String), StringValue = argument.StringValue },
-            ControlScriptOscArgumentType.Symbol => new() { Kind = nameof(ControlScriptOscArgumentType.Symbol), StringValue = argument.StringValue },
-            ControlScriptOscArgumentType.True => new() { Kind = nameof(ControlScriptOscArgumentType.True), BoolValue = true },
-            ControlScriptOscArgumentType.False => new() { Kind = nameof(ControlScriptOscArgumentType.False), BoolValue = false },
+            ControlScriptOSCArgumentType.Float32 => new() { Kind = nameof(ControlScriptOSCArgumentType.Float32), FloatValue = argument.NumberValue },
+            ControlScriptOSCArgumentType.Double64 => new() { Kind = nameof(ControlScriptOSCArgumentType.Double64), FloatValue = argument.NumberValue },
+            ControlScriptOSCArgumentType.Int32 => new() { Kind = nameof(ControlScriptOSCArgumentType.Int32), IntegerValue = (long)argument.NumberValue },
+            ControlScriptOSCArgumentType.Int64 => new() { Kind = nameof(ControlScriptOSCArgumentType.Int64), IntegerValue = (long)argument.NumberValue },
+            ControlScriptOSCArgumentType.String => new() { Kind = nameof(ControlScriptOSCArgumentType.String), StringValue = argument.StringValue },
+            ControlScriptOSCArgumentType.Symbol => new() { Kind = nameof(ControlScriptOSCArgumentType.Symbol), StringValue = argument.StringValue },
+            ControlScriptOSCArgumentType.True => new() { Kind = nameof(ControlScriptOSCArgumentType.True), BoolValue = true },
+            ControlScriptOSCArgumentType.False => new() { Kind = nameof(ControlScriptOSCArgumentType.False), BoolValue = false },
             _ => new() { Kind = argument.Type.ToString() },
         };
 }
@@ -191,8 +191,8 @@ public enum ControlMonitorDirection
 
 public enum ControlMonitorProtocol
 {
-    Midi,
-    Osc,
+    MIDI,
+    OSC,
     Script,
     Runtime,
     Cache,

@@ -1,11 +1,12 @@
+using S.Media.Routing;
 using HaPlay.ViewModels;
 using Microsoft.Extensions.Logging;
-using S.Media.Core.Clock;
+using S.Media.Time;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
-using S.Media.Effects;
-using S.Media.Playback;
-using S.Media.SDL3;
+using S.Media.Compositor;
+using S.Media.Session;
+using S.Media.Present.SDL3;
 
 namespace HaPlay.Playback;
 
@@ -111,6 +112,13 @@ internal sealed class CueCompositionRuntime : IDisposable
         return new LayerSlot(_inner.AddLayer(sourceFormat, ToPlacementSpec(placement)));
     }
 
+    /// <summary>
+    /// Attaches a subtitle/overlay source as a full-canvas top layer composited each frame at the clip's
+    /// position (delegates to the framework runtime). Returns a handle that detaches + disposes the feed.
+    /// </summary>
+    public IDisposable AttachSubtitleOverlay(IVideoOverlaySource source, Func<TimeSpan> positionProvider) =>
+        _inner.AttachSubtitleOverlay(source, positionProvider);
+
     private static VideoPlacementSpec ToPlacementSpec(CueVideoPlacement placement)
     {
         // The editor/model use a top-left origin (DestY = 0 is the top), but the composited output's
@@ -214,7 +222,7 @@ internal sealed class CueCompositionRuntime : IDisposable
                     if (ndi is not null)
                     {
                         IVideoOutput sink = ndi.Video;
-                        sink = WrapWithNDILockIfNeeded(sink, nd, $"cuecomp-ndi-{nd.Id:N}");
+                        sink = HaPlayPlaybackHelpers.WrapWithNDILockIfNeeded(sink, nd, $"cuecomp-ndi-{nd.Id:N}");
                         var pump = new VideoOutputPump(
                             sink,
                             maxQueuedFrames: 8,
@@ -244,13 +252,19 @@ internal sealed class CueCompositionRuntime : IDisposable
         return leases;
     }
 
-    private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, CueComposition composition)
+    internal static ClipCompositionCompositor CreateShowSessionCompositor(VideoFormat canvasFormat) =>
+        CreateCompositor(canvasFormat, "ShowSession");
+
+    private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, CueComposition composition) =>
+        CreateCompositor(canvasFormat, composition.Name);
+
+    private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, string compositionName)
     {
         var requested = Environment.GetEnvironmentVariable("HAPLAY_CUE_COMPOSITOR");
         if (string.Equals(requested, "cpu", StringComparison.OrdinalIgnoreCase))
         {
             Trace.LogInformation("CueCompositionRuntime: composition {Composition} using CPU compositor (env override)",
-                composition.Name);
+                compositionName);
             return new ClipCompositionCompositor(
                 new CpuVideoCompositor(canvasFormat),
                 RequiresBgraLayerConversion: true,
@@ -260,7 +274,7 @@ internal sealed class CueCompositionRuntime : IDisposable
         if (SDL3GLVideoCompositor.TryProbe(out var glError))
         {
             var gpu = new SDL3GLVideoCompositor(canvasFormat);
-            Trace.LogInformation("CueCompositionRuntime: composition {Composition} using OpenGL compositor", composition.Name);
+            Trace.LogInformation("CueCompositionRuntime: composition {Composition} using OpenGL compositor", compositionName);
             return new ClipCompositionCompositor(
                 gpu,
                 RequiresBgraLayerConversion: false,
@@ -275,14 +289,14 @@ internal sealed class CueCompositionRuntime : IDisposable
         {
             Trace.LogWarning(
                 "CueCompositionRuntime: OpenGL compositor requested for {Composition} but unavailable: {Error}; falling back to CPU",
-                composition.Name,
+                compositionName,
                 glError);
         }
         else
         {
             Trace.LogInformation(
                 "CueCompositionRuntime: OpenGL compositor unavailable for {Composition}: {Error}; using CPU compositor",
-                composition.Name,
+                compositionName,
                 glError);
         }
 
@@ -290,20 +304,6 @@ internal sealed class CueCompositionRuntime : IDisposable
             new CpuVideoCompositor(canvasFormat),
             RequiresBgraLayerConversion: true,
             BackendName: "CPU");
-    }
-
-    /// <summary>Mirrors <c>HaPlayPlaybackSession.WrapWithNDILockIfNeeded</c>.</summary>
-    private static IVideoOutput WrapWithNDILockIfNeeded(IVideoOutput ndiSender, NDIOutputDefinition nd, string name)
-    {
-        if (nd.PixelFormatLock is null && nd.ResolutionLockWidth is null && nd.ResolutionLockHeight is null)
-            return ndiSender;
-        return new LockedFormatVideoOutput(
-            ndiSender,
-            nd.PixelFormatLock,
-            nd.ResolutionLockWidth,
-            nd.ResolutionLockHeight,
-            name,
-            disposeInnerOnDispose: false);
     }
 
     private static Guid? TryParseGuid(string id) =>

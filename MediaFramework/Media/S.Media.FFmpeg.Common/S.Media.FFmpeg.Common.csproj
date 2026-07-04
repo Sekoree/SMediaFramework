@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.FFmpeg.Common — shared FFmpeg runtime/binding glue used by the Decode/Encode/Subtitle
+         FFmpeg modules: native init, error helpers, stream<->AVIO bridge, pixel-format mapping, memory
+         helpers. No decoders/encoders here, so those modules don't depend on each other (plan §2). -->
+
+    <ItemGroup>
+        <PackageReference Include="FFmpeg.AutoGen" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="FFmpeg.AutoGen" />
+        <Using Include="FFmpeg.AutoGen.ffmpeg" Static="true" />
+        <Using Include="S.Media.Core" />
+        <Using Include="S.Media.Core.Video" />
+        <Using Include="S.Media.Core.Diagnostics" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Decode.FFmpeg" />
+        <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
+    </ItemGroup>
+
+</Project>

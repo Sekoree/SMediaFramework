@@ -1,18 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- Phase 4 gate: polyphonic soundboard playback through the registry (no globals). Decodes a clip to
+         a resident AudioClip, then fires many AudioClipPlayer voices into an AudioRouter → PortAudio. -->
+
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <RootNamespace>SoundboardSmoke</RootNamespace>
-        <AssemblyName>SoundboardSmoke</AssemblyName>
+        <IsAotCompatible>false</IsAotCompatible>
     </PropertyGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
     </ItemGroup>
 
 </Project>

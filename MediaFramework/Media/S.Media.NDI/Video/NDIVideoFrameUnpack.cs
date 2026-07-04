@@ -19,7 +19,7 @@ internal static class NDIVideoFrameUnpack
     /// it to black; full-range metadata matches what worked in the field (passthrough may look gray on
     /// some GPUs — use default BGRA conversion).
     /// </summary>
-    private static readonly VideoFrameMetadata NdiSdrFullRangeBt709 = new(
+    private static readonly VideoFrameMetadata NDISdrFullRangeBt709 = new(
         ColorTransferHint: VideoTransferHint.Sdr,
         ColorSpace: VideoColorSpace.Bt709,
         ColorRange: VideoColorRange.Full,
@@ -168,8 +168,8 @@ internal static class NDIVideoFrameUnpack
 
     private static VideoFrameMetadata MetadataForFourCc(NDIFourCCVideoType fourCc) =>
         fourCc is NDIFourCCVideoType.Bgra or NDIFourCCVideoType.Rgba
-            ? NdiSdrFullRangeBt709 with { AlphaMode = VideoAlphaMode.Straight }
-            : NdiSdrFullRangeBt709;
+            ? NDISdrFullRangeBt709 with { AlphaMode = VideoAlphaMode.Straight }
+            : NDISdrFullRangeBt709;
 
     private static int DefaultLineStride(PixelFormat format, int width) => format switch
     {

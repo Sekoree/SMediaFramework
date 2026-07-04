@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using S.Media.Core.Audio;
-using S.Media.Core.Clock;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -64,13 +62,17 @@ public class AudioRouterClockingTests
         r.AddRoute("src", "out", ChannelMap.Identity(2));
         r.SlaveTo("out");
 
+        var sw = Stopwatch.StartNew();
         r.Start();
         Thread.Sleep(200);
+        sw.Stop();
         var produced = r.ChunksProduced;
         r.Stop();
 
-        // 200ms / 5ms ≈ 40; allow generous slack for thread scheduling.
-        Assert.InRange(produced, 25, 60);
+        // The clocked output signals ~once/5 ms, so production scales with the ACTUAL elapsed window, not
+        // the requested 200 ms (a loaded CI runner sleeps well past it — an absolute range is flaky).
+        var expected = sw.Elapsed.TotalMilliseconds / 5.0;
+        Assert.InRange(produced, expected * 0.4, expected * 1.75 + 5);
     }
 
     [Fact]
@@ -166,12 +168,22 @@ public class AudioRouterClockingTests
         r.SlaveTo("primary");
 
         r.Start();
-        Thread.Sleep(300);
+        // Poll until the drainer has made meaningful progress rather than asserting a count after a fixed
+        // sleep: a loaded CI runner processes far fewer chunks per wall-ms (processed=9-in-300ms flake), so
+        // give it time — a genuine stall never reaches the threshold within the timeout and still fails.
         var stats = r.GetPumpStats("primary");
+        var sw = Stopwatch.StartNew();
+        while (stats.Processed <= 10 && sw.ElapsedMilliseconds < 3000)
+        {
+            Thread.Sleep(20);
+            stats = r.GetPumpStats("primary");
+        }
         r.Stop();
 
         Assert.True(stats.Processed > 10,
             $"drainer should make steady progress (processed={stats.Processed})");
+        // Backpressure means dropped stays ~0 no matter how long the window runs (the router waits, never
+        // floods the pump), so this holds even after the poll above.
         Assert.True(stats.Dropped < 10,
             $"primary output must backpressure rather than flood-drop (dropped={stats.Dropped}, processed={stats.Processed})");
     }

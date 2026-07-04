@@ -25,12 +25,12 @@ namespace HaPlay.ViewModels;
 public partial class MainViewModel
 {
     [RelayCommand]
-    private void AddOscEndpoint()
+    private void AddOSCEndpoint()
     {
-        var n = ActionEndpoints.OfType<OscActionEndpoint>().Count() + 1;
-        var endpoint = new OscActionEndpoint
+        var n = ActionEndpoints.OfType<OSCActionEndpoint>().Count() + 1;
+        var endpoint = new OSCActionEndpoint
         {
-            Name = Strings.Format(nameof(Strings.OscEndpointNameFormat), n),
+            Name = Strings.Format(nameof(Strings.OSCEndpointNameFormat), n),
             Host = "127.0.0.1",
             Port = 9000,
         };
@@ -38,38 +38,38 @@ public partial class MainViewModel
         SelectedActionEndpoint = endpoint;
     }
 
-    [RelayCommand(CanExecute = nameof(CanAddMidiEndpoint))]
-    private void AddMidiEndpoint()
+    [RelayCommand(CanExecute = nameof(CanAddMIDIEndpoint))]
+    private void AddMIDIEndpoint()
     {
-        var n = ActionEndpoints.OfType<MidiActionEndpoint>().Count() + 1;
-        var endpoint = new MidiActionEndpoint
+        var n = ActionEndpoints.OfType<MIDIActionEndpoint>().Count() + 1;
+        var endpoint = new MIDIActionEndpoint
         {
-            Name = Strings.Format(nameof(Strings.MidiEndpointNameFormat), n),
+            Name = Strings.Format(nameof(Strings.MIDIEndpointNameFormat), n),
             Channel = 0,
         };
         ActionEndpoints.Add(endpoint);
         SelectedActionEndpoint = endpoint;
     }
 
-    private bool CanAddMidiEndpoint() => IsMidiAvailable;
+    private bool CanAddMIDIEndpoint() => IsMIDIAvailable;
 
-    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputEndpoint))]
-    private void AddSelectedMidiOutputEndpoint()
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMIDIOutputEndpoint))]
+    private void AddSelectedMIDIOutputEndpoint()
     {
-        AddSelectedMidiOutputToProject();
+        AddSelectedMIDIOutputToProject();
     }
 
-    private bool CanAddSelectedMidiOutputEndpoint() => IsMidiAvailable && SelectedMidiOutputOption is not null;
+    private bool CanAddSelectedMIDIOutputEndpoint() => IsMIDIAvailable && SelectedMIDIOutputOption is not null;
 
-    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputToProject))]
-    private void AddSelectedMidiOutputToProject()
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMIDIOutputToProject))]
+    private void AddSelectedMIDIOutputToProject()
     {
-        if (SelectedMidiOutputOption is not { } output)
+        if (SelectedMIDIOutputOption is not { } output)
             return;
 
-        Control.AddOrUpdateMidiOutputDevice(output.Id, output.Name);
+        Control.AddOrUpdateMIDIOutputDevice(output.Id, output.Name);
 
-        var existing = FindMidiEndpoint(output.Id, output.Name);
+        var existing = FindMIDIEndpoint(output.Id, output.Name);
         if (existing is not null)
         {
             SelectedActionEndpoint = existing;
@@ -77,7 +77,7 @@ public partial class MainViewModel
         }
         else
         {
-            var endpoint = new MidiActionEndpoint
+            var endpoint = new MIDIActionEndpoint
             {
                 Name = output.Name,
                 DeviceId = output.Id,
@@ -89,17 +89,17 @@ public partial class MainViewModel
             EndpointTestStatus = $"Added project MIDI output '{endpoint.Name}'.";
         }
 
-        RebuildProjectMidiDeviceRows();
-        SelectedProjectMidiOutputRow = ProjectMidiOutputRows.FirstOrDefault(r =>
-            MatchesMidiBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
+        RebuildProjectMIDIDeviceRows();
+        SelectedProjectMIDIOutputRow = ProjectMIDIOutputRows.FirstOrDefault(r =>
+            MatchesMIDIBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
     }
 
-    private bool CanAddSelectedMidiOutputToProject() => IsMidiAvailable && SelectedMidiOutputOption is not null;
+    private bool CanAddSelectedMIDIOutputToProject() => IsMIDIAvailable && SelectedMIDIOutputOption is not null;
 
-    private MidiActionEndpoint? FindMidiEndpoint(int deviceId, string deviceName) =>
+    private MIDIActionEndpoint? FindMIDIEndpoint(int deviceId, string deviceName) =>
         ActionEndpoints
-            .OfType<MidiActionEndpoint>()
-            .FirstOrDefault(e => MatchesMidiBinding(e.DeviceId, e.DeviceName ?? e.Name, deviceId, deviceName));
+            .OfType<MIDIActionEndpoint>()
+            .FirstOrDefault(e => MatchesMIDIBinding(e.DeviceId, e.DeviceName ?? e.Name, deviceId, deviceName));
 
     [RelayCommand(CanExecute = nameof(CanRemoveActionEndpoint))]
     private void RemoveActionEndpoint()
@@ -127,18 +127,18 @@ public partial class MainViewModel
 
         var replacement = SelectedActionEndpoint switch
         {
-            OscActionEndpoint osc => osc with
+            OSCActionEndpoint osc => osc with
             {
                 Name = name,
-                Host = string.IsNullOrWhiteSpace(OscEditHost) ? osc.Host : OscEditHost.Trim(),
-                Port = OscEditPort is >= IPEndPoint.MinPort and <= IPEndPoint.MaxPort ? OscEditPort : osc.Port,
+                Host = string.IsNullOrWhiteSpace(OSCEditHost) ? osc.Host : OSCEditHost.Trim(),
+                Port = OSCEditPort is >= IPEndPoint.MinPort and <= IPEndPoint.MaxPort ? OSCEditPort : osc.Port,
             },
-            MidiActionEndpoint midi => midi with
+            MIDIActionEndpoint midi => midi with
             {
                 Name = name,
-                DeviceId = MidiEditDeviceId,
-                DeviceName = string.IsNullOrWhiteSpace(MidiEditDeviceName) ? null : MidiEditDeviceName.Trim(),
-                Channel = Math.Clamp(MidiEditChannel, 0, 15),
+                DeviceId = MIDIEditDeviceId,
+                DeviceName = string.IsNullOrWhiteSpace(MIDIEditDeviceName) ? null : MIDIEditDeviceName.Trim(),
+                Channel = Math.Clamp(MIDIEditChannel, 0, 15),
             },
             _ => SelectedActionEndpoint,
         };
@@ -153,121 +153,121 @@ public partial class MainViewModel
 
     private bool CanSaveActionEndpointEdits() => SelectedActionEndpoint is not null;
 
-    [RelayCommand(CanExecute = nameof(CanRefreshMidiOutputs))]
-    private void RefreshMidiOutputs()
+    [RelayCommand(CanExecute = nameof(CanRefreshMIDIOutputs))]
+    private void RefreshMIDIOutputs()
     {
-        RefreshMidiDeviceCatalog();
-        if (SelectedActionEndpoint is MidiActionEndpoint midi)
-            SelectedMidiOutputOption = MidiOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
+        RefreshMIDIDeviceCatalog();
+        if (SelectedActionEndpoint is MIDIActionEndpoint midi)
+            SelectedMIDIOutputOption = MIDIOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
     }
 
-    private bool CanRefreshMidiOutputs() => IsMidiAvailable && SelectedActionEndpoint is MidiActionEndpoint;
+    private bool CanRefreshMIDIOutputs() => IsMIDIAvailable && SelectedActionEndpoint is MIDIActionEndpoint;
 
-    [RelayCommand(CanExecute = nameof(CanRefreshMidiDeviceCatalog))]
-    private void RefreshMidiDeviceCatalog()
+    [RelayCommand(CanExecute = nameof(CanRefreshMIDIDeviceCatalog))]
+    private void RefreshMIDIDeviceCatalog()
     {
-        if (!IsMidiAvailable)
+        if (!IsMIDIAvailable)
         {
-            MidiInputOptions.Clear();
-            MidiOutputOptions.Clear();
-            SelectedMidiInputOption = null;
-            SelectedMidiOutputOption = null;
-            MidiDeviceStatus = MidiUnavailableStatus;
+            MIDIInputOptions.Clear();
+            MIDIOutputOptions.Clear();
+            SelectedMIDIInputOption = null;
+            SelectedMIDIOutputOption = null;
+            MIDIDeviceStatus = MIDIUnavailableStatus;
             return;
         }
 
-        var previousInputId = SelectedMidiInputOption?.Id;
-        var previousOutputId = SelectedMidiOutputOption?.Id;
-        var initError = EnsureMidiInitialized();
+        var previousInputId = SelectedMIDIInputOption?.Id;
+        var previousOutputId = SelectedMIDIOutputOption?.Id;
+        var initError = EnsureMIDIInitialized();
         if (initError is not null)
         {
-            MidiDeviceStatus = initError;
+            MIDIDeviceStatus = initError;
             return;
         }
 
         var inputs = PMUtil.GetInputDevices();
-        MidiInputOptions.Clear();
+        MIDIInputOptions.Clear();
         foreach (var dev in inputs)
-            MidiInputOptions.Add(new MidiInputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
+            MIDIInputOptions.Add(new MIDIInputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
 
         var outputs = PMUtil.GetOutputDevices();
-        MidiOutputOptions.Clear();
+        MIDIOutputOptions.Clear();
         foreach (var dev in outputs)
-            MidiOutputOptions.Add(new MidiOutputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
+            MIDIOutputOptions.Add(new MIDIOutputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
 
-        SelectedMidiInputOption = previousInputId is null
-            ? MidiInputOptions.FirstOrDefault()
-            : MidiInputOptions.FirstOrDefault(o => o.Id == previousInputId) ?? MidiInputOptions.FirstOrDefault();
-        SelectedMidiOutputOption = previousOutputId is null
-            ? MidiOutputOptions.FirstOrDefault()
-            : MidiOutputOptions.FirstOrDefault(o => o.Id == previousOutputId) ?? MidiOutputOptions.FirstOrDefault();
-        MidiDeviceStatus = Strings.Format(nameof(Strings.MidiDeviceCatalogStatusFormat), inputs.Count, outputs.Count);
+        SelectedMIDIInputOption = previousInputId is null
+            ? MIDIInputOptions.FirstOrDefault()
+            : MIDIInputOptions.FirstOrDefault(o => o.Id == previousInputId) ?? MIDIInputOptions.FirstOrDefault();
+        SelectedMIDIOutputOption = previousOutputId is null
+            ? MIDIOutputOptions.FirstOrDefault()
+            : MIDIOutputOptions.FirstOrDefault(o => o.Id == previousOutputId) ?? MIDIOutputOptions.FirstOrDefault();
+        MIDIDeviceStatus = Strings.Format(nameof(Strings.MIDIDeviceCatalogStatusFormat), inputs.Count, outputs.Count);
     }
 
-    private bool CanRefreshMidiDeviceCatalog() => IsMidiAvailable;
+    private bool CanRefreshMIDIDeviceCatalog() => IsMIDIAvailable;
 
-    [RelayCommand(CanExecute = nameof(CanUseSelectedMidiOutput))]
-    private void UseSelectedMidiOutput()
+    [RelayCommand(CanExecute = nameof(CanUseSelectedMIDIOutput))]
+    private void UseSelectedMIDIOutput()
     {
-        if (SelectedMidiOutputOption is null)
+        if (SelectedMIDIOutputOption is null)
             return;
-        MidiEditDeviceId = SelectedMidiOutputOption.Id;
-        MidiEditDeviceName = SelectedMidiOutputOption.Name;
+        MIDIEditDeviceId = SelectedMIDIOutputOption.Id;
+        MIDIEditDeviceName = SelectedMIDIOutputOption.Name;
     }
 
-    private bool CanUseSelectedMidiOutput() => IsMidiAvailable && SelectedMidiOutputOption is not null;
+    private bool CanUseSelectedMIDIOutput() => IsMIDIAvailable && SelectedMIDIOutputOption is not null;
 
-    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiInputToControl))]
-    private void AddSelectedMidiInputToControl()
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMIDIInputToControl))]
+    private void AddSelectedMIDIInputToControl()
     {
-        if (SelectedMidiInputOption is not { } input)
+        if (SelectedMIDIInputOption is not { } input)
             return;
-        Control.AddOrUpdateMidiInputDevice(input.Id, input.Name);
-        RebuildProjectMidiDeviceRows();
-        SelectedProjectMidiInputRow = ProjectMidiInputRows.FirstOrDefault(r =>
-            MatchesMidiBinding(r.DeviceId, r.DeviceName, input.Id, input.Name));
-        MidiDeviceStatus = $"Added project MIDI input '{input.Name}'.";
+        Control.AddOrUpdateMIDIInputDevice(input.Id, input.Name);
+        RebuildProjectMIDIDeviceRows();
+        SelectedProjectMIDIInputRow = ProjectMIDIInputRows.FirstOrDefault(r =>
+            MatchesMIDIBinding(r.DeviceId, r.DeviceName, input.Id, input.Name));
+        MIDIDeviceStatus = $"Added project MIDI input '{input.Name}'.";
     }
 
-    private bool CanAddSelectedMidiInputToControl() => IsMidiAvailable && SelectedMidiInputOption is not null;
+    private bool CanAddSelectedMIDIInputToControl() => IsMIDIAvailable && SelectedMIDIInputOption is not null;
 
-    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputToControl))]
-    private void AddSelectedMidiOutputToControl()
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMIDIOutputToControl))]
+    private void AddSelectedMIDIOutputToControl()
     {
-        if (SelectedMidiOutputOption is not { } output)
+        if (SelectedMIDIOutputOption is not { } output)
             return;
-        Control.AddOrUpdateMidiOutputDevice(output.Id, output.Name);
-        RebuildProjectMidiDeviceRows();
-        SelectedProjectMidiOutputRow = ProjectMidiOutputRows.FirstOrDefault(r =>
-            MatchesMidiBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
-        MidiDeviceStatus = $"Added project MIDI output '{output.Name}' to Control.";
+        Control.AddOrUpdateMIDIOutputDevice(output.Id, output.Name);
+        RebuildProjectMIDIDeviceRows();
+        SelectedProjectMIDIOutputRow = ProjectMIDIOutputRows.FirstOrDefault(r =>
+            MatchesMIDIBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
+        MIDIDeviceStatus = $"Added project MIDI output '{output.Name}' to Control.";
     }
 
-    private bool CanAddSelectedMidiOutputToControl() => IsMidiAvailable && SelectedMidiOutputOption is not null;
+    private bool CanAddSelectedMIDIOutputToControl() => IsMIDIAvailable && SelectedMIDIOutputOption is not null;
 
-    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMidiInput))]
-    private void RemoveSelectedProjectMidiInput()
+    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMIDIInput))]
+    private void RemoveSelectedProjectMIDIInput()
     {
-        var row = SelectedProjectMidiInputRow;
+        var row = SelectedProjectMIDIInputRow;
         if (row is null)
             return;
 
-        Control.RemoveMidiInputDevice(row.ControlDeviceId);
-        MidiDeviceStatus = $"Removed project MIDI input '{row.Name}'.";
-        RebuildProjectMidiDeviceRows();
+        Control.RemoveMIDIInputDevice(row.ControlDeviceId);
+        MIDIDeviceStatus = $"Removed project MIDI input '{row.Name}'.";
+        RebuildProjectMIDIDeviceRows();
     }
 
-    private bool CanRemoveSelectedProjectMidiInput() => SelectedProjectMidiInputRow is not null;
+    private bool CanRemoveSelectedProjectMIDIInput() => SelectedProjectMIDIInputRow is not null;
 
-    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMidiOutput))]
-    private void RemoveSelectedProjectMidiOutput()
+    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMIDIOutput))]
+    private void RemoveSelectedProjectMIDIOutput()
     {
-        var row = SelectedProjectMidiOutputRow;
+        var row = SelectedProjectMIDIOutputRow;
         if (row is null)
             return;
 
         if (row.ControlDeviceId is { } controlDeviceId)
-            Control.RemoveMidiOutputDevice(controlDeviceId);
+            Control.RemoveMIDIOutputDevice(controlDeviceId);
 
         if (row.CueEndpointId is { } endpointId)
         {
@@ -280,36 +280,36 @@ public partial class MainViewModel
             }
         }
 
-        MidiDeviceStatus = $"Removed project MIDI output '{row.Name}'.";
-        RebuildProjectMidiDeviceRows();
+        MIDIDeviceStatus = $"Removed project MIDI output '{row.Name}'.";
+        RebuildProjectMIDIDeviceRows();
     }
 
-    private bool CanRemoveSelectedProjectMidiOutput() => SelectedProjectMidiOutputRow is not null;
+    private bool CanRemoveSelectedProjectMIDIOutput() => SelectedProjectMIDIOutputRow is not null;
 
-    [RelayCommand(CanExecute = nameof(CanTestSelectedProjectMidiOutput))]
-    private async Task TestSelectedProjectMidiOutputAsync()
+    [RelayCommand(CanExecute = nameof(CanTestSelectedProjectMIDIOutput))]
+    private async Task TestSelectedProjectMIDIOutputAsync()
     {
-        var row = SelectedProjectMidiOutputRow;
+        var row = SelectedProjectMIDIOutputRow;
         if (row is null)
             return;
 
-        EndpointTestStatus = Strings.TestingMidiStatus;
+        EndpointTestStatus = Strings.TestingMIDIStatus;
         var endpoint = row.CueEndpointId is { } endpointId
-            ? ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
+            ? ActionEndpoints.OfType<MIDIActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
             : null;
-        endpoint ??= new MidiActionEndpoint
+        endpoint ??= new MIDIActionEndpoint
         {
             Name = row.Name,
             DeviceId = row.DeviceId,
             DeviceName = row.DeviceName,
         };
 
-        var (ok, detail) = await Task.Run(() => ActionEndpointProbe.TryProbeMidi(endpoint, EnsureMidiInitialized))
+        var (ok, detail) = await Task.Run(() => ActionEndpointProbe.TryProbeMIDI(endpoint, EnsureMIDIInitialized))
             .ConfigureAwait(true);
         EndpointTestStatus = ok
-            ? Strings.Format(nameof(Strings.MidiTestOkStatusFormat), detail)
-            : Strings.Format(nameof(Strings.MidiTestFailedStatusFormat), detail);
+            ? Strings.Format(nameof(Strings.MIDITestOkStatusFormat), detail)
+            : Strings.Format(nameof(Strings.MIDITestFailedStatusFormat), detail);
     }
 
-    private bool CanTestSelectedProjectMidiOutput() => SelectedProjectMidiOutputRow is not null;
+    private bool CanTestSelectedProjectMIDIOutput() => SelectedProjectMIDIOutputRow is not null;
 }

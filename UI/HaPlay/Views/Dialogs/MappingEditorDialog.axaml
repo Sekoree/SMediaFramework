@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HaPlay.Views"
         xmlns:vmd="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.MappingEditorDialog"
         x:DataType="vmd:MappingEditorViewModel"
@@ -15,15 +16,15 @@
       <CheckBox Content="{Binding EnableLabel}" IsChecked="{Binding MappingEnabled, Mode=TwoWay}" />
       <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding CanEditOutputSize}">
         <TextBlock Text="{Binding SizeLabel}" VerticalAlignment="Center" />
-        <NumericUpDown Value="{Binding OutputWidth, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
+        <NumericUpDown FormatString="0" Value="{Binding OutputWidth, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
         <TextBlock Text="×" VerticalAlignment="Center" />
-        <NumericUpDown Value="{Binding OutputHeight, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
+        <NumericUpDown FormatString="0" Value="{Binding OutputHeight, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
       </StackPanel>
       <StackPanel Orientation="Horizontal" Spacing="4">
         <TextBlock Text="Split into" VerticalAlignment="Center" />
-        <NumericUpDown Value="{Binding SplitColumns, Mode=TwoWay}" Minimum="1" Maximum="64" Width="100" />
+        <NumericUpDown FormatString="0" Value="{Binding SplitColumns, Mode=TwoWay}" Minimum="1" Maximum="64" Width="100" />
         <TextBlock Text="cols ×" VerticalAlignment="Center" />
-        <NumericUpDown Value="{Binding SplitRows, Mode=TwoWay}" Minimum="1" Maximum="64" Width="100" />
+        <NumericUpDown FormatString="0" Value="{Binding SplitRows, Mode=TwoWay}" Minimum="1" Maximum="64" Width="100" />
         <TextBlock Text="rows" VerticalAlignment="Center" />
         <Button Content="Split" Command="{Binding SplitIntoGridCommand}"
                 ToolTip.Tip="Replace all sections with an even grid (one per panel), then nudge each into place" />
@@ -42,7 +43,9 @@
       <DockPanel Grid.Column="0">
         <WrapPanel DockPanel.Dock="Top" ItemSpacing="4" Margin="0,0,0,6">
           <Button Content="+" Command="{Binding AddSectionCommand}" ToolTip.Tip="Add section" />
-          <Button Content="⧉" Command="{Binding DuplicateSectionCommand}" ToolTip.Tip="Duplicate selected" />
+          <Button Command="{Binding DuplicateSectionCommand}" ToolTip.Tip="Duplicate selected">
+            <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
+          </Button>
           <Button Content="–" Command="{Binding RemoveSectionCommand}" ToolTip.Tip="Remove selected" />
           <Button Content="↑" Command="{Binding MoveSectionUpCommand}" ToolTip.Tip="Draw earlier (further back)" />
           <Button Content="↓" Command="{Binding MoveSectionDownCommand}" ToolTip.Tip="Draw later (further front)" />
@@ -62,7 +65,7 @@
 
       <!-- Preview + selected-section fields. -->
       <DockPanel Grid.Column="2">
-        <Border DockPanel.Dock="Bottom" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6"
+        <Border DockPanel.Dock="Bottom" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0"
                 Padding="8" Margin="0,8,0,0"
                 IsEnabled="{Binding SelectedSection, Converter={x:Static ObjectConverters.IsNotNull}}">
           <Grid ColumnDefinitions="Auto,110,Auto,110,Auto,110,Auto,110" RowDefinitions="Auto,Auto,Auto,Auto"
@@ -111,7 +114,7 @@
         </Border>
 
         <!-- Dest-space preview: sections drawn to scale; drag to move. Rendered in code-behind. -->
-        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="4"
+        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="4"
                 Background="#10000000">
           <!-- ClipToBounds on the host (not the canvas): sections dragged past the output rect stay
                visible in the surrounding "offstage" area but never paint over the section list. -->

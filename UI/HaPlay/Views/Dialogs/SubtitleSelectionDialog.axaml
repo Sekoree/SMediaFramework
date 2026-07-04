@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        xmlns:vmm="using:HaPlay.ViewModels"
+        x:Class="HaPlay.Views.Dialogs.SubtitleSelectionDialog"
+        x:DataType="vm:SubtitleSelectionDialogViewModel"
+        Title="Subtitles"
+        Width="480" Height="520"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="380" MinHeight="360">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="OK" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="Embedded subtitle tracks" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding StatusMessage}" Opacity="0.7" TextWrapping="Wrap" />
+        <ItemsControl ItemsSource="{Binding Tracks}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vmm:CueSubtitleTrackChoice">
+              <CheckBox Margin="0,1" IsChecked="{Binding IsSelected, Mode=TwoWay}" Content="{Binding Label}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Text="Font" FontWeight="SemiBold" Margin="0,6,0,0" />
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock VerticalAlignment="Center" Text="Family" />
+          <TextBox Width="160" PlaceholderText="document default" Text="{Binding FontFamily, Mode=TwoWay}" />
+          <TextBlock VerticalAlignment="Center" Text="Size ×" />
+          <NumericUpDown Width="110" Minimum="0.25" Maximum="5" Increment="0.1" PlaceholderText="1.0"
+                         Value="{Binding FontScaleValue, Mode=TwoWay}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock VerticalAlignment="Center" Text="Align" />
+          <ComboBox MinWidth="150" ItemsSource="{Binding AlignmentChoices}"
+                    SelectedItem="{Binding SelectedAlignment, Mode=TwoWay}" />
+        </StackPanel>
+        <TextBlock Opacity="0.6" FontSize="11" TextWrapping="Wrap"
+                   Text="Font overrides apply to text tracks (ASS/SRT/…). Bitmap subtitles (PGS/DVB) ignore them." />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

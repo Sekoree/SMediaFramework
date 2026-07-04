@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 6 S.Abi GL gate: verifies the native plugin GL layer-surface adapter end-to-end on a real SDL GL
+         context — the plugin's layer surface (created from a config blob, registered into an ICompositorRegistry)
+         renders into a canvas FBO; readback confirms the config-driven colour. Headless: run under xvfb. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Interop/S.Abi/S.Abi.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+</Project>

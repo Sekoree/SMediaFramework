@@ -1,4 +1,4 @@
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.OutputPreview;
 

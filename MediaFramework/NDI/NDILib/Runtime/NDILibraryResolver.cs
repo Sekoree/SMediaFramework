@@ -79,4 +79,3 @@ public static class NDILibraryResolver
             ? NDILibraryNames.WindowsCandidates
             : NDILibraryNames.LinuxCandidates;
 }
-

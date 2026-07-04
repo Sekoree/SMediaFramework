@@ -1,0 +1,49 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:classic="clr-namespace:Classic.Avalonia.Theme"
+                    xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
+                    xmlns:utils="clr-namespace:Classic.Avalonia.Theme.Utils"
+                    x:ClassModifier="internal">
+  <ControlTheme x:Key="{x:Type FlyoutPresenter}"
+                TargetType="FlyoutPresenter">
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    <Setter Property="Background" Value="{DynamicResource {x:Static common:SystemColors.ControlBrushKey}}" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="Padding" Value="2" />
+    <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+    <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <classic:ClassicBorderDecorator Name="LayoutRoot"
+                                        BorderStyle="AltRaised"
+                                        Background="{TemplateBinding Background}"
+                                        RenderOptions.EdgeMode="Aliased"
+                                        RenderOptions.BitmapInterpolationMode="None"
+                                        utils:FontUtils.FontAliasing="{DynamicResource {x:Static common:SystemParameters.FontAliasingKey}}"
+                                        BorderThickness="{TemplateBinding BorderThickness}">
+          <ScrollViewer HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                        VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+            <ContentPresenter x:Name="PART_ContentPresenter"
+                              Margin="{TemplateBinding Padding}"
+                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}" />
+          </ScrollViewer>
+        </classic:ClassicBorderDecorator>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+<ControlTheme x:Key="FlatFlyoutPresenter"
+              BasedOn="{StaticResource {x:Type FlyoutPresenter}}"
+                TargetType="FlyoutPresenter">
+  <Setter Property="BorderThickness" Value="1" />
+    <Style Selector="^ /template/ ClassicBorderDecorator#LayoutRoot">
+      <Setter Property="BorderBrush" Value="{DynamicResource {x:Static common:SystemColors.WindowFrameBrushKey}}" />
+    </Style>
+  </ControlTheme>
+</ResourceDictionary>

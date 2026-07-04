@@ -4,6 +4,8 @@
   "protocol": 1,
   "version": "1.0",
   "defaultOscPort": 10023,
+  "scriptModule": "x32",
+  "helperScript": "fun pad2(n) { return n < 10 ? '0' + n : '' + n; } fun a(id) { var c = devices.command(id); return c == null ? null : c.address; } return { channelFaderAddress: fun(self, ch) { return a('x32.ch.' + pad2(ch) + '.fader'); }, channelMuteAddress: fun(self, ch) { return a('x32.ch.' + pad2(ch) + '.mute'); }, channelPanAddress: fun(self, ch) { return a('x32.ch.' + pad2(ch) + '.pan'); }, channelSoloAddress: fun(self, ch) { return a('x32.ch.' + pad2(ch) + '.solo'); }, busFaderAddress: fun(self, b) { return a('x32.bus.' + pad2(b) + '.fader'); }, busMuteAddress: fun(self, b) { return a('x32.bus.' + pad2(b) + '.mute'); }, matrixFaderAddress: fun(self, m) { return a('x32.matrix.' + pad2(m) + '.fader'); }, matrixMuteAddress: fun(self, m) { return a('x32.matrix.' + pad2(m) + '.mute'); }, dcaFaderAddress: fun(self, d) { return a('x32.dca.' + d + '.fader'); }, dcaMuteAddress: fun(self, d) { return a('x32.dca.' + d + '.mute'); }, mainFaderAddress: fun(self) { return a('x32.main.st.fader'); }, mainMuteAddress: fun(self) { return a('x32.main.st.mute'); }, faderToDb: fun(self, f) { var v = math.clamp(f, 0.0, 1.0); if (v <= 0.0) { return -144.0; } if (v >= 0.5) { return v * 40.0 - 30.0; } if (v >= 0.25) { return v * 80.0 - 50.0; } if (v >= 0.0625) { return v * 160.0 - 70.0; } return v * 480.0 - 90.0; }, dbToFader: fun(self, db) { if (db <= -90.0) { return 0.0; } var d = math.clamp(db, -90.0, 10.0); if (d >= -10.0) { return (d + 30.0) / 40.0; } if (d >= -30.0) { return (d + 50.0) / 80.0; } if (d >= -60.0) { return (d + 70.0) / 160.0; } return (d + 90.0) / 480.0; }, quantizeFader: fun(self, v) { return math.clamp(math.round(math.clamp(v, 0.0, 1.0) * 1023.0) / 1023.0, 0.0, 1.0); } };",
   "ports": [
     {
       "id": "osc-remote",
@@ -1925,7 +1927,7 @@
       "id": "x32.xremote",
       "displayName": "Maintain /xremote",
       "isDefaultEnabled": true,
-      "kind": 1,
+      "kind": 0,
       "address": "/xremote",
       "intervalMs": 8000,
       "arguments": []
@@ -1934,7 +1936,7 @@
       "id": "x32.subscribe.ch01.fader",
       "displayName": "Subscribe Ch 01 fader (optional)",
       "isDefaultEnabled": false,
-      "kind": 1,
+      "kind": 0,
       "address": "/subscribe",
       "intervalMs": 8000,
       "arguments": [
@@ -1957,7 +1959,7 @@
       "id": "x32.meters.bank6",
       "displayName": "Subscribe meter bank 6 (optional)",
       "isDefaultEnabled": false,
-      "kind": 1,
+      "kind": 0,
       "address": "/meters",
       "intervalMs": 8000,
       "arguments": [
@@ -1984,14 +1986,6 @@
     }
   ],
   "behaviors": {
-    "protocolMaintenance": {
-      "renewIntervalMs": 8000,
-      "maintenanceAddresses": [
-        "/xremote",
-        "/subscribe",
-        "/meters"
-      ]
-    },
     "meterBlobDecoder": "x32"
   }
 }

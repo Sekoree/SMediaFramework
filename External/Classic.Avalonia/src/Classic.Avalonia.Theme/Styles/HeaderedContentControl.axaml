@@ -1,0 +1,82 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:theme="clr-namespace:Classic.Avalonia.Theme"
+                    xmlns:converters="clr-namespace:Classic.Avalonia.Theme.Converters"
+                    x:ClassModifier="internal">
+    <Design.PreviewWith>
+        <HeaderedContentControl Header="Header of the control" Margin="10">
+            <Border Width="200" Height="200" Background="Red" />
+        </HeaderedContentControl>
+    </Design.PreviewWith>
+    <converters:BorderGapMaskConverter x:Key="BorderGapMaskConverter" />
+    <ControlTheme x:Key="{x:Type HeaderedContentControl}"
+                  TargetType="HeaderedContentControl">
+        <Setter Property="BorderBrush"
+                Value="{x:Static theme:ClassicBorderDecorator.ClassicBorderBrush}" />
+        <Setter Property="BorderThickness"
+                Value="2" />
+        <Setter Property="Padding"
+                Value="8" />
+        <Setter Property="ClipToBounds"
+                Value="True" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel Background="{TemplateBinding Background}">
+                    <Panel
+                        Margin="0,7,0,0"
+                        ClipToBounds="{TemplateBinding ClipToBounds}">
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Margin="{TemplateBinding Padding}"
+                                          ClipToBounds="{TemplateBinding ClipToBounds}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Content="{TemplateBinding Content}"
+                                          RecognizesAccessKey="True"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          FontSize="{TemplateBinding FontSize}"
+                                          FontWeight="{TemplateBinding FontWeight}"
+                                          FontFamily="{TemplateBinding FontFamily}"
+                                          FontStyle="{TemplateBinding FontStyle}" />
+                    </Panel>
+
+
+                    <theme:ClassicBorderDecorator x:Name="Border"
+                                                  Margin="0,7,0,0"
+                                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                                  BorderStyle="Etched">
+
+                        <theme:ClassicBorderDecorator.OpacityMask>
+                            <MultiBinding Converter="{StaticResource BorderGapMaskConverter}"
+                                          ConverterParameter="7">
+                                <Binding ElementName="Header"
+                                         Path="Bounds.Width" />
+                                <Binding ElementName="Header"
+                                         Path="Bounds.Height" />
+                                <Binding ElementName="Border"
+                                         Path="Bounds.Width" />
+                                <Binding ElementName="Border"
+                                         Path="Bounds.Height" />
+                            </MultiBinding>
+                        </theme:ClassicBorderDecorator.OpacityMask>
+                    </theme:ClassicBorderDecorator>
+
+                    <Border x:Name="Header"
+                            Margin="5,0,0,0"
+                            Padding="3,0,3,0"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top">
+                        <ContentPresenter Name="PART_HeaderPresenter"
+                                          Content="{TemplateBinding Header}"
+                                          RecognizesAccessKey="True"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                          FontSize="{TemplateBinding FontSize}"
+                                          FontWeight="{TemplateBinding FontWeight}"
+                                          FontFamily="{TemplateBinding FontFamily}"
+                                          FontStyle="{TemplateBinding FontStyle}" />
+                    </Border>
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+</ResourceDictionary>

@@ -1,23 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- Phase 2 video-decode validation: opens a file's video track via the registry and pulls frames
+         (no display; on-screen video is Phase 3). Pass the media path as the first argument (optionally a
+         max-frame count). Needs native FFmpeg present at runtime. -->
+
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <IsAotCompatible>false</IsAotCompatible>
     </PropertyGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.Effects\S.Media.Effects.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.OpenGL\S.Media.OpenGL.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <PackageReference Include="Silk.NET.OpenGL" />
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
     </ItemGroup>
 
 </Project>

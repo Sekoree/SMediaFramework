@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using S.Media.Core.Diagnostics;
 
 namespace S.Media.Core.Tests;
 

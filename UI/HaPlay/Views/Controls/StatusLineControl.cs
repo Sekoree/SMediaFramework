@@ -20,9 +20,11 @@ public sealed class StatusLineControl : ContentControl
     public static readonly StyledProperty<ToastSeverity> SeverityProperty =
         AvaloniaProperty.Register<StatusLineControl, ToastSeverity>(nameof(Severity));
 
-    private static readonly IBrush InfoBrush = new SolidColorBrush(Color.Parse("#90A4AE"));
-    private static readonly IBrush WarnBrush = new SolidColorBrush(Color.Parse("#FFD54F"));
-    private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#FF8A80"));
+    // Dark severity shades — the status line sits on the Classic theme's light-gray chrome
+    // (must match the StatusInfoFg/StatusWarnFg/StatusErrorFg tokens in Styles/Tokens.axaml).
+    private static readonly IBrush InfoBrush = new SolidColorBrush(Color.Parse("#37474F"));
+    private static readonly IBrush WarnBrush = new SolidColorBrush(Color.Parse("#8A5A00"));
+    private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#B71C1C"));
 
     private readonly TextBlock _text;
 

@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:port="using:S.Media.PortAudio"
+        xmlns:port="using:S.Media.Audio.PortAudio"
         xmlns:res="using:HaPlay.Resources"
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddPortAudioOutputDialog"
@@ -57,10 +57,10 @@
         </ComboBox>
 
         <TextBlock Text="{x:Static res:Strings.ChannelCountDeviceLimitLabel}" FontWeight="SemiBold" />
-        <NumericUpDown Minimum="1" Maximum="64" Value="{Binding ChannelCount}" />
+        <NumericUpDown FormatString="0" Minimum="1" Maximum="64" Value="{Binding ChannelCount}" />
 
         <TextBlock Text="{x:Static res:Strings.SampleRateHzLabel}" FontWeight="SemiBold" />
-        <NumericUpDown Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding SampleRate}" />
+        <NumericUpDown FormatString="0" Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding SampleRate}" />
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

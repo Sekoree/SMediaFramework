@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 0 skeleton: S.Media.Session — cues, soundboard, output mapping, show orchestration (headless).
+         NuGet/native refs are added in the phase noted above. Common build settings come
+         from Directory.Build.props; versions from Directory.Packages.props. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../S.Media.Routing/S.Media.Routing.csproj" />
+        <ProjectReference Include="../S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../S.Media.Compositor/S.Media.Compositor.csproj" />
+    </ItemGroup>
+
+</Project>

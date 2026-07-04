@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
+using System.Threading;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Resources;
 using NDILib;
+using S.Media.NDI;
 
 namespace HaPlay.ViewModels.Dialogs;
 
@@ -26,7 +29,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     private NDIFinder? _finder;
     private DispatcherTimer? _discoveryTimer;
 
-    [ObservableProperty] private string _displayName = Strings.NdiInputDefaultName;
+    [ObservableProperty] private string _displayName = Strings.NDIInputDefaultName;
     [ObservableProperty] private string _sourceName = string.Empty;
     [ObservableProperty] private string? _validationMessage;
     [ObservableProperty] private bool _useDiscovery = true;
@@ -37,13 +40,19 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _isScanning;
     [ObservableProperty] private string? _discoveryStatus;
 
+    /// <summary>Manual audio jitter-buffer override in ms; null = framework default (~50 ms).</summary>
+    [ObservableProperty] private int? _audioMinBufferedDurationMs;
+    [ObservableProperty] private bool _isProbingBuffer;
+    [ObservableProperty] private string? _bufferProbeStatus;
+    private CancellationTokenSource? _probeCts;
+
     /// <summary>Discovered sources. Updated on the UI thread by the discovery timer.</summary>
     public ObservableCollection<string> DiscoveredSources { get; } = new();
 
     [ObservableProperty] private string? _selectedDiscoveredSource;
 
     public bool IsEditing => _existingId is not null;
-    public string DialogTitle => IsEditing ? Strings.EditNdiInputDialogTitle : Strings.AddNdiInputDialogTitle;
+    public string DialogTitle => IsEditing ? Strings.EditNDIInputDialogTitle : Strings.AddNDIInputDialogTitle;
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void LoadFromExisting(NDIInputPlaylistItem existing)
@@ -55,6 +64,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         AudioOnly = existing.AudioOnly;
         VideoOnly = existing.VideoOnly;
         RetrySeconds = existing.RetrySeconds;
+        AudioMinBufferedDurationMs = existing.AudioMinBufferedDurationMs;
         // Default to manual-name when editing — the saved name is authoritative and shouldn't be silently
         // replaced by a discovery match with the same human label but a different transport address.
         UseDiscovery = false;
@@ -75,7 +85,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             {
                 DiscoveryStatus = string.Format(
                     System.Globalization.CultureInfo.CurrentUICulture,
-                    Strings.NdiDiscoveryUnavailableStatus,
+                    Strings.NDIDiscoveryUnavailableStatus,
                     rc);
                 UseDiscovery = false;
                 return Task.CompletedTask;
@@ -101,7 +111,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     private async Task RefreshAsync()
     {
         IsScanning = true;
-        DiscoveryStatus = Strings.NdiDiscoveryScanningStatus;
+        DiscoveryStatus = Strings.NDIDiscoveryScanningStatus;
         try
         {
             await StartDiscoveryAsync().ConfigureAwait(false);
@@ -113,6 +123,89 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Probes the live network for the lowest glitch-free audio jitter-buffer size for the selected source
+    /// (ramps from a safe reserve down to the floor — see <see cref="NDIAudioBufferProbe"/>), reports the
+    /// lowest/balanced/safe presets, and sets the override to the measured floor. Runs off the UI thread with
+    /// per-step progress; cancellable.
+    /// </summary>
+    [RelayCommand]
+    private async Task ProbeBufferAsync()
+    {
+        var name = (UseDiscovery ? SelectedDiscoveredSource : SourceName)?.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            BufferProbeStatus = "Pick or enter an NDI source first.";
+            return;
+        }
+        if (IsProbingBuffer)
+            return;
+
+        IsProbingBuffer = true;
+        BufferProbeStatus = "Probing… ramping buffer sizes down to your network's floor (a few seconds).";
+        _probeCts = new CancellationTokenSource();
+        var ct = _probeCts.Token;
+        try
+        {
+            var presets = await Task.Run(() =>
+            {
+                var match = NDISource.Find(TimeSpan.FromSeconds(3))
+                    .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.Ordinal));
+                if (match.Name is null)
+                    return (NDIAudioBufferPresets?)null;
+
+                return NDIAudioBufferProbe.Probe(
+                    match,
+                    onStep: (buf, underruns) => Dispatcher.UIThread.Post(() =>
+                        BufferProbeStatus = $"{buf.TotalMilliseconds:0} ms → {(underruns == 0 ? "OK" : $"{underruns} underrun chunk(s)")}"),
+                    cancellationToken: ct);
+            }, ct).ConfigureAwait(true);
+
+            if (presets is null)
+            {
+                BufferProbeStatus = $"Source '{name}' was not found on the network.";
+                return;
+            }
+            if (!presets.Value.HasAudio)
+            {
+                BufferProbeStatus = "Source carries no audio — a buffer override isn't needed.";
+                return;
+            }
+
+            var p = presets.Value;
+            AudioMinBufferedDurationMs = (int)Math.Round(p.Lowest.TotalMilliseconds);
+            BufferProbeStatus =
+                $"Lowest {p.Lowest.TotalMilliseconds:0} ms · balanced {p.Balanced.TotalMilliseconds:0} ms · " +
+                $"safe {p.Safe.TotalMilliseconds:0} ms — override set to lowest (raise it if you hear dropouts).";
+        }
+        catch (OperationCanceledException)
+        {
+            BufferProbeStatus = "Probe cancelled.";
+        }
+        catch (Exception ex)
+        {
+            BufferProbeStatus = $"Probe failed: {ex.Message}";
+        }
+        finally
+        {
+            IsProbingBuffer = false;
+            _probeCts?.Dispose();
+            _probeCts = null;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelBufferProbe() => _probeCts?.Cancel();
+
+    /// <summary>NumericUpDown-friendly (decimal?) view of the nullable-int override. Empty = framework default.</summary>
+    public decimal? AudioBufferOverrideMs
+    {
+        get => AudioMinBufferedDurationMs;
+        set => AudioMinBufferedDurationMs = value is null ? null : (int)Math.Round(value.Value);
+    }
+
+    partial void OnAudioMinBufferedDurationMsChanged(int? value) => OnPropertyChanged(nameof(AudioBufferOverrideMs));
+
     /// <summary>Dispose the underlying <see cref="NDIFinder"/> and stop polling. The dialog calls this
     /// from <c>finally</c> in <see cref="MediaPlayerViewModel.AddNDIInputAsync"/>.</summary>
     public void StopDiscovery()
@@ -121,6 +214,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         _discoveryTimer = null;
         _finder?.Dispose();
         _finder = null;
+        try { _probeCts?.Cancel(); } catch { /* best effort */ }
     }
 
     public void Dispose() => StopDiscovery();
@@ -148,17 +242,17 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
                 ? p
                 : DiscoveredSources.FirstOrDefault();
             DiscoveryStatus = newNames.Count == 0
-                ? Strings.NdiDiscoveryNoSourcesStatus
+                ? Strings.NDIDiscoveryNoSourcesStatus
                 : string.Format(
                     System.Globalization.CultureInfo.CurrentUICulture,
-                    Strings.NdiDiscoverySourceCountStatus,
+                    Strings.NDIDiscoverySourceCountStatus,
                     newNames.Count);
         }
         catch (Exception ex)
         {
             DiscoveryStatus = string.Format(
                 System.Globalization.CultureInfo.CurrentUICulture,
-                Strings.NdiDiscoveryScanFailedStatus,
+                Strings.NDIDiscoveryScanFailedStatus,
                 ex.Message);
         }
     }
@@ -189,7 +283,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         {
             ValidationMessage = UseDiscovery
                 ? Strings.ValidationDiscoveryPickOrManual
-                : Strings.ValidationNdiSourceNameExample;
+                : Strings.ValidationNDISourceNameExample;
             return null;
         }
 
@@ -205,6 +299,12 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             return null;
         }
 
+        if (AudioMinBufferedDurationMs is < 0 or > 2000)
+        {
+            ValidationMessage = "Audio buffer override must be between 0 and 2000 ms.";
+            return null;
+        }
+
         return new NDIInputPlaylistItem(name)
         {
             Id = _existingId ?? Guid.NewGuid(),
@@ -215,6 +315,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             AudioOnly = AudioOnly,
             VideoOnly = VideoOnly,
             RetrySeconds = RetrySeconds,
+            AudioMinBufferedDurationMs = AudioMinBufferedDurationMs,
         };
     }
 }

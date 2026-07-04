@@ -1,0 +1,140 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:commonControls="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia">
+
+    <Design.PreviewWith>
+        <StackPanel Orientation="Horizontal">
+            <commonControls:ListView View="Icon" Width="500" Height="200" SelectedIndex="0">
+                <commonControls:ListViewItem Text="Item 1 very very very very lorem ipsum dolor sit amet text which is very long long" LargeIcon="{StaticResource ALERT_warning}" />
+                <commonControls:ListViewItem Text="Item 2" LargeIcon="{StaticResource ALERT_warning}"/>
+                <commonControls:ListViewItem Text="Item 3" LargeIcon="{StaticResource ALERT_warning}"/>
+            </commonControls:ListView>
+            <commonControls:ListView View="SmallIcon" Width="500" Height="200" SelectedIndex="0">
+                <commonControls:ListViewItem Text="Item 1 very very very very lorem ipsum dolor sit amet text which is very long long Item 1 very very very very lorem ipsum dolor sit amet text which is very long long " LargeIcon="{StaticResource ALERT_warning}" />
+                <commonControls:ListViewItem Text="Item 2" LargeIcon="{StaticResource ALERT_warning}"/>
+                <commonControls:ListViewItem Text="Item 3" LargeIcon="{StaticResource ALERT_warning}"/>
+            </commonControls:ListView>
+            <commonControls:ListView View="List" Width="500" Height="200" SelectedIndex="0">
+                <commonControls:ListViewItem Text="Item 1 very very very very lorem ipsum dolor sit amet text which is very long long" LargeIcon="{StaticResource ALERT_warning}" />
+                <commonControls:ListViewItem Text="Item 2" LargeIcon="{StaticResource ALERT_warning}"/>
+                <commonControls:ListViewItem Text="Item 3" LargeIcon="{StaticResource ALERT_warning}"/>
+            </commonControls:ListView>
+        </StackPanel>
+    </Design.PreviewWith>
+
+    <ControlTheme x:Key="BaseListViewItemTheme"
+                  TargetType="commonControls:ListViewItem">
+        <Style Selector="^ /template/ TextBlock#PART_Text">
+            <Setter Property="Padding" Value="2,1" />
+        </Style>
+        <!--  Selected State  -->
+        <Style Selector="^:selected">
+
+            <Style Selector="^ /template/ DockPanel#PART_Root">
+                <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentLowBrush}" />
+                <Setter Property="TextElement.Foreground" Value="{DynamicResource SystemControlHighlightAltBaseHighBrush}" />
+            </Style>
+
+            <!--  Selected Unfocused State  -->
+            <Style Selector="^:not(:focus) /template/ DockPanel#PART_Root">
+                <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentLowBrush}" />
+                <Setter Property="TextElement.Foreground" Value="{DynamicResource SystemControlHighlightAltBaseHighBrush}" />
+            </Style>
+
+            <!--  Selected PointerOver State  -->
+            <Style Selector="^:pointerover /template/ DockPanel#PART_Root">
+                <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentMediumBrush}" />
+                <Setter Property="TextElement.Foreground" Value="{DynamicResource SystemControlHighlightAltBaseHighBrush}" />
+            </Style>
+
+            <!--  Selected Pressed State  -->
+            <Style Selector="^:pressed /template/ DockPanel#PART_Root">
+                <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentHighBrush}" />
+                <Setter Property="TextElement.Foreground" Value="{DynamicResource SystemControlHighlightAltBaseHighBrush}" />
+            </Style>
+        </Style>
+    </ControlTheme>
+
+    <ControlTheme x:Key="ListViewItemIconTheme"
+                  TargetType="commonControls:ListViewItem"
+                  BasedOn="{StaticResource BaseListViewItemTheme}">
+        <Setter Property="Width" Value="74" />
+        <Setter Property="Margin" Value="0,0,0,10" />
+
+        <Setter Property="Template">
+            <ControlTemplate>
+                <DockPanel x:Name="PART_Root">
+                    <commonControls:IconRenderer x:Name="PART_Icon" DockPanel.Dock="Top" Source="{TemplateBinding SmallIcon}" LargeSource="{TemplateBinding LargeIcon}" Width="32" Height="32" />
+                    <TextBlock x:Name="PART_Text" Margin="0,7,0,0" HorizontalAlignment="Center" VerticalAlignment="Top" TextAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="2" TextWrapping="WrapWithOverflow" Text="{TemplateBinding Text}" />
+                </DockPanel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <ControlTheme x:Key="ListViewItemSmallIconTheme"
+                  TargetType="commonControls:ListViewItem"
+                  BasedOn="{StaticResource BaseListViewItemTheme}">
+        <Setter Property="Margin" Value="0,0,2,2" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <DockPanel x:Name="PART_Root">
+                    <commonControls:IconRenderer x:Name="PART_Icon" Source="{TemplateBinding SmallIcon}" LargeSource="{TemplateBinding LargeIcon}" Width="16" Height="16" />
+                    <TextBlock x:Name="PART_Text" Margin="2,0,0,0" HorizontalAlignment="Left" TextAlignment="Center" TextTrimming="CharacterEllipsis" Text="{TemplateBinding Text}" />
+                </DockPanel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <ControlTheme x:Key="ListViewItemListTheme"
+                  TargetType="commonControls:ListViewItem"
+                  BasedOn="{StaticResource BaseListViewItemTheme}">
+        <Setter Property="MaxWidth" Value="112" />
+        <Setter Property="Margin" Value="0,0,0,2" />
+
+        <Setter Property="Template">
+            <ControlTemplate>
+                <DockPanel x:Name="PART_Root">
+                    <commonControls:IconRenderer x:Name="PART_Icon" Source="{TemplateBinding SmallIcon}" LargeSource="{TemplateBinding LargeIcon}" Width="16" Height="16" />
+                    <TextBlock x:Name="PART_Text" Margin="2,0,0,0" HorizontalAlignment="Left" TextAlignment="Center" TextTrimming="CharacterEllipsis" Text="{TemplateBinding Text}" />
+                </DockPanel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <ControlTheme x:Key="{x:Type commonControls:ListViewItem}"
+                  TargetType="commonControls:ListViewItem"
+                  BasedOn="{StaticResource ListViewItemIconTheme}"/>
+
+    <ControlTheme x:Key="{x:Type commonControls:ListView}"
+                  TargetType="commonControls:ListView"
+                  BasedOn="{StaticResource {x:Type ListBox}}">
+
+        <Style Selector="^[View=Icon]">
+            <Setter Property="ItemContainerTheme" Value="{StaticResource ListViewItemIconTheme}" />
+            <Setter Property="(ScrollViewer.HorizontalScrollBarVisibility)" Value="Disabled" />
+            <Setter Property="ItemsPanel">
+                <ItemsPanelTemplate>
+                    <WrapPanel />
+                </ItemsPanelTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="^[View=SmallIcon]">
+            <Setter Property="ItemContainerTheme" Value="{StaticResource ListViewItemSmallIconTheme}" />
+            <Setter Property="(ScrollViewer.HorizontalScrollBarVisibility)" Value="Disabled" />
+            <Setter Property="ItemsPanel">
+                <ItemsPanelTemplate>
+                    <WrapPanel />
+                </ItemsPanelTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="^[View=List]">
+            <Setter Property="ItemContainerTheme" Value="{StaticResource ListViewItemListTheme}" />
+            <Setter Property="(ScrollViewer.VerticalScrollBarVisibility)" Value="Disabled" />
+            <Setter Property="ItemsPanel">
+                <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Vertical" />
+                </ItemsPanelTemplate>
+            </Setter>
+        </Style>
+    </ControlTheme>
+</ResourceDictionary>

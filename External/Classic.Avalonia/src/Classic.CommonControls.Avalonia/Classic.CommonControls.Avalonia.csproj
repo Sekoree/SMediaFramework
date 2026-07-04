@@ -1,0 +1,56 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <WarningsAsErrors>nullable</WarningsAsErrors>
+        <LangVersion>latest</LangVersion>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <IsAotCompatible>true</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia" />
+        <PackageReference Include="Avalonia.Skia" />
+    </ItemGroup>
+
+    <PropertyGroup>
+        <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+        <Authors>bandysc</Authors>
+        <Company />
+        <PackageId>Classic.CommonControls.Avalonia</PackageId>
+        <Product>Classic.CommonControls.Avalonia</Product>
+        <Description>Classic Windows-like controls for Avalonia. Also reference Classic.Avalonia.Theme for classic look</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/BAndysc/Classic.Avalonia</PackageProjectUrl>
+        <PackageIcon>icon.png</PackageIcon>
+        <RepositoryUrl>https://github.com/BAndysc/Classic.Avalonia</RepositoryUrl>
+        <PackageTags>avalonia theme classic controls</PackageTags>
+        <Version>$(ClassicAvaloniaVersion)</Version>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)'=='Release'">
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="..\..\icon.png">
+            <Pack>True</Pack>
+            <PackagePath />
+        </None>
+        <None Include="..\..\README.md">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <AvaloniaResource Include="Audio\chimes.wav" />
+      <AvaloniaResource Include="Audio\chord.wav" />
+      <AvaloniaResource Include="Audio\ding.wav" />
+    </ItemGroup>
+</Project>

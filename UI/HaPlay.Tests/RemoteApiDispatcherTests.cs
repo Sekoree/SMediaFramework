@@ -69,7 +69,7 @@ public sealed class RemoteApiDispatcherTests
             // Empty cue list: nothing fireable.
             Assert.Equal(409, Execute(dispatcher, "/api/v1/cues/go").Status);
 
-            cues.AddMediaCueCommand.Execute(null); // selected media cue makes Go available
+            cues.AddEmptyMediaCue(); // selected media cue makes Go available
             Assert.Equal(200, Execute(dispatcher, "/api/v1/cues/go").Status);
         });
     }

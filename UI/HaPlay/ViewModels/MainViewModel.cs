@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Globalization;
 using System.Net;
 using System.Reflection;
@@ -17,6 +18,9 @@ using HaPlay.Resources;
 using Microsoft.Extensions.Logging;
 using S.Control;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Video;
+using S.Media.Interop;
+using S.Media.Session;
 using OSCLib;
 using PMLib;
 using PMLib.Devices;
@@ -31,8 +35,9 @@ public partial class MainViewModel : ViewModelBase
 
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
-    private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
-    private readonly Playback.SoundboardEngine _soundboardEngine;
+    // The cue workspace's ShowSession runtime, its output leases, reloads, and progress polls all live on the
+    // coordinator (extracted from this VM — review Part-5 #3); this VM only constructs and forwards to it.
+    private readonly CueShowSessionCoordinator _cueShow;
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
     private DispatcherTimer? _endpointHealthTimer;
@@ -60,71 +65,22 @@ public partial class MainViewModel : ViewModelBase
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
-        _cuePlaybackEngine = new Playback.CuePlaybackEngine(OutputManagement, CuePlayer);
-        OutputManagement.CueLineMetricsProbe = _cuePlaybackEngine.TryGetLineHealthMetrics;
-        _cuePlaybackEngine.NaturalEnd += OnCuePlaybackEngineNaturalEndAsync;
-        _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
-        _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
-        _cuePlaybackEngine.CueProgress += (_, p) => CuePlayer.OnCueProgress(p);
-        _cuePlaybackEngine.PreparedCuesChanged += ids =>
-        {
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-                CuePlayer.OnPreRollCacheChanged(ids);
-            else
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
-        };
-        _cuePlaybackEngine.PreparedCueStatesChanged += states =>
-        {
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-                CuePlayer.OnPreparedCueStatesChanged(states);
-            else
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreparedCueStatesChanged(states));
-        };
-        _cuePlaybackEngine.PreviewEnded += (_, id) => CuePlayer.OnPreviewEnded(id);
-        CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
-        CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
-        CuePlayer.MediaCueGroupExecutor = _cuePlaybackEngine.ExecuteGroupAsync;
-        CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
-        CuePlayer.SetPlaybackPausedCallback = _cuePlaybackEngine.SetPausedAsync;
-        CuePlayer.PreviewCueCallback = async (cue, ct) =>
-        {
-            _cuePlaybackEngine.PreviewAudioDeviceIndex = CuePlayer.PreviewAudioDeviceIndex;
-            return await _cuePlaybackEngine.PreviewCueAsync(cue, ct);
-        };
-        CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
-        CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
-        CuePlayer.SeekCuesCallback = _cuePlaybackEngine.SeekCuesAsync;
         Soundboard = new SoundboardWorkspaceViewModel(OutputManagement);
-        _soundboardEngine = new Playback.SoundboardEngine(_cuePlaybackEngine);
-        Soundboard.PlaySoundCallback = _soundboardEngine.PlayAsync;
-        Soundboard.FadeOutSoundCallback = _soundboardEngine.FadeOutAsync;
-        Soundboard.StopSoundCallback = _soundboardEngine.StopAsync;
-        Soundboard.StopAllSoundsCallback = _soundboardEngine.StopAllAsync;
-        Soundboard.SetSoundVolumeCallback = _soundboardEngine.SetVolume;
         Soundboard.ProbeDurationCallback = CueMediaProbe.TryProbeDurationMsAsync;
-        _soundboardEngine.SoundStarted += (_, id) => Soundboard.OnSoundStarted(id);
-        _soundboardEngine.SoundProgress += (_, p) => Soundboard.OnSoundProgress(p);
-        _soundboardEngine.SoundEnded += (_, id) => Soundboard.OnSoundEnded(id);
-        CuePlayer.UpdateActiveCueVideoPlacementCallback = _cuePlaybackEngine.UpdateActiveCueVideoPlacementAsync;
-        CuePlayer.UpdateActiveCueAudioRoutesCallback = _cuePlaybackEngine.UpdateActiveCueAudioRoutesAsync;
-        CuePlayer.UpdateOutputMappingCallback = _cuePlaybackEngine.UpdateCompositionOutputMapping;
-        CuePlayer.UpdateCompositionVideoFxCallback = _cuePlaybackEngine.UpdateCompositionVideoFx;
-        CuePlayer.SetCompositionTestPatternCallback = (compositionId, outputLineId, mapping, show) =>
-            _cuePlaybackEngine.SetCompositionTestPattern(
-                show ? CuePlayer.SelectedCueList?.ToModel() : null, compositionId, outputLineId, mapping, show);
-        _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) =>
             FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
-        CuePlayer.CueStandbyInvalidated += (_, cueId) => _cuePlaybackEngine.MarkPreparedCueStale(cueId);
         CuePlayer.RefreshPreviewAudioDevices();
-        foreach (var player in Players)
-            player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
+        // The cue workspace + soundboard run on the headless ShowSession — the only playback runtime since the
+        // legacy CuePlaybackEngine/SoundboardEngine were deleted (NXT-06/NXT-13 cutover completion). The session,
+        // its output leases, reloads, and polls are owned by the coordinator.
+        _cueShow = new CueShowSessionCoordinator(CuePlayer, Soundboard, OutputManagement);
+        _cueShow.WireShowSessionCueTransport();
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
-        RefreshMidiDeviceCatalog();
+        RefreshMIDIDeviceCatalog();
         FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync startup");
         // Keep endpoint LEDs current even when devices/network state changes after project load.
         _endpointHealthTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) =>
@@ -191,6 +147,10 @@ public partial class MainViewModel : ViewModelBase
             Trace.LogError(ex, "{Operation}: background task failed", operation);
         }
     }
+
+    /// <summary>Best-effort shutdown teardown (called by the app lifetime): tears down the cue workspace's
+    /// ShowSession + its output leases via the coordinator. Players are reclaimed by process-exit, as before.</summary>
+    public void ShutdownCleanup() => _cueShow.ShutdownCleanup();
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
 
@@ -431,19 +391,6 @@ public partial class MainViewModel : ViewModelBase
             SelectedWorkspace = Workspaces[idx];
     }
 
-    private async Task ReleaseMediaPlayerOutputsForCueAsync(IReadOnlyCollection<Guid> outputLineIds)
-    {
-        if (outputLineIds.Count == 0)
-            return;
-
-        var wanted = outputLineIds.ToHashSet();
-        var targets = await Dispatcher.UIThread.InvokeAsync(() =>
-            Players.Where(p => p.IsHoldingAnyOutputLine(wanted)).ToList());
-
-        foreach (var player in targets)
-            await player.ReleaseSessionForExternalPlaybackAsync().ConfigureAwait(false);
-    }
-
     public OutputManagementViewModel OutputManagement { get; }
     public CuePlayerViewModel CuePlayer { get; }
     public SoundboardWorkspaceViewModel Soundboard { get; }
@@ -518,98 +465,98 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>OSC endpoints with persistent health LEDs for the OSC sidebar workspace.</summary>
-    public ObservableCollection<ActionEndpointRowViewModel> OscEndpointRows { get; } = new();
+    public ObservableCollection<ActionEndpointRowViewModel> OSCEndpointRows { get; } = new();
 
     /// <summary>MIDI endpoints with persistent health LEDs for the MIDI sidebar workspace.</summary>
-    public ObservableCollection<ActionEndpointRowViewModel> MidiEndpointRows { get; } = new();
+    public ObservableCollection<ActionEndpointRowViewModel> MIDIEndpointRows { get; } = new();
 
     [ObservableProperty]
-    private ActionEndpointRowViewModel? _selectedOscEndpointRow;
+    private ActionEndpointRowViewModel? _selectedOSCEndpointRow;
 
     [ObservableProperty]
-    private ActionEndpointRowViewModel? _selectedMidiEndpointRow;
+    private ActionEndpointRowViewModel? _selectedMIDIEndpointRow;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelectedActionEndpoint))]
-    [NotifyPropertyChangedFor(nameof(IsSelectedOscEndpoint))]
-    [NotifyPropertyChangedFor(nameof(IsSelectedMidiEndpoint))]
+    [NotifyPropertyChangedFor(nameof(IsSelectedOSCEndpoint))]
+    [NotifyPropertyChangedFor(nameof(IsSelectedMIDIEndpoint))]
     private ActionEndpoint? _selectedActionEndpoint;
 
     public bool HasSelectedActionEndpoint => SelectedActionEndpoint is not null;
-    public bool IsSelectedOscEndpoint => SelectedActionEndpoint is OscActionEndpoint;
-    public bool IsSelectedMidiEndpoint => SelectedActionEndpoint is MidiActionEndpoint;
+    public bool IsSelectedOSCEndpoint => SelectedActionEndpoint is OSCActionEndpoint;
+    public bool IsSelectedMIDIEndpoint => SelectedActionEndpoint is MIDIActionEndpoint;
 
     [ObservableProperty]
     private string _endpointEditName = string.Empty;
 
     [ObservableProperty]
-    private string _oscEditHost = "127.0.0.1";
+    private string _oSCEditHost = "127.0.0.1";
 
     [ObservableProperty]
-    private int _oscEditPort = 9000;
+    private int _oSCEditPort = 9000;
 
     [ObservableProperty]
-    private string _midiEditDeviceName = string.Empty;
+    private string _mIDIEditDeviceName = string.Empty;
 
     [ObservableProperty]
-    private int? _midiEditDeviceId;
+    private int? _mIDIEditDeviceId;
 
     [ObservableProperty]
-    private int _midiEditChannel;
+    private int _mIDIEditChannel;
 
-    public ObservableCollection<MidiOutputOption> MidiOutputOptions { get; } = new();
-    public ObservableCollection<MidiInputOption> MidiInputOptions { get; } = new();
-    public ObservableCollection<ProjectMidiInputRowViewModel> ProjectMidiInputRows { get; } = new();
-    public ObservableCollection<ProjectMidiOutputRowViewModel> ProjectMidiOutputRows { get; } = new();
-    public bool HasNoProjectMidiInputs => ProjectMidiInputRows.Count == 0;
-    public bool HasNoProjectMidiOutputs => ProjectMidiOutputRows.Count == 0;
-    public bool IsMidiAvailable => RuntimeModules.IsMidiAvailable;
-    public string MidiUnavailableStatus => RuntimeModules.MidiUnavailableReason ?? "MIDI runtime unavailable.";
-
-    [ObservableProperty]
-    private string? _midiDeviceStatus;
+    public ObservableCollection<MIDIOutputOption> MIDIOutputOptions { get; } = new();
+    public ObservableCollection<MIDIInputOption> MIDIInputOptions { get; } = new();
+    public ObservableCollection<ProjectMIDIInputRowViewModel> ProjectMIDIInputRows { get; } = new();
+    public ObservableCollection<ProjectMIDIOutputRowViewModel> ProjectMIDIOutputRows { get; } = new();
+    public bool HasNoProjectMIDIInputs => ProjectMIDIInputRows.Count == 0;
+    public bool HasNoProjectMIDIOutputs => ProjectMIDIOutputRows.Count == 0;
+    public bool IsMIDIAvailable => RuntimeModules.IsMIDIAvailable;
+    public string MIDIUnavailableStatus => RuntimeModules.MIDIUnavailableReason ?? "MIDI runtime unavailable.";
 
     [ObservableProperty]
-    private MidiOutputOption? _selectedMidiOutputOption;
+    private string? _mIDIDeviceStatus;
 
     [ObservableProperty]
-    private MidiInputOption? _selectedMidiInputOption;
+    private MIDIOutputOption? _selectedMIDIOutputOption;
 
     [ObservableProperty]
-    private ProjectMidiInputRowViewModel? _selectedProjectMidiInputRow;
+    private MIDIInputOption? _selectedMIDIInputOption;
 
     [ObservableProperty]
-    private ProjectMidiOutputRowViewModel? _selectedProjectMidiOutputRow;
+    private ProjectMIDIInputRowViewModel? _selectedProjectMIDIInputRow;
+
+    [ObservableProperty]
+    private ProjectMIDIOutputRowViewModel? _selectedProjectMIDIOutputRow;
 
     [ObservableProperty]
     private string? _endpointTestStatus;
 
-    partial void OnSelectedMidiInputOptionChanged(MidiInputOption? value)
+    partial void OnSelectedMIDIInputOptionChanged(MIDIInputOption? value)
     {
         _ = value;
-        AddSelectedMidiInputToControlCommand.NotifyCanExecuteChanged();
+        AddSelectedMIDIInputToControlCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnSelectedMidiOutputOptionChanged(MidiOutputOption? value)
+    partial void OnSelectedMIDIOutputOptionChanged(MIDIOutputOption? value)
     {
         _ = value;
-        UseSelectedMidiOutputCommand.NotifyCanExecuteChanged();
-        AddSelectedMidiOutputToControlCommand.NotifyCanExecuteChanged();
-        AddSelectedMidiOutputEndpointCommand.NotifyCanExecuteChanged();
-        AddSelectedMidiOutputToProjectCommand.NotifyCanExecuteChanged();
+        UseSelectedMIDIOutputCommand.NotifyCanExecuteChanged();
+        AddSelectedMIDIOutputToControlCommand.NotifyCanExecuteChanged();
+        AddSelectedMIDIOutputEndpointCommand.NotifyCanExecuteChanged();
+        AddSelectedMIDIOutputToProjectCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnSelectedProjectMidiInputRowChanged(ProjectMidiInputRowViewModel? value)
+    partial void OnSelectedProjectMIDIInputRowChanged(ProjectMIDIInputRowViewModel? value)
     {
         _ = value;
-        RemoveSelectedProjectMidiInputCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectMIDIInputCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnSelectedProjectMidiOutputRowChanged(ProjectMidiOutputRowViewModel? value)
+    partial void OnSelectedProjectMIDIOutputRowChanged(ProjectMIDIOutputRowViewModel? value)
     {
         _ = value;
-        RemoveSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
-        TestSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectMIDIOutputCommand.NotifyCanExecuteChanged();
+        TestSelectedProjectMIDIOutputCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
@@ -617,45 +564,45 @@ public partial class MainViewModel : ViewModelBase
         if (value is null)
         {
             EndpointEditName = string.Empty;
-            OscEditHost = "127.0.0.1";
-            OscEditPort = 9000;
-            MidiEditDeviceName = string.Empty;
-            MidiEditDeviceId = null;
-            MidiEditChannel = 0;
+            OSCEditHost = "127.0.0.1";
+            OSCEditPort = 9000;
+            MIDIEditDeviceName = string.Empty;
+            MIDIEditDeviceId = null;
+            MIDIEditChannel = 0;
         }
         else
         {
             EndpointEditName = value.Name;
             switch (value)
             {
-                case OscActionEndpoint osc:
-                    OscEditHost = osc.Host;
-                    OscEditPort = osc.Port;
+                case OSCActionEndpoint osc:
+                    OSCEditHost = osc.Host;
+                    OSCEditPort = osc.Port;
                     break;
-                case MidiActionEndpoint midi:
-                    MidiEditDeviceName = midi.DeviceName ?? string.Empty;
-                    MidiEditDeviceId = midi.DeviceId;
-                    MidiEditChannel = midi.Channel;
-                    SelectedMidiOutputOption = MidiOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
+                case MIDIActionEndpoint midi:
+                    MIDIEditDeviceName = midi.DeviceName ?? string.Empty;
+                    MIDIEditDeviceId = midi.DeviceId;
+                    MIDIEditChannel = midi.Channel;
+                    SelectedMIDIOutputOption = MIDIOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
                     break;
             }
         }
         RemoveActionEndpointCommand.NotifyCanExecuteChanged();
         SaveActionEndpointEditsCommand.NotifyCanExecuteChanged();
-        RefreshMidiOutputsCommand.NotifyCanExecuteChanged();
-        TestSelectedOscEndpointCommand.NotifyCanExecuteChanged();
-        TestSelectedMidiEndpointCommand.NotifyCanExecuteChanged();
+        RefreshMIDIOutputsCommand.NotifyCanExecuteChanged();
+        TestSelectedOSCEndpointCommand.NotifyCanExecuteChanged();
+        TestSelectedMIDIEndpointCommand.NotifyCanExecuteChanged();
         EndpointTestStatus = null;
         SyncEndpointRowSelectionFromEndpoint();
     }
 
-    partial void OnSelectedOscEndpointRowChanged(ActionEndpointRowViewModel? value)
+    partial void OnSelectedOSCEndpointRowChanged(ActionEndpointRowViewModel? value)
     {
         if (value is not null && !ReferenceEquals(SelectedActionEndpoint, value.Endpoint))
             SelectedActionEndpoint = value.Endpoint;
     }
 
-    partial void OnSelectedMidiEndpointRowChanged(ActionEndpointRowViewModel? value)
+    partial void OnSelectedMIDIEndpointRowChanged(ActionEndpointRowViewModel? value)
     {
         if (value is not null && !ReferenceEquals(SelectedActionEndpoint, value.Endpoint))
             SelectedActionEndpoint = value.Endpoint;
@@ -664,12 +611,12 @@ public partial class MainViewModel : ViewModelBase
     private void SyncEndpointRowSelectionFromEndpoint()
     {
         var id = SelectedActionEndpoint?.Id;
-        SelectedOscEndpointRow = id is null
+        SelectedOSCEndpointRow = id is null
             ? null
-            : OscEndpointRows.FirstOrDefault(r => r.Endpoint.Id == id);
-        SelectedMidiEndpointRow = id is null
+            : OSCEndpointRows.FirstOrDefault(r => r.Endpoint.Id == id);
+        SelectedMIDIEndpointRow = id is null
             ? null
-            : MidiEndpointRows.FirstOrDefault(r => r.Endpoint.Id == id);
+            : MIDIEndpointRows.FirstOrDefault(r => r.Endpoint.Id == id);
     }
 
     private void OnActionEndpointsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -684,9 +631,9 @@ public partial class MainViewModel : ViewModelBase
 
     private void RebuildEndpointWorkspaceLists()
     {
-        var oscHealth = OscEndpointRows.ToDictionary(r => r.Endpoint.Id, r => (r.Health, r.HealthDetail));
-        OscEndpointRows.Clear();
-        foreach (var endpoint in ActionEndpoints.OfType<OscActionEndpoint>())
+        var oscHealth = OSCEndpointRows.ToDictionary(r => r.Endpoint.Id, r => (r.Health, r.HealthDetail));
+        OSCEndpointRows.Clear();
+        foreach (var endpoint in ActionEndpoints.OfType<OSCActionEndpoint>())
         {
             var row = new ActionEndpointRowViewModel(endpoint);
             if (oscHealth.TryGetValue(endpoint.Id, out var h))
@@ -695,12 +642,12 @@ public partial class MainViewModel : ViewModelBase
                 row.HealthDetail = h.HealthDetail;
             }
 
-            OscEndpointRows.Add(row);
+            OSCEndpointRows.Add(row);
         }
 
-        var midiHealth = MidiEndpointRows.ToDictionary(r => r.Endpoint.Id, r => (r.Health, r.HealthDetail));
-        MidiEndpointRows.Clear();
-        foreach (var endpoint in ActionEndpoints.OfType<MidiActionEndpoint>())
+        var midiHealth = MIDIEndpointRows.ToDictionary(r => r.Endpoint.Id, r => (r.Health, r.HealthDetail));
+        MIDIEndpointRows.Clear();
+        foreach (var endpoint in ActionEndpoints.OfType<MIDIActionEndpoint>())
         {
             var row = new ActionEndpointRowViewModel(endpoint);
             if (midiHealth.TryGetValue(endpoint.Id, out var h))
@@ -709,85 +656,85 @@ public partial class MainViewModel : ViewModelBase
                 row.HealthDetail = h.HealthDetail;
             }
 
-            MidiEndpointRows.Add(row);
+            MIDIEndpointRows.Add(row);
         }
 
         SyncEndpointRowSelectionFromEndpoint();
-        RebuildProjectMidiDeviceRows();
+        RebuildProjectMIDIDeviceRows();
     }
 
     private ActionEndpointRowViewModel? FindEndpointRow(Guid endpointId) =>
-        OscEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId)
-        ?? MidiEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId);
+        OSCEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId)
+        ?? MIDIEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId);
 
-    private void RebuildProjectMidiDeviceRows()
+    private void RebuildProjectMIDIDeviceRows()
     {
-        var selectedInputKey = SelectedProjectMidiInputRow?.MatchKey;
-        var selectedOutputKey = SelectedProjectMidiOutputRow?.MatchKey;
+        var selectedInputKey = SelectedProjectMIDIInputRow?.MatchKey;
+        var selectedOutputKey = SelectedProjectMIDIOutputRow?.MatchKey;
 
-        ProjectMidiInputRows.Clear();
-        foreach (var row in BuildProjectMidiInputRows(Control.BuildSnapshot()))
-            ProjectMidiInputRows.Add(row);
+        ProjectMIDIInputRows.Clear();
+        foreach (var row in BuildProjectMIDIInputRows(Control.BuildSnapshot()))
+            ProjectMIDIInputRows.Add(row);
 
-        ProjectMidiOutputRows.Clear();
-        foreach (var row in BuildProjectMidiOutputRows(Control.BuildSnapshot(), ActionEndpoints))
-            ProjectMidiOutputRows.Add(row);
-        OnPropertyChanged(nameof(HasNoProjectMidiInputs));
-        OnPropertyChanged(nameof(HasNoProjectMidiOutputs));
+        ProjectMIDIOutputRows.Clear();
+        foreach (var row in BuildProjectMIDIOutputRows(Control.BuildSnapshot(), ActionEndpoints))
+            ProjectMIDIOutputRows.Add(row);
+        OnPropertyChanged(nameof(HasNoProjectMIDIInputs));
+        OnPropertyChanged(nameof(HasNoProjectMIDIOutputs));
 
-        SelectedProjectMidiInputRow = selectedInputKey is null
-            ? ProjectMidiInputRows.FirstOrDefault()
-            : ProjectMidiInputRows.FirstOrDefault(r => r.MatchKey == selectedInputKey) ?? ProjectMidiInputRows.FirstOrDefault();
-        SelectedProjectMidiOutputRow = selectedOutputKey is null
-            ? ProjectMidiOutputRows.FirstOrDefault()
-            : ProjectMidiOutputRows.FirstOrDefault(r => r.MatchKey == selectedOutputKey) ?? ProjectMidiOutputRows.FirstOrDefault();
+        SelectedProjectMIDIInputRow = selectedInputKey is null
+            ? ProjectMIDIInputRows.FirstOrDefault()
+            : ProjectMIDIInputRows.FirstOrDefault(r => r.MatchKey == selectedInputKey) ?? ProjectMIDIInputRows.FirstOrDefault();
+        SelectedProjectMIDIOutputRow = selectedOutputKey is null
+            ? ProjectMIDIOutputRows.FirstOrDefault()
+            : ProjectMIDIOutputRows.FirstOrDefault(r => r.MatchKey == selectedOutputKey) ?? ProjectMIDIOutputRows.FirstOrDefault();
 
-        RemoveSelectedProjectMidiInputCommand.NotifyCanExecuteChanged();
-        RemoveSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
-        TestSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectMIDIInputCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectMIDIOutputCommand.NotifyCanExecuteChanged();
+        TestSelectedProjectMIDIOutputCommand.NotifyCanExecuteChanged();
     }
 
-    internal static IReadOnlyList<ProjectMidiInputRowViewModel> BuildProjectMidiInputRows(ControlSystemConfig config) =>
+    internal static IReadOnlyList<ProjectMIDIInputRowViewModel> BuildProjectMIDIInputRows(ControlSystemConfig config) =>
         config.Devices
-            .Where(d => d.Protocol == ControlDeviceProtocol.Midi)
-            .Where(d => d.Binding.MidiInputDeviceId is not null || !string.IsNullOrWhiteSpace(d.Binding.MidiInputDeviceName))
-            .Select(d => new ProjectMidiInputRowViewModel(
+            .Where(d => d.Protocol == ControlDeviceProtocol.MIDI)
+            .Where(d => d.Binding.MIDIInputDeviceId is not null || !string.IsNullOrWhiteSpace(d.Binding.MIDIInputDeviceName))
+            .Select(d => new ProjectMIDIInputRowViewModel(
                 d.Id,
-                d.Binding.MidiInputDeviceId,
-                d.Binding.MidiInputDeviceName ?? d.Name))
+                d.Binding.MIDIInputDeviceId,
+                d.Binding.MIDIInputDeviceName ?? d.Name))
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    internal static IReadOnlyList<ProjectMidiOutputRowViewModel> BuildProjectMidiOutputRows(
+    internal static IReadOnlyList<ProjectMIDIOutputRowViewModel> BuildProjectMIDIOutputRows(
         ControlSystemConfig config,
         IEnumerable<ActionEndpoint> endpoints)
     {
-        var rows = new List<ProjectMidiOutputRowBuilder>();
+        var rows = new List<ProjectMIDIOutputRowBuilder>();
 
-        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Midi))
+        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.MIDI))
         {
-            var deviceId = device.Binding.MidiOutputDeviceId;
-            var deviceName = device.Binding.MidiOutputDeviceName;
+            var deviceId = device.Binding.MIDIOutputDeviceId;
+            var deviceName = device.Binding.MIDIOutputDeviceName;
             if (deviceId is null && string.IsNullOrWhiteSpace(deviceName))
                 continue;
             deviceName ??= device.Name;
 
-            var row = FindOrAddProjectMidiOutputRow(rows, deviceId, deviceName);
+            var row = FindOrAddProjectMIDIOutputRow(rows, deviceId, deviceName);
             row.ControlDeviceId = device.Id;
             row.DeviceId ??= deviceId;
-            row.DeviceName = PreferMidiDeviceName(row.DeviceName, deviceName);
+            row.DeviceName = PreferMIDIDeviceName(row.DeviceName, deviceName);
         }
 
-        foreach (var endpoint in endpoints.OfType<MidiActionEndpoint>())
+        foreach (var endpoint in endpoints.OfType<MIDIActionEndpoint>())
         {
             var deviceName = endpoint.DeviceName ?? endpoint.Name;
             if (endpoint.DeviceId is null && string.IsNullOrWhiteSpace(deviceName))
                 continue;
 
-            var row = FindOrAddProjectMidiOutputRow(rows, endpoint.DeviceId, deviceName);
+            var row = FindOrAddProjectMIDIOutputRow(rows, endpoint.DeviceId, deviceName);
             row.CueEndpointId = endpoint.Id;
             row.DeviceId ??= endpoint.DeviceId;
-            row.DeviceName = PreferMidiDeviceName(row.DeviceName, deviceName);
+            row.DeviceName = PreferMIDIDeviceName(row.DeviceName, deviceName);
         }
 
         return rows
@@ -796,16 +743,16 @@ public partial class MainViewModel : ViewModelBase
             .ToList();
     }
 
-    private static ProjectMidiOutputRowBuilder FindOrAddProjectMidiOutputRow(
-        List<ProjectMidiOutputRowBuilder> rows,
+    private static ProjectMIDIOutputRowBuilder FindOrAddProjectMIDIOutputRow(
+        List<ProjectMIDIOutputRowBuilder> rows,
         int? deviceId,
         string? deviceName)
     {
-        var existing = rows.FirstOrDefault(r => MatchesMidiBinding(r.DeviceId, r.DeviceName, deviceId, deviceName));
+        var existing = rows.FirstOrDefault(r => MatchesMIDIBinding(r.DeviceId, r.DeviceName, deviceId, deviceName));
         if (existing is not null)
             return existing;
 
-        var row = new ProjectMidiOutputRowBuilder
+        var row = new ProjectMIDIOutputRowBuilder
         {
             DeviceId = deviceId,
             DeviceName = deviceName,
@@ -814,7 +761,7 @@ public partial class MainViewModel : ViewModelBase
         return row;
     }
 
-    private static bool MatchesMidiBinding(int? firstId, string? firstName, int? secondId, string? secondName)
+    private static bool MatchesMIDIBinding(int? firstId, string? firstName, int? secondId, string? secondName)
     {
         if (firstId is not null && secondId is not null && firstId == secondId)
             return true;
@@ -824,7 +771,7 @@ public partial class MainViewModel : ViewModelBase
                && string.Equals(firstName.Trim(), secondName.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string? PreferMidiDeviceName(string? existing, string? candidate) =>
+    private static string? PreferMIDIDeviceName(string? existing, string? candidate) =>
         string.IsNullOrWhiteSpace(existing)
             ? candidate
             : existing;
@@ -847,7 +794,7 @@ public partial class MainViewModel : ViewModelBase
         try
         {
             var probed = 0;
-            foreach (var row in OscEndpointRows.Concat(MidiEndpointRows))
+            foreach (var row in OSCEndpointRows.Concat(MIDIEndpointRows))
             {
                 if (ct.IsCancellationRequested)
                 {
@@ -884,8 +831,8 @@ public partial class MainViewModel : ViewModelBase
 
         var (ok, detail) = row.Endpoint switch
         {
-            OscActionEndpoint osc => await ActionEndpointProbe.TryProbeOscAsync(osc, ct).ConfigureAwait(false),
-            MidiActionEndpoint midi => ActionEndpointProbe.TryProbeMidi(midi, EnsureMidiInitialized),
+            OSCActionEndpoint osc => await ActionEndpointProbe.TryProbeOSCAsync(osc, ct).ConfigureAwait(false),
+            MIDIActionEndpoint midi => ActionEndpointProbe.TryProbeMIDI(midi, EnsureMIDIInitialized),
             _ => (false, Strings.UnknownEndpointKind),
         };
 
@@ -915,44 +862,8 @@ public partial class MainViewModel : ViewModelBase
     {
         var name = Strings.Format(nameof(Strings.PlayerNameFormat), _nextPlayerNumber++);
         var player = new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
-        player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         player.DetachRequested += OnPlayerDetachRequested;
-        player.CuePreRollChanged += ids =>
-        {
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-                CuePlayer.OnPreRollCacheChanged(ids);
-            else
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
-        };
         return player;
-    }
-
-    private async void OnPlayerNaturalPlaybackEnded(object? sender, EventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        try
-        {
-            await CuePlayer.OnMediaCueNaturallyEndedAsync();
-        }
-        catch (Exception ex)
-        {
-            Trace.LogWarning(ex, "OnPlayerNaturalPlaybackEnded: cue auto-follow failed");
-            CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
-        }
-    }
-
-    private async Task OnCuePlaybackEngineNaturalEndAsync()
-    {
-        try
-        {
-            await CuePlayer.OnMediaCueNaturallyEndedAsync();
-        }
-        catch (Exception ex)
-        {
-            Trace.LogWarning(ex, "OnCuePlaybackEngineNaturalEndAsync: cue auto-follow failed");
-            CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
-        }
     }
 
     private async Task RemovePlayer(MediaPlayerViewModel player)
@@ -961,7 +872,6 @@ public partial class MainViewModel : ViewModelBase
         if (idx < 0) return;
         if (_detachedPlayerWindows.TryGetValue(player, out var detachedWindow))
             detachedWindow.Close();
-        player.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
         player.DetachRequested -= OnPlayerDetachRequested;
         await player.DisposeAsync();
         Players.RemoveAt(idx);
@@ -1035,7 +945,6 @@ public partial class MainViewModel : ViewModelBase
                     return;
                 }
 
-                var player = SelectedPlayer;
                 var list = CuePlayer.SelectedCueList;
                 if (list is null)
                 {
@@ -1043,28 +952,12 @@ public partial class MainViewModel : ViewModelBase
                     return;
                 }
 
-                var engineTargets = CuePlayer.GetPreparedMediaCueTargets();
-                var ndiTargets = CuePlayer.GetNdiPreConnectTargets();
-                var paTargets = CuePlayer.GetPortAudioPreConnectTargets();
-                Trace.LogDebug(
-                    "RefreshCuePreRollAsync: engineTargets={EngineTargets} ndiTargets={NdiTargets} portAudioTargets={PortAudioTargets} player={Player}",
-                    engineTargets.Count,
-                    ndiTargets.Count,
-                    paTargets.Count,
-                    player?.Name ?? "<none>");
+                var warmTargets = CuePlayer.GetPreparedMediaCueTargets();
+                Trace.LogDebug("RefreshCuePreRollAsync: warmTargets={WarmTargets}", warmTargets.Count);
 
-                player?.InvalidateCuePreRoll();
-                await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);
-                if (player is null)
-                {
-                    timing?.SetOutcome("no-selected-player");
-                    return;
-                }
-                ct.ThrowIfCancellationRequested();
-                await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
-                ct.ThrowIfCancellationRequested();
-                await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
-                timing?.SetOutcome($"engine={engineTargets.Count} ndi={ndiTargets.Count} portAudio={paTargets.Count}");
+                // Prepare through the SAME ShowSession graph that fires (flush-then-warm, coordinator-owned).
+                await _cueShow.WarmUpcomingForPreRollAsync(Math.Max(1, warmTargets.Count)).ConfigureAwait(false);
+                timing?.SetOutcome($"warm={warmTargets.Count}");
             }
             catch (OperationCanceledException)
             {
@@ -1096,8 +989,8 @@ public partial class MainViewModel : ViewModelBase
         {
             return cue.ActionKind switch
             {
-                CueActionKind.OscOut => await ExecuteCueOscAsync(cue, ct),
-                CueActionKind.MidiOut => await Task.Run(() => ExecuteCueMidi(cue, ct), ct),
+                CueActionKind.OSCOut => await ExecuteCueOSCAsync(cue, ct),
+                CueActionKind.MIDIOut => await Task.Run(() => ExecuteCueMIDI(cue, ct), ct),
                 _ => Strings.Format(nameof(Strings.ActionKindNotWiredFormat), cue.ActionKind),
             };
         }
@@ -1107,59 +1000,59 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private async Task<string?> ExecuteCueOscAsync(ActionCueNode cue, CancellationToken ct)
+    private async Task<string?> ExecuteCueOSCAsync(ActionCueNode cue, CancellationToken ct)
     {
-        OscActionEndpoint? endpoint = null;
+        OSCActionEndpoint? endpoint = null;
         if (cue.EndpointId is { } endpointId)
         {
             endpoint = ActionEndpoints
-                .OfType<OscActionEndpoint>()
+                .OfType<OSCActionEndpoint>()
                 .FirstOrDefault(e => e.Id == endpointId);
             if (endpoint is null)
-                return Strings.Format(nameof(Strings.OscEndpointMissingFormat), endpointId);
+                return Strings.Format(nameof(Strings.OSCEndpointMissingFormat), endpointId);
         }
 
-        var spec = ParseOscSpec(cue.AddressOrMessage, endpoint);
+        var spec = ParseOSCSpec(cue.AddressOrMessage, endpoint);
         using var client = await OSCClient.CreateAsync(spec.Host, spec.Port, cancellationToken: ct);
         await client.SendMessageAsync(spec.Address, spec.Arguments, ct);
-        return Strings.Format(nameof(Strings.OscSendResultFormat), spec.Host, spec.Port, spec.Address);
+        return Strings.Format(nameof(Strings.OSCSendResultFormat), spec.Host, spec.Port, spec.Address);
     }
 
-    private string ExecuteCueMidi(ActionCueNode cue, CancellationToken ct)
+    private string ExecuteCueMIDI(ActionCueNode cue, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var endpoint = cue.EndpointId is { } endpointId
-            ? ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
-            : ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault();
+            ? ActionEndpoints.OfType<MIDIActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
+            : ActionEndpoints.OfType<MIDIActionEndpoint>().FirstOrDefault();
         if (cue.EndpointId is not null && endpoint is null)
-            return Strings.Format(nameof(Strings.MidiEndpointMissingFormat), cue.EndpointId);
+            return Strings.Format(nameof(Strings.MIDIEndpointMissingFormat), cue.EndpointId);
 
-        var initErr = EnsureMidiInitialized();
+        var initErr = EnsureMIDIInitialized();
         if (initErr is not null)
             return initErr;
 
         var devices = PMUtil.GetOutputDevices();
         if (devices.Count == 0)
-            return Strings.MidiNoOutputDevices;
+            return Strings.MIDINoOutputDevices;
 
-        var device = ResolveMidiDevice(endpoint, devices);
+        var device = ResolveMIDIDevice(endpoint, devices);
         if (device is null)
             return endpoint is null
-                ? Strings.MidiNoSuitableOutputDevice
-                : Strings.Format(nameof(Strings.MidiEndpointDeviceNotFoundFormat), endpoint.DeviceName ?? endpoint.DeviceId?.ToString() ?? Strings.UnsetLabel);
+                ? Strings.MIDINoSuitableOutputDevice
+                : Strings.Format(nameof(Strings.MIDIEndpointDeviceNotFoundFormat), endpoint.DeviceName ?? endpoint.DeviceId?.ToString() ?? Strings.UnsetLabel);
 
-        var spec = ParseMidiSpec(cue.AddressOrMessage, endpoint, device.Value.Id);
+        var spec = ParseMIDISpec(cue.AddressOrMessage, endpoint, device.Value.Id);
         using var outDevice = new MIDIOutputDevice(spec.DeviceId);
         var openErr = outDevice.Open();
         if (openErr != PmError.NoError)
-            return Strings.Format(nameof(Strings.MidiOpenFailedFormat), PMUtil.GetErrorText(openErr) ?? openErr.ToString());
+            return Strings.Format(nameof(Strings.MIDIOpenFailedFormat), PMUtil.GetErrorText(openErr) ?? openErr.ToString());
         var writeErr = outDevice.Write(spec.Message);
         if (writeErr != PmError.NoError)
-            return Strings.Format(nameof(Strings.MidiWriteFailedFormat), PMUtil.GetErrorText(writeErr) ?? writeErr.ToString());
-        return Strings.Format(nameof(Strings.MidiSendResultFormat), device.Value.Name ?? Strings.Format(nameof(Strings.DeviceHashIdFormat), device.Value.Id), spec.Description);
+            return Strings.Format(nameof(Strings.MIDIWriteFailedFormat), PMUtil.GetErrorText(writeErr) ?? writeErr.ToString());
+        return Strings.Format(nameof(Strings.MIDISendResultFormat), device.Value.Name ?? Strings.Format(nameof(Strings.DeviceHashIdFormat), device.Value.Id), spec.Description);
     }
 
-    private string? EnsureMidiInitialized()
+    private string? EnsureMIDIInitialized()
     {
         lock (_midiInitSync)
         {
@@ -1167,13 +1060,13 @@ public partial class MainViewModel : ViewModelBase
                 return null;
             var err = PMUtil.Initialize();
             if (err != PmError.NoError)
-                return Strings.Format(nameof(Strings.MidiInitFailedFormat), PMUtil.GetErrorText(err) ?? err.ToString());
+                return Strings.Format(nameof(Strings.MIDIInitFailedFormat), PMUtil.GetErrorText(err) ?? err.ToString());
             _midiInitialized = true;
             return null;
         }
     }
 
-    private static PmDeviceEntry? ResolveMidiDevice(MidiActionEndpoint? endpoint, IReadOnlyList<PmDeviceEntry> outputs)
+    private static PmDeviceEntry? ResolveMIDIDevice(MIDIActionEndpoint? endpoint, IReadOnlyList<PmDeviceEntry> outputs)
     {
         if (endpoint is { DeviceId: { } id })
         {
@@ -1193,7 +1086,7 @@ public partial class MainViewModel : ViewModelBase
         return outputs.FirstOrDefault();
     }
 
-    private static OscSpec ParseOscSpec(string raw, OscActionEndpoint? endpoint)
+    private static OSCSpec ParseOSCSpec(string raw, OSCActionEndpoint? endpoint)
     {
         var host = string.IsNullOrWhiteSpace(endpoint?.Host) ? "127.0.0.1" : endpoint.Host;
         var port = endpoint is { Port: > 0 } ? endpoint.Port : 9000;
@@ -1201,7 +1094,7 @@ public partial class MainViewModel : ViewModelBase
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
         if (tokens.Count == 0)
-            return new OscSpec(host, port, "/cue/go", []);
+            return new OSCSpec(host, port, "/cue/go", []);
 
         string address;
         var argsStart = 1;
@@ -1232,19 +1125,19 @@ public partial class MainViewModel : ViewModelBase
 
         var args = new List<OSCArgument>();
         for (var i = argsStart; i < tokens.Count; i++)
-            args.Add(ParseOscArgumentToken(tokens[i]));
+            args.Add(ParseOSCArgumentToken(tokens[i]));
 
-        return new OscSpec(host, port, address, args);
+        return new OSCSpec(host, port, address, args);
     }
 
-    private static MidiSpec ParseMidiSpec(string raw, MidiActionEndpoint? endpoint, int fallbackDeviceId)
+    private static MIDISpec ParseMIDISpec(string raw, MIDIActionEndpoint? endpoint, int fallbackDeviceId)
     {
         var deviceId = endpoint?.DeviceId ?? fallbackDeviceId;
-        var parsed = CueMidiActionMessage.CreateMessage(raw, endpoint?.Channel ?? 0);
-        return new MidiSpec(deviceId, parsed.Message, parsed.Description);
+        var parsed = CueMIDIActionMessage.CreateMessage(raw, endpoint?.Channel ?? 0);
+        return new MIDISpec(deviceId, parsed.Message, parsed.Description);
     }
 
-    private static OSCArgument ParseOscArgumentToken(string token)
+    private static OSCArgument ParseOSCArgumentToken(string token)
     {
         if (bool.TryParse(token, out var b))
             return b ? OSCArgument.True() : OSCArgument.False();
@@ -1255,10 +1148,10 @@ public partial class MainViewModel : ViewModelBase
         return OSCArgument.String(token);
     }
 
-    private sealed record OscSpec(string Host, int Port, string Address, IReadOnlyList<OSCArgument> Arguments);
-    private sealed record MidiSpec(int DeviceId, IMIDIMessage Message, string Description);
-    public sealed record MidiInputOption(int Id, string Name);
-    public sealed record MidiOutputOption(int Id, string Name);
+    private sealed record OSCSpec(string Host, int Port, string Address, IReadOnlyList<OSCArgument> Arguments);
+    private sealed record MIDISpec(int DeviceId, IMIDIMessage Message, string Description);
+    public sealed record MIDIInputOption(int Id, string Name);
+    public sealed record MIDIOutputOption(int Id, string Name);
 
     /// <summary>
     /// Phase A — build a <see cref="HaPlayProject"/> snapshot from the current VM state. Pure projection,
@@ -1289,12 +1182,9 @@ public partial class MainViewModel : ViewModelBase
                 ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
             SavedSections = sections is null ? null : ProjectSections.Normalize(sections),
             Outputs = outputs,
-            SharedHeadphonesBuses = Has(ProjectSections.OutputsAudio)
-                ? OutputManagement.BuildSharedHeadphonesBusesSnapshot().ToList()
-                : [],
             Players = Has(ProjectSections.Players) ? Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList() : [],
             ActionEndpoints = ActionEndpoints
-                .Where(e => e is MidiActionEndpoint ? Has(ProjectSections.TargetsMidi) : Has(ProjectSections.TargetsOsc))
+                .Where(e => e is MIDIActionEndpoint ? Has(ProjectSections.TargetsMIDI) : Has(ProjectSections.TargetsOSC))
                 .ToList(),
             CueLists = Has(ProjectSections.CueLists) ? CuePlayer.BuildCueListsSnapshot() : [],
             Soundboards = Has(ProjectSections.Soundboards) ? Soundboard.BuildSnapshot() : [],
@@ -1339,15 +1229,13 @@ public partial class MainViewModel : ViewModelBase
         // aliases + per-player matrix presets. Old projects still load; tell the operator once.
         if (project.VirtualAudioChannels.Count > 0)
             ToastCenter.Info(Strings.VirtualChannelsMigratedToast);
-        if (hasAudioOut)
-            OutputManagement.ApplySharedHeadphonesBuses(project.SharedHeadphonesBuses);
 
-        var hasMidiTargets = Has(ProjectSections.TargetsMidi);
-        var hasOscTargets = Has(ProjectSections.TargetsOsc);
-        if (hasMidiTargets || hasOscTargets)
+        var hasMIDITargets = Has(ProjectSections.TargetsMIDI);
+        var hasOSCTargets = Has(ProjectSections.TargetsOSC);
+        if (hasMIDITargets || hasOSCTargets)
         {
             var keep = ActionEndpoints
-                .Where(e => e is MidiActionEndpoint ? !hasMidiTargets : !hasOscTargets)
+                .Where(e => e is MIDIActionEndpoint ? !hasMIDITargets : !hasOSCTargets)
                 .ToList();
             ActionEndpoints.Clear();
             foreach (var endpoint in keep.Concat(project.ActionEndpoints))
@@ -1360,12 +1248,12 @@ public partial class MainViewModel : ViewModelBase
             CuePlayer.ApplyCueLists(project.CueLists);
         if (Has(ProjectSections.Soundboards))
         {
-            FireAndLog(_soundboardEngine.StopAllAsync(), "SoundboardEngine.StopAllAsync project-load");
+            FireAndLog(_cueShow.StopAllVoicesAsync(), "ShowSession.StopAllVoicesAsync project-load");
             Soundboard.ApplySnapshot(project.Soundboards);
         }
         if (Has(ProjectSections.Control))
             Control.LoadConfig(project.ControlSystem);
-        RebuildProjectMidiDeviceRows();
+        RebuildProjectMIDIDeviceRows();
 
         if (!Has(ProjectSections.Players))
         {
@@ -1379,7 +1267,6 @@ public partial class MainViewModel : ViewModelBase
         while (Players.Count > project.Players.Count && Players.Count > 1)
         {
             var removed = Players[^1];
-            removed.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
             removed.DetachRequested -= OnPlayerDetachRequested;
             Players.RemoveAt(Players.Count - 1);
             FireAndLog(removed.DisposeAsync(), "MediaPlayerViewModel.DisposeAsync project-load-removed-player");
@@ -1430,49 +1317,49 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    [RelayCommand(CanExecute = nameof(CanTestSelectedOscEndpoint))]
-    private async Task TestSelectedOscEndpointAsync()
+    [RelayCommand(CanExecute = nameof(CanTestSelectedOSCEndpoint))]
+    private async Task TestSelectedOSCEndpointAsync()
     {
-        if (SelectedActionEndpoint is not OscActionEndpoint)
+        if (SelectedActionEndpoint is not OSCActionEndpoint)
             return;
-        var row = SelectedOscEndpointRow ?? FindEndpointRow(SelectedActionEndpoint.Id);
+        var row = SelectedOSCEndpointRow ?? FindEndpointRow(SelectedActionEndpoint.Id);
         if (row is null)
             return;
 
-        EndpointTestStatus = Strings.TestingOscStatus;
+        EndpointTestStatus = Strings.TestingOSCStatus;
         await ProbeEndpointRowAsync(row, CancellationToken.None);
         EndpointTestStatus = row.Health switch
         {
-            ActionEndpointHealthState.Ok => Strings.Format(nameof(Strings.OscTestOkStatusFormat), row.HealthDetail),
-            ActionEndpointHealthState.Failed => Strings.Format(nameof(Strings.OscTestFailedStatusFormat), row.HealthDetail),
-            _ => Strings.OscTestFinishedStatus,
+            ActionEndpointHealthState.Ok => Strings.Format(nameof(Strings.OSCTestOkStatusFormat), row.HealthDetail),
+            ActionEndpointHealthState.Failed => Strings.Format(nameof(Strings.OSCTestFailedStatusFormat), row.HealthDetail),
+            _ => Strings.OSCTestFinishedStatus,
         };
     }
 
-    private bool CanTestSelectedOscEndpoint() => SelectedActionEndpoint is OscActionEndpoint;
+    private bool CanTestSelectedOSCEndpoint() => SelectedActionEndpoint is OSCActionEndpoint;
 
-    [RelayCommand(CanExecute = nameof(CanTestSelectedMidiEndpoint))]
-    private async Task TestSelectedMidiEndpointAsync()
+    [RelayCommand(CanExecute = nameof(CanTestSelectedMIDIEndpoint))]
+    private async Task TestSelectedMIDIEndpointAsync()
     {
-        if (SelectedActionEndpoint is not MidiActionEndpoint)
+        if (SelectedActionEndpoint is not MIDIActionEndpoint)
             return;
-        var row = SelectedMidiEndpointRow ?? FindEndpointRow(SelectedActionEndpoint.Id);
+        var row = SelectedMIDIEndpointRow ?? FindEndpointRow(SelectedActionEndpoint.Id);
         if (row is null)
             return;
 
-        EndpointTestStatus = Strings.TestingMidiStatus;
+        EndpointTestStatus = Strings.TestingMIDIStatus;
         await ProbeEndpointRowAsync(row, CancellationToken.None);
         EndpointTestStatus = row.Health switch
         {
-            ActionEndpointHealthState.Ok => Strings.Format(nameof(Strings.MidiTestOkStatusFormat), row.HealthDetail),
-            ActionEndpointHealthState.Failed => Strings.Format(nameof(Strings.MidiTestFailedStatusFormat), row.HealthDetail),
-            _ => Strings.MidiTestFinishedStatus,
+            ActionEndpointHealthState.Ok => Strings.Format(nameof(Strings.MIDITestOkStatusFormat), row.HealthDetail),
+            ActionEndpointHealthState.Failed => Strings.Format(nameof(Strings.MIDITestFailedStatusFormat), row.HealthDetail),
+            _ => Strings.MIDITestFinishedStatus,
         };
     }
 
-    private bool CanTestSelectedMidiEndpoint() => IsMidiAvailable && SelectedActionEndpoint is MidiActionEndpoint;
+    private bool CanTestSelectedMIDIEndpoint() => IsMIDIAvailable && SelectedActionEndpoint is MIDIActionEndpoint;
 
-    private sealed class ProjectMidiOutputRowBuilder
+    private sealed class ProjectMIDIOutputRowBuilder
     {
         public int? DeviceId { get; set; }
 
@@ -1482,7 +1369,7 @@ public partial class MainViewModel : ViewModelBase
 
         public Guid? CueEndpointId { get; set; }
 
-        public ProjectMidiOutputRowViewModel ToRow() =>
+        public ProjectMIDIOutputRowViewModel ToRow() =>
             new(ControlDeviceId, CueEndpointId, DeviceId, DeviceName);
     }
 

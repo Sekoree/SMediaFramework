@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      LibAssLib is the dedicated P/Invoke binding for libass (ass_*) — the analogue of MALib (miniaudio) and
+      NDILib (NDI). It binds libass's own C ABI directly; there is NO custom C wrapper/shim and no native build
+      step in this project. Native provisioning: on Linux the libraries are USER-PROVIDED (the system libass.so
+      plus its FreeType/FriBidi/HarfBuzz/fontconfig deps, via the distro package manager) on the normal search
+      path; on Windows a host build script deploys ass.dll + deps (set up separately). Renders ASS/SSA to
+      alpha-bitmap layers (ASS_Image); the managed wrapper composites them.
+    -->
+
+    <ItemGroup>
+        <!-- S.Media.Subtitles is the primary managed wrapper for LibAssLib (next/ name). -->
+        <InternalsVisibleTo Include="S.Media.Subtitles" />
+        <InternalsVisibleTo Include="LibAssLib.Tests" />
+    </ItemGroup>
+
+</Project>

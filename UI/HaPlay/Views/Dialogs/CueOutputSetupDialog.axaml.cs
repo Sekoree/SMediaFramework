@@ -179,7 +179,7 @@ public partial class CueOutputSetupDialog : Window
     }
 
     private static (int? Width, int? Height) ResolveOutputResolution(OutputDefinition? definition) =>
-        definition is not null && HaPlayPlaybackSession.TryGetOutputResolution(definition, out var width, out var height)
+        definition is not null && HaPlayPlaybackHelpers.TryGetOutputResolution(definition, out var width, out var height)
             ? (width, height)
             : (null, null);
 }

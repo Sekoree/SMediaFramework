@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Media/S.Media.Source.YouTube/S.Media.Source.YouTube.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="S.Media.Core" />
+    <Using Include="S.Media.Core.Registry" />
+    <Using Include="S.Media.Source.YouTube" />
+  </ItemGroup>
+
+</Project>

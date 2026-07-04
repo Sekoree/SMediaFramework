@@ -1,5 +1,5 @@
 using S.Media.Core.Video;
-using S.Media.Effects;
+using S.Media.Compositor;
 
 namespace HaPlay.Playback;
 

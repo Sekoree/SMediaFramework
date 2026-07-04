@@ -424,3 +424,32 @@ public sealed record CueAudioTrackChoice(int? Index, string? Signature, string L
 
     public override string ToString() => Label;
 }
+
+/// <summary>One embedded subtitle-track entry in the cue subtitle picker. Subtitles are none/one/many, so each
+/// entry carries its own <see cref="IsSelected"/> toggle rather than a single shared selection.</summary>
+public sealed partial class CueSubtitleTrackChoice : ObservableObject
+{
+    public CueSubtitleTrackChoice(int streamIndex, string label, bool isSelected)
+    {
+        StreamIndex = streamIndex;
+        Label = label;
+        _isSelected = isSelected;
+    }
+
+    /// <summary>Embedded container stream index.</summary>
+    public int StreamIndex { get; }
+
+    /// <summary>Operator-facing label (codec / language / title).</summary>
+    public string Label { get; }
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    public override string ToString() => Label;
+}
+
+/// <summary>One subtitle alignment option (ASS numpad 1–9; <c>null</c> = keep the document's alignment).</summary>
+public sealed record SubtitleAlignmentChoice(int? Value, string Label)
+{
+    public override string ToString() => Label;
+}

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Threading;
-using S.Media.Core.Clock;
 using Xunit;
 
 namespace S.Media.Core.Tests.Clock;
@@ -148,13 +147,18 @@ public class MediaClockTests
         var ticks = 0;
         clock.AudioTick += (_, _) => Interlocked.Increment(ref ticks);
 
+        var sw = Stopwatch.StartNew();
         clock.Start();
         Thread.Sleep(300);
         clock.Pause();
+        sw.Stop();
 
-        // 300 ms / 20 ms = 15 expected; allow generous slack for thread scheduling.
+        // The tick count scales with the ACTUAL Start→Pause window, not the requested 300 ms — a loaded
+        // CI runner sleeps well past 300 ms, so an absolute range is flaky. Derive the expected count from
+        // the measured elapsed and allow generous slack for timer resolution + scheduling.
+        var expected = sw.Elapsed.TotalMilliseconds / interval.TotalMilliseconds;
         var observed = Volatile.Read(ref ticks);
-        Assert.InRange(observed, 8, 25);
+        Assert.InRange(observed, expected * 0.4, expected * 1.75 + 3);
     }
 
     [Fact]
@@ -165,12 +169,16 @@ public class MediaClockTests
         var ticks = 0;
         clock.VideoTick += (_, _) => Interlocked.Increment(ref ticks);
 
+        var sw = Stopwatch.StartNew();
         clock.Start();
         Thread.Sleep(300);
         clock.Pause();
+        sw.Stop();
 
+        // Scale the expected count by the ACTUAL elapsed window (CI sleeps run long); see AudioTick above.
+        var expected = sw.Elapsed.TotalMilliseconds / interval.TotalMilliseconds;
         var observed = Volatile.Read(ref ticks);
-        Assert.InRange(observed, 3, 10);
+        Assert.InRange(observed, expected * 0.4, expected * 1.75 + 3);
     }
 
     [Fact]

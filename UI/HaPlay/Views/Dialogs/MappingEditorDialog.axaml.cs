@@ -5,7 +5,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using HaPlay.Models;
 using HaPlay.ViewModels.Dialogs;
-using S.Media.Effects;
+using S.Media.Compositor;
 
 namespace HaPlay.Views.Dialogs;
 

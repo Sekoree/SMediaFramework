@@ -13,7 +13,7 @@ public sealed class OSCAddressMatcherTests
     [InlineData("/deck/[ab]/play", "/deck/a/play")]
     [InlineData("/show//go", "/show/page/scene/go")]
     [InlineData("/show//go", "/show/go")]
-    public void IsMatch_MatchesSupportedOscPatterns(string pattern, string address)
+    public void IsMatch_MatchesSupportedOSCPatterns(string pattern, string address)
     {
         Assert.True(OSCAddressMatcher.IsMatch(pattern, address));
     }

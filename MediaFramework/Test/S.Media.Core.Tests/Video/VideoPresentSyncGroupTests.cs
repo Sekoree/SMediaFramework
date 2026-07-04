@@ -1,5 +1,3 @@
-using S.Media.Core.Clock;
-using S.Media.Core.Video;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;

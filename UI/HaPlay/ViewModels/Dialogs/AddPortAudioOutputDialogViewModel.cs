@@ -4,7 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
 using HaPlay.Resources;
 using S.Media.Core.Audio;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.ViewModels.Dialogs;
 
@@ -211,6 +211,15 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
     {
         var previousHost = SelectedHostApi?.Index;
         HostApis.Clear();
+        if (!RuntimeModules.IsPortAudioAvailable)
+        {
+            // Opening the dialog on a machine without the portaudio native library must not crash;
+            // leave the pickers empty and say why.
+            ValidationMessage = RuntimeModules.PortAudioUnavailableReason;
+            SelectedHostApi = null;
+            ReloadDevices();
+            return;
+        }
         foreach (var h in PortAudioDeviceCatalog.EnumerateHostApis())
             HostApis.Add(h);
         SelectedHostApi =
@@ -233,6 +242,12 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 
         if (IsPortAudioBackend)
         {
+            if (!RuntimeModules.IsPortAudioAvailable)
+            {
+                ValidationMessage = RuntimeModules.PortAudioUnavailableReason;
+                SelectedDevice = null;
+                return;
+            }
             var host = SelectedHostApi?.Index;
             foreach (var d in PortAudioDeviceCatalog.EnumerateOutputDevices(host))
             {
@@ -350,7 +365,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 
     private static IReadOnlyList<IAudioBackend> DiscoverBackends()
     {
-        var registered = AudioBackends.All;
+        var registered = MediaRuntime.Registry.AudioBackends;
         if (registered.Count > 0)
             return registered;
 

@@ -1,23 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- Phase 3 gate: GL compositing with FFmpeg ABSENT. Composites synthetic StaticFrameSource layers
+         through the SDL3 GL backend (the Present.SDL3.Compositor bridge) and verifies the readback.
+         Proves the moved Gpu+Compositor+bridge stack runs on real GL — no decoder anywhere. -->
+
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <RootNamespace>CompositorSmoke</RootNamespace>
-        <AssemblyName>CompositorSmoke</AssemblyName>
+        <IsAotCompatible>false</IsAotCompatible>
     </PropertyGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.Effects\S.Media.Effects.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.OpenGL\S.Media.OpenGL.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.SkiaSharp\S.Media.SkiaSharp.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
     </ItemGroup>
 
 </Project>

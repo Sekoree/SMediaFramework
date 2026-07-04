@@ -1,14 +1,16 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
-    <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    </PropertyGroup>
+    <!-- NDILib is the dedicated P/Invoke binding for the NDI SDK (NDIlib_*). The native libndi is
+         host-supplied (NDILibraryResolver locates it); there is no native build step here. -->
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.NDI" />
+        <InternalsVisibleTo Include="S.Media.NDI.Tests" />
+        <InternalsVisibleTo Include="NDILib.Tests" />
     </ItemGroup>
 
 </Project>

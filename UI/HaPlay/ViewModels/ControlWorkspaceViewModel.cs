@@ -36,18 +36,18 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private string? _configFilePath;
     private ControlMonitorBuffer? _monitorBuffer;
     private ControlSystemRuntimeSession? _session;
-    private UdpControlOscSender? _oscSender;
-    private IControlMidiSender? _midiSender;
+    private UdpControlOSCSender? _oscSender;
+    private IControlMIDISender? _midiSender;
     private int _lastRenderedCount = -1;
     private bool _filterDirty;
     private bool _busy;
     private DateTimeOffset _learnSinceUtc;
 
     // Fallback MIDI device resolution — injectable so unit tests can supply a fake catalog/prompt
-    // without touching PortMidi or showing a real dialog.
-    internal Func<ControlMidiPortCatalog?> MidiCatalogProvider { get; set; } = EnumerateMidiPorts;
+    // without touching PortMIDI or showing a real dialog.
+    internal Func<ControlMIDIPortCatalog?> MIDICatalogProvider { get; set; } = EnumerateMIDIPorts;
 
-    internal Func<IReadOnlyList<ControlMidiResolutionRequest>, Task<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>> MidiResolutionPrompt { get; set; } = DefaultPromptAsync;
+    internal Func<IReadOnlyList<ControlMIDIResolutionRequest>, Task<IReadOnlyDictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>?>> MIDIResolutionPrompt { get; set; } = DefaultPromptAsync;
 
     /// <summary>
     /// Ensures the project has been saved to disk (scripts are stored next to the project file, so there's
@@ -91,8 +91,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<string> ProfileWarnings { get; } = new();
 
-    public bool IsMidiAvailable => RuntimeModules.IsMidiAvailable;
-    public string MidiUnavailableStatus => RuntimeModules.MidiUnavailableReason ?? "MIDI runtime unavailable.";
+    // Test seam (like MIDICatalogProvider): the device-RESOLUTION flows are pure over an injected catalog,
+    // so tests on runners without a native portmidi override this probe — production always asks the runtime.
+    internal Func<bool> MIDIAvailabilityProbe { get; set; } = static () => RuntimeModules.IsMIDIAvailable;
+
+    public bool IsMIDIAvailable => MIDIAvailabilityProbe();
+    public string MIDIUnavailableStatus => RuntimeModules.MIDIUnavailableReason ?? "MIDI runtime unavailable.";
 
     [ObservableProperty]
     private string _profileBuilderDisplayName = "Custom MIDI Surface";
@@ -104,10 +108,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private string _profileBuilderControlName = "Fader 1";
 
     [ObservableProperty]
-    private string _profileBuilderMidiChannelText = "1";
+    private string _profileBuilderMIDIChannelText = "1";
 
     [ObservableProperty]
-    private string _profileBuilderMidiControllerText = "0";
+    private string _profileBuilderMIDIControllerText = "0";
 
     [ObservableProperty]
     private bool _profileBuilderHighResolution14Bit;
@@ -134,8 +138,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public IReadOnlyList<string> MonitorProtocolOptions { get; } =
     [
         AllFilter,
-        nameof(ControlMonitorProtocol.Midi),
-        nameof(ControlMonitorProtocol.Osc),
+        nameof(ControlMonitorProtocol.MIDI),
+        nameof(ControlMonitorProtocol.OSC),
         nameof(ControlMonitorProtocol.Script),
         nameof(ControlMonitorProtocol.Runtime),
         nameof(ControlMonitorProtocol.Cache),
@@ -246,7 +250,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public bool CanRemoveSelectedProjectProfile => SelectedProfileRow?.IsProjectOverride == true;
 
     partial void OnX32CommandFilterTextChanged(string value) =>
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
 
     partial void OnSelectedX32CommandRowChanged(ControlX32CommandRowViewModel? value)
     {
@@ -267,21 +271,21 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public int ScriptCount => _config.Scripts.Count;
 
-    public int ListenerCount => _config.OscListeners.Count;
+    public int ListenerCount => _config.OSCListeners.Count;
 
     public int LayerCount => _config.Layers.Count;
 
     [ObservableProperty]
-    private string _testOscHost = string.Empty;
+    private string _testOSCHost = string.Empty;
 
     [ObservableProperty]
-    private string _testOscPort = string.Empty;
+    private string _testOSCPort = string.Empty;
 
     [ObservableProperty]
-    private string _testOscAddress = "/info";
+    private string _testOSCAddress = "/info";
 
     [ObservableProperty]
-    private string _testOscArgs = string.Empty;
+    private string _testOSCArgs = string.Empty;
 
     public void LoadConfig(ControlSystemConfig config, string? configFilePath = null)
     {
@@ -364,29 +368,29 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
 
-    public IReadOnlyList<ControlDeviceInstanceConfig> GetMidiInputDevices() =>
+    public IReadOnlyList<ControlDeviceInstanceConfig> GetMIDIInputDevices() =>
         _config.Devices
-            .Where(d => d.Protocol == ControlDeviceProtocol.Midi && HasMidiInputBinding(d.Binding))
+            .Where(d => d.Protocol == ControlDeviceProtocol.MIDI && HasMIDIInputBinding(d.Binding))
             .ToList();
 
-    public IReadOnlyList<ControlDeviceInstanceConfig> GetMidiOutputDevices() =>
+    public IReadOnlyList<ControlDeviceInstanceConfig> GetMIDIOutputDevices() =>
         _config.Devices
-            .Where(d => d.Protocol == ControlDeviceProtocol.Midi && HasMidiOutputBinding(d.Binding))
+            .Where(d => d.Protocol == ControlDeviceProtocol.MIDI && HasMIDIOutputBinding(d.Binding))
             .ToList();
 
-    public void AddOrUpdateMidiInputDevice(int deviceId, string deviceName) =>
-        AddOrUpdateMidiDevice(deviceId, deviceName, isInput: true);
+    public void AddOrUpdateMIDIInputDevice(int deviceId, string deviceName) =>
+        AddOrUpdateMIDIDevice(deviceId, deviceName, isInput: true);
 
-    public void AddOrUpdateMidiOutputDevice(int deviceId, string deviceName) =>
-        AddOrUpdateMidiDevice(deviceId, deviceName, isInput: false);
+    public void AddOrUpdateMIDIOutputDevice(int deviceId, string deviceName) =>
+        AddOrUpdateMIDIDevice(deviceId, deviceName, isInput: false);
 
-    public bool RemoveMidiInputDevice(Guid deviceInstanceId) =>
-        RemoveMidiBinding(deviceInstanceId, isInput: true);
+    public bool RemoveMIDIInputDevice(Guid deviceInstanceId) =>
+        RemoveMIDIBinding(deviceInstanceId, isInput: true);
 
-    public bool RemoveMidiOutputDevice(Guid deviceInstanceId) =>
-        RemoveMidiBinding(deviceInstanceId, isInput: false);
+    public bool RemoveMIDIOutputDevice(Guid deviceInstanceId) =>
+        RemoveMIDIBinding(deviceInstanceId, isInput: false);
 
-    private void AddOrUpdateMidiDevice(int deviceId, string deviceName, bool isInput)
+    private void AddOrUpdateMIDIDevice(int deviceId, string deviceName, bool isInput)
     {
         if (string.IsNullOrWhiteSpace(deviceName))
             deviceName = deviceId.ToString(CultureInfo.InvariantCulture);
@@ -394,10 +398,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         var trimmedName = deviceName.Trim();
         var devices = _config.Devices.ToList();
         var index = devices.FindIndex(d =>
-            d.Protocol == ControlDeviceProtocol.Midi
+            d.Protocol == ControlDeviceProtocol.MIDI
             && (string.Equals(d.Name, trimmedName, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(d.Binding.MidiInputDeviceName, trimmedName, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(d.Binding.MidiOutputDeviceName, trimmedName, StringComparison.OrdinalIgnoreCase)));
+                || string.Equals(d.Binding.MIDIInputDeviceName, trimmedName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(d.Binding.MIDIOutputDeviceName, trimmedName, StringComparison.OrdinalIgnoreCase)));
 
         if (index < 0)
         {
@@ -405,21 +409,21 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             {
                 Name = trimmedName,
                 ProfileId = "generic-midi",
-                Protocol = ControlDeviceProtocol.Midi,
+                Protocol = ControlDeviceProtocol.MIDI,
                 IsEnabled = true,
-                Binding = CreateMidiBinding(deviceId, trimmedName, isInput, existingAliases: devices.Select(d => d.Binding.Alias)),
+                Binding = CreateMIDIBinding(deviceId, trimmedName, isInput, existingAliases: devices.Select(d => d.Binding.Alias)),
             });
         }
         else
         {
             var device = devices[index];
             var binding = isInput
-                ? device.Binding with { MidiInputDeviceId = deviceId, MidiInputDeviceName = trimmedName }
-                : device.Binding with { MidiOutputDeviceId = deviceId, MidiOutputDeviceName = trimmedName };
+                ? device.Binding with { MIDIInputDeviceId = deviceId, MIDIInputDeviceName = trimmedName }
+                : device.Binding with { MIDIOutputDeviceId = deviceId, MIDIOutputDeviceName = trimmedName };
             devices[index] = device with
             {
                 Name = string.IsNullOrWhiteSpace(device.Name) ? trimmedName : device.Name,
-                Protocol = ControlDeviceProtocol.Midi,
+                Protocol = ControlDeviceProtocol.MIDI,
                 IsEnabled = true,
                 Binding = binding,
             };
@@ -431,23 +435,23 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildStructureRows();
         RebuildProfileWarnings();
         RebuildProfileRows();
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
         NotifySummary();
     }
 
-    private bool RemoveMidiBinding(Guid deviceInstanceId, bool isInput)
+    private bool RemoveMIDIBinding(Guid deviceInstanceId, bool isInput)
     {
         var devices = _config.Devices.ToList();
-        var index = devices.FindIndex(d => d.Id == deviceInstanceId && d.Protocol == ControlDeviceProtocol.Midi);
+        var index = devices.FindIndex(d => d.Id == deviceInstanceId && d.Protocol == ControlDeviceProtocol.MIDI);
         if (index < 0)
             return false;
 
         var device = devices[index];
         var binding = isInput
-            ? device.Binding with { MidiInputDeviceId = null, MidiInputDeviceName = null }
-            : device.Binding with { MidiOutputDeviceId = null, MidiOutputDeviceName = null };
+            ? device.Binding with { MIDIInputDeviceId = null, MIDIInputDeviceName = null }
+            : device.Binding with { MIDIOutputDeviceId = null, MIDIOutputDeviceName = null };
 
-        if (!HasMidiInputBinding(binding) && !HasMidiOutputBinding(binding))
+        if (!HasMIDIInputBinding(binding) && !HasMIDIOutputBinding(binding))
             devices.RemoveAt(index);
         else
             devices[index] = device with { Binding = binding };
@@ -458,18 +462,18 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildStructureRows();
         RebuildProfileWarnings();
         RebuildProfileRows();
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
         NotifySummary();
         return true;
     }
 
-    private static bool HasMidiInputBinding(ControlDeviceBindingConfig binding) =>
-        binding.MidiInputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MidiInputDeviceName);
+    private static bool HasMIDIInputBinding(ControlDeviceBindingConfig binding) =>
+        binding.MIDIInputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MIDIInputDeviceName);
 
-    private static bool HasMidiOutputBinding(ControlDeviceBindingConfig binding) =>
-        binding.MidiOutputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MidiOutputDeviceName);
+    private static bool HasMIDIOutputBinding(ControlDeviceBindingConfig binding) =>
+        binding.MIDIOutputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MIDIOutputDeviceName);
 
-    private static ControlDeviceBindingConfig CreateMidiBinding(
+    private static ControlDeviceBindingConfig CreateMIDIBinding(
         int deviceId,
         string deviceName,
         bool isInput,
@@ -480,8 +484,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             Alias = CreateUniqueAlias(deviceName, existingAliases),
         };
         return isInput
-            ? binding with { MidiInputDeviceId = deviceId, MidiInputDeviceName = deviceName }
-            : binding with { MidiOutputDeviceId = deviceId, MidiOutputDeviceName = deviceName };
+            ? binding with { MIDIInputDeviceId = deviceId, MIDIInputDeviceName = deviceName }
+            : binding with { MIDIOutputDeviceId = deviceId, MIDIOutputDeviceName = deviceName };
     }
 
     private static string CreateUniqueAlias(string deviceName, IEnumerable<string?> existingAliases)
@@ -643,7 +647,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     private void AddEndpointScript(ControlStructureRowViewModel row)
     {
-        if (row.OscListenerId is { } listenerId)
+        if (row.OSCListenerId is { } listenerId)
             AddScriptInternal(ControlScriptScope.Endpoint, deviceInstanceId: null, layerId: null, endpointInstanceId: listenerId);
     }
 
@@ -865,51 +869,51 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     // App-level inbound OSC ports for external control sources (device replies use the client socket and
     // need none). Structural, so add/edit/remove ask for a re-arm while armed. Display is injectable for tests.
 
-    internal Func<OscListenerDialogViewModel, Task<bool>> OscListenerPrompt { get; set; } = DefaultOscListenerPromptAsync;
+    internal Func<OSCListenerDialogViewModel, Task<bool>> OSCListenerPrompt { get; set; } = DefaultOSCListenerPromptAsync;
 
     [RelayCommand]
-    private async Task AddOscListenerAsync()
+    private async Task AddOSCListenerAsync()
     {
-        var nextPort = _config.OscListeners.Count == 0 ? 10020 : _config.OscListeners.Max(l => l.LocalPort) + 1;
-        var dialog = new OscListenerDialogViewModel(
+        var nextPort = _config.OSCListeners.Count == 0 ? 10020 : _config.OSCListeners.Max(l => l.LocalPort) + 1;
+        var dialog = new OSCListenerDialogViewModel(
             "Add OSC listener",
-            name: $"OSC Listener {(_config.OscListeners.Count + 1).ToString(CultureInfo.InvariantCulture)}",
+            name: $"OSC Listener {(_config.OSCListeners.Count + 1).ToString(CultureInfo.InvariantCulture)}",
             localPort: nextPort,
             isEnabled: true);
-        if (!await OscListenerPrompt(dialog).ConfigureAwait(true))
+        if (!await OSCListenerPrompt(dialog).ConfigureAwait(true))
             return;
 
         var values = dialog.BuildValues();
-        var listeners = _config.OscListeners.ToList();
-        listeners.Add(new ControlOscListenerConfig
+        var listeners = _config.OSCListeners.ToList();
+        listeners.Add(new ControlOSCListenerConfig
         {
             Name = values.Name,
             LocalPort = values.LocalPort,
             IsEnabled = values.IsEnabled,
         });
-        _config = _config with { OscListeners = listeners };
+        _config = _config with { OSCListeners = listeners };
         RefreshAfterListenerChange();
         StatusMessage = $"Added OSC listener '{values.Name}' on port {values.LocalPort.ToString(CultureInfo.InvariantCulture)}."
                         + (IsArmed ? " Re-arm to apply." : string.Empty);
     }
 
-    private async Task EditOscListenerAsync(ControlStructureRowViewModel row)
+    private async Task EditOSCListenerAsync(ControlStructureRowViewModel row)
     {
-        if (row.OscListenerId is not { } listenerId)
+        if (row.OSCListenerId is not { } listenerId)
             return;
 
-        var existing = _config.OscListeners.FirstOrDefault(l => l.Id == listenerId);
+        var existing = _config.OSCListeners.FirstOrDefault(l => l.Id == listenerId);
         if (existing is null)
             return;
 
-        var dialog = new OscListenerDialogViewModel("Edit OSC listener", existing.Name, existing.LocalPort, existing.IsEnabled);
-        if (!await OscListenerPrompt(dialog).ConfigureAwait(true))
+        var dialog = new OSCListenerDialogViewModel("Edit OSC listener", existing.Name, existing.LocalPort, existing.IsEnabled);
+        if (!await OSCListenerPrompt(dialog).ConfigureAwait(true))
             return;
 
         var values = dialog.BuildValues();
         _config = _config with
         {
-            OscListeners = _config.OscListeners
+            OSCListeners = _config.OSCListeners
                 .Select(l => l.Id == listenerId
                     ? l with { Name = values.Name, LocalPort = values.LocalPort, IsEnabled = values.IsEnabled }
                     : l)
@@ -919,18 +923,18 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         StatusMessage = $"Updated OSC listener '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
     }
 
-    private void RemoveOscListener(ControlStructureRowViewModel row)
+    private void RemoveOSCListener(ControlStructureRowViewModel row)
     {
-        if (row.OscListenerId is not { } listenerId)
+        if (row.OSCListenerId is not { } listenerId)
             return;
 
-        var existing = _config.OscListeners.FirstOrDefault(l => l.Id == listenerId);
+        var existing = _config.OSCListeners.FirstOrDefault(l => l.Id == listenerId);
         if (existing is null)
             return;
 
         // A dangling endpoint id simply makes any endpoint-scoped script inert (no event will match it),
         // so there's nothing unsafe to clean up here — just drop the listener.
-        _config = _config with { OscListeners = _config.OscListeners.Where(l => l.Id != listenerId).ToList() };
+        _config = _config with { OSCListeners = _config.OSCListeners.Where(l => l.Id != listenerId).ToList() };
         RefreshAfterListenerChange();
         StatusMessage = $"Removed OSC listener '{existing.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
     }
@@ -942,13 +946,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         NotifySummary();
     }
 
-    private static async Task<bool> DefaultOscListenerPromptAsync(OscListenerDialogViewModel dialogViewModel)
+    private static async Task<bool> DefaultOSCListenerPromptAsync(OSCListenerDialogViewModel dialogViewModel)
     {
         var owner = TryGetOwnerWindow();
         if (owner is null)
             return false;
 
-        var dialog = new OscListenerDialog { DataContext = dialogViewModel };
+        var dialog = new OSCListenerDialog { DataContext = dialogViewModel };
         return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
     }
 
@@ -968,10 +972,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         var values = dialog.BuildValues();
         if (!TryUpdateDevice(deviceId, device => device with
         {
-            PeriodicOscSends =
+            PeriodicOSCSends =
             [
-                .. device.PeriodicOscSends,
-                new ControlPeriodicOscSendConfig
+                .. device.PeriodicOSCSends,
+                new ControlPeriodicOSCSendConfig
                 {
                     Name = values.Name,
                     Address = values.Address,
@@ -991,7 +995,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
 
         var existing = _config.Devices.FirstOrDefault(d => d.Id == deviceId)?
-            .PeriodicOscSends.FirstOrDefault(s => s.Id == sendId);
+            .PeriodicOSCSends.FirstOrDefault(s => s.Id == sendId);
         if (existing is null)
             return;
 
@@ -1003,7 +1007,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         var values = dialog.BuildValues();
         if (!TryUpdateDevice(deviceId, device => device with
         {
-            PeriodicOscSends = device.PeriodicOscSends
+            PeriodicOSCSends = device.PeriodicOSCSends
                 .Select(s => s.Id == sendId
                     ? s with { Name = values.Name, Address = values.Address, IntervalMs = values.IntervalMs, IsEnabled = values.IsEnabled }
                     : s)
@@ -1021,7 +1025,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
         if (TryUpdateDevice(deviceId, device => device with
         {
-            PeriodicOscSends = device.PeriodicOscSends.Where(s => s.Id != sendId).ToList(),
+            PeriodicOSCSends = device.PeriodicOSCSends.Where(s => s.Id != sendId).ToList(),
         }))
         {
             StatusMessage = "Removed periodic send." + (IsArmed ? " Re-arm to apply." : string.Empty);
@@ -1064,54 +1068,54 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         row => _ = AddPeriodicSendAsync(row),
         row => _ = EditPeriodicSendAsync(row),
         RemovePeriodicSend,
-        row => _ = EditOscDeviceInternalAsync(FindOscDevice(row)),
-        RemoveOscDevice,
-        row => _ = TestOscDeviceAsync(row),
-        row => _ = TestMidiDeviceAsync(row),
-        () => _ = AddOscListenerAsync(),
-        row => _ = EditOscListenerAsync(row),
-        RemoveOscListener,
-        row => _ = EditMidiDeviceInternalAsync(FindMidiDevice(row)),
+        row => _ = EditOSCDeviceInternalAsync(FindOSCDevice(row)),
+        RemoveOSCDevice,
+        row => _ = TestOSCDeviceAsync(row),
+        row => _ = TestMIDIDeviceAsync(row),
+        () => _ = AddOSCListenerAsync(),
+        row => _ = EditOSCListenerAsync(row),
+        RemoveOSCListener,
+        row => _ = EditMIDIDeviceInternalAsync(FindMIDIDevice(row)),
         row => _ = ExportLayerAsync(row));
 
     // ----- OSC device add/edit/remove ---------------------------------------------------------
     // The dialog display is injectable so the add/edit logic is unit-testable without a window.
 
-    internal Func<OscDeviceDialogViewModel, Task<bool>> OscDevicePrompt { get; set; } = DefaultOscDevicePromptAsync;
+    internal Func<OSCDeviceDialogViewModel, Task<bool>> OSCDevicePrompt { get; set; } = DefaultOSCDevicePromptAsync;
 
     // Injectable so the MIDI device alias/profile edit logic is unit-testable without a window.
-    internal Func<MidiDeviceDialogViewModel, Task<bool>> MidiDevicePrompt { get; set; } = DefaultMidiDevicePromptAsync;
+    internal Func<MIDIDeviceDialogViewModel, Task<bool>> MIDIDevicePrompt { get; set; } = DefaultMIDIDevicePromptAsync;
 
     [RelayCommand]
-    private Task AddOscDeviceAsync() => EditOscDeviceInternalAsync(existing: null);
+    private Task AddOSCDeviceAsync() => EditOSCDeviceInternalAsync(existing: null);
 
-    private ControlDeviceInstanceConfig? FindOscDevice(ControlStructureRowViewModel row) =>
+    private ControlDeviceInstanceConfig? FindOSCDevice(ControlStructureRowViewModel row) =>
         row.DeviceInstanceId is { } id
-            ? _config.Devices.FirstOrDefault(d => d.Id == id && d.Protocol == ControlDeviceProtocol.Osc)
+            ? _config.Devices.FirstOrDefault(d => d.Id == id && d.Protocol == ControlDeviceProtocol.OSC)
             : null;
 
-    private async Task EditOscDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
+    private async Task EditOSCDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
     {
         var isAdd = existing is null;
         var profileRepository = CompositeControlDeviceProfileRepository.ForProject(_config);
         var profiles = profileRepository.Profiles
-            .Where(p => p.Protocol == ControlDeviceProtocol.Osc)
+            .Where(p => p.Protocol == ControlDeviceProtocol.OSC)
             .ToList();
         var defaultProfile = profiles.FirstOrDefault(p => p.Id == DefaultX32ProfileId) ?? profiles.FirstOrDefault();
         var defaultProfileId = defaultProfile?.Id;
 
-        var dialog = new OscDeviceDialogViewModel(
+        var dialog = new OSCDeviceDialogViewModel(
             isAdd ? "Add OSC device" : "Edit OSC device",
             name: existing?.Name ?? "X32",
             profileId: existing?.ProfileId is { Length: > 0 } pid ? pid : defaultProfileId,
-            host: string.IsNullOrWhiteSpace(existing?.Binding.OscHost) ? "192.168.2.76" : existing!.Binding.OscHost!,
-            port: existing?.Binding.OscPort ?? defaultProfile?.DefaultOscPort ?? 10023,
+            host: string.IsNullOrWhiteSpace(existing?.Binding.OSCHost) ? "192.168.2.76" : existing!.Binding.OSCHost!,
+            port: existing?.Binding.OSCPort ?? defaultProfile?.DefaultOSCPort ?? 10023,
             alias: existing?.Binding.Alias ?? (isAdd ? "x32" : null),
-            localPort: existing?.Binding.OscLocalPort,
+            localPort: existing?.Binding.OSCLocalPort,
             isEnabled: existing?.IsEnabled ?? true,
             oscProfiles: profiles);
 
-        if (!await OscDevicePrompt(dialog).ConfigureAwait(true))
+        if (!await OSCDevicePrompt(dialog).ConfigureAwait(true))
             return;
 
         var values = dialog.BuildValues();
@@ -1123,16 +1127,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             {
                 Name = values.Name,
                 ProfileId = values.ProfileId!,
-                Protocol = ControlDeviceProtocol.Osc,
+                Protocol = ControlDeviceProtocol.OSC,
                 IsEnabled = values.IsEnabled,
                 Binding = new ControlDeviceBindingConfig
                 {
                     Alias = values.Alias,
-                    OscHost = values.Host,
-                    OscPort = values.Port,
-                    OscLocalPort = values.LocalPort,
+                    OSCHost = values.Host,
+                    OSCPort = values.Port,
+                    OSCLocalPort = values.LocalPort,
                 },
-                PeriodicOscSends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOscSends(selectedProfile),
+                PeriodicOSCSends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOSCSends(selectedProfile),
             });
             StatusMessage = $"Added OSC device '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
         }
@@ -1150,9 +1154,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 Binding = existing.Binding with
                 {
                     Alias = values.Alias,
-                    OscHost = values.Host,
-                    OscPort = values.Port,
-                    OscLocalPort = values.LocalPort,
+                    OSCHost = values.Host,
+                    OSCPort = values.Port,
+                    OSCLocalPort = values.LocalPort,
                 },
             };
             StatusMessage = $"Updated OSC device '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
@@ -1162,9 +1166,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RefreshAfterDeviceChange();
     }
 
-    private void RemoveOscDevice(ControlStructureRowViewModel row)
+    private void RemoveOSCDevice(ControlStructureRowViewModel row)
     {
-        var device = FindOscDevice(row);
+        var device = FindOSCDevice(row);
         if (device is null)
             return;
 
@@ -1178,7 +1182,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildStructureRows();
         RebuildProfileWarnings();
         RebuildProfileRows();
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
         NotifySummary();
     }
 
@@ -1186,29 +1190,29 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     // MIDI ports are bound from the MIDI Devices view; this only edits the script alias, the assigned
     // profile (e.g. the BCF2000 profile that enables 14-bit CC pairing), and the enabled state.
 
-    private ControlDeviceInstanceConfig? FindMidiDevice(ControlStructureRowViewModel row) =>
+    private ControlDeviceInstanceConfig? FindMIDIDevice(ControlStructureRowViewModel row) =>
         row.DeviceInstanceId is { } id
-            ? _config.Devices.FirstOrDefault(d => d.Id == id && d.Protocol == ControlDeviceProtocol.Midi)
+            ? _config.Devices.FirstOrDefault(d => d.Id == id && d.Protocol == ControlDeviceProtocol.MIDI)
             : null;
 
-    private async Task EditMidiDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
+    private async Task EditMIDIDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
     {
         if (existing is null)
             return;
 
         var midiProfiles = CompositeControlDeviceProfileRepository.ForProject(_config).Profiles
-            .Where(p => p.Protocol == ControlDeviceProtocol.Midi)
+            .Where(p => p.Protocol == ControlDeviceProtocol.MIDI)
             .ToList();
 
-        var dialog = new MidiDeviceDialogViewModel(
+        var dialog = new MIDIDeviceDialogViewModel(
             "Edit MIDI device",
-            deviceName: existing.Binding.MidiInputDeviceName ?? existing.Binding.MidiOutputDeviceName ?? existing.Name,
+            deviceName: existing.Binding.MIDIInputDeviceName ?? existing.Binding.MIDIOutputDeviceName ?? existing.Name,
             profileId: existing.ProfileId,
             alias: existing.Binding.Alias,
             isEnabled: existing.IsEnabled,
             midiProfiles: midiProfiles);
 
-        if (!await MidiDevicePrompt(dialog).ConfigureAwait(true))
+        if (!await MIDIDevicePrompt(dialog).ConfigureAwait(true))
             return;
 
         var values = dialog.BuildValues();
@@ -1229,13 +1233,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         StatusMessage = $"Updated MIDI device '{values.Alias ?? existing.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
     }
 
-    private static async Task<bool> DefaultMidiDevicePromptAsync(MidiDeviceDialogViewModel dialogViewModel)
+    private static async Task<bool> DefaultMIDIDevicePromptAsync(MIDIDeviceDialogViewModel dialogViewModel)
     {
         var owner = TryGetOwnerWindow();
         if (owner is null)
             return false;
 
-        var dialog = new MidiDeviceDialog { DataContext = dialogViewModel };
+        var dialog = new MIDIDeviceDialog { DataContext = dialogViewModel };
         return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
     }
 
@@ -1265,11 +1269,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     }
 
     [RelayCommand]
-    private void SaveMidiProfileBuilder()
+    private void SaveMIDIProfileBuilder()
     {
         try
         {
-            var profile = BuildMidiProfileFromBuilder();
+            var profile = BuildMIDIProfileFromBuilder();
             UpsertProjectProfile(profile);
             ProfileBuilderStatus = $"Saved project profile '{FormatProfileName(profile)}'.";
             StatusMessage = ProfileBuilderStatus;
@@ -1281,7 +1285,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
-    internal ControlDeviceProfile BuildMidiProfileFromBuilder()
+    internal ControlDeviceProfile BuildMIDIProfileFromBuilder()
     {
         var displayName = ProfileBuilderDisplayName.Trim();
         if (string.IsNullOrWhiteSpace(displayName))
@@ -1297,11 +1301,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (string.IsNullOrWhiteSpace(controlName))
             throw new InvalidOperationException("Control name is required.");
 
-        var channel = ParseRequiredInt(ProfileBuilderMidiChannelText, "MIDI channel");
+        var channel = ParseRequiredInt(ProfileBuilderMIDIChannelText, "MIDI channel");
         if (channel is < 1 or > 16)
             throw new InvalidOperationException("MIDI channel must be between 1 and 16.");
 
-        var controller = ParseRequiredInt(ProfileBuilderMidiControllerText, "CC");
+        var controller = ParseRequiredInt(ProfileBuilderMIDIControllerText, "CC");
         if (controller is < 0 or > 127)
             throw new InvalidOperationException("CC must be between 0 and 127.");
 
@@ -1318,20 +1322,20 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         {
             Id = profileId,
             DisplayName = displayName,
-            Protocol = ControlDeviceProtocol.Midi,
+            Protocol = ControlDeviceProtocol.MIDI,
             Ports =
             [
                 new ControlDevicePortProfile
                 {
                     Id = "midi.in",
                     DisplayName = "MIDI In",
-                    Kind = ControlDevicePortKind.MidiInput,
+                    Kind = ControlDevicePortKind.MIDIInput,
                 },
                 new ControlDevicePortProfile
                 {
                     Id = "midi.out",
                     DisplayName = "MIDI Out",
-                    Kind = ControlDevicePortKind.MidiOutput,
+                    Kind = ControlDevicePortKind.MIDIOutput,
                 },
             ],
             Controls =
@@ -1341,14 +1345,14 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                     Id = controlId,
                     DisplayName = controlName,
                     Kind = ControlProfileControlKind.Fader,
-                    MidiChannel = channel,
-                    MidiController = controller,
+                    MIDIChannel = channel,
+                    MIDIController = controller,
                     ValueMode = ProfileBuilderHighResolution14Bit
                         ? ControlProfileValueMode.Absolute14Bit
                         : ControlProfileValueMode.Absolute7Bit,
-                    MidiHighResolution14Bit = ProfileBuilderHighResolution14Bit,
-                    MidiValueMin = minValue,
-                    MidiValueMax = maxValue,
+                    MIDIHighResolution14Bit = ProfileBuilderHighResolution14Bit,
+                    MIDIValueMin = minValue,
+                    MIDIValueMax = maxValue,
                 },
             ],
         };
@@ -1426,7 +1430,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         };
         RebuildProfileWarnings();
         RebuildProfileRows();
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
         StatusMessage = $"Removed project profile '{row.DisplayName}'.";
     }
 
@@ -1441,7 +1445,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         _config = _config with { DeviceProfileOverrides = overrides };
         RebuildProfileWarnings();
         RebuildProfileRows();
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
         SelectedProfileRow = ProfileRows.FirstOrDefault(row =>
             string.Equals(row.Id, profile.Id, StringComparison.OrdinalIgnoreCase));
     }
@@ -1498,13 +1502,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         return builder.ToString().Trim('-');
     }
 
-    private static async Task<bool> DefaultOscDevicePromptAsync(OscDeviceDialogViewModel dialogViewModel)
+    private static async Task<bool> DefaultOSCDevicePromptAsync(OSCDeviceDialogViewModel dialogViewModel)
     {
         var owner = TryGetOwnerWindow();
         if (owner is null)
             return false;
 
-        var dialog = new OscDeviceDialog { DataContext = dialogViewModel };
+        var dialog = new OSCDeviceDialog { DataContext = dialogViewModel };
         return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
     }
 
@@ -1584,11 +1588,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
         var rows = new List<ControlX32CommandRowViewModel>();
         foreach (var device in config.Devices
-                     .Where(d => d.Protocol == ControlDeviceProtocol.Osc)
+                     .Where(d => d.Protocol == ControlDeviceProtocol.OSC)
                      .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
         {
             var profile = repository.FindById(device.ProfileId);
-            if (profile is null || profile.Protocol != ControlDeviceProtocol.Osc || profile.Commands.Count == 0)
+            if (profile is null || profile.Protocol != ControlDeviceProtocol.OSC || profile.Commands.Count == 0)
                 continue;
 
             foreach (var commandInfo in profile.Commands
@@ -1602,8 +1606,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                     DeviceInstanceId: device.Id,
                     DeviceName: string.IsNullOrWhiteSpace(device.Name) ? "(unnamed OSC)" : device.Name,
                     DeviceKey: GetPreferredDeviceKey(device),
-                    Host: device.Binding.OscHost?.Trim() ?? string.Empty,
-                    Port: device.Binding.OscPort,
+                    Host: device.Binding.OSCHost?.Trim() ?? string.Empty,
+                    Port: device.Binding.OSCPort,
                     Group: commandInfo.Group,
                     CommandName: string.IsNullOrWhiteSpace(command.DisplayName) ? command.Id : command.DisplayName,
                     Address: command.Address,
@@ -1611,8 +1615,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                     Access: command.Access.ToString(),
                     CacheValue: cacheText,
                     CanRequest: command.Access != ControlCommandAccess.WriteOnly
-                                && !string.IsNullOrWhiteSpace(device.Binding.OscHost)
-                                && device.Binding.OscPort is > 0);
+                                && !string.IsNullOrWhiteSpace(device.Binding.OSCHost)
+                                && device.Binding.OSCPort is > 0);
                 if (MatchesX32CommandFilter(row, filterText))
                     rows.Add(row);
             }
@@ -1731,13 +1735,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             }
         }
 
-        var listenerPorts = config.OscListeners
+        var listenerPorts = config.OSCListeners
             .Where(l => l.IsEnabled)
             .Select(l => l.LocalPort)
             .ToHashSet();
-        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Osc && d.Binding.OscLocalPort is > 0))
+        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.OSC && d.Binding.OSCLocalPort is > 0))
         {
-            var localPort = device.Binding.OscLocalPort!.Value;
+            var localPort = device.Binding.OSCLocalPort!.Value;
             if (!listenerPorts.Contains(localPort))
                 continue;
 
@@ -1829,22 +1833,22 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
         var rows = new List<ControlStructureRowViewModel>();
 
-        AddGroup(rows, "MIDI devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.Midi), commands);
-        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Midi).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+        AddGroup(rows, "MIDI devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.MIDI), commands);
+        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.MIDI).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
                 "MIDI",
                 string.IsNullOrWhiteSpace(device.Name) ? "(unnamed MIDI)" : device.Name,
-                FormatMidiBinding(device.Binding),
+                FormatMIDIBinding(device.Binding),
                 FormatEnabled(device.IsEnabled),
                 Level: 1,
                 deviceInstanceId: device.Id,
-                protocol: ControlDeviceProtocol.Midi,
+                protocol: ControlDeviceProtocol.MIDI,
                 commands: commands));
         }
 
-        AddGroup(rows, "OSC listeners", config.OscListeners.Count, commands);
-        foreach (var listener in config.OscListeners.OrderBy(l => l.Name, StringComparer.OrdinalIgnoreCase))
+        AddGroup(rows, "OSC listeners", config.OSCListeners.Count, commands);
+        foreach (var listener in config.OSCListeners.OrderBy(l => l.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
                 "Listen",
@@ -1856,17 +1860,17 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 commands: commands));
         }
 
-        AddGroup(rows, "OSC devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.Osc), commands);
-        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Osc).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+        AddGroup(rows, "OSC devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.OSC), commands);
+        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.OSC).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
                 "OSC",
                 string.IsNullOrWhiteSpace(device.Name) ? "(unnamed OSC)" : device.Name,
-                FormatOscBinding(device.Binding),
+                FormatOSCBinding(device.Binding),
                 FormatEnabled(device.IsEnabled),
                 Level: 1,
                 deviceInstanceId: device.Id,
-                protocol: ControlDeviceProtocol.Osc,
+                protocol: ControlDeviceProtocol.OSC,
                 commands: commands));
         }
 
@@ -1897,8 +1901,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         }
 
         var periodic = config.Devices
-            .Where(d => d.Protocol == ControlDeviceProtocol.Osc)
-            .SelectMany(d => d.PeriodicOscSends.Select(s => (Device: d, Send: s)))
+            .Where(d => d.Protocol == ControlDeviceProtocol.OSC)
+            .SelectMany(d => d.PeriodicOSCSends.Select(s => (Device: d, Send: s)))
             .OrderBy(x => x.Device.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Send.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -1913,7 +1917,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 Level: 1,
                 deviceInstanceId: item.Device.Id,
                 periodicSendId: item.Send.Id,
-                protocol: ControlDeviceProtocol.Osc,
+                protocol: ControlDeviceProtocol.OSC,
                 commands: commands));
         }
 
@@ -1985,22 +1989,22 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             IsGroup: true,
             commands: commands));
 
-    private static string FormatMidiBinding(ControlDeviceBindingConfig binding)
+    private static string FormatMIDIBinding(ControlDeviceBindingConfig binding)
     {
         var parts = new List<string>();
-        if (binding.MidiInputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MidiInputDeviceName))
-            parts.Add($"in: {FormatDeviceBinding(binding.MidiInputDeviceId, binding.MidiInputDeviceName)}");
-        if (binding.MidiOutputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MidiOutputDeviceName))
-            parts.Add($"out: {FormatDeviceBinding(binding.MidiOutputDeviceId, binding.MidiOutputDeviceName)}");
+        if (binding.MIDIInputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MIDIInputDeviceName))
+            parts.Add($"in: {FormatDeviceBinding(binding.MIDIInputDeviceId, binding.MIDIInputDeviceName)}");
+        if (binding.MIDIOutputDeviceId is not null || !string.IsNullOrWhiteSpace(binding.MIDIOutputDeviceName))
+            parts.Add($"out: {FormatDeviceBinding(binding.MIDIOutputDeviceId, binding.MIDIOutputDeviceName)}");
         return parts.Count == 0 ? "(unbound)" : string.Join(" / ", parts);
     }
 
-    private static string FormatOscBinding(ControlDeviceBindingConfig binding)
+    private static string FormatOSCBinding(ControlDeviceBindingConfig binding)
     {
-        var endpoint = !string.IsNullOrWhiteSpace(binding.OscHost) && binding.OscPort is { } port
-            ? $"{binding.OscHost}:{port.ToString(CultureInfo.InvariantCulture)}"
+        var endpoint = !string.IsNullOrWhiteSpace(binding.OSCHost) && binding.OSCPort is { } port
+            ? $"{binding.OSCHost}:{port.ToString(CultureInfo.InvariantCulture)}"
             : "(unbound)";
-        return binding.OscListenerId is { } listenerId
+        return binding.OSCListenerId is { } listenerId
             ? $"{endpoint} - listener {listenerId}"
             : endpoint;
     }
@@ -2175,29 +2179,29 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     // When a configured MIDI device cannot be confidently matched to a current port (ambiguous or
     // missing), let the user pick the live port and persist that choice into the device binding.
 
-    [RelayCommand(CanExecute = nameof(CanResolveMidiDevices))]
-    private async Task ResolveMidiDevicesAsync()
+    [RelayCommand(CanExecute = nameof(CanResolveMIDIDevices))]
+    private async Task ResolveMIDIDevicesAsync()
     {
-        if (await ResolveMidiDevicesCoreAsync(announceWhenResolvedOrEmpty: true).ConfigureAwait(true))
+        if (await ResolveMIDIDevicesCoreAsync(announceWhenResolvedOrEmpty: true).ConfigureAwait(true))
             StatusMessage = "MIDI device bindings resolved." + (IsArmed ? " Re-arm to apply." : string.Empty);
     }
 
-    private bool CanResolveMidiDevices() => IsMidiAvailable;
+    private bool CanResolveMIDIDevices() => IsMIDIAvailable;
 
     /// <summary>
     /// Enumerates current MIDI ports, prompts the user to resolve any ambiguous/missing bindings, and writes
     /// the chosen ports back into the config. Returns true when at least one binding was updated.
     /// </summary>
-    private async Task<bool> ResolveMidiDevicesCoreAsync(bool announceWhenResolvedOrEmpty)
+    private async Task<bool> ResolveMIDIDevicesCoreAsync(bool announceWhenResolvedOrEmpty)
     {
-        if (!IsMidiAvailable)
+        if (!IsMIDIAvailable)
         {
             if (announceWhenResolvedOrEmpty)
-                StatusMessage = MidiUnavailableStatus;
+                StatusMessage = MIDIUnavailableStatus;
             return false;
         }
 
-        var catalog = MidiCatalogProvider();
+        var catalog = MIDICatalogProvider();
         if (catalog is null)
         {
             if (announceWhenResolvedOrEmpty)
@@ -2205,7 +2209,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return false;
         }
 
-        var requests = ControlMidiDeviceResolver.BuildRequests(_config, catalog.Inputs, catalog.Outputs);
+        var requests = ControlMIDIDeviceResolver.BuildRequests(_config, catalog.Inputs, catalog.Outputs);
         if (requests.Count == 0)
         {
             if (announceWhenResolvedOrEmpty)
@@ -2213,7 +2217,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return false;
         }
 
-        var selections = await MidiResolutionPrompt(requests).ConfigureAwait(true);
+        var selections = await MIDIResolutionPrompt(requests).ConfigureAwait(true);
         if (selections is null || selections.Count == 0)
         {
             if (announceWhenResolvedOrEmpty)
@@ -2221,30 +2225,30 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return false;
         }
 
-        _config = ControlMidiDeviceResolver.ApplySelections(_config, selections);
+        _config = ControlMIDIDeviceResolver.ApplySelections(_config, selections);
         RebuildStructureRows();
         RebuildProfileWarnings();
         RebuildProfileRows();
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
         NotifySummary();
         return true;
     }
 
-    private static ControlMidiPortCatalog? EnumerateMidiPorts() =>
-        ControlMidiPortCatalogProvider.TryEnumerate();
+    private static ControlMIDIPortCatalog? EnumerateMIDIPorts() =>
+        ControlMIDIPortCatalogProvider.TryEnumerate();
 
-    private static async Task<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?> DefaultPromptAsync(
-        IReadOnlyList<ControlMidiResolutionRequest> requests)
+    private static async Task<IReadOnlyDictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>?> DefaultPromptAsync(
+        IReadOnlyList<ControlMIDIResolutionRequest> requests)
     {
         var owner = TryGetOwnerWindow();
         if (owner is null)
             return null;
 
-        var dialog = new RebindMissingControlMidiDevicesDialog
+        var dialog = new RebindMissingControlMIDIDevicesDialog
         {
-            DataContext = new RebindMissingControlMidiDevicesDialogViewModel(requests),
+            DataContext = new RebindMissingControlMIDIDevicesDialogViewModel(requests),
         };
-        return await dialog.ShowDialog<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(owner)
+        return await dialog.ShowDialog<IReadOnlyDictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>?>(owner)
             .ConfigureAwait(true);
     }
 
@@ -2301,16 +2305,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     {
         // Give the user a chance to bind ambiguous/missing MIDI devices to live ports before opening
         // sessions. No-op in tests/headless (no owner window, or no enabled MIDI bindings to resolve).
-        await ResolveMidiDevicesCoreAsync(announceWhenResolvedOrEmpty: false).ConfigureAwait(true);
+        await ResolveMIDIDevicesCoreAsync(announceWhenResolvedOrEmpty: false).ConfigureAwait(true);
 
         ControlSystemRuntimeSession? pendingSession = null;
-        UdpControlOscSender? pendingOsc = null;
+        UdpControlOSCSender? pendingOSC = null;
         try
         {
             var armedConfig = _config with { IsArmed = true };
             var monitor = new ControlMonitorBuffer(Math.Max(1, _config.Monitor.MaxVisibleMessages));
-            var osc = new UdpControlOscSender(armedConfig);
-            var midi = new ControlSystemMidiDeviceSessionManager(armedConfig, monitor);
+            var osc = new UdpControlOSCSender(armedConfig);
+            var midi = new ControlSystemMIDIDeviceSessionManager(armedConfig, monitor);
             var session = new ControlSystemRuntimeSession(
                 armedConfig,
                 CreateSourceProvider(),
@@ -2319,7 +2323,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 monitor: monitor,
                 midiSessions: midi);
             pendingSession = session;
-            pendingOsc = osc;
+            pendingOSC = osc;
             await session.StartAsync().ConfigureAwait(true);
 
             _monitorBuffer = monitor;
@@ -2327,7 +2331,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             _midiSender = midi;
             _session = session;
             pendingSession = null;
-            pendingOsc = null;
+            pendingOSC = null;
             _lastRenderedCount = -1;
             StatusMessage = $"Armed — {ListenerCount} listener(s), {DeviceCount} device(s), {ScriptCount} script(s).";
         }
@@ -2345,7 +2349,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 }
             }
 
-            pendingOsc?.Dispose();
+            pendingOSC?.Dispose();
             await DisarmInternalAsync().ConfigureAwait(true);
             StatusMessage = $"Failed to arm: {ex.Message}";
         }
@@ -2420,7 +2424,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     }
 
     [RelayCommand]
-    private async Task SendTestOscAsync()
+    private async Task SendTestOSCAsync()
     {
         var osc = _oscSender;
         var monitor = _monitorBuffer;
@@ -2430,8 +2434,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        var host = TestOscHost.Trim();
-        var address = TestOscAddress.Trim();
+        var host = TestOSCHost.Trim();
+        var address = TestOSCAddress.Trim();
         if (string.IsNullOrWhiteSpace(host))
         {
             StatusMessage = "OSC test host is required.";
@@ -2444,26 +2448,26 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        if (!int.TryParse(TestOscPort, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
+        if (!int.TryParse(TestOSCPort, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
         {
             StatusMessage = "Invalid OSC port.";
             return;
         }
 
-        var args = ParseOscArgs(TestOscArgs);
+        var args = ParseOSCArgs(TestOSCArgs);
         try
         {
             await osc.SendAsync(host, port, address, args).ConfigureAwait(true);
             monitor.Record(new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Output,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 Result = ControlMonitorResult.Sent,
                 RemoteHost = host,
                 RemotePort = port,
                 Endpoint = $"{host}:{port}",
                 Address = address,
-                OscArguments = args.Select(ControlMonitorOscArgumentRecord.FromOscArgument).ToList(),
+                OSCArguments = args.Select(ControlMonitorOSCArgumentRecord.FromOSCArgument).ToList(),
                 Message = "test send",
             });
         }
@@ -2472,7 +2476,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             monitor.Record(new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Error,
-                Protocol = ControlMonitorProtocol.Osc,
+                Protocol = ControlMonitorProtocol.OSC,
                 Result = ControlMonitorResult.Failed,
                 RemoteHost = host,
                 RemotePort = port,
@@ -2490,10 +2494,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (row is null)
             return;
 
-        TestOscHost = row.Host;
-        TestOscPort = row.Port?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-        TestOscAddress = row.Address;
-        TestOscArgs = string.Empty;
+        TestOSCHost = row.Host;
+        TestOSCPort = row.Port?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+        TestOSCAddress = row.Address;
+        TestOSCArgs = string.Empty;
         StatusMessage = $"Prepared '{row.CommandName}' for test send.";
     }
 
@@ -2501,7 +2505,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private async Task RequestSelectedX32CommandAsync()
     {
         UseSelectedX32CommandForTestSend();
-        await SendTestOscAsync().ConfigureAwait(true);
+        await SendTestOSCAsync().ConfigureAwait(true);
     }
 
     [RelayCommand]
@@ -2527,7 +2531,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     // ----- Context-menu test sends ------------------------------------------------------------
 
     /// <summary>Prefills the test-send fields from the OSC device endpoint and sends the current test address.</summary>
-    private async Task TestOscDeviceAsync(ControlStructureRowViewModel row)
+    private async Task TestOSCDeviceAsync(ControlStructureRowViewModel row)
     {
         if (row.DeviceInstanceId is not { } deviceId)
             return;
@@ -2536,20 +2540,20 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (device is null)
             return;
 
-        if (!string.IsNullOrWhiteSpace(device.Binding.OscHost))
-            TestOscHost = device.Binding.OscHost!;
-        if (device.Binding.OscPort is { } port)
-            TestOscPort = port.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(device.Binding.OSCHost))
+            TestOSCHost = device.Binding.OSCHost!;
+        if (device.Binding.OSCPort is { } port)
+            TestOSCPort = port.ToString(CultureInfo.InvariantCulture);
 
-        await SendTestOscAsync().ConfigureAwait(true);
+        await SendTestOSCAsync().ConfigureAwait(true);
     }
 
     /// <summary>Sends a single recognizable test CC to the selected MIDI device's output.</summary>
-    private async Task TestMidiDeviceAsync(ControlStructureRowViewModel row)
+    private async Task TestMIDIDeviceAsync(ControlStructureRowViewModel row)
     {
-        if (!IsMidiAvailable)
+        if (!IsMIDIAvailable)
         {
-            StatusMessage = MidiUnavailableStatus;
+            StatusMessage = MIDIUnavailableStatus;
             return;
         }
 
@@ -2573,12 +2577,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             _monitorBuffer?.Record(new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Output,
-                Protocol = ControlMonitorProtocol.Midi,
+                Protocol = ControlMonitorProtocol.MIDI,
                 Result = ControlMonitorResult.Sent,
                 DeviceInstanceId = deviceId,
-                MidiChannel = channel,
-                MidiController = controller,
-                MidiValue = value,
+                MIDIChannel = channel,
+                MIDIController = controller,
+                MIDIValue = value,
                 Message = "test send",
             });
             StatusMessage = $"Sent test MIDI cc{controller}={value}.";
@@ -2588,7 +2592,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             _monitorBuffer?.Record(new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Error,
-                Protocol = ControlMonitorProtocol.Midi,
+                Protocol = ControlMonitorProtocol.MIDI,
                 Result = ControlMonitorResult.Failed,
                 DeviceInstanceId = deviceId,
                 Message = "test send",
@@ -2643,8 +2647,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             : candidate.FunctionName.Trim();
 
         var trigger = BuildLearnedTrigger(candidate.Record, functionName);
-        if (trigger.MidiValue is null && candidate.HasValueRange)
-            trigger = trigger with { MidiValueMin = candidate.MinimumValue, MidiValueMax = candidate.MaximumValue };
+        if (trigger.MIDIValue is null && candidate.HasValueRange)
+            trigger = trigger with { MIDIValueMin = candidate.MinimumValue, MIDIValueMax = candidate.MaximumValue };
         row.AddLearnedTrigger(trigger);
 
         if (candidate.InsertStub && !HasExport(SelectedScriptText, functionName))
@@ -2686,101 +2690,101 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         return records.FirstOrDefault(r =>
             r.TimestampUtc >= sinceUtc
             && r.Direction == ControlMonitorDirection.Input
-            && r.Protocol == ControlMonitorProtocol.Midi
-            && (r.MidiMessageType is not null
-                || r.MidiController is not null
-                || r.MidiNote is not null
-                || r.MidiValue is not null));
+            && r.Protocol == ControlMonitorProtocol.MIDI
+            && (r.MIDIMessageType is not null
+                || r.MIDIController is not null
+                || r.MIDINote is not null
+                || r.MIDIValue is not null));
     }
 
     internal static string SuggestLearnFunctionName(ControlMonitorRecord record) =>
-        record.MidiController is { } controller
+        record.MIDIController is { } controller
             ? $"onCc{controller.ToString(CultureInfo.InvariantCulture)}"
-            : record.MidiNote is { } note
+            : record.MIDINote is { } note
                 ? $"onNote{note.ToString(CultureInfo.InvariantCulture)}"
-                : $"on{SanitizeFunctionSuffix((record.MidiMessageType ?? ControlMidiMessageType.Unknown).ToString())}";
+                : $"on{SanitizeFunctionSuffix((record.MIDIMessageType ?? ControlMIDIMessageType.Unknown).ToString())}";
 
     internal static ControlScriptTriggerConfig BuildLearnedTrigger(ControlMonitorRecord record, string functionName)
     {
         ArgumentNullException.ThrowIfNull(record);
-        var messageType = InferMidiMessageType(record);
-        if (record.MidiController is { } controller)
+        var messageType = InferMIDIMessageType(record);
+        if (record.MIDIController is { } controller)
         {
             return new ControlScriptTriggerConfig
             {
-                Kind = ControlScriptTriggerKind.MidiControlChange,
+                Kind = ControlScriptTriggerKind.MIDIControlChange,
                 FunctionName = functionName,
-                MidiMessageType = messageType,
-                MidiChannel = record.MidiChannel,
-                MidiController = controller,
+                MIDIMessageType = messageType,
+                MIDIChannel = record.MIDIChannel,
+                MIDIController = controller,
             };
         }
 
-        if (record.MidiNote is { } note)
+        if (record.MIDINote is { } note)
         {
             return new ControlScriptTriggerConfig
             {
-                Kind = ControlScriptTriggerKind.MidiNote,
+                Kind = ControlScriptTriggerKind.MIDINote,
                 FunctionName = functionName,
-                MidiMessageType = messageType is ControlMidiMessageType.NoteOn or ControlMidiMessageType.NoteOff ? messageType : null,
-                MidiChannel = record.MidiChannel,
-                MidiNote = note,
+                MIDIMessageType = messageType is ControlMIDIMessageType.NoteOn or ControlMIDIMessageType.NoteOff ? messageType : null,
+                MIDIChannel = record.MIDIChannel,
+                MIDINote = note,
             };
         }
 
         return new ControlScriptTriggerConfig
         {
-            Kind = ControlScriptTriggerKind.MidiMessage,
+            Kind = ControlScriptTriggerKind.MIDIMessage,
             FunctionName = functionName,
-            MidiMessageType = messageType == ControlMidiMessageType.Unknown ? null : messageType,
-            MidiChannel = record.MidiChannel,
-            MidiValue = ShouldLearnMidiValue(messageType) ? record.MidiValue : null,
-            MidiParameter = record.MidiParameter,
+            MIDIMessageType = messageType == ControlMIDIMessageType.Unknown ? null : messageType,
+            MIDIChannel = record.MIDIChannel,
+            MIDIValue = ShouldLearnMIDIValue(messageType) ? record.MIDIValue : null,
+            MIDIParameter = record.MIDIParameter,
         };
     }
 
     internal static string BuildLearnedStub(ControlMonitorRecord record, string functionName)
     {
-        var description = DescribeMidiRecord(record);
+        var description = DescribeMIDIRecord(record);
         return $"{Environment.NewLine}export fun {functionName}(event, context) {{{Environment.NewLine}"
             + $"    // TODO: handle {description}{Environment.NewLine}"
             + $"    // event.value holds the incoming value{Environment.NewLine}"
             + $"}}{Environment.NewLine}";
     }
 
-    private static ControlMidiMessageType InferMidiMessageType(ControlMonitorRecord record)
+    private static ControlMIDIMessageType InferMIDIMessageType(ControlMonitorRecord record)
     {
-        if (record.MidiMessageType is { } messageType)
+        if (record.MIDIMessageType is { } messageType)
             return messageType;
-        if (record.MidiController is not null)
-            return ControlMidiMessageType.ControlChange;
-        if (record.MidiNote is not null)
-            return ControlMidiMessageType.NoteOn;
-        return ControlMidiMessageType.Unknown;
+        if (record.MIDIController is not null)
+            return ControlMIDIMessageType.ControlChange;
+        if (record.MIDINote is not null)
+            return ControlMIDIMessageType.NoteOn;
+        return ControlMIDIMessageType.Unknown;
     }
 
-    private static bool ShouldLearnMidiValue(ControlMidiMessageType messageType) =>
-        messageType is ControlMidiMessageType.ProgramChange
-            or ControlMidiMessageType.SongSelect
-            or ControlMidiMessageType.MIDITimeCode;
+    private static bool ShouldLearnMIDIValue(ControlMIDIMessageType messageType) =>
+        messageType is ControlMIDIMessageType.ProgramChange
+            or ControlMIDIMessageType.SongSelect
+            or ControlMIDIMessageType.MIDITimeCode;
 
-    private static string DescribeMidiRecord(ControlMonitorRecord record)
+    private static string DescribeMIDIRecord(ControlMonitorRecord record)
     {
-        var channel = record.MidiChannel is { } ch ? $" on channel {ch.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
-        var value = record.MidiValue is { } v ? $" value {v.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
-        if (record.MidiController is { } controller)
+        var channel = record.MIDIChannel is { } ch ? $" on channel {ch.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
+        var value = record.MIDIValue is { } v ? $" value {v.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
+        if (record.MIDIController is { } controller)
             return $"MIDI CC {controller.ToString(CultureInfo.InvariantCulture)}{channel}";
-        if (record.MidiNote is { } note)
+        if (record.MIDINote is { } note)
             return $"MIDI note {note.ToString(CultureInfo.InvariantCulture)}{channel}";
-        if (record.MidiParameter is { } parameter)
-            return $"MIDI {(record.MidiMessageType ?? ControlMidiMessageType.Unknown)} parameter {parameter.ToString(CultureInfo.InvariantCulture)}{channel}";
-        return $"MIDI {(record.MidiMessageType ?? ControlMidiMessageType.Unknown)}{channel}{value}";
+        if (record.MIDIParameter is { } parameter)
+            return $"MIDI {(record.MIDIMessageType ?? ControlMIDIMessageType.Unknown)} parameter {parameter.ToString(CultureInfo.InvariantCulture)}{channel}";
+        return $"MIDI {(record.MIDIMessageType ?? ControlMIDIMessageType.Unknown)}{channel}{value}";
     }
 
     private static string SanitizeFunctionSuffix(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return "Midi";
+            return "MIDI";
 
         var builder = new StringBuilder(text.Length);
         foreach (var ch in text)
@@ -2789,7 +2793,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 builder.Append(ch);
         }
 
-        return builder.Length == 0 ? "Midi" : builder.ToString();
+        return builder.Length == 0 ? "MIDI" : builder.ToString();
     }
 
     internal static bool HasExport(string? scriptText, string functionName) =>
@@ -2805,7 +2809,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (buffer is null || IsPaused)
             return;
 
-        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
 
         var records = buffer.Records;
 
@@ -2879,7 +2883,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private static bool Contains(string? value, string text) =>
         value is not null && value.Contains(text, StringComparison.OrdinalIgnoreCase);
 
-    private static IReadOnlyList<OSCArgument> ParseOscArgs(string raw)
+    private static IReadOnlyList<OSCArgument> ParseOSCArgs(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return [];

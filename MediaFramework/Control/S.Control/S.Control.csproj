@@ -1,22 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <RootNamespace>S.Control</RootNamespace>
-        <Description>Scriptable MIDI/OSC control runtime: device profiles, control config, event queue, monitor/cache, and live MIDI/OSC routing.</Description>
-    </PropertyGroup>
+    <!-- S.Control — scriptable MIDI/OSC control runtime: data-driven device profiles (JSON, embedded + copied to
+         output), control config, event queue, monitor/value-cache, live MIDI/OSC routing, and a Mond script host.
+         Devices are DATA (Profiles/*.json), not code. Moved to next/ (Phase 6 Control); common build settings from
+         Directory.Build.props, package versions from Directory.Packages.props. -->
 
     <ItemGroup>
-        <InternalsVisibleTo Include="HaPlay.Tests" />
+        <InternalsVisibleTo Include="S.Control.Tests" />
     </ItemGroup>
 
     <ItemGroup>
-        <EmbeddedResource Include="Profiles\*.json" />
-        <None Include="Profiles\*.json">
+        <EmbeddedResource Include="Profiles/*.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
+        </EmbeddedResource>
     </ItemGroup>
 
     <ItemGroup>
@@ -24,8 +20,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Extras\MIDI\PMLib\PMLib.csproj" />
-        <ProjectReference Include="..\..\Extras\OSC\OSCLib\OSCLib.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../S.Control.Abstractions/S.Control.Abstractions.csproj" />
+        <ProjectReference Include="../../MIDI/PMLib/PMLib.csproj" />
+        <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
     </ItemGroup>
 
 </Project>

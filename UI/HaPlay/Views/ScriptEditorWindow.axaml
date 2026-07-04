@@ -1,26 +1,25 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HaPlay.Views"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         xmlns:vm="using:HaPlay.ViewModels"
         x:Class="HaPlay.Views.ScriptEditorWindow"
-        x:DataType="vm:ControlWorkspaceViewModel"
-        Title="Script Editor"
+        x:DataType="vm:ScriptEditorWindowViewModel"
+        Title="{Binding SelectedScriptRow.DisplayName, StringFormat='Script — {0}'}"
         Width="1000" Height="700"
         MinWidth="640" MinHeight="460"
         WindowStartupLocation="CenterOwner">
   <Window.Styles>
     <Style Selector="Grid.error TextBlock">
-      <Setter Property="Foreground" Value="#FF6B6B" />
+      <Setter Property="Foreground" Value="#B71C1C" />
     </Style>
   </Window.Styles>
 
   <Panel Margin="12">
-    <TextBlock Text="Select a script in the Control workspace to edit it."
-               Opacity="0.6" HorizontalAlignment="Center" VerticalAlignment="Center"
-               IsVisible="{Binding !HasSelectedScript}" />
-
-    <Grid IsVisible="{Binding HasSelectedScript}"
-          RowDefinitions="Auto,*,Auto,Auto" RowSpacing="10">
+    <!-- One script per window: this window pins its script row for its whole lifetime — selecting a
+         different script in the Control workspace opens ANOTHER editor window instead of silently
+         switching this one. -->
+    <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="10">
 
       <!-- Header + metadata -->
       <StackPanel Grid.Row="0" Spacing="8">
@@ -78,17 +77,19 @@
       </StackPanel>
 
       <!-- Code editor -->
-      <Border Grid.Row="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="4">
+      <Border Grid.Row="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0">
+        <!-- Light editor surface — the dark pane was a Fluent-era holdover that clashed with the
+             Classic theme (and its light text bled into a light-on-light mess under the Light variant). -->
         <ae:TextEditor x:Name="ScriptEditor"
                        ShowLineNumbers="True"
                        FontFamily="Cascadia Code, Consolas, monospace"
                        FontSize="13"
-                       Background="#101010"
-                       Foreground="#EEEEEE" />
+                       Background="White"
+                       Foreground="#1A1A1A" />
       </Border>
 
       <!-- Triggers / Learn / Diagnostics -->
-      <Border Grid.Row="2" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+      <Border Grid.Row="2" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
         <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Spacing="10">
 
@@ -118,10 +119,10 @@
                             </ComboBox>
                             <WrapPanel Grid.Column="1" Orientation="Horizontal">
                               <TextBox Width="160" Margin="0,0,6,6" Text="{Binding FunctionName}" PlaceholderText="exported function" />
-                              <TextBox Width="180" Text="{Binding OscAddressPattern}"
-                                       PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" Margin="0,0,6,6" />
-                              <ComboBox Width="160" ItemsSource="{Binding MidiMessageTypeOptions}"
-                                        SelectedItem="{Binding MidiMessageType}" IsVisible="{Binding ShowMidiMessageType}"
+                              <TextBox Width="180" Text="{Binding OSCAddressPattern}"
+                                       PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOSCAddress}" Margin="0,0,6,6" />
+                              <ComboBox Width="160" ItemsSource="{Binding MIDIMessageTypeOptions}"
+                                        SelectedItem="{Binding MIDIMessageType}" IsVisible="{Binding ShowMIDIMessageType}"
                                         Margin="0,0,6,6">
                                 <ComboBox.ItemTemplate>
                                   <DataTemplate>
@@ -129,24 +130,26 @@
                                   </DataTemplate>
                                 </ComboBox.ItemTemplate>
                               </ComboBox>
-                              <TextBox Width="64" Text="{Binding MidiChannelText}"
-                                       PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" Margin="0,0,6,6" />
-                              <TextBox Width="64" Text="{Binding MidiControllerText}"
-                                       PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" Margin="0,0,6,6" />
-                              <TextBox Width="64" Text="{Binding MidiNoteText}"
-                                       PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiValueText}"
-                                       PlaceholderText="value" IsVisible="{Binding ShowMidiValue}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiValueMinText}"
-                                       PlaceholderText="min" IsVisible="{Binding ShowMidiValueRange}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiValueMaxText}"
-                                       PlaceholderText="max" IsVisible="{Binding ShowMidiValueRange}" Margin="0,0,6,6" />
-                              <TextBox Width="70" Text="{Binding MidiParameterText}"
-                                       PlaceholderText="param" IsVisible="{Binding ShowMidiParameter}" Margin="0,0,6,6" />
+                              <TextBox Width="64" Text="{Binding MIDIChannelText}"
+                                       PlaceholderText="chan" IsVisible="{Binding ShowMIDIChannel}" Margin="0,0,6,6" />
+                              <TextBox Width="64" Text="{Binding MIDIControllerText}"
+                                       PlaceholderText="cc" IsVisible="{Binding ShowMIDIController}" Margin="0,0,6,6" />
+                              <TextBox Width="64" Text="{Binding MIDINoteText}"
+                                       PlaceholderText="note" IsVisible="{Binding ShowMIDINote}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIValueText}"
+                                       PlaceholderText="value" IsVisible="{Binding ShowMIDIValue}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIValueMinText}"
+                                       PlaceholderText="min" IsVisible="{Binding ShowMIDIValueRange}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIValueMaxText}"
+                                       PlaceholderText="max" IsVisible="{Binding ShowMIDIValueRange}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MIDIParameterText}"
+                                       PlaceholderText="param" IsVisible="{Binding ShowMIDIParameter}" Margin="0,0,6,6" />
                               <TextBox Width="90" Text="{Binding IntervalMsText}"
                                        PlaceholderText="ms" IsVisible="{Binding ShowInterval}" Margin="0,0,6,6" />
-                              <Button Content="✕" Padding="8,2" ToolTip.Tip="Remove trigger" Margin="0,0,0,6"
-                                      Command="{Binding RemoveCommand}" />
+                              <Button Padding="8,2" ToolTip.Tip="Remove trigger" Margin="0,0,0,6"
+                                      Command="{Binding RemoveCommand}">
+            <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
+          </Button>
                             </WrapPanel>
                           </Grid>
                         </DataTemplate>
@@ -169,7 +172,7 @@
                         Content="{Binding LearnButtonText}" Command="{Binding ToggleLearnCommand}" />
               </Grid>
               <Border IsVisible="{Binding HasLearnCandidate}"
-                      BorderBrush="#3360C060" BorderThickness="1" CornerRadius="4" Padding="8">
+                      BorderBrush="#3360C060" BorderThickness="1" CornerRadius="0" Padding="8">
                 <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Captured" Opacity="0.7" VerticalAlignment="Center" />
                   <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding LearnCandidate.Description}"

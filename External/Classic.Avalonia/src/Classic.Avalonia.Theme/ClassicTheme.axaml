@@ -1,0 +1,67 @@
+﻿<Styles x:Class="Classic.Avalonia.Theme.ClassicTheme"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:classic="clr-namespace:Classic.Avalonia.Theme"
+        xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
+        xmlns:utils="clr-namespace:Classic.CommonControls.Utils;assembly=Classic.CommonControls.Avalonia"
+        xmlns:system="clr-namespace:System;assembly=System.Runtime">
+  <Styles.Resources>
+    <ResourceDictionary>
+      <system:Boolean x:Key="{x:Static common:SystemParameters.FontAliasingKey}">True</system:Boolean>
+
+      <VisualBrush x:Key="DiagonalBrushLight" TileMode="Tile" SourceRect="0,0,2,2" DestinationRect="0,0,2,2">
+        <VisualBrush.Visual>
+          <Canvas Width="2" Height="2" Background="{StaticResource {x:Static common:SystemColors.ControlLightBrushKey}}">
+            <Rectangle Fill="{StaticResource {x:Static common:SystemColors.ControlLightLightBrushKey}}" Width="1" Height="1" />
+            <Rectangle Fill="{StaticResource {x:Static common:SystemColors.ControlLightLightBrushKey}}" Width="1" Height="1" Canvas.Left="1" Canvas.Top="1" />
+          </Canvas>
+        </VisualBrush.Visual>
+      </VisualBrush>
+
+      <VisualBrush x:Key="DiagonalBrush" TileMode="Tile" SourceRect="0,0,2,2" DestinationRect="0,0,2,2">
+        <VisualBrush.Visual>
+          <Canvas Width="2" Height="2" Background="{StaticResource {x:Static common:SystemColors.ControlBrushKey}}">
+            <Rectangle Fill="{StaticResource {x:Static common:SystemColors.ControlLightLightBrushKey}}" Width="1" Height="1" />
+            <Rectangle Fill="{StaticResource {x:Static common:SystemColors.ControlLightLightBrushKey}}" Width="1" Height="1" Canvas.Left="1" Canvas.Top="1" />
+          </Canvas>
+        </VisualBrush.Visual>
+      </VisualBrush>
+
+      <classic:ClassicWindowFactory x:Key="{x:Type utils:IWindowFactory}" />
+
+      <ResourceDictionary.MergedDictionaries>
+        <MergeResourceInclude Source="avares://Classic.Avalonia.Theme/Styles/InvariantResources.axaml" />
+        <MergeResourceInclude Source="avares://Classic.Avalonia.Theme/Colors/Colors.axaml" />
+        <MergeResourceInclude Source="/Accents/Base.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+  
+  <StyleInclude Source="/Styles/Controls.axaml" />
+
+  <Style Selector="AccessText:disabled">
+    <Setter Property="Foreground"
+            Value="{DynamicResource {x:Static common:SystemColors.GrayTextBrushKey}}"/>
+    <Setter Property="Effect">
+      <DropShadowEffect OffsetX="1" OffsetY="1" Color="{DynamicResource {x:Static common:SystemColors.ControlLightLightColorKey}}" BlurRadius="0" Opacity="1" />
+    </Setter>
+  </Style>
+
+  <Style Selector="Path:disabled">
+    <Setter Property="Fill" Value="{DynamicResource {x:Static common:SystemColors.GrayTextBrushKey}}" />
+    <Setter Property="Effect">
+      <DropShadowEffect OffsetX="1" OffsetY="1" Color="{DynamicResource {x:Static common:SystemColors.ControlLightLightColorKey}}" BlurRadius="0" Opacity="1" />
+    </Setter>
+  </Style>
+
+  <Style Selector="MenuItem:disabled common|IconRenderer">
+    <Setter Property="IconStyle" Value="Disabled" />
+  </Style>
+  
+  <!-- somehow the shadow color is always black (resource key not found) when the style below was directly in ControlTheme of MenuItem -->
+  <Style Selector="MenuItem:disabled /template/ TextBlock#PART_InputGestureText">
+    <Setter Property="Effect">
+      <DropShadowEffect OffsetX="1" OffsetY="1" Color="{DynamicResource {x:Static common:SystemColors.ControlLightLightColorKey}}" BlurRadius="0" Opacity="1" />
+    </Setter>
+  </Style>
+</Styles>

@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Present.SDL3 — IVideoOutput on its own GL render thread (salvaged from S.Media.SDL3).
+         Output + GL context only: [Core, Gpu]. The SDL3 GL *compositor backend* lives in the separate
+         S.Media.Present.SDL3.Compositor bridge so this presenter never references S.Media.Compositor. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Gpu/S.Media.Gpu.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="SDL3-CS" />
+        <!-- SDL3-CS.Native is deprecated; the split SDL3-CS.<Platform> packages carry the runtimes/<rid>/native
+             libs (the binding no longer pulls a native transitively). Reference each CI target (Windows + Linux,
+             D13) so the matching RID's native flows to any referencing exe — the Linux .so resolves from the
+             deps.json, the Windows .dll is copied below for the RID-less IDE case. -->
+        <PackageReference Include="SDL3-CS.Linux" />
+        <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <!-- RID-less Windows build (IDE Debug/run): the platform native package only places SDL3.dll via
+         runtimes/<rid>/native RID resolution; copy it next to the exe for the RID-less-on-Windows case (flows
+         into a referencing exe's output). RID publishes resolve it from runtimes/, so this is gated off there. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(PkgSDL3-CS_Windows)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>SDL3.dll</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Present.SDL3.Tests" />
+    </ItemGroup>
+
+</Project>

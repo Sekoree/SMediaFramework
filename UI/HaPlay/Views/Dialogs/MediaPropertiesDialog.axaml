@@ -1,0 +1,106 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        xmlns:res="using:HaPlay.Resources"
+        x:Class="HaPlay.Views.Dialogs.MediaPropertiesDialog"
+        x:DataType="vm:MediaPropertiesDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="560" Height="560"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="440" MinHeight="400">
+  <Window.Resources>
+    <DataTemplate x:Key="PropertyRowTemplate" x:DataType="vm:MediaPropertyRow">
+      <Grid ColumnDefinitions="150,*" Margin="0,2">
+        <TextBlock Grid.Column="0" Text="{Binding Name}" Opacity="0.7" VerticalAlignment="Top" />
+        <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" />
+      </Grid>
+    </DataTemplate>
+  </Window.Resources>
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.OkButton}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <TabControl>
+      <!-- Details: every item kind. Static facts appear instantly; probed container facts merge in. -->
+      <TabItem Header="{x:Static res:Strings.MediaPropertiesTabDetails}">
+        <ScrollViewer>
+          <StackPanel Spacing="10" Margin="0,8,0,0">
+            <ItemsControl ItemsSource="{Binding DetailRows}" ItemTemplate="{StaticResource PropertyRowTemplate}" />
+            <TextBlock Text="{Binding DetailsStatus}" Opacity="0.7" TextWrapping="Wrap"
+                       IsVisible="{Binding DetailsStatus, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            <StackPanel Spacing="4" IsVisible="{Binding HasStreamLines}">
+              <TextBlock Text="{x:Static res:Strings.MediaPropertiesStreamsHeader}" FontWeight="SemiBold" Margin="0,6,0,0" />
+              <ItemsControl ItemsSource="{Binding StreamLines}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <SelectableTextBlock Text="{Binding}" FontSize="12" Opacity="0.85" Margin="0,1" TextWrapping="Wrap" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- Tracks: file items — audio track choice + subtitle selection. -->
+      <TabItem Header="{x:Static res:Strings.MediaPropertiesTabTracks}" IsVisible="{Binding IsFileItem}">
+        <StackPanel Spacing="10" Margin="0,8,0,0">
+          <!-- Only shown when the file has more than one audio track (nothing to choose otherwise). -->
+          <StackPanel Spacing="10" IsVisible="{Binding HasMultipleAudioTracks}">
+            <TextBlock Text="{x:Static res:Strings.MediaPropertiesAudioTrackLabel}" FontWeight="SemiBold" />
+            <ComboBox MinWidth="260" HorizontalAlignment="Left"
+                      ItemsSource="{Binding AudioTrackOptions}"
+                      SelectedItem="{Binding SelectedAudioTrack, Mode=TwoWay}" />
+          </StackPanel>
+
+          <!-- Only shown when the file actually carries subtitle streams (or already has some configured) —
+               the picker is embedded-track-based, so it's empty and pointless otherwise. -->
+          <StackPanel Spacing="10" IsVisible="{Binding HasSubtitleTracks}">
+            <TextBlock Text="{x:Static res:Strings.MediaPropertiesSubtitlesLabel}" FontWeight="SemiBold" Margin="0,10,0,0" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="{Binding SubtitleSummary}" VerticalAlignment="Center" Opacity="0.85" />
+              <Button Content="{x:Static res:Strings.MediaPropertiesEditSubtitlesButton}" Click="EditSubtitlesClick" />
+            </StackPanel>
+          </StackPanel>
+
+          <TextBlock Text="{x:Static res:Strings.MediaPropertiesNoSelectableTracks}"
+                     Opacity="0.75" TextWrapping="Wrap"
+                     IsVisible="{Binding HasNoSelectableTracks}" />
+        </StackPanel>
+      </TabItem>
+
+      <!-- Scene: MMD items — scene summary, full editor, explicit physics bake. -->
+      <TabItem Header="{x:Static res:Strings.MediaPropertiesTabScene}" IsVisible="{Binding IsMMDItem}">
+        <ScrollViewer>
+          <StackPanel Spacing="10" Margin="0,8,0,0">
+            <ItemsControl ItemsSource="{Binding SceneRows}" ItemTemplate="{StaticResource PropertyRowTemplate}" />
+            <Button Content="{x:Static res:Strings.MediaPropertiesEditSceneButton}" Click="EditSceneClick" />
+
+            <TextBlock Text="{x:Static res:Strings.MediaPropertiesRowPhysics}" FontWeight="SemiBold" Margin="0,10,0,0" />
+            <TextBlock Text="{Binding BakeStatus}" Opacity="0.85" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Button Content="{x:Static res:Strings.MediaPropertiesBakeButton}"
+                      Command="{Binding BakePhysicsCommand}" />
+              <ProgressBar Width="180" Minimum="0" Maximum="1" VerticalAlignment="Center"
+                           Value="{Binding BakeProgress}" IsVisible="{Binding IsBaking}" />
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- Streams: YouTube items — resolved descriptors, cache state, stream editor. -->
+      <TabItem Header="{x:Static res:Strings.MediaPropertiesTabStreams}" IsVisible="{Binding IsYouTubeItem}">
+        <ScrollViewer>
+          <StackPanel Spacing="10" Margin="0,8,0,0">
+            <ItemsControl ItemsSource="{Binding YouTubeRows}" ItemTemplate="{StaticResource PropertyRowTemplate}" />
+            <Button Content="{x:Static res:Strings.MediaPropertiesChangeStreamsButton}" Click="ChangeStreamsClick" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

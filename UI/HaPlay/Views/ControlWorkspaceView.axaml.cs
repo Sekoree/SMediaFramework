@@ -9,7 +9,9 @@ namespace HaPlay.Views;
 
 public partial class ControlWorkspaceView : UserControl
 {
-    private ScriptEditorWindow? _scriptEditorWindow;
+    // One editor window PER SCRIPT (keyed by row) — editing two scripts side by side is two windows,
+    // and selecting another script in the list never hijacks an already-open editor.
+    private readonly Dictionary<ControlScriptRowViewModel, ScriptEditorWindow> _scriptEditorWindows = new();
     private readonly PopoutRegion[] _tabPopouts = [new(), new(), new(), new()];
 
     public ControlWorkspaceView()
@@ -44,18 +46,22 @@ public partial class ControlWorkspaceView : UserControl
 
     private void OpenScriptEditorWindow()
     {
-        if (DataContext is not ControlWorkspaceViewModel viewModel || !viewModel.HasSelectedScript)
+        if (DataContext is not ControlWorkspaceViewModel viewModel
+            || viewModel.SelectedScriptRow is not { } row)
             return;
 
-        if (_scriptEditorWindow is not null)
+        if (_scriptEditorWindows.TryGetValue(row, out var existing))
         {
-            _scriptEditorWindow.Activate();
+            existing.Activate();
             return;
         }
 
-        var window = new ScriptEditorWindow { DataContext = viewModel };
-        window.Closed += (_, _) => _scriptEditorWindow = null;
-        _scriptEditorWindow = window;
+        var window = new ScriptEditorWindow
+        {
+            DataContext = new ScriptEditorWindowViewModel(viewModel, row),
+        };
+        window.Closed += (_, _) => _scriptEditorWindows.Remove(row);
+        _scriptEditorWindows[row] = window;
 
         if (TopLevel.GetTopLevel(this) is Window owner)
             window.Show(owner);

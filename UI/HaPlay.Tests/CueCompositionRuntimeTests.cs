@@ -1,6 +1,6 @@
 using HaPlay.Playback;
 using HaPlay.ViewModels;
-using S.Media.Core.Clock;
+using S.Media.Time;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -69,7 +69,7 @@ public sealed class CueCompositionRuntimeTests
     }
 
     [Fact]
-    public void LeasedLineCount_StaysZeroWhenNdiCarrierCannotBeAcquired()
+    public void LeasedLineCount_StaysZeroWhenNDICarrierCannotBeAcquired()
     {
         var outputs = new OutputManagementViewModel();
         var line = new OutputLineViewModel(

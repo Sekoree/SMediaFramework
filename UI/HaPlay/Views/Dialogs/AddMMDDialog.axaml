@@ -1,0 +1,115 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddMMDDialog"
+        x:DataType="vm:AddMMDDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="860" Height="640"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="720" MinHeight="540">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.AddButton}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <Grid ColumnDefinitions="*,16,360">
+      <!-- Left: files + camera controls -->
+      <ScrollViewer Grid.Column="0">
+        <StackPanel Spacing="10">
+          <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
+
+          <TextBlock Text="{x:Static res:Strings.MMDModelPathLabel}" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" Text="{Binding ModelPath}" />
+            <Button Grid.Column="1" Margin="6,0,0,0" Content="{x:Static res:Strings.BrowseButton}"
+                    Click="BrowseModelClick" />
+          </Grid>
+
+          <TextBlock Text="{x:Static res:Strings.MMDMotionPathLabel}" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" Text="{Binding MotionPath}" />
+            <Button Grid.Column="1" Margin="6,0,0,0" Content="{x:Static res:Strings.BrowseButton}"
+                    Click="BrowseMotionClick" />
+          </Grid>
+
+          <TextBlock Text="{x:Static res:Strings.MMDCameraMotionPathLabel}" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" Text="{Binding CameraMotionPath}" />
+            <Button Grid.Column="1" Margin="6,0,0,0" Content="{x:Static res:Strings.BrowseButton}"
+                    Click="BrowseCameraClick" />
+          </Grid>
+
+          <Border Background="#15808080" CornerRadius="0" Padding="10" IsEnabled="{Binding ManualCameraActive}">
+            <StackPanel Spacing="8">
+              <TextBlock Text="{x:Static res:Strings.MMDCameraSectionLabel}" FontWeight="SemiBold" />
+
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MMDDistanceLabel}" />
+                <Slider Minimum="-150" Maximum="-2" Value="{Binding CameraDistance}" Width="220" />
+                <NumericUpDown Minimum="-500" Maximum="-1" Increment="1" Value="{Binding CameraDistance}" Width="110" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MMDTargetLabel}" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraTargetX}" Width="100" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraTargetY}" Width="100" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraTargetZ}" Width="100" />
+              </StackPanel>
+
+              <!-- Direct camera-EYE placement (XYZ), two-way synced with distance/rotation. -->
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MMDCameraPositionLabel}" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraPositionX}" Width="100" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraPositionY}" Width="100" />
+                <NumericUpDown Minimum="-500" Maximum="500" Increment="0.5" Value="{Binding CameraPositionZ}" Width="100" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MMDRotationLabel}" />
+                <NumericUpDown Minimum="-180" Maximum="180" Increment="1" Value="{Binding CameraRotationXDeg}" Width="100" />
+                <NumericUpDown Minimum="-180" Maximum="180" Increment="1" Value="{Binding CameraRotationYDeg}" Width="100" />
+                <NumericUpDown Minimum="-180" Maximum="180" Increment="1" Value="{Binding CameraRotationZDeg}" Width="100" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="16">
+                <CheckBox IsChecked="{Binding RenderAntialias}" Content="{x:Static res:Strings.MMDAntialiasLabel}" />
+                <CheckBox IsChecked="{Binding RenderPhysics}" Content="{x:Static res:Strings.MMDPhysicsLabel}" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock VerticalAlignment="Center" Width="80" Text="{x:Static res:Strings.MMDFovLabel}" />
+                <Slider Minimum="5" Maximum="120" Value="{Binding CameraFovDeg}" Width="220" />
+                <NumericUpDown Minimum="1" Maximum="175" Increment="1" Value="{Binding CameraFovDeg}" Width="110" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.MMDRenderSizeLabel}" />
+            <NumericUpDown FormatString="0" Minimum="16" Maximum="7680" Increment="16" Value="{Binding RenderWidth}" Width="120" />
+            <TextBlock VerticalAlignment="Center" Text="×" />
+            <NumericUpDown FormatString="0" Minimum="16" Maximum="4320" Increment="16" Value="{Binding RenderHeight}" Width="120" />
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- Right: live preview -->
+      <StackPanel Grid.Column="2" Spacing="8">
+        <Border Background="#20000000" CornerRadius="0" Height="203">
+          <Panel>
+            <Image Source="{Binding PreviewImage}" Stretch="Uniform" />
+            <ProgressBar IsIndeterminate="True" VerticalAlignment="Bottom" Height="3"
+                         IsVisible="{Binding IsRendering}" />
+          </Panel>
+        </Border>
+        <TextBlock Text="{x:Static res:Strings.MMDPreviewTimeLabel}" FontWeight="SemiBold" />
+        <Slider Minimum="0" Maximum="{Binding PreviewDurationSeconds}" Value="{Binding PreviewTimeSeconds}" />
+        <Button Content="{x:Static res:Strings.RescanButton}" Command="{Binding RefreshPreviewCommand}"
+                HorizontalAlignment="Right" />
+      </StackPanel>
+    </Grid>
+  </DockPanel>
+</Window>

@@ -1,4 +1,3 @@
-using S.Media.Core.Triggers;
 using Xunit;
 
 namespace S.Media.Core.Tests.Triggers;

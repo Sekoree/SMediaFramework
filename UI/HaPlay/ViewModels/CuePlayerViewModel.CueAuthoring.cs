@@ -47,44 +47,25 @@ public partial class CuePlayerViewModel
             RenumberFlat(SelectedCueList.Nodes, start: 1, step: 1);
     }
 
+    /// <summary>"+ Media" — cancel-safe: the picker runs FIRST and a cue row is only created per
+    /// successfully picked file. A dismissed picker leaves the cue list untouched (the old flow
+    /// seeded an empty placeholder cue that survived the cancel and had to be removed by hand).</summary>
     [RelayCommand]
     private async Task AddMediaCueAsync()
     {
         var parent = SelectedParentCollection();
         if (parent is null) return;
 
-        // Always seed at least one empty cue (matches the prior "+ Media → row, then pick" UX
-        // and the test contract). Multi-select fills it with the first file plus N-1 follow-ups.
-        var firstRow = new CueNodeViewModel(CueNodeKind.Media)
-        {
-            Number = NextNumber(parent),
-            Label = Strings.CueNodeDefaultMediaLabel,
-        };
-        parent.Add(firstRow);
-        FinalizeAddedCue(firstRow);
-        SelectedCueNode = firstRow;
-
         var picked = await PickMediaFilePathsAsync(allowMultiple: true);
         if (picked.Count == 0)
         {
-            // Picker cancelled — leave the empty cue so the operator can still drag a file onto
-            // it (and so the existing tests' assumptions hold).
-            GoCommand.NotifyCanExecuteChanged();
-            BackCommand.NotifyCanExecuteChanged();
             StatusMessage = null;
             return;
         }
 
-        var firstPath = picked[0];
-        firstRow.MediaSourceItem = new FilePlaylistItem(firstPath);
-        firstRow.SourceOrAction = firstPath;
-        firstRow.Label = Path.GetFileNameWithoutExtension(firstPath);
-        await ProbeAndAssignDurationAsync(firstRow, firstPath);
-
-        CueNodeViewModel lastAdded = firstRow;
-        for (var i = 1; i < picked.Count; i++)
+        CueNodeViewModel? lastAdded = null;
+        foreach (var path in picked)
         {
-            var path = picked[i];
             var row = new CueNodeViewModel(CueNodeKind.Media)
             {
                 Number = NextNumber(parent),
@@ -106,8 +87,28 @@ public partial class CuePlayerViewModel
             : null;
     }
 
-    [RelayCommand(CanExecute = nameof(CanAddNdiInputCue))]
-    private async Task AddNdiInputCueAsync()
+    /// <summary>Adds an empty media cue row (no source yet). Kept for programmatic/test fixture use —
+    /// the "+ Media" command itself is cancel-safe and never creates placeholder cues.</summary>
+    internal CueNodeViewModel? AddEmptyMediaCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return null;
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = Strings.CueNodeDefaultMediaLabel,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+        return row;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAddNDIInputCue))]
+    private async Task AddNDIInputCueAsync()
     {
         var owner = TryGetMainWindow();
         if (owner is null) return;
@@ -127,7 +128,79 @@ public partial class CuePlayerViewModel
         }
     }
 
-    private bool CanAddNdiInputCue() => IsNdiAvailable;
+    private bool CanAddNDIInputCue() => IsNDIAvailable;
+
+    /// <summary>Gate 6 — adds an MMD scene cue through the camera-placement dialog. The scene renders
+    /// like any video cue on its composition; audio pairs as a separate cue in the same group. The
+    /// cue's duration comes from the motion VMD (0 = bind pose, holds until stopped) and the physics
+    /// bake starts in the background immediately ("always pre-bake if possible").</summary>
+    [RelayCommand]
+    private async Task AddMMDCueAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.AddMMDDialogViewModel();
+        var dialog = new Views.Dialogs.AddMMDDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MMDPlaylistItem?>(owner);
+        if (result is null) return;
+        var row = AddLiveInputCue(result, result.DisplayName);
+        HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
+
+        if (row is not null && result.MotionPath is { Length: > 0 } motionPath && File.Exists(motionPath))
+        {
+            var duration = await Task.Run(() =>
+            {
+                try { return S.Media.Source.MMD.VMDDocument.Load(motionPath).Duration; }
+                catch { return TimeSpan.Zero; }
+            });
+            if (duration > TimeSpan.Zero)
+                row.DurationMs = (int)duration.TotalMilliseconds;
+        }
+    }
+
+    /// <summary>Gate 5 — adds a YouTube media cue through the same stream-selection dialog the deck uses
+    /// (selectable video/audio/subtitle tracks + caching of the selected pair). The produced cue carries
+    /// the prepared caption sidecar as its subtitle selection, so it renders like any sidecar subtitle.</summary>
+    [RelayCommand]
+    private async Task AddYouTubeCueAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.AddYouTubeDialogViewModel();
+        var dialog = new Views.Dialogs.AddYouTubeDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<YouTubePlaylistItem?>(owner);
+        if (result is null) return;
+
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = result.DisplayName,
+            MediaSourceItem = result,
+            SourceOrAction = result.DisplayName,
+            // The prepared caption sidecar rides as a normal sidecar subtitle selection.
+            PersistedSubtitles = result.Subtitles,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+
+        // Reliable mode means the selected streams are already in the local cache — probe that asset
+        // like any file so the drawer gets exact duration/channels/fps/resolution (and audio-only
+        // items correctly drop the Video tab). The item-metadata duration is the fallback.
+        var assetPath = YouTubeRuntime.Preparer.AssetPathFor(
+            result.VideoId, result.VideoStreamDescriptor, result.AudioStreamDescriptor);
+        if (File.Exists(assetPath))
+            await ProbeAndAssignDurationAsync(row, assetPath);
+        else if (result.DurationSeconds is { } seconds and > 0)
+            row.DurationMs = (int)TimeSpan.FromSeconds(seconds).TotalMilliseconds;
+    }
 
     [RelayCommand]
     private async Task AddPortAudioInputCueAsync()
@@ -144,10 +217,10 @@ public partial class CuePlayerViewModel
         AddLiveInputCue(result, result.DeviceName);
     }
 
-    private void AddLiveInputCue(PlaylistItem source, string label)
+    private CueNodeViewModel? AddLiveInputCue(PlaylistItem source, string label)
     {
         var parent = SelectedParentCollection();
-        if (parent is null) return;
+        if (parent is null) return null;
         var row = new CueNodeViewModel(CueNodeKind.Media)
         {
             Number = NextNumber(parent),
@@ -161,6 +234,7 @@ public partial class CuePlayerViewModel
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
+        return row;
     }
 
     private const int StaticCueDefaultDurationMs = 5000;
@@ -194,6 +268,53 @@ public partial class CuePlayerViewModel
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
+    }
+
+    /// <summary>Adds a standalone caption-overlay cue: a sidecar subtitle file rendered as timed captions,
+    /// placeable on a composition via the Video tab (no media clip). Held for the cue's custom duration.</summary>
+    [RelayCommand]
+    private async Task AddSubtitleCueAsync()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var path = await PickSubtitleFilePathAsync();
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = Path.GetFileNameWithoutExtension(path),
+            MediaSourceItem = new SubtitlePlaylistItem(path),
+            SourceOrAction = path,
+            SourceHasVideo = true,
+            SourceVideoWidth = 1920,
+            SourceVideoHeight = 1080,
+            DurationMs = StaticCueDefaultDurationMs,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = "Subtitle cue added — place it on a composition in the Video tab.";
+    }
+
+    private static async Task<string?> PickSubtitleFilePathAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return null;
+        var opts = new FilePickerOpenOptions
+        {
+            Title = "Pick a subtitle file",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Subtitles") { Patterns = ["*.srt", "*.ass", "*.ssa", "*.vtt", "*.sub", "*.smi", "*.sbv"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
+            ],
+        };
+        var picked = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        return picked.Select(f => f.TryGetLocalPath()).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p));
     }
 
     /// <summary>Adds an editable text/title cue (rendered, held for the cue's custom duration). Default 5 s.</summary>
@@ -277,6 +398,7 @@ public partial class CuePlayerViewModel
                 row.SourceVideoWidth = 0;
                 row.SourceVideoHeight = 0;
                 row.SetAudioTrackChoices([]);
+                row.SetSubtitleTrackChoices([]);
                 return;
             }
 
@@ -290,6 +412,7 @@ public partial class CuePlayerViewModel
             row.SourceVideoWidth = probe.Value.SourceVideoWidth;
             row.SourceVideoHeight = probe.Value.SourceVideoHeight;
             row.SetAudioTrackChoices(probe.Value.AudioTracks);
+            row.SetSubtitleTrackChoices(probe.Value.SubtitleTracks);
         });
     }
 
@@ -299,18 +422,29 @@ public partial class CuePlayerViewModel
     /// Stream-table probe only — cheap enough to run on first selection.</summary>
     private static async Task EnsureAudioTrackChoicesAsync(CueNodeViewModel node)
     {
-        if (node.AudioTrackChoices.Count > 0)
-            return;
         if (node.MediaSourceItem is not FilePlaylistItem file)
             return;
 
-        var tracks = await CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(false);
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        if (node.AudioTrackChoices.Count == 0)
         {
-            // A Browse-media probe may have filled the list while we were probing; keep its result.
-            if (node.AudioTrackChoices.Count == 0)
-                node.SetAudioTrackChoices(tracks);
-        });
+            var tracks = await CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                // A Browse-media probe may have filled the list while we were probing; keep its result.
+                if (node.AudioTrackChoices.Count == 0)
+                    node.SetAudioTrackChoices(tracks);
+            });
+        }
+
+        if (node.SubtitleTrackChoices.Count == 0)
+        {
+            var subs = await CueMediaProbe.TryProbeSubtitleTracksAsync(file.Path).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (node.SubtitleTrackChoices.Count == 0)
+                    node.SetSubtitleTrackChoices(subs);
+            });
+        }
     }
 
     private static async Task<string?> PickMediaFilePathAsync()
@@ -349,7 +483,7 @@ public partial class CuePlayerViewModel
         {
             Number = NextNumber(parent),
             Label = Strings.CueNodeDefaultActionLabel,
-            Extra = CueActionKind.OscOut.ToString(),
+            Extra = CueActionKind.OSCOut.ToString(),
         };
         if (SelectedActionEndpoint is not null)
             row.EndpointIdText = SelectedActionEndpoint.Id.ToString();

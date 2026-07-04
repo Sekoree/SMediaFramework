@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 6 S.Abi gate: compiles the native test_plugin.c (gcc) into a .so and loads it through the S.Abi
+         plugin host, proving a native C-ABI plugin loads + registers a source AND a control decoder. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Interop/S.Abi/S.Abi.csproj" />
+    </ItemGroup>
+
+</Project>

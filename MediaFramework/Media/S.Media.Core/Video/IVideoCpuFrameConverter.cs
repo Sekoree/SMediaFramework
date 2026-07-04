@@ -1,13 +1,11 @@
 using System.Buffers;
-using S.Media.Core.Diagnostics;
 
 namespace S.Media.Core.Video;
 
 /// <summary>
 /// Pluggable CPU pixel-format converter (libswscale-style). The shipping implementation lives in
-/// <c>S.Media.FFmpeg</c> and is installed via <see cref="MediaFrameworkPlugins.VideoCpuFrameConverterFactory"/>
-/// during <c>FFmpegRuntime.EnsureInitialized()</c>. Core uses the interface so <see cref="VideoRouter"/>
-/// and <see cref="VideoOutputFanoutFormats"/> can do branch conversion without referencing FFmpeg.
+/// <c>S.Media.FFmpeg</c> and is resolved through the media registry (<c>IMediaRegistry.CreateCpuConverter</c>).
+/// Core uses the interface so the router can do branch conversion without referencing FFmpeg.
 /// </summary>
 public interface IVideoCpuFrameConverter : IDisposable
 {
@@ -21,23 +19,9 @@ public interface IVideoCpuFrameConverter : IDisposable
     VideoFrame Convert(VideoFrame source, VideoTransferHint hint);
 }
 
-/// <summary>
-/// Process-wide hook table that lets Core's <see cref="VideoRouter"/> create CPU pixel converters
-/// without depending on FFmpeg. The S.Media.FFmpeg package installs the shipping implementation on
-/// <c>FFmpegRuntime.EnsureInitialized()</c>. Other converter packages can install their own.
-/// </summary>
-public static class VideoCpuFrameConverterRegistry
-{
-    /// <summary>Creates a converter from <see cref="MediaFrameworkPlugins.VideoCpuFrameConverterFactory"/>; throws when none is registered.</summary>
-    public static IVideoCpuFrameConverter Create() =>
-        MediaFrameworkPlugins.VideoCpuFrameConverterFactory?.Invoke()
-            ?? throw new InvalidOperationException(
-                "No CPU frame converter is installed — reference S.Media.FFmpeg and call FFmpegRuntime.EnsureInitialized() to install the default swscale-backed converter.");
-
-    /// <summary>Convenience that returns <c>false</c> when no probe is installed.</summary>
-    public static bool CanConvert(PixelFormat src, PixelFormat dst, int width, int height) =>
-        MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe?.Invoke(src, dst, width, height) ?? false;
-}
+// Phase 1: the old `VideoCpuFrameConverterRegistry` (a process-wide hook over MediaFrameworkPlugins) is
+// removed — CPU converters are now resolved through `IMediaRegistry` (see Registry/). The interface above
+// and the pure-managed `VideoFrameCpuClone` below stay in Core.
 
 /// <summary>
 /// Pure-managed helpers that operate on CPU-backed <see cref="VideoFrame"/> planes without

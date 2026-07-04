@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5: compositor→NDI egress. A GL compositor composites a layer onto a canvas; a
+         CpuFrameCompositeTarget reads it back to CPU (OQ3 — NDI SDK send is CPU p_data), and its OnFrameReady
+         submits each frame to an NDIOutput. An in-process loopback receiver discovers the sender and confirms
+         the composited frames went out as NDI. Needs real GL + libndi. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+</Project>

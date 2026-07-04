@@ -1,6 +1,6 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
-using S.Media.Effects;
+using S.Media.Compositor;
 
 namespace HaPlay.Playback;
 
@@ -19,7 +19,15 @@ internal class OutputPresetVideoSource : IVideoSource, ICooperativeVideoReadInte
         ArgumentNullException.ThrowIfNull(inner);
         _inner = inner;
         _disposeInner = disposeInner;
-        _compositor = VideoCompositor.Create(target, VideoCompositorBackend.Cpu);
+        // The rewritten CPU compositor takes its pixel-format converter as a capability (the old monolithic
+        // compositor had one built in). Supply the registry's CPU converter so non-native inputs (e.g. UYVY
+        // live frames) convert into the BGRA program raster.
+        _compositor = VideoCompositor.Create(target, VideoCompositorBackend.Cpu, new VideoCompositorOptions
+        {
+            CpuFrameConverterFactory = () => MediaRuntime.Registry.CreateCpuConverter()
+                ?? throw new InvalidOperationException(
+                    "No CPU frame converter is registered (the FFmpeg module provides it)."),
+        });
         _compositor.AddLayer(inner, LayerConfig.Background);
     }
 

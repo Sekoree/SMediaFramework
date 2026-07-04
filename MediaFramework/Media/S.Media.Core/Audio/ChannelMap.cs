@@ -271,6 +271,29 @@ public readonly partial struct ChannelMap : IEquatable<ChannelMap>
         return new ChannelMap(tmp);
     }
 
+    /// <summary>
+    /// Default map from a source of <paramref name="inputChannels"/> onto an output of
+    /// <paramref name="outputChannels"/>, chosen <em>without</em> assuming the two counts match: equal
+    /// counts pass straight through (<see cref="Identity"/>), mono fans out to every output channel
+    /// (<see cref="MonoToN"/>), stereo repeats the L/R pattern (<see cref="StereoToN"/>), and any other
+    /// N→M repeats the source channels in order (<c>map[outCh] = outCh % inputChannels</c>). Because the
+    /// indices are taken modulo <paramref name="inputChannels"/>, the map never references a channel the
+    /// source lacks, so it always satisfies the router's <c>RequiredInputChannels ≤ source channels</c>
+    /// contract — a mono (or otherwise mismatched) source up/down-mixes instead of failing the route.
+    /// </summary>
+    public static ChannelMap DefaultFor(int inputChannels, int outputChannels)
+    {
+        if (inputChannels <= 0) throw new ArgumentOutOfRangeException(nameof(inputChannels));
+        if (outputChannels <= 0) throw new ArgumentOutOfRangeException(nameof(outputChannels));
+        if (inputChannels == outputChannels) return Identity(inputChannels);
+        if (inputChannels == 1) return MonoToN(outputChannels);
+        if (inputChannels == 2) return StereoToN(outputChannels);
+
+        Span<int> tmp = stackalloc int[outputChannels];
+        for (var i = 0; i < outputChannels; i++) tmp[i] = i % inputChannels;
+        return new ChannelMap(tmp);
+    }
+
     public bool Equals(ChannelMap other)
     {
         if (OutputChannels != other.OutputChannels) return false;

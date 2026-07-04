@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 4 gate: a full show runs headless (no Avalonia). Loads a ShowDocument (JSON round-trip,
+         D10), then drives ShowSession's dispatcher: GO fires a cue → clip plays, seek jumps the playhead,
+         GO again switches clips. Opens through the registry (no globals); plays on a PortAudio master. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+        <ProjectReference Include="../../Interop/S.Media.Interop/S.Media.Interop.csproj" />
+    </ItemGroup>
+
+</Project>

@@ -361,7 +361,7 @@ public partial class CuePlayerViewModel
         var dialogVm = new Dialogs.ActionCueBuilderDialogViewModel();
         var actionKind = Enum.TryParse<CueActionKind>(cue.Extra, out var parsed)
             ? parsed
-            : CueActionKind.OscOut;
+            : CueActionKind.OSCOut;
         Guid? endpointId = Guid.TryParse(cue.EndpointIdText, out var id) ? id : null;
         dialogVm.Load(cue.Label, actionKind, cue.SourceOrAction, endpointId, ActionEndpoints);
 

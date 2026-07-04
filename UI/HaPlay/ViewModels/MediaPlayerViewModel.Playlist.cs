@@ -16,7 +16,7 @@ using HaPlay.Resources;
 using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.NDI;
-using S.Media.PortAudio;
+using S.Media.Audio.PortAudio;
 
 namespace HaPlay.ViewModels;
 
@@ -48,62 +48,26 @@ public partial class MediaPlayerViewModel
 
     partial void OnHoldFallbackVideoChanged(bool value)
     {
+        _ = value;
         OnPropertyChanged(nameof(HoldImageSummary));
-        if (value && _session is not null && IsMediaLoaded && !string.IsNullOrWhiteSpace(FallbackImagePath))
-        {
-            // Phase 3 — toggling hold on (with an image path already set) must re-apply the image so
-            // outputs reconfigure to the image's native size.
-            try { _session.ApplyFallbackImage(FallbackImagePath); }
-            catch { /* best effort */ }
-        }
-
-        _session?.SetHoldFallback(value);
-        if (_session is not null && IsMediaLoaded)
-        {
-            if (value)
-            {
-                StartHoldPumpTimer();
-            }
-            else
-            {
-                StopHoldPumpTimer();
-                // Restore the last real decoded frame at the current playhead so single-frame sources
-                // (attached_pic / album cover art) come back instead of leaving receivers stuck on the
-                // no-longer-pumped template.
-                try
-                {
-                    var pt = _session.Player.PlayClock.CurrentPosition;
-                    _session.ResubmitLastCachedFramesAt(pt);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-            }
-        }
-
+        // Apply/clear the hold image as the composition's held top layer while playing; the idle slate
+        // covers the not-playing (and ShowSession audio-only) cases.
+        if (ShowSessionActive)
+            _ = ApplyShowSessionHoldImageAsync();
         SyncIdleSlate();
     }
 
+    /// <summary>Clears the HOLD idle image (the dialog's Clear button).</summary>
+    [RelayCommand]
+    private void ClearFallbackImage() => FallbackImagePath = null;
+
     partial void OnFallbackImagePathChanged(string? value)
     {
+        _ = value;
         OnPropertyChanged(nameof(HoldImageSummary));
-        if (_session is not null && !string.IsNullOrWhiteSpace(value))
-            _session.ApplyFallbackImage(value);
-        if (_session is not null && IsMediaLoaded && HoldFallbackVideo && !string.IsNullOrWhiteSpace(value))
-        {
-            try
-            {
-                _session.PumpHoldFrames(_session.Player.PlayClock.CurrentPosition);
-            }
-            catch
-            {
-                /* best effort */
-            }
-
-            StartHoldPumpTimer();
-        }
-
+        // A new image while HOLD is engaged re-renders the held top layer in place.
+        if (ShowSessionActive && HoldFallbackVideo)
+            _ = ApplyShowSessionHoldImageAsync();
         SyncIdleSlate();
     }
 
@@ -255,7 +219,89 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    private bool CanAddNDIInput() => IsNdiAvailable;
+    private bool CanAddNDIInput() => IsNDIAvailable;
+
+    /// <summary>Gate 6 — opens the MMD scene dialog (model/motion pickers + the rudimentary 3D
+    /// camera-placement preview) and adds the produced item to the playlist.</summary>
+    [RelayCommand]
+    private async Task AddMMDAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.AddMMDDialogViewModel();
+        var dialog = new Views.Dialogs.AddMMDDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<MMDPlaylistItem?>(top);
+        if (result is null) return;
+        PlaylistItems.Add(result);
+        SelectedPlaylistItem = result;
+        HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
+    }
+
+    /// <summary>Gate 5 — opens the YouTube stream-selection dialog (resolve → pick video/audio/subtitle
+    /// streams → download &amp; cache) and adds the produced item. Muxed streams are rarely offered, so the
+    /// dialog selects a separate video-only + audio-only pair; playback later runs from the local cache.</summary>
+    [RelayCommand]
+    private async Task AddYouTubeAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.AddYouTubeDialogViewModel();
+        var dialog = new Views.Dialogs.AddYouTubeDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<YouTubePlaylistItem?>(top);
+        if (result is null) return;
+        PlaylistItems.Add(result);
+        SelectedPlaylistItem = result;
+    }
+
+    /// <summary>Opens the common per-item properties dialog (details / tracks / MMD scene / YouTube
+    /// streams) for the selected playlist item and applies its edits. Edits keep the item's
+    /// <see cref="PlaylistItem.Id"/>, so cue references and the current-item pointer stay valid.</summary>
+    [RelayCommand(CanExecute = nameof(CanShowItemProperties))]
+    private async Task ShowItemPropertiesAsync()
+    {
+        var item = SelectedPlaylistItem;
+        var top = TryGetMainWindow();
+        if (item is null || top is null) return;
+
+        var dialogVm = new Dialogs.MediaPropertiesDialogViewModel(item);
+        var dialog = new Views.Dialogs.MediaPropertiesDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<PlaylistItem?>(top);
+        if (result is null || result.Equals(item))
+            return;
+
+        var idx = PlaylistItems.IndexOf(item);
+        if (idx < 0) return;
+        var wasActive = ReferenceEquals(_currentPlaylistItem, item);
+        PlaylistItems[idx] = result;
+        if (ReferenceEquals(_currentPlaylistItem, item))
+            _currentPlaylistItem = result;
+        if (ReferenceEquals(CurrentPlayingItem, item)) // keep the now-playing marker on the edited item
+            CurrentPlayingItem = result;
+        SelectedPlaylistItem = result;
+        StatusMessage = Strings.Format(nameof(Strings.MediaPropertiesAppliedStatusFormat), result.DisplayName);
+        HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
+
+        // An edit that changes HOW the running clip decodes — audio-track or subtitle selection — only takes
+        // effect on (re)open: the live clip was opened with the old selection. When the edited item is the one
+        // loaded in the deck, re-open it and restore the playhead so a movie doesn't jump back to the start.
+        if (wasActive && RequiresReopenForPlayback(item, result))
+        {
+            var resumeAt = CurrentPosition;
+            await OpenOrReloadAsync().ConfigureAwait(false);
+            if (resumeAt > TimeSpan.Zero)
+                await ShowSessionSeekAsync(resumeAt).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>True when an edit changed a field the decoder open consumes (audio-track index or the subtitle
+    /// selection) — the only edits that need the running clip re-opened to take effect.</summary>
+    private static bool RequiresReopenForPlayback(PlaylistItem before, PlaylistItem after) =>
+        before is FilePlaylistItem o && after is FilePlaylistItem n
+        && (o.AudioTrackIndex != n.AudioTrackIndex || !o.Subtitles.SequenceEqual(n.Subtitles));
+
+    private bool CanShowItemProperties() => SelectedPlaylistItem is not null;
 
     /// <summary>§8.5 quick-play — load and play the first dropped file without mutating the playlist.</summary>
     public async Task QuickPlayDroppedFilesAsync(IEnumerable<string> paths)
@@ -393,9 +439,8 @@ public partial class MediaPlayerViewModel
         SelectedPlaylistItem = item;
     }
 
-    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.
-    /// Routes both file items and live items through the open path; live playback wiring lands in Phase C.5
-    /// (currently surfaces "live items not yet supported" on play).</summary>
+    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing
+    /// (the ShowSession open fires immediately for file and live items alike).</summary>
     public async Task PlayPlaylistItemAsync(PlaylistItem? item)
     {
         if (!SDebug.ChangeTrace.IsActive)
@@ -405,12 +450,6 @@ public partial class MediaPlayerViewModel
         {
             SDebug.ChangeTrace.End("cancelled (null item)");
             return;
-        }
-
-        if (_pendingCueFilePlayback is null)
-        {
-            CancelCueEnvelope();
-            SDebug.ChangeTrace.Step("CancelCueEnvelope");
         }
 
         // Callable from pool threads (cue executors) as well as the view — marshal the observable
@@ -424,12 +463,6 @@ public partial class MediaPlayerViewModel
         SDebug.ChangeTrace.Step("PrepareCurrentItemAsync");
         await OpenOrReloadAsync().ConfigureAwait(false);
         SDebug.ChangeTrace.Step("OpenOrReloadAsync");
-        if (_session is not null && !IsPlaying)
-        {
-            await StartPlaybackAsync().ConfigureAwait(false);
-            SDebug.ChangeTrace.Step("StartPlaybackAsync");
-        }
-
         SDebug.ChangeTrace.End("PlayPlaylistItemAsync");
     }
 
@@ -439,6 +472,7 @@ public partial class MediaPlayerViewModel
     private Task PrepareCurrentItemAsync(PlaylistItem? item)
     {
         _currentPlaylistItem = item;
+        CurrentPlayingItem = item; // "now playing" marker; cleared when the deck returns to idle.
         MediaFilePath = item is FilePlaylistItem f ? f.Path : null;
         OnPropertyChanged(nameof(CurrentMediaDisplay));
         return Task.CompletedTask;

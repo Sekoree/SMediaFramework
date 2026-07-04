@@ -7,11 +7,14 @@ public sealed record ControlSystemConfig
     // No app-level OSC listener by default: X32/OSC device replies arrive on the sending client's own
     // socket (see ControlSystemRuntimeSession reply routing), so a standing inbound UDP port is only
     // needed for separate external OSC control sources. Add listeners explicitly when that's the case.
-    public List<ControlOscListenerConfig> OscListeners { get; init; } = [];
+    [System.Text.Json.Serialization.JsonPropertyName("oscListeners")]
+    public List<ControlOSCListenerConfig> OSCListeners { get; init; } = [];
 
-    public ControlOscCacheUpdateMode OscCacheUpdateMode { get; init; } = ControlOscCacheUpdateMode.IncomingOnly;
+    [System.Text.Json.Serialization.JsonPropertyName("oscCacheUpdateMode")]
+    public ControlOSCCacheUpdateMode OSCCacheUpdateMode { get; init; } = ControlOSCCacheUpdateMode.IncomingOnly;
 
-    public List<ControlOscCacheCommandOverride> OscCacheOverrides { get; init; } = new();
+    [System.Text.Json.Serialization.JsonPropertyName("oscCacheOverrides")]
+    public List<ControlOSCCacheCommandOverride> OSCCacheOverrides { get; init; } = new();
 
     public ControlMonitorOptions Monitor { get; init; } = new();
 
@@ -24,12 +27,12 @@ public sealed record ControlSystemConfig
     public List<ControlScriptConfig> Scripts { get; init; } = new();
 }
 
-public enum ControlOscSocketMode
+public enum ControlOSCSocketMode
 {
     SharedAppListener,
 }
 
-public sealed record ControlOscListenerConfig
+public sealed record ControlOSCListenerConfig
 {
     public Guid Id { get; init; } = Guid.NewGuid();
 
@@ -39,29 +42,29 @@ public sealed record ControlOscListenerConfig
 
     public int LocalPort { get; init; } = 10020;
 
-    public ControlOscSocketMode SocketMode { get; init; } = ControlOscSocketMode.SharedAppListener;
+    public ControlOSCSocketMode SocketMode { get; init; } = ControlOSCSocketMode.SharedAppListener;
 }
 
-public enum ControlOscCacheUpdateMode
+public enum ControlOSCCacheUpdateMode
 {
     IncomingOnly,
     OptimisticSendAndIncoming,
 }
 
 /// <summary>
-/// Per-command override of <see cref="ControlSystemConfig.OscCacheUpdateMode"/> for OSC sends whose
+/// Per-command override of <see cref="ControlSystemConfig.OSCCacheUpdateMode"/> for OSC sends whose
 /// address matches <see cref="AddressPattern"/> (exact or single-<c>*</c> wildcard). Useful for
-/// commands where optimistic-send state is misleading (force <see cref="ControlOscCacheUpdateMode.IncomingOnly"/>)
+/// commands where optimistic-send state is misleading (force <see cref="ControlOSCCacheUpdateMode.IncomingOnly"/>)
 /// or for commands that should track optimistically even when the project default is incoming-only.
 /// </summary>
-public sealed record ControlOscCacheCommandOverride
+public sealed record ControlOSCCacheCommandOverride
 {
     public string AddressPattern { get; init; } = string.Empty;
 
     /// <summary>Restrict the override to one OSC device instance; null applies to any OSC device.</summary>
     public Guid? DeviceInstanceId { get; init; }
 
-    public ControlOscCacheUpdateMode Mode { get; init; }
+    public ControlOSCCacheUpdateMode Mode { get; init; }
 }
 
 public sealed record ControlMonitorOptions
@@ -94,15 +97,16 @@ public sealed record ControlDeviceInstanceConfig
 
     public ControlDeviceBindingConfig Binding { get; init; } = new();
 
-    public List<ControlPeriodicOscSendConfig> PeriodicOscSends { get; init; } = new();
+    [System.Text.Json.Serialization.JsonPropertyName("periodicOscSends")]
+    public List<ControlPeriodicOSCSendConfig> PeriodicOSCSends { get; init; } = new();
 
     public List<Guid> ScriptIds { get; init; } = new();
 }
 
 public enum ControlDeviceProtocol
 {
-    Midi,
-    Osc,
+    MIDI,
+    OSC,
 }
 
 public enum ControlDeviceProfileMode
@@ -115,26 +119,34 @@ public sealed record ControlDeviceBindingConfig
 {
     public string? Alias { get; init; }
 
-    public int? MidiInputDeviceId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiInputDeviceId")]
+    public int? MIDIInputDeviceId { get; init; }
 
-    public string? MidiInputDeviceName { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiInputDeviceName")]
+    public string? MIDIInputDeviceName { get; init; }
 
-    public int? MidiOutputDeviceId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiOutputDeviceId")]
+    public int? MIDIOutputDeviceId { get; init; }
 
-    public string? MidiOutputDeviceName { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiOutputDeviceName")]
+    public string? MIDIOutputDeviceName { get; init; }
 
-    public string? OscHost { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("oscHost")]
+    public string? OSCHost { get; init; }
 
-    public int? OscPort { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("oscPort")]
+    public int? OSCPort { get; init; }
 
     /// <summary>Optional fixed local UDP port to bind our client socket to (null/0 = OS-assigned ephemeral).
     /// The X32 replies to this source port, so a fixed value gives a deterministic receive port.</summary>
-    public int? OscLocalPort { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("oscLocalPort")]
+    public int? OSCLocalPort { get; init; }
 
-    public Guid? OscListenerId { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("oscListenerId")]
+    public Guid? OSCListenerId { get; init; }
 }
 
-public sealed record ControlPeriodicOscSendConfig
+public sealed record ControlPeriodicOSCSendConfig
 {
     public Guid Id { get; init; } = Guid.NewGuid();
 
@@ -146,12 +158,12 @@ public sealed record ControlPeriodicOscSendConfig
 
     public int IntervalMs { get; init; } = 8000;
 
-    public List<ControlOscArgumentConfig> Arguments { get; init; } = new();
+    public List<ControlOSCArgumentConfig> Arguments { get; init; } = new();
 }
 
-public sealed record ControlOscArgumentConfig
+public sealed record ControlOSCArgumentConfig
 {
-    public ControlOscArgumentKind Kind { get; init; }
+    public ControlOSCArgumentKind Kind { get; init; }
 
     public string? StringValue { get; init; }
 
@@ -164,7 +176,7 @@ public sealed record ControlOscArgumentConfig
     public byte[]? BlobValue { get; init; }
 }
 
-public enum ControlOscArgumentKind
+public enum ControlOSCArgumentKind
 {
     Int32,
     Int64,
@@ -253,23 +265,32 @@ public sealed record ControlScriptTriggerConfig
 
     public Guid? LayerId { get; init; }
 
-    public string? OscAddressPattern { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("oscAddressPattern")]
+    public string? OSCAddressPattern { get; init; }
 
-    public ControlMidiMessageType? MidiMessageType { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiMessageType")]
+    public ControlMIDIMessageType? MIDIMessageType { get; init; }
 
-    public int? MidiChannel { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiChannel")]
+    public int? MIDIChannel { get; init; }
 
-    public int? MidiController { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiController")]
+    public int? MIDIController { get; init; }
 
-    public int? MidiNote { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiNote")]
+    public int? MIDINote { get; init; }
 
-    public int? MidiValue { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiValue")]
+    public int? MIDIValue { get; init; }
 
-    public int? MidiValueMin { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiValueMin")]
+    public int? MIDIValueMin { get; init; }
 
-    public int? MidiValueMax { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiValueMax")]
+    public int? MIDIValueMax { get; init; }
 
-    public int? MidiParameter { get; init; }
+    [System.Text.Json.Serialization.JsonPropertyName("midiParameter")]
+    public int? MIDIParameter { get; init; }
 
     public int? IntervalMs { get; init; }
 }
@@ -279,11 +300,11 @@ public enum ControlScriptTriggerKind
     DeviceEnabled,
     DeviceDisabled,
     DeviceHealthChanged,
-    MidiMessage,
-    MidiControlChange,
-    MidiNote,
-    OscMessage,
-    OscCacheChanged,
+    MIDIMessage,
+    MIDIControlChange,
+    MIDINote,
+    OSCMessage,
+    OSCCacheChanged,
     LayerEnabled,
     LayerDisabled,
     Periodic,

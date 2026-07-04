@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 NDI-output smoke: decode a file through the registry and fan its video to an NDIOutput
+         (NDI send), then discover that sender on the network and receive the frames back (in-process
+         loopback) to prove NDI out works end-to-end. Needs native FFmpeg + libndi. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+    </ItemGroup>
+
+</Project>

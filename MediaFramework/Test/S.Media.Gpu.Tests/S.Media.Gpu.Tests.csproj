@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Ported from S.Media.OpenGL.Tests. Pure unit tests of the GL helpers (color/gamut/HDR, format
+         support, shader source, dmabuf formats, NV12 layout/interop) + one GlVideoCompositor format test.
+         No real GL context needed — runs headless. -->
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" />
+        <PackageReference Include="xunit" />
+        <PackageReference Include="xunit.runner.visualstudio" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Gpu/S.Media.Gpu.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+    </ItemGroup>
+
+</Project>

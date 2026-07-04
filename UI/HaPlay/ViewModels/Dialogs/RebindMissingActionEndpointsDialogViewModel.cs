@@ -47,8 +47,8 @@ public partial class RebindMissingActionEndpointsDialogViewModel : ViewModelBase
             var options = allEndpoints
                 .Where(e => e switch
                 {
-                    OscActionEndpoint when group.Kind == CueActionKind.OscOut => true,
-                    MidiActionEndpoint when group.Kind == CueActionKind.MidiOut => true,
+                    OSCActionEndpoint when group.Kind == CueActionKind.OSCOut => true,
+                    MIDIActionEndpoint when group.Kind == CueActionKind.MIDIOut => true,
                     _ => false,
                 })
                 .ToList();

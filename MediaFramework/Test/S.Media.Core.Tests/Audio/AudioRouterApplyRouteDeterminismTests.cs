@@ -1,4 +1,3 @@
-using S.Media.Core.Audio;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;

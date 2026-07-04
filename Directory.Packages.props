@@ -1,48 +1,55 @@
 <Project>
-  <!-- https://learn.microsoft.com/en-us/nuget/consume-packages/central-package-management -->
+  <!-- Central Package Management for the repo. This file is what all projects
+       resolve, because MSBuild takes the nearest Directory.Packages.props walking up. Pin versions
+       here; projects add <PackageReference Include="..."/> without a version in the phase that needs
+       them. System.Text.Json is in-box for net10.0, so no package entry (D10 uses its source generator). -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Avalonia packages -->
-    <!-- Important: keep version in sync! -->
-    <PackageVersion Include="Avalonia" Version="12.0.4" />
+    <!-- UI tier (Phase 8) + Avalonia GL present (Phase 5) -->
+    <PackageVersion Include="Avalonia" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Controls.ColorPicker" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Skia" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.5" />
     <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
-    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.4" />
-    <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.2" />
-    <PackageVersion Include="Avalonia.Desktop" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.iOS" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Browser" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Android" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Headless" Version="12.0.4" />
-    <PackageVersion Include="Mond" Version="0.11.2" />
-    <PackageVersion Include="StbImageSharp" Version="2.30.15" />
-    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.92.0" />
+    <PackageVersion Include="TreeDataGrid.Avalonia" Version="12.0.0" />
+    <PackageVersion Include="Xaml.Behaviors.Avalonia" Version="12.0.5" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
+    <PackageVersion Include="StbImageSharp" Version="2.30.15" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.0.5" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
+    <!-- Decode / encode (Phase 2). FFmpeg.AutoGen 8.1.0 binds FFmpeg 8.0 and loads the VERSIONED soname
+         (avcodec-62.dll / libavcodec.so.62), so the native FFmpeg MUST be avcodec-62 (FFmpeg 8.0). The
+         FFmpeg.GPL nightlies track master: builds through ~20260601 ship avcodec-62 (match), but ~20260619+
+         bumped to avcodec-63 (FFmpeg 9-dev) which AutoGen 8.1.0 would fail to load. Pin to a 62 build. -->
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.1.0" />
-    <!-- Native FFmpeg for Windows publishes (see S.Media.FFmpeg.csproj). Keep the FFmpeg major in
-         sync with FFmpeg.AutoGen above (currently 8.x). -->
-    <PackageVersion Include="FFmpeg.GPL" Version="20260615.1.0" />
-    <PackageVersion Include="SDL3-CS" Version="3.4.2" />
-    <PackageVersion Include="SDL3-CS.Native" Version="3.4.2" />
+    <PackageVersion Include="FFmpeg.GPL" Version="20260601.1.0" />
+    <!-- Present / GPU (Phase 2/3) -->
+    <PackageVersion Include="SDL3-CS" Version="3.4.10.5" />
+    <PackageVersion Include="SDL3-CS.Linux" Version="3.4.10.5" />
+    <PackageVersion Include="SDL3-CS.Windows" Version="3.4.10.5" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
-    <PackageVersion Include="TreeDataGrid.Avalonia" Version="12.0.0" />
-    <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
-    <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
-    <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.macOS" Version="3.119.4" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Win32" Version="3.119.4" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
-    <PackageVersion Include="Xaml.Behaviors.Avalonia" Version="12.0.0.1" />
+    <!-- Windows D3D11 interop — 3.8.x is authoritative (OQ5; the Reference/ 1.9.143 copy is stale). -->
+    <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
+    <!-- Control scripting (Phase 6) -->
+    <PackageVersion Include="Mond" Version="0.11.2" />
+    <!-- Logging abstractions (framework-wide) -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <!-- Test -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageVersion Include="YoutubeExplode" Version="6.6.0" />
   </ItemGroup>
 </Project>

@@ -10,7 +10,7 @@ namespace HaPlay.ViewModels;
 /// Phase C (§4.3.4) — runtime model behind one row of the per-output audio matrix. Each instance
 /// represents one (input channel × output channel) cell, with its own gain (dB) and mute toggle.
 /// Cells fire <see cref="INotifyPropertyChanged"/> so the host view-model can push the change down to
-/// <see cref="Playback.HaPlayPlaybackSession.TrySetOutputMatrix"/> without re-snapshotting the entire grid.
+/// the deck's ShowSession audio-route re-apply without re-snapshotting the entire grid.
 /// </summary>
 public sealed partial class AudioMatrixCellViewModel : ObservableObject
 {
@@ -96,7 +96,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
     [ObservableProperty]
     private int _inputChannelCount;
 
-    /// <summary>Output channel count this matrix was last sized to (typically 2 — see <see cref="HaPlayPlaybackSession.WireAudio"/>).</summary>
+    /// <summary>Output channel count this matrix was last sized to (typically 2 — the output line's device channel count).</summary>
     [ObservableProperty]
     private int _outputChannelCount;
 
