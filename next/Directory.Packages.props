@@ -30,7 +30,6 @@
          bumped to avcodec-63 (FFmpeg 9-dev) which AutoGen 8.1.0 would fail to load. Pin to a 62 build. -->
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.1.0" />
     <PackageVersion Include="FFmpeg.GPL" Version="20260601.1.0" />
-    <PackageVersion Include="System.Text.Encoding.CodePages" Version="10.0.9" />
     <!-- Present / GPU (Phase 2/3) -->
     <PackageVersion Include="SDL3-CS" Version="3.4.10.5" />
     <PackageVersion Include="SDL3-CS.Linux" Version="3.4.10.5" />

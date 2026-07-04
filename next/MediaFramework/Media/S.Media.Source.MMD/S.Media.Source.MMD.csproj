@@ -7,7 +7,10 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-        <PackageReference Include="System.Text.Encoding.CodePages" />
+        <!-- System.Text.Encoding.CodePages (Shift-JIS / cp932 for VMD bone names) is NOT referenced as a
+             package: its assembly ships in the .NET 10 shared framework + NativeAOT runtime pack, so the
+             explicit PackageReference was redundant (SDK NU1510). CodePagesEncodingProvider resolves from
+             the framework. -->
         <!-- GL layer-surface renderer (NXT-10 consumer): bindings + image decode are pure managed;
              a GL context only ever comes from the hosting compositor, so the module still carries no
              native runtime of its own. -->
