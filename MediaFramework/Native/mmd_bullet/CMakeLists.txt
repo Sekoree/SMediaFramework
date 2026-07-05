@@ -31,6 +31,16 @@ target_include_directories(mmd_bullet PRIVATE "${BULLET_SRC}")
 # Bullet's own sources trip a lot of harmless warnings; silence them so real shim warnings stand out.
 target_compile_options(mmd_bullet PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>)
 
+# MSVC auto-defines BT_USE_SSE but leaves BT_USE_SSE_IN_API off, so Bullet's SSE math in
+# btMatrix3x3/btQuaternion can't convert __m128 -> btVector3 and fails to compile (C2440/C2679). Bullet's
+# own clang-on-Windows path sets __BT_DISABLE_SSE__ to fall back to the portable SCALAR math; do the same
+# on MSVC so Windows uses the exact scalar code path Linux already builds — deterministic across platforms,
+# and no 16-byte-alignment requirement on embedded btVector3s. (Must apply to EVERY TU: it changes the
+# btVector3 layout, so a mixed SSE/scalar build would be an ODR/ABI mismatch — PRIVATE covers all sources.)
+if(MSVC)
+    target_compile_definitions(mmd_bullet PRIVATE __BT_DISABLE_SSE__)
+endif()
+
 # Use CMake's per-platform default library names — libmmd_bullet.so (Linux), libmmd_bullet.dylib (macOS),
 # mmd_bullet.dll (Windows). Do NOT force a "lib" prefix: on Windows the managed [LibraryImport("mmd_bullet")]
 # resolver looks for mmd_bullet.dll and would miss a libmmd_bullet.dll.
