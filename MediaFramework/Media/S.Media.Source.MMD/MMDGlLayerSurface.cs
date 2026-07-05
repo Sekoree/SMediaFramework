@@ -866,18 +866,27 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             vec3 normal = normalize(vNormal);
             float ndl = dot(normal, -light);
             vec3 base = clamp(uDiffuse.rgb * 0.8 + uAmbient * 0.6, 0.0, 1.0);
-            vec3 color = tex.rgb * base * uLightColor;
-            // Toon: the ramp texture's V axis encodes lit(0) → shadow(1); procedural two-tone fallback.
+            // Lighting term (babylon-mmd's diffuseBase): the toon ramp — whose V axis encodes
+            // lit(0) → shadow(1) — or a procedural two-tone fallback, then self-shadow. BOTH the surface
+            // colour and the sphere reflection are modulated by this (see below).
+            vec3 diffuseBase;
             if (uHasToon == 1)
-                color *= applyTextureColor(
+                diffuseBase = applyTextureColor(
                     texture(uToon, vec2(0.5, clamp(0.5 - 0.5 * ndl, 0.01, 0.99))).rgb,
                     uToonMultiply, uToonAdd);
             else
-                color *= mix(0.62, 1.0, smoothstep(0.02, 0.28, ndl));
-            color *= sampleShadow();
+                diffuseBase = vec3(mix(0.62, 1.0, smoothstep(0.02, 0.28, ndl)));
+            diffuseBase *= sampleShadow();
+            vec3 color = tex.rgb * base * uLightColor * diffuseBase;
             // Sphere map (matcap): view-space normal xy → texture coords. Multiply (.sph) darkens/tints,
-            // Add (.spa) is the highlight/iris detail layer.
+            // Add (.spa) is the highlight/iris detail layer. babylon-mmd modulates the reflection by the
+            // lighting term before blending (sphereReflectionColor.rgb *= diffuseBase) so an additive eye
+            // matcap is LIT and integrates with the shade — without it the .spa layer blasted a
+            // full-bright, unlit "bullseye" over the iris (the wrong-looking eyes).
             vec2 sphereUv = normalize(vNormalView).xy * 0.5 + 0.5;
+            // babylon-mmd samples the matcap un-flipped (viewSpaceNormal.xy*0.5+0.5), but it loads
+            // textures invertY; our loader does not, so the V flip here reproduces the same orientation
+            // (matcap highlight at the TOP of the eye).
             vec2 sphereSampleUv = uSphereMode == 3
                 ? vAdditionalUv1
                 : vec2(sphereUv.x, 1.0 - sphereUv.y);
@@ -889,6 +898,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
                 fragColor = vec4(uSphereMode == 0 ? vec3(1,0,1) : sphere, 1.0);
                 return;
             }
+            sphere *= diffuseBase;
             if (uSphereMode == 1 || uSphereMode == 3) color *= sphere;
             else if (uSphereMode == 2) color += sphere;
             vec3 lightView = normalize(mat3(uView) * light);
