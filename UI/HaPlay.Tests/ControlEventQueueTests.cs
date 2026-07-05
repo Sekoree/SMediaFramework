@@ -54,14 +54,17 @@ public sealed class ControlEventQueueTests
         await using var queue = new ControlEventQueue(session);
 
         var first = queue.DispatchControlEventAsync(MIDICcEvent(midiId, controller: 16, value: 1)).AsTask();
-        await sender.FirstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // Generous cap: the FIRST dispatch pays the Mond script cold-start (compile + JIT), which can exceed
+        // a couple of seconds on a loaded CI runner. WaitAsync resolves the instant the send starts, so a big
+        // cap costs nothing on success and only bites a genuine hang (the old 2s flaked → TimeoutException).
+        await sender.FirstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
         var second = queue.DispatchControlEventAsync(MIDICcEvent(midiId, controller: 17, value: 2)).AsTask();
 
         await Task.Delay(50);
         Assert.False(second.IsCompleted);
 
         sender.ReleaseFirstSend.SetResult();
-        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(0, queue.PendingCount);
         Assert.Collection(

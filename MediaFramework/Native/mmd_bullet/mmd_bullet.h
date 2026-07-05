@@ -9,6 +9,16 @@
 
 #include <stdint.h>
 
+// Export the C ABI from the shared library. GCC/Clang export public symbols by default, but MSVC exports
+// NOTHING from a DLL unless annotated — without this the managed [LibraryImport] finds the DLL but fails
+// with EntryPointNotFoundException. The .cpp defines each function `extern "C"` and includes this header,
+// so the dllexport on the declaration propagates to the definition.
+#if defined(_WIN32)
+  #define MMD_API __declspec(dllexport)
+#else
+  #define MMD_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,12 +32,12 @@ enum { MMD_MOTION_DYNAMIC = 0, MMD_MOTION_STATIC = 1, MMD_MOTION_KINEMATIC = 2 }
 typedef struct mmd_world mmd_world;
 
 // Create/destroy a physics world with the given gravity (MMD default: 0,-98,0).
-mmd_world* mmd_world_create(float gx, float gy, float gz);
-void       mmd_world_destroy(mmd_world* world);
+MMD_API mmd_world* mmd_world_create(float gx, float gy, float gz);
+MMD_API void       mmd_world_destroy(mmd_world* world);
 
 // Add a rigid body. Returns its integer handle (>=0), or -1 on failure.
 // transform16 is the body's initial world transform (shape origin), column-major.
-int mmd_world_add_body(
+MMD_API int mmd_world_add_body(
     mmd_world* world,
     int shape_type, float size_x, float size_y, float size_z,
     const float* transform16,
@@ -39,7 +49,7 @@ int mmd_world_add_body(
 // Add a Generic6DofSpring constraint between two bodies (MMD Spring6Dof joint). Frames are the joint
 // frame expressed in each body's local space (column-major). Limits/springs are per-axis (x,y,z).
 // Angular springs are always enabled (MMD convention); linear springs enable only where stiffness != 0.
-void mmd_world_add_spring_constraint(
+MMD_API void mmd_world_add_spring_constraint(
     mmd_world* world, int body_a, int body_b,
     const float* frame_a16, const float* frame_b16,
     const float* linear_lower3, const float* linear_upper3,
@@ -48,20 +58,20 @@ void mmd_world_add_spring_constraint(
 
 // Drive a body's kinematic target (writes its motion state). For FollowBone bodies and dynamic bodies
 // that are temporarily kinematic (physics disabled / warm-up), call this every frame before stepping.
-void mmd_body_set_kinematic_transform(mmd_world* world, int body, const float* transform16);
+MMD_API void mmd_body_set_kinematic_transform(mmd_world* world, int body, const float* transform16);
 
 // Hard-reset a body onto a world transform and zero its velocities (seek / re-base).
-void mmd_body_reset(mmd_world* world, int body, const float* transform16);
+MMD_API void mmd_body_reset(mmd_world* world, int body, const float* transform16);
 
 // Toggle a dynamic body between kinematic-follow and free-dynamic (VMD physics on/off, and the
 // one-frame warm-up after a reset). No-op for authored-kinematic (FollowBone) bodies.
-void mmd_body_set_kinematic(mmd_world* world, int body, int is_kinematic);
+MMD_API void mmd_body_set_kinematic(mmd_world* world, int body, int is_kinematic);
 
 // Read a body's current world transform (column-major) into out16.
-void mmd_body_get_transform(mmd_world* world, int body, float* out16);
+MMD_API void mmd_body_get_transform(mmd_world* world, int body, float* out16);
 
 // Advance the simulation. Reference MMD cadence: max_sub_steps=5, fixed_time_step=1/60.
-void mmd_world_step(mmd_world* world, float time_step, int max_sub_steps, float fixed_time_step);
+MMD_API void mmd_world_step(mmd_world* world, float time_step, int max_sub_steps, float fixed_time_step);
 
 #ifdef __cplusplus
 }
