@@ -5,6 +5,7 @@
 // the render is EYEBALLABLE without a display.
 //
 //   MMDGlSmoke <model.pmx> [motion.vmd] [--t seconds] [--out frame.bmp]
+using System.Numerics;
 using S.Media.Compositor;
 using S.Media.Compositor.OpenGL;
 using S.Media.Core.Video;
@@ -13,7 +14,7 @@ using SDL3;
 using SilkGL = Silk.NET.OpenGL;
 
 // Positionals = everything that is neither a flag nor a value consumed by a value-taking flag.
-var valueFlags = new[] { "--t", "--out" };
+var valueFlags = new[] { "--t", "--out", "--from", "--to", "--fps", "--w", "--h", "--tx", "--ty", "--tz", "--dist" };
 var positionalList = new List<string>();
 for (var i = 0; i < args.Length; i++)
 {
@@ -31,14 +32,42 @@ if (positional.Length < 1)
 var modelPath = positional[0];
 var motionPath = positional.Length > 1 ? positional[1] : null;
 var t = 5.0;
+float? tx = null, ty = null, tz = null, dist = null;
+double seqFrom = -1, seqTo = -1, seqFps = 30;
 string? outPath = null;
+var outW = 1280;
+var outH = 720;
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--t") _ = double.TryParse(args[i + 1], out t);
     if (args[i] == "--out") outPath = args[i + 1];
+    if (args[i] == "--from") _ = double.TryParse(args[i + 1], out seqFrom);
+    if (args[i] == "--to") _ = double.TryParse(args[i + 1], out seqTo);
+    if (args[i] == "--fps") _ = double.TryParse(args[i + 1], out seqFps);
+    if (args[i] == "--w") _ = int.TryParse(args[i + 1], out outW);
+    if (args[i] == "--h") _ = int.TryParse(args[i + 1], out outH);
+    if (args[i] == "--tx") tx = float.TryParse(args[i + 1], out var fx) ? fx : tx;
+    if (args[i] == "--ty") ty = float.TryParse(args[i + 1], out var fy) ? fy : ty;
+    if (args[i] == "--tz") tz = float.TryParse(args[i + 1], out var fz) ? fz : tz;
+    if (args[i] == "--dist") dist = float.TryParse(args[i + 1], out var fd) ? fd : dist;
 }
 
-const int W = 1280, H = 720;
+int W = outW, H = outH;
+
+// --from/--to sequence mode renders CONTINUOUS frames; the physics must be the deterministic offline
+// bake (what playback converges to), not the live warm-up, so wait for the bake before rendering.
+if (seqFrom >= 0 && seqTo > seqFrom && motionPath is not null)
+{
+    var bakeModel = S.Media.Source.MMD.PMXDocument.Load(modelPath);
+    var bakeMotion = S.Media.Source.MMD.VMDDocument.Load(motionPath);
+    var (ready, pending) = MMDPhysicsBakeCache.LoadOrStart(modelPath, motionPath, bakeModel, bakeMotion);
+    if (ready is null)
+    {
+        Console.Error.WriteLine("baking physics…");
+        var baked = pending.GetAwaiter().GetResult();
+        Console.Error.WriteLine(baked is not null ? "bake complete" : "bake FAILED (live physics will be used)");
+    }
+}
 
 if (!SDL.Init(SDL.InitFlags.Video))
 {
@@ -87,8 +116,88 @@ if (args.Contains("--diag", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// --textures: dump the PMX texture table, per-material texture/sphere/toon assignments and how each
+// path resolves on disk (the "eyes have no texture" diagnosis).
+if (args.Contains("--textures", StringComparer.OrdinalIgnoreCase))
+{
+    var doc = S.Media.Source.MMD.PMXDocument.Load(modelPath);
+    var dir = Path.GetDirectoryName(Path.GetFullPath(modelPath)) ?? ".";
+    Console.WriteLine($"model dir: {dir}");
+    for (var i = 0; i < doc.Textures.Count; i++)
+    {
+        var rel = doc.Textures[i].Replace('\\', Path.DirectorySeparatorChar);
+        var resolved = ResolveTextureLikeRenderer(dir, rel);
+        var decode = "unresolved";
+        if (resolved is not null)
+        {
+            try
+            {
+                var img = StbImageSharp.ImageResult.FromMemory(
+                    File.ReadAllBytes(resolved), StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                decode = $"decoded {img.Width}x{img.Height}";
+            }
+            catch (Exception ex)
+            {
+                decode = $"DECODE FAILED: {ex.Message}";
+            }
+        }
+
+        Console.WriteLine($"tex[{i}] '{doc.Textures[i]}' -> {(resolved ?? "MISSING")} [{decode}]");
+    }
+
+    for (var m = 0; m < doc.Materials.Count; m++)
+    {
+        var mat = doc.Materials[m];
+        Console.WriteLine(
+            $"mat[{m}] '{mat.Name}' tex={mat.TextureIndex} sphere={mat.SphereTextureIndex}({mat.SphereMode}) " +
+            $"toon={mat.ToonTextureIndex} sharedToon={mat.SharedToonIndex} diffuse={mat.Diffuse} " +
+            $"doubleSided={mat.DoubleSided} edge={mat.HasEdge}");
+    }
+
+    return 0;
+}
+
+// --keys <boneName> [--t seconds]: raw VMD keys around a frame for one bone track.
+if (args.Contains("--keys", StringComparer.OrdinalIgnoreCase) && motionPath is not null)
+{
+    var vmd = S.Media.Source.MMD.VMDDocument.Load(motionPath);
+    var frame = (float)(t * 30.0);
+    foreach (var name in new[] { "センター", "グルーブ", "右足ＩＫ", "左足ＩＫ", "全ての親", "上半身", "右足", "左足" })
+    {
+        if (!vmd.BoneTracks.TryGetValue(name, out var track) || track.Count == 0)
+        {
+            Console.WriteLine($"'{name}': no track");
+            continue;
+        }
+
+        var around = track.Where(k => Math.Abs(k.Frame - frame) <= 30).Take(5).ToList();
+        if (around.Count == 0)
+            around = [track[0]];
+        foreach (var k in around)
+            Console.WriteLine($"'{name}' f={k.Frame} pos={k.Translation} rot={k.Rotation}");
+    }
+
+    return 0;
+}
+
+// --tracks: which VMD bone tracks bind to PMX bones by name (encoding/name mismatches leave bones
+// at bind pose — the "wrong intro stance" diagnosis).
+if (args.Contains("--tracks", StringComparer.OrdinalIgnoreCase) && motionPath is not null)
+{
+    var doc = S.Media.Source.MMD.PMXDocument.Load(modelPath);
+    var vmd = S.Media.Source.MMD.VMDDocument.Load(motionPath);
+    var boneNames = doc.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
+    Console.WriteLine($"PMX bones: {doc.Bones.Count}, VMD bone tracks: {vmd.BoneTracks.Count}");
+    foreach (var (name, track) in vmd.BoneTracks.OrderByDescending(kv => kv.Value.Count))
+        Console.WriteLine($"{(boneNames.Contains(name) ? "  ok  " : "UNMATCHED")} '{name}' keys={track.Count}");
+    return 0;
+}
+
 // The same construction path the session uses: source → surface seam.
-var request = new MMDSourceRequest(modelPath, motionPath, null, W, H, null, null, null, null);
+var cameraTarget = tx is not null || ty is not null || tz is not null
+    ? new Vector3(tx ?? 0f, ty ?? 10f, tz ?? 0f)
+    : (Vector3?)null;
+var request = new MMDSourceRequest(modelPath, motionPath, null, W, H, dist, cameraTarget, null, null);
 using var source = new MMDVideoSource(request);
 
 // --software: dump the SOFTWARE renderer's frame instead (orientation/framing reference).
@@ -108,6 +217,32 @@ if (args.Contains("--software", StringComparer.OrdinalIgnoreCase))
 }
 
 var surface = ((ILayerSurfaceVideoSource)source).CreateLayerSurface();
+
+// Sequence mode: continuous frames from --from to --to at --fps, raw BGRA32 to stdout (ffmpeg-ready:
+//   ... --from 0 --to 20 --fps 30 | ffmpeg -f rawvideo -pix_fmt bgra -s WxH -r FPS -i - out.mp4
+// ). Logs go to stderr so stdout stays a pure pixel stream.
+if (seqFrom >= 0 && seqTo > seqFrom)
+{
+    using var stdout = Console.OpenStandardOutput();
+    var total = (int)Math.Round((seqTo - seqFrom) * seqFps);
+    for (var f = 0; f < total; f++)
+    {
+        var time = TimeSpan.FromSeconds(seqFrom + f / seqFps);
+        var frame = compositor.CompositeWithSurfaces(
+            [], [new CompositorSurfaceLayer(surface, LayerTransform2D.Identity, 1f)], time);
+        var span = frame.Planes[0].Span;
+        var stride = frame.Strides[0];
+        for (var y = 0; y < H; y++)
+            stdout.Write(span.Slice(y * stride, W * 4));
+        frame.Dispose();
+        if (f % 60 == 0)
+            Console.Error.WriteLine($"seq {f}/{total} t={time.TotalSeconds:0.00}s");
+    }
+
+    surface.Dispose();
+    Console.Error.WriteLine($"seq done: {total} frames");
+    return 0;
+}
 
 var times = motionPath is null
     ? new[] { TimeSpan.FromSeconds(t) }
@@ -159,6 +294,32 @@ if (coverage.Any(c => c < 0.005))
 
 Console.WriteLine("MMDGlSmoke OK — the GL layer surface rendered the model on real GL.");
 return 0;
+
+// Mirror of MMDGlLayerSurface.ResolveTexturePath (internal there): exact path, then a case-insensitive
+// per-segment walk.
+static string? ResolveTextureLikeRenderer(string root, string relative)
+{
+    var direct = Path.Combine(root, relative);
+    if (File.Exists(direct))
+        return direct;
+
+    var current = root;
+    var segments = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+    for (var i = 0; i < segments.Length; i++)
+    {
+        var want = segments[i];
+        var match = i == segments.Length - 1
+            ? Directory.EnumerateFiles(current)
+                .FirstOrDefault(f => string.Equals(Path.GetFileName(f), want, StringComparison.OrdinalIgnoreCase))
+            : Directory.EnumerateDirectories(current)
+                .FirstOrDefault(d => string.Equals(Path.GetFileName(d), want, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+            return null;
+        current = match;
+    }
+
+    return current;
+}
 
 static double OpaqueCoverage(VideoFrame frame)
 {

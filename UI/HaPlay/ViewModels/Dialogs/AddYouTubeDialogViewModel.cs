@@ -67,7 +67,15 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
     [ObservableProperty] private bool _audioOnly;
     [ObservableProperty] private double _prepareProgress;
     [ObservableProperty] private string? _prepareStatus;
+    [ObservableProperty] private string? _prepareDetail;
     [ObservableProperty] private string? _cacheStatus;
+
+    // Rolling download-speed sample: baseline (bytes, time) within the current phase; speed is the
+    // delta over ≥0.5 s windows so the readout doesn't flicker with every progress callback.
+    private YouTubePreparePhase _speedPhase;
+    private long _speedBaselineBytes;
+    private long _speedBaselineTimestamp;
+    private double _speedBytesPerSecond;
 
     public ObservableCollection<YouTubeVideoOption> VideoStreams { get; } = new();
     public ObservableCollection<YouTubeAudioOption> AudioStreams { get; } = new();
@@ -184,6 +192,9 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
         _cts = new CancellationTokenSource();
         IsPreparing = true;
         PrepareProgress = 0;
+        PrepareDetail = null;
+        _speedPhase = YouTubePreparePhase.Resolving;
+        _speedBytesPerSecond = 0;
         try
         {
             var prepared = await _preparer.PrepareAsync(
@@ -199,6 +210,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
                         YouTubePreparePhase.Remuxing => Strings.YouTubePhaseRemuxing,
                         _ => Strings.YouTubePhaseReady,
                     };
+                    PrepareDetail = BuildDownloadDetail(p);
                 }),
                 _cts.Token);
 
@@ -238,6 +250,47 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
 
     /// <summary>Cancels an in-flight resolve/prepare (dialog cancel/close).</summary>
     public void CancelPending() => _cts?.Cancel();
+
+    /// <summary>Byte-level readout for the download phases: "done / total · speed". The gateway reports a
+    /// 0–1 fraction and the manifest carries each stream's exact size, so bytes are derived here — the
+    /// currently-downloading stream is identified by the phase. Non-download phases show no detail.</summary>
+    private string? BuildDownloadDetail(YouTubePrepareProgress p)
+    {
+        var total = p.Phase switch
+        {
+            YouTubePreparePhase.DownloadingVideo => SelectedVideoStream?.Info.SizeBytes ?? 0,
+            YouTubePreparePhase.DownloadingAudio => SelectedAudioStream?.Info.SizeBytes ?? 0,
+            _ => 0,
+        };
+        if (total <= 0)
+            return null;
+
+        var done = (long)(p.Fraction * total);
+
+        // Speed over ≥0.5 s windows within one phase (a phase switch restarts the byte counter).
+        var now = Environment.TickCount64;
+        if (p.Phase != _speedPhase)
+        {
+            _speedPhase = p.Phase;
+            _speedBaselineBytes = done;
+            _speedBaselineTimestamp = now;
+            _speedBytesPerSecond = 0;
+        }
+        else if (now - _speedBaselineTimestamp >= 500)
+        {
+            var seconds = (now - _speedBaselineTimestamp) / 1000.0;
+            _speedBytesPerSecond = (done - _speedBaselineBytes) / seconds;
+            _speedBaselineBytes = done;
+            _speedBaselineTimestamp = now;
+        }
+
+        var doneText = MediaPropertiesDialogViewModel.FormatSize(done);
+        var totalText = MediaPropertiesDialogViewModel.FormatSize(total);
+        return _speedBytesPerSecond > 0
+            ? Strings.Format(nameof(Strings.YouTubeDownloadDetailWithSpeedFormat),
+                doneText, totalText, MediaPropertiesDialogViewModel.FormatSize((long)_speedBytesPerSecond))
+            : Strings.Format(nameof(Strings.YouTubeDownloadDetailFormat), doneText, totalText);
+    }
 
     private void RefreshCacheStatus()
     {

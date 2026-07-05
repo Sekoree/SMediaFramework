@@ -361,7 +361,8 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
 
     public void Dispose()
     {
-        // All managed; nothing to release. (Kept for symmetry with other sources.)
+        _physics?.Dispose(); // frees the native Bullet world (the live-play physics path)
+        _physics = null;
     }
 }
 

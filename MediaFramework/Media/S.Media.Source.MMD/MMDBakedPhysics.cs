@@ -15,7 +15,7 @@ namespace S.Media.Source.MMD;
 public sealed class MMDBakedPhysics
 {
     /// <summary>Bump when the solver or the bake format changes — invalidates disk caches.</summary>
-    public const int Version = 1;
+    public const int Version = 5; // v5: real Bullet 3.25 solver (replaces the custom sequential-impulse one)
 
     private const string Magic = "MMDBAKE1";
     private const float FramesPerSecond = (float)VMDDocument.FramesPerSecond;
@@ -77,7 +77,7 @@ public sealed class MMDBakedPhysics
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(motion);
-        var physics = MMDPhysics.TryCreate(model);
+        using var physics = MMDPhysics.TryCreate(model);
         if (physics is null)
             return null;
 
@@ -135,8 +135,64 @@ public sealed class MMDBakedPhysics
                 progress?.Invoke(f / (float)frames);
         }
 
+        // Optional temporal low-pass on the baked transforms. This was a band-aid for the OLD custom
+        // solver, which rigidly transmitted the fast dance's head-shake down the spring-locked chains.
+        // Real Bullet (with the additional-damping the file authors rely on) settles that inertia itself,
+        // so smoothing is OFF by default (SmoothingPasses = 0) — the bake is the raw Bullet result, exactly
+        // like MMD's own render. The kernel is retained (probe/opt-in only) behind the field.
+        SmoothTemporally(rotations, translations, slots, frames, SmoothingPasses);
+
         progress?.Invoke(1f);
         return new MMDBakedPhysics(model.Bones.Count, [.. driven], frames, rotations, translations);
+    }
+
+    /// <summary>Passes of the [0.25, 0.5, 0.25] temporal kernel applied to the baked transforms (0 = off).
+    /// Internal-settable so the jitter probe can sweep it; 3 was chosen by the probe — it cuts the worst
+    /// hair-tip frame-to-frame angular jerk ~5× (0.50→0.10 rad) with ZERO phase lag (symmetric kernel over
+    /// an offline bake), so fast motion survives while the transmitted head-shake twitch is smoothed out.</summary>
+    internal static int SmoothingPasses = 0;
+
+    internal static void SmoothTemporally(Quaternion[] rotations, Vector3[] translations, int slots, int frames, int passes)
+    {
+        if (passes <= 0 || frames < 3)
+            return;
+
+        var smoothedR = new Quaternion[rotations.Length];
+        var smoothedT = new Vector3[translations.Length];
+        for (var pass = 0; pass < passes; pass++)
+        {
+            for (var slot = 0; slot < slots; slot++)
+            {
+                for (var f = 0; f < frames; f++)
+                {
+                    var index = f * slots + slot;
+                    if (f == 0 || f == frames - 1)
+                    {
+                        smoothedR[index] = rotations[index]; // endpoints unchanged (no future/past to blend)
+                        smoothedT[index] = translations[index];
+                        continue;
+                    }
+
+                    var prev = (f - 1) * slots + slot;
+                    var next = (f + 1) * slots + slot;
+                    // Quaternion 3-tap via double nlerp (hemisphere-aligned): centre weight 0.5, neighbours 0.25.
+                    var half = NlerpAligned(rotations[prev], rotations[next], 0.5f);          // 0.25 : 0.25
+                    smoothedR[index] = NlerpAligned(rotations[index], half, 0.5f);             // → 0.5 : 0.5
+                    smoothedT[index] = translations[index] * 0.5f
+                                       + (translations[prev] + translations[next]) * 0.25f;
+                }
+            }
+
+            Array.Copy(smoothedR, rotations, rotations.Length);
+            Array.Copy(smoothedT, translations, translations.Length);
+        }
+    }
+
+    private static Quaternion NlerpAligned(Quaternion a, Quaternion b, float t)
+    {
+        if (Quaternion.Dot(a, b) < 0f)
+            b = new Quaternion(-b.X, -b.Y, -b.Z, -b.W); // shortest-arc hemisphere
+        return Quaternion.Normalize(Quaternion.Lerp(a, b, t));
     }
 
     public void Save(Stream stream)

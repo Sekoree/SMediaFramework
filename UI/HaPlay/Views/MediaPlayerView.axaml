@@ -14,32 +14,15 @@
              x:DataType="vm:MediaPlayerViewModel">
 
     <UserControl.Resources>
-        <!-- Classic notebook-tab look for the playlist set strip. The stock TabStripItem theme is
-             flat text (TabStrip has no tab chrome), which made the sets unrecognizable as tabs —
-             this mirrors the classic TabItem template (TabTop bevel, selected tab pops forward). -->
-        <ControlTheme x:Key="PlaylistSetTabTheme" TargetType="TabStripItem">
+        <!-- Classic notebook-tab look for the playlist set strip: REAL TabItems restyled for the strip
+             (padding only). A hand-rolled TabStripItem theme drew its own ClassicBorderDecorator, but a
+             decorator instantiated from a view-local ControlTheme misses the bevel brushes its implicit
+             theme provides and the tab rendered outline-less — reusing the package's proven TabItem
+             theme (via a header-only TabControl) gets the exact Player-tab chrome for free. -->
+        <ControlTheme x:Key="PlaylistSetTabItemTheme" TargetType="TabItem"
+                      BasedOn="{StaticResource {x:Type TabItem}}">
             <Setter Property="Padding" Value="10,3" />
-            <Setter Property="Background" Value="{DynamicResource {x:Static common:SystemColors.ControlBrushKey}}" />
-            <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlTextBrushKey}}" />
-            <Setter Property="Template">
-                <ControlTemplate>
-                    <theme:ClassicBorderDecorator x:Name="ClassicBorder"
-                                                  Background="{TemplateBinding Background}"
-                                                  BorderBrush="{x:Static theme:ClassicBorderDecorator.ClassicBorderBrush}"
-                                                  BorderStyle="TabTop"
-                                                  BorderThickness="2">
-                        <ContentPresenter Name="PART_ContentPresenter"
-                                          Margin="{TemplateBinding Padding}"
-                                          Content="{TemplateBinding Content}"
-                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
-                    </theme:ClassicBorderDecorator>
-                </ControlTemplate>
-            </Setter>
-            <Style Selector="^:selected">
-                <Setter Property="ZIndex" Value="1" />
-                <Setter Property="Margin" Value="-2,-2,-2,-1" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-            </Style>
+            <Setter Property="FontSize" Value="12" />
         </ControlTheme>
     </UserControl.Resources>
 
@@ -134,7 +117,14 @@
         </Style>
     </UserControl.Styles>
 
-    <DockPanel LastChildFill="True">
+    <!-- The whole deck scrolls when the window is too short for its minimum layout. Height is bound to
+         the viewport so at normal sizes the DockPanel fills it exactly (playlist scrolls INTERNALLY and
+         the transport header stays pinned — same behavior as before the wrap); once the viewport drops
+         under MinHeight the content keeps its minimum and the outer scrollbar takes over, instead of the
+         docked rows overlapping (the set strip used to glitch down into the playlist). -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <DockPanel LastChildFill="True" MinHeight="580"
+               Height="{Binding $parent[ScrollViewer].Viewport.Height}">
 
         <!-- ============ Now-playing / transport deck header (pinned) ============ -->
         <Border DockPanel.Dock="Top" Classes="card" Margin="0,0,0,8">
@@ -439,16 +429,26 @@
                 <ScrollViewer DockPanel.Dock="Top" ZIndex="1" Margin="4,0,0,0"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled">
-                            <TabStrip ItemsSource="{Binding PlaylistTabs}"
-                                      SelectedItem="{Binding SelectedPlaylistTab}"
-                                      Padding="3,3,3,0"
-                                      ItemContainerTheme="{StaticResource PlaylistSetTabTheme}">
-                                <TabStrip.ItemsPanel>
+                            <!-- Header-only TabControl: the template renders JUST the tab headers (real
+                                 TabItems with the theme's classic chrome — same look as the player tabs);
+                                 the playlist ListBox below acts as the "pane" the selected tab merges into. -->
+                            <TabControl ItemsSource="{Binding PlaylistTabs}"
+                                        SelectedItem="{Binding SelectedPlaylistTab}"
+                                        Padding="3,3,3,0"
+                                        ItemContainerTheme="{StaticResource PlaylistSetTabItemTheme}">
+                                <TabControl.Template>
+                                    <ControlTemplate>
+                                        <ItemsPresenter Name="PART_ItemsPresenter"
+                                                        Margin="{TemplateBinding Padding}"
+                                                        ItemsPanel="{TemplateBinding ItemsPanel}" />
+                                    </ControlTemplate>
+                                </TabControl.Template>
+                                <TabControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <StackPanel Orientation="Horizontal" Spacing="2" />
                                     </ItemsPanelTemplate>
-                                </TabStrip.ItemsPanel>
-                                <TabStrip.ItemTemplate>
+                                </TabControl.ItemsPanel>
+                                <TabControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PlaylistTabViewModel">
                                         <!-- Label by default (clicks select the tab); double-click swaps in
                                              the rename box. The old always-editable TextBox ate every click,
@@ -471,8 +471,8 @@
                                                      KeyDown="OnPlaylistTabRenameKeyDown" />
                                         </Panel>
                                     </DataTemplate>
-                                </TabStrip.ItemTemplate>
-                            </TabStrip>
+                                </TabControl.ItemTemplate>
+                            </TabControl>
                 </ScrollViewer>
 
                 <!-- Reorder hint (hidden when compact). -->
@@ -537,4 +537,5 @@
             </DockPanel>
         </HeaderedContentControl>
     </DockPanel>
+    </ScrollViewer>
 </UserControl>

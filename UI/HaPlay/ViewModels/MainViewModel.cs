@@ -349,6 +349,8 @@ public partial class MainViewModel : ViewModelBase
     {
         _appSettings.LastSelectedWorkspace = value.Id;
         _appSettings.Save();
+        if (value == WorkspaceItem.Project)
+            RefreshMediaCacheSizes(); // sizes are current by the time the operator sees the section
     }
 
     // ----- Phase E (§8.7): Main window state persistence -----------------------------------------

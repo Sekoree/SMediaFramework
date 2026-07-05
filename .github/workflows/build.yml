@@ -46,6 +46,15 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
+      # MMD physics runs on real Bullet 3.25 via the mmd_bullet C shim (vendored in External/bullet3).
+      # Build it BEFORE `dotnet build`, so S.Media.Source.MMD's csproj can stage libmmd_bullet.so into every
+      # consumer's bin (its <None> item is conditioned on the .so existing).
+      - name: Build MMD Bullet physics shim
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y cmake
+          MediaFramework/Native/mmd_bullet/build.sh
+
       - name: Build (Release)
         run: dotnet build MFPlayer.sln -c Release
 
@@ -230,6 +239,9 @@ jobs:
           curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
           cp -vL ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib/lib*.so.* natives-stage/ 2>/dev/null || true
           for f in natives-stage/libav*.so.* natives-stage/libsw*.so.*; do [ -e "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" || true; done
+
+          # MMD physics: real Bullet 3.25 via the mmd_bullet shim (vendored in External/bullet3).
+          MediaFramework/Native/mmd_bullet/build.sh natives-stage
           ls -la natives-stage
 
       # ─── Windows natives (from source; iterate on CI — no Windows runner to pre-validate against) ───

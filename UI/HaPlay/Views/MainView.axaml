@@ -258,7 +258,11 @@
       <views:ControlWorkspaceView DataContext="{Binding Control}"
           IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsControlWorkspaceSelected}" />
 
-      <DockPanel Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}">
+      <!-- Scrolls when the window is too short for the display / remote-api / media-cache sections
+           (the cache rows at the bottom used to land out of bounds on a small window). -->
+      <ScrollViewer Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}"
+                    VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <DockPanel>
         <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
           <TextBlock Text="{x:Static res:Strings.ProjectHeader}" FontSize="22" FontWeight="SemiBold" />
           <TextBlock Text="{Binding ProjectTitle}" Opacity="0.85" />
@@ -376,9 +380,48 @@
                 </ItemsControl>
               </StackPanel>
             </Border>
+
+            <!-- Media caches — per-machine prepared media (YouTube downloads, MMD bakes): size, open, clear. -->
+            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{x:Static res:Strings.CacheSectionHeader}" FontWeight="SemiBold" />
+                <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
+                           Text="{x:Static res:Strings.CacheSectionHint}" />
+                <ItemsControl ItemsSource="{Binding MediaCaches}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:MediaCacheViewModel">
+                      <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto,Auto"
+                            ColumnSpacing="6" Margin="0,4,0,0">
+                        <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                          <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                          <TextBlock Text="{Binding SizeText}" Opacity="0.75" FontSize="12"
+                                     VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button Grid.Row="0" Grid.Column="1" Padding="8,2" FontSize="12"
+                                Content="{x:Static res:Strings.CacheRefreshButton}"
+                                Command="{Binding RefreshCommand}" />
+                        <Button Grid.Row="0" Grid.Column="2" Padding="8,2" FontSize="12"
+                                Content="{x:Static res:Strings.CacheOpenFolderButton}"
+                                Command="{Binding OpenFolderCommand}" />
+                        <Button Grid.Row="0" Grid.Column="3" Padding="8,2" FontSize="12"
+                                Content="{x:Static res:Strings.CacheClearButton}"
+                                Command="{Binding ClearCommand}"
+                                IsEnabled="{Binding !IsBusy}" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
+                                   Text="{Binding Hint}" Opacity="0.55" FontSize="11" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4"
+                                   Text="{Binding StatusText}" FontSize="11" TextWrapping="Wrap"
+                                   IsVisible="{Binding StatusText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
           </StackPanel>
         </Grid>
       </DockPanel>
+      </ScrollViewer>
     </Grid>
   </DockPanel>
 

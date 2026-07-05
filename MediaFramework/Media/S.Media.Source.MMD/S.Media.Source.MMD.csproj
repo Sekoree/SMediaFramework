@@ -28,6 +28,16 @@
         <InternalsVisibleTo Include="S.Media.Source.MMD.Tests" />
     </ItemGroup>
 
+    <!-- Native MMD physics: real Bullet 3.25 via the mmd_bullet C shim (MediaFramework/Native/mmd_bullet).
+         Stage the built libmmd_bullet.so next to every consumer's binary so the P/Invoke resolver finds it.
+         CI builds the shim first (build.sh); locally, run MediaFramework/Native/mmd_bullet/build.sh once. -->
+    <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)../../Native/mmd_bullet/libmmd_bullet.so')">
+        <None Include="$(MSBuildThisFileDirectory)../../Native/mmd_bullet/libmmd_bullet.so">
+            <Link>libmmd_bullet.so</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
     <ItemGroup>
         <Using Include="S.Media.Core" />
         <Using Include="S.Media.Core.Video" />
