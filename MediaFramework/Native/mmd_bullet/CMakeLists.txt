@@ -11,7 +11,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")  # MSVC keeps its default /O2 /DNDEBUG (-O3 is a GCC/Clang flag)
+endif()
 
 set(BULLET_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../../External/bullet3/src")
 
@@ -27,6 +29,8 @@ target_include_directories(mmd_bullet PRIVATE "${BULLET_SRC}")
 # not a value test) — leave it undefined to match MMD/babylon-mmd, whose whole physics is float.
 
 # Bullet's own sources trip a lot of harmless warnings; silence them so real shim warnings stand out.
-target_compile_options(mmd_bullet PRIVATE -w)
+target_compile_options(mmd_bullet PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>)
 
-set_target_properties(mmd_bullet PROPERTIES OUTPUT_NAME mmd_bullet PREFIX "lib")
+# Use CMake's per-platform default library names — libmmd_bullet.so (Linux), libmmd_bullet.dylib (macOS),
+# mmd_bullet.dll (Windows). Do NOT force a "lib" prefix: on Windows the managed [LibraryImport("mmd_bullet")]
+# resolver looks for mmd_bullet.dll and would miss a libmmd_bullet.dll.

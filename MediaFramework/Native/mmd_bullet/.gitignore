@@ -1,3 +1,5 @@
 # Build artifacts — CI and local build.sh regenerate these from the vendored Bullet source + shim.
 build/
 libmmd_bullet.so
+libmmd_bullet.dylib
+mmd_bullet.dll
