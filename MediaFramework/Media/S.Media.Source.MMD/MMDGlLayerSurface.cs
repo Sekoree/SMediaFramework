@@ -865,10 +865,9 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             vec3 light = normalize(uLightDirection);
             vec3 normal = normalize(vNormal);
             float ndl = dot(normal, -light);
-            vec3 base = clamp(uDiffuse.rgb * 0.8 + uAmbient * 0.6, 0.0, 1.0);
             // Lighting term (babylon-mmd's diffuseBase): the toon ramp — whose V axis encodes
-            // lit(0) → shadow(1) — or a procedural two-tone fallback, then self-shadow. BOTH the surface
-            // colour and the sphere reflection are modulated by this (see below).
+            // lit(0) → shadow(1) — or a procedural two-tone fallback, then self-shadow × light colour.
+            // BOTH the surface colour and the sphere reflection are modulated by this (see below).
             vec3 diffuseBase;
             if (uHasToon == 1)
                 diffuseBase = applyTextureColor(
@@ -876,8 +875,13 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
                     uToonMultiply, uToonAdd);
             else
                 diffuseBase = vec3(mix(0.62, 1.0, smoothstep(0.02, 0.28, ndl)));
-            diffuseBase *= sampleShadow();
-            vec3 color = tex.rgb * base * uLightColor * diffuseBase;
+            diffuseBase *= sampleShadow() * uLightColor;
+            // MMD/babylon-mmd composite: AMBIENT is added to the shaded diffuse and clamped, THEN modulates
+            // the texture (finalDiffuse = clamp(diffuseBase*diffuse + ambient) * baseColor). The ambient is
+            // NOT itself shaded — so high-ambient materials (the EYES) stay bright. The old model folded
+            // ambient into the shaded product (tex * clamp(diffuse*0.8 + ambient*0.6) * diffuseBase), which
+            // darkened the eyes below the MMD editor.
+            vec3 color = clamp(diffuseBase * uDiffuse.rgb + uAmbient, 0.0, 1.0) * tex.rgb;
             // Sphere map (matcap): view-space normal xy → texture coords. Multiply (.sph) darkens/tints,
             // Add (.spa) is the highlight/iris detail layer. babylon-mmd modulates the reflection by the
             // lighting term before blending (sphereReflectionColor.rgb *= diffuseBase) so an additive eye
