@@ -1608,6 +1608,11 @@ public sealed class ShowSession : IAsyncDisposable
             if (group.Active is { } active)
             {
                 group.PausedByHost = paused; // end-monitor stall detection must not read a host pause as EOF
+                // Announce the state change BEFORE applying it: resume's Play() prefills + starts audio
+                // hardware, holding IsRunning=false for a while — lock-free snapshot consumers (the deck's
+                // 250 ms end poll) key their debounce off the generation, so bumping it up front resets
+                // their window at op START instead of only after the (potentially slow) apply.
+                group.Timeline.MarkDiscontinuity();
                 if (paused)
                     active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                 else
@@ -1629,6 +1634,7 @@ public sealed class ShowSession : IAsyncDisposable
                 if (group.Active is { } active)
                 {
                     group.PausedByHost = paused; // see SetPausedAsync — keeps the end monitor's stall check honest
+                    group.Timeline.MarkDiscontinuity(); // announce BEFORE the slow apply (see SetPausedAsync)
                     if (paused)
                         active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                     else

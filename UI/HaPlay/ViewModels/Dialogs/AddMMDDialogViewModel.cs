@@ -123,6 +123,9 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
     partial void OnCameraRotationYDegChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
     partial void OnCameraRotationZDegChanged(double value) { SyncPositionFromOrbit(); ScheduleRender(); }
     partial void OnCameraFovDegChanged(double value) => ScheduleRender();
+    // Output-size edits change the preview's aspect ratio, so re-frame the preview when they change.
+    partial void OnRenderWidthChanged(int value) => ScheduleRender();
+    partial void OnRenderHeightChanged(int value) => ScheduleRender();
     partial void OnPreviewTimeSecondsChanged(double value) => ScheduleRender();
     partial void OnCameraPositionXChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
     partial void OnCameraPositionYChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
@@ -209,8 +212,15 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(model) || !File.Exists(model))
             return;
 
-        const int previewWidth = 480;
-        const int previewHeight = 270;
+        // Preview at the OUTPUT's aspect ratio (was a fixed 480×270) so a portrait/ultrawide render is
+        // framed here exactly as the composition will frame it — MMD fov is vertical, so matching the
+        // aspect matches the shot. Longest side capped for a fast preview; the view's Stretch=Uniform
+        // letterboxes the result into the preview panel.
+        var outW = Math.Clamp(RenderWidth, 16, 7680);
+        var outH = Math.Clamp(RenderHeight, 16, 4320);
+        const int previewMax = 480;
+        var previewWidth = outW >= outH ? previewMax : Math.Max(2, (int)Math.Round(previewMax * (double)outW / outH));
+        var previewHeight = outW >= outH ? Math.Max(2, (int)Math.Round(previewMax * (double)outH / outW)) : previewMax;
         try
         {
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => IsRendering = true);

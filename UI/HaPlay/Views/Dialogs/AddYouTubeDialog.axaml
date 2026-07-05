@@ -13,7 +13,11 @@
     <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,16,0,0">
       <StackPanel Spacing="4" IsVisible="{Binding IsPreparing}">
         <ProgressBar Minimum="0" Maximum="1" Value="{Binding PrepareProgress}" />
-        <TextBlock Opacity="0.8" FontSize="11" Text="{Binding PrepareStatus}" />
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Opacity="0.8" FontSize="11" Text="{Binding PrepareStatus}" />
+          <!-- Byte-level readout during the download phases: "142.3 MiB / 401.2 MiB · 12.4 MiB/s". -->
+          <TextBlock Grid.Column="1" Opacity="0.8" FontSize="11" Text="{Binding PrepareDetail}" />
+        </Grid>
       </StackPanel>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
         <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />

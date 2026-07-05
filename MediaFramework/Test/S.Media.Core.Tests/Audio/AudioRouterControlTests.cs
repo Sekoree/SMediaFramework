@@ -54,7 +54,13 @@ public class AudioRouterControlTests
         var pauseTask = Task.Run(() => r.Pause());
         try
         {
-            Assert.False(output.FlushStarted.Wait(TimeSpan.FromMilliseconds(80)),
+            // Pause gates Flush behind the pump's WaitForIdle, which waits for the in-flight Submit but is
+            // itself capped at a 100ms bounded-pause timeout (a wedged device must not hang Pause forever).
+            // Probe with a SHORT window well under that cap: an ungated implementation flushes at ~0ms, so
+            // 30ms still catches the bug, while leaving ~70ms of slack before the 100ms timeout — the old
+            // 80ms probe left only 20ms and flaked on the single-CPU CI runner when thread starvation pushed
+            // the ReleaseSubmit below past the timeout (Flush then fired while the Submit was still blocked).
+            Assert.False(output.FlushStarted.Wait(TimeSpan.FromMilliseconds(30)),
                 "Pause must not flush while an output Submit is still in flight");
 
             output.ReleaseSubmit();

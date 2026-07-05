@@ -390,6 +390,11 @@ public sealed class MMDAnimator
     internal void EvaluatePoseForBake(TimeSpan time, MMDPhysics physics, float physicsDeltaSeconds) =>
         EvaluatePose((float)(time.TotalSeconds * VMDDocument.FramesPerSecond), physics, physicsDeltaSeconds);
 
+    /// <summary>FK/IK-only pose (no physics step) for offline probes — the rigid pose a bone would have
+    /// if physics never ran, used as the "driven by the animation only" reference.</summary>
+    internal void EvaluatePoseFKOnly(TimeSpan time) =>
+        EvaluatePose((float)(time.TotalSeconds * VMDDocument.FramesPerSecond), physics: null, physicsDeltaSeconds: 0f);
+
     /// <summary>The last evaluated world transform of a bone (baker capture).</summary>
     internal Matrix4x4 BoneWorldForBake(int index) => _world[index];
 

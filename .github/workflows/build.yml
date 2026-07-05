@@ -46,6 +46,21 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
+      # MMD physics runs on real Bullet 3.25 via the mmd_bullet C shim (vendored in External/bullet3).
+      # Build it BEFORE `dotnet build` on BOTH OSes, so S.Media.Source.MMD's csproj can stage the shared
+      # library (libmmd_bullet.so / mmd_bullet.dll) into every consumer's bin — otherwise the P/Invoke in
+      # the physics tests throws DllNotFoundException (Windows was missing the .dll entirely).
+      - name: Build MMD Bullet physics shim (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y cmake
+          MediaFramework/Native/mmd_bullet/build.sh
+
+      - name: Build MMD Bullet physics shim (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: MediaFramework/Native/mmd_bullet/build.sh   # CMake + MSVC are preinstalled on the runner
+
       - name: Build (Release)
         run: dotnet build MFPlayer.sln -c Release
 
@@ -230,6 +245,9 @@ jobs:
           curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
           cp -vL ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib/lib*.so.* natives-stage/ 2>/dev/null || true
           for f in natives-stage/libav*.so.* natives-stage/libsw*.so.*; do [ -e "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" || true; done
+
+          # MMD physics: real Bullet 3.25 via the mmd_bullet shim (vendored in External/bullet3).
+          MediaFramework/Native/mmd_bullet/build.sh natives-stage
           ls -la natives-stage
 
       # ─── Windows natives (from source; iterate on CI — no Windows runner to pre-validate against) ───
@@ -325,6 +343,12 @@ jobs:
           Start-Process -FilePath .\ndi.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           $dll = Get-ChildItem 'C:\Program Files\NDI' -Recurse -Filter 'Processing.NDI.Lib.x64.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($dll) { Copy-Item $dll.FullName natives-stage\ -Verbose } else { Write-Host 'WARN: NDI DLL not found' }
+
+      # MMD physics: real Bullet 3.25 via the mmd_bullet shim -> mmd_bullet.dll (vendored External/bullet3).
+      - name: Stage Windows natives — MMD Bullet physics shim (CMake/MSVC)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: MediaFramework/Native/mmd_bullet/build.sh natives-stage
 
       - name: HaPlay.Desktop AOT publish
         run: >

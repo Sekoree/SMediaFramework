@@ -2878,4 +2878,52 @@
   <data name="MediaPropertiesKindPortAudio" xml:space="preserve">
     <value>Audio input</value>
   </data>
+  <data name="CacheSectionHeader" xml:space="preserve">
+    <value>Media caches</value>
+  </data>
+  <data name="CacheSectionHint" xml:space="preserve">
+    <value>Prepared media is cached on this machine so shows play from disk (and offline). Clearing a cache frees the space; the media is re-downloaded or re-baked the next time it is used.</value>
+  </data>
+  <data name="CacheYouTubeLabel" xml:space="preserve">
+    <value>YouTube downloads</value>
+  </data>
+  <data name="CacheYouTubeHint" xml:space="preserve">
+    <value>Downloaded streams, remuxed assets and subtitles. Cleared items are re-downloaded on next use.</value>
+  </data>
+  <data name="CacheMMDBakeLabel" xml:space="preserve">
+    <value>MMD physics bakes</value>
+  </data>
+  <data name="CacheMMDBakeHint" xml:space="preserve">
+    <value>Pre-computed physics for model + motion pairs. Cleared items are re-baked on next use.</value>
+  </data>
+  <data name="CacheSizeCalculatingLabel" xml:space="preserve">
+    <value>calculating…</value>
+  </data>
+  <data name="CacheEmptyLabel" xml:space="preserve">
+    <value>empty</value>
+  </data>
+  <data name="CacheSizeFormat" xml:space="preserve">
+    <value>{0} in {1} file(s)</value>
+  </data>
+  <data name="CacheClearedStatusFormat" xml:space="preserve">
+    <value>Freed {0}.</value>
+  </data>
+  <data name="CacheClearedWithSkipsStatusFormat" xml:space="preserve">
+    <value>Freed {0} — {1} file(s) in use were kept.</value>
+  </data>
+  <data name="CacheOpenFolderButton" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="CacheClearButton" xml:space="preserve">
+    <value>Clear</value>
+  </data>
+  <data name="CacheRefreshButton" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="YouTubeDownloadDetailFormat" xml:space="preserve">
+    <value>{0} / {1}</value>
+  </data>
+  <data name="YouTubeDownloadDetailWithSpeedFormat" xml:space="preserve">
+    <value>{0} / {1} · {2}/s</value>
+  </data>
 </root>

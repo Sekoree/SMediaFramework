@@ -42,18 +42,13 @@ public sealed class MMDSoftwareRenderer(int width, int height)
         if (!visible)
             return;
 
-        // MMD is left-handed with +Z into the screen; VMD camera distance is negative toward the viewer.
-        // View: orbit around Target by euler (x pitch, y yaw, z roll), then push out by |distance|.
-        var rotation =
-            Matrix4x4.CreateRotationY(camera.RotationRadians.Y) *
-            Matrix4x4.CreateRotationX(-camera.RotationRadians.X) *
-            Matrix4x4.CreateRotationZ(-camera.RotationRadians.Z);
-        var forward = Vector3.TransformNormal(new Vector3(0, 0, 1), rotation);
-        var up = Vector3.TransformNormal(new Vector3(0, 1, 0), rotation);
-        var eye = camera.Target - forward * MathF.Abs(camera.Distance);
-        var view = Matrix4x4.CreateLookAt(eye, camera.Target, up);
-        var fov = Math.Clamp(camera.FovDegrees, 1f, 175f) * MathF.PI / 180f;
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(fov, (float)Width / Height, 0.5f, 2000f);
+        // Camera: reuse the GL surface's exact view/projection so the placement PREVIEW frames the shot
+        // identically to the final GL output (both flip Z per-vertex to right-handed below). This renderer
+        // previously negated the eye offset (eye = target − back·|d| instead of target + back·|d|), which
+        // put the preview camera on the OPPOSITE side of the target — the preview showed the model's back
+        // while playback showed its front. One source of truth removes that whole class of drift.
+        var view = MMDGlLayerSurface.SceneView(camera);
+        var projection = MMDGlLayerSurface.SceneProjection(camera, (float)Width / Height);
         var viewProjection = view * projection;
         var lightState = lightFrame ?? new VMDLightFrame(0, Vector3.One, new Vector3(-0.3f, -1f, 0.6f));
         var light = lightState.Direction.LengthSquared() > 1e-8f

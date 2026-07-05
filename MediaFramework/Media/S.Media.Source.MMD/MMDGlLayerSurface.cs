@@ -468,6 +468,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             gl.Uniform1(gl.GetUniformLocation(_shadowProgram, "uTexture"), 0);
             gl.Enable(EnableCap.CullFace);
             gl.CullFace(TriangleFace.Back);
+            gl.FrontFace(FrontFaceDirection.CW); // Z-flipped model winding (see the main pass note)
             var shadowOffset = 0;
             for (var m = 0; m < _model.Materials.Count; m++)
             {
@@ -515,6 +516,8 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uSphere"), 1);
         gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uToon"), 2);
         gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uShadowMap"), 3);
+        gl.Uniform1(gl.GetUniformLocation(_mainProgram, "uSphereDebug"),
+            Environment.GetEnvironmentVariable("MFP_MMD_GL_SPHEREDEBUG") == "1" ? 1 : 0);
         gl.UniformMatrix4(gl.GetUniformLocation(_mainProgram, "uLightViewProj"), 1, false,
             (float*)&lightViewProjection);
         gl.ActiveTexture(TextureUnit.Texture3);
@@ -525,6 +528,15 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         gl.Uniform3(gl.GetUniformLocation(_mainProgram, "uLightColor"),
             light.Color.X, light.Color.Y, light.Color.Z);
         gl.CullFace(TriangleFace.Back);
+        // PMX winding is authored for MMD's left-handed space; the per-vertex Z-flip mirrors the
+        // geometry and reverses winding, so the model's FRONT faces arrive CLOCKWISE in GL. Nearly
+        // every YYB material is double-sided (masking this), but single-sided meshes — the classic
+        // inset iris/eye-highlight shells — vanish under the default CCW convention (the "eyes have
+        // no texture" report).
+        gl.FrontFace(FrontFaceDirection.CW);
+        // MFP_MMD_GL_ONLYMAT=<index>: draw a single material (render-debug isolation).
+        var onlyMaterial = int.TryParse(
+            Environment.GetEnvironmentVariable("MFP_MMD_GL_ONLYMAT"), out var om) ? om : -1;
         var offset = 0;
         for (var m = 0; visible && m < _model.Materials.Count; m++)
         {
@@ -532,13 +544,16 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             var materialState = _animator is not null
                 ? _animator.MaterialStates[m]
                 : MMDMaterialState.From(material);
-            if (material.FaceVertexCount <= 0 || materialState.Diffuse.W <= 0f)
+            if (material.FaceVertexCount <= 0 || materialState.Diffuse.W <= 0f
+                || (onlyMaterial >= 0 && m != onlyMaterial))
             {
                 offset += material.FaceVertexCount;
                 continue;
             }
 
-            if (material.DoubleSided) gl.Disable(EnableCap.CullFace);
+            // MFP_MMD_GL_NOCULL=1: draw everything double-sided (render-debug knob).
+            if (material.DoubleSided || Environment.GetEnvironmentVariable("MFP_MMD_GL_NOCULL") == "1")
+                gl.Disable(EnableCap.CullFace);
             else gl.Enable(EnableCap.CullFace);
             gl.ActiveTexture(TextureUnit.Texture0);
             gl.BindTexture(TextureTarget.Texture2D,
@@ -588,6 +603,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             }
         }
         gl.ActiveTexture(TextureUnit.Texture0);
+        gl.FrontFace(FrontFaceDirection.Ccw); // edge pass + host compositor expect the GL default
 
         // Pass 2 — MMD inverted-hull edges, AFTER the body so the shell can never occlude it: vertices
         // expanded along normals, and only the AWAY-facing hull kept. The scene's Z-flip inverts winding,
@@ -752,7 +768,11 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         return shader;
     }
 
-    public void Dispose() => _disposed = true; // GL objects follow the compositor's context (see class doc)
+    public void Dispose()
+    {
+        _disposed = true; // GL objects follow the compositor's context (see class doc)
+        _physics?.Dispose(); // ...but the native Bullet world is ours to free
+    }
 
     // MMD is left-handed (+Z away); the shaders flip Z into GL's right-handed clip space — the same
     // conversion the software rasterizer applies. Visible faces then wind CCW (GL default front).
@@ -813,6 +833,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         uniform mat4 uView;
         uniform int uShadowEnabled;
         uniform float uShadowStrength;
+        uniform int uSphereDebug; // MFP_MMD_GL_SPHEREDEBUG=1: show only the sphere-map layer
         out vec4 fragColor;
         vec3 applyTextureColor(vec3 sampled, vec4 multiplyColor, vec4 additiveColor)
         {
@@ -844,24 +865,44 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             vec3 light = normalize(uLightDirection);
             vec3 normal = normalize(vNormal);
             float ndl = dot(normal, -light);
-            vec3 base = clamp(uDiffuse.rgb * 0.8 + uAmbient * 0.6, 0.0, 1.0);
-            vec3 color = tex.rgb * base * uLightColor;
-            // Toon: the ramp texture's V axis encodes lit(0) → shadow(1); procedural two-tone fallback.
+            // Lighting term (babylon-mmd's diffuseBase): the toon ramp — whose V axis encodes
+            // lit(0) → shadow(1) — or a procedural two-tone fallback, then self-shadow × light colour.
+            // BOTH the surface colour and the sphere reflection are modulated by this (see below).
+            vec3 diffuseBase;
             if (uHasToon == 1)
-                color *= applyTextureColor(
+                diffuseBase = applyTextureColor(
                     texture(uToon, vec2(0.5, clamp(0.5 - 0.5 * ndl, 0.01, 0.99))).rgb,
                     uToonMultiply, uToonAdd);
             else
-                color *= mix(0.62, 1.0, smoothstep(0.02, 0.28, ndl));
-            color *= sampleShadow();
+                diffuseBase = vec3(mix(0.62, 1.0, smoothstep(0.02, 0.28, ndl)));
+            diffuseBase *= sampleShadow() * uLightColor;
+            // MMD/babylon-mmd composite: AMBIENT is added to the shaded diffuse and clamped, THEN modulates
+            // the texture (finalDiffuse = clamp(diffuseBase*diffuse + ambient) * baseColor). The ambient is
+            // NOT itself shaded — so high-ambient materials (the EYES) stay bright. The old model folded
+            // ambient into the shaded product (tex * clamp(diffuse*0.8 + ambient*0.6) * diffuseBase), which
+            // darkened the eyes below the MMD editor.
+            vec3 color = clamp(diffuseBase * uDiffuse.rgb + uAmbient, 0.0, 1.0) * tex.rgb;
             // Sphere map (matcap): view-space normal xy → texture coords. Multiply (.sph) darkens/tints,
-            // Add (.spa) is the highlight/iris detail layer.
+            // Add (.spa) is the highlight/iris detail layer. babylon-mmd modulates the reflection by the
+            // lighting term before blending (sphereReflectionColor.rgb *= diffuseBase) so an additive eye
+            // matcap is LIT and integrates with the shade — without it the .spa layer blasted a
+            // full-bright, unlit "bullseye" over the iris (the wrong-looking eyes).
             vec2 sphereUv = normalize(vNormalView).xy * 0.5 + 0.5;
+            // babylon-mmd samples the matcap un-flipped (viewSpaceNormal.xy*0.5+0.5), but it loads
+            // textures invertY; our loader does not, so the V flip here reproduces the same orientation
+            // (matcap highlight at the TOP of the eye).
             vec2 sphereSampleUv = uSphereMode == 3
                 ? vAdditionalUv1
                 : vec2(sphereUv.x, 1.0 - sphereUv.y);
             vec3 sphere = applyTextureColor(texture(uSphere, sphereSampleUv).rgb,
                 uSphereMultiply, uSphereAdd);
+            if (uSphereDebug == 1)
+            {
+                if (tex.a * uDiffuse.a < 0.005) discard;
+                fragColor = vec4(uSphereMode == 0 ? vec3(1,0,1) : sphere, 1.0);
+                return;
+            }
+            sphere *= diffuseBase;
             if (uSphereMode == 1 || uSphereMode == 3) color *= sphere;
             else if (uSphereMode == 2) color += sphere;
             vec3 lightView = normalize(mat3(uView) * light);

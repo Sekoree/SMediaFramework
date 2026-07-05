@@ -281,10 +281,27 @@ public partial class MediaPlayerViewModel
     internal static string BuildPortAudioInputUri(PortAudioInputPlaylistItem item) =>
         HaPlayPlaybackHelpers.BuildPortAudioInputUri(item);
 
-    private Task ShowSessionPauseAsync(bool paused)
+    // Pause/resume command in flight (like _seekArcRunning for seeks): resume flips IsPlaying=true
+    // immediately, but the session's Play() prefills + starts the audio hardware before the clip clock
+    // runs — the lock-free snapshot shows IsRunning=false with an unchanged generation for that whole
+    // window. Without this guard the 250 ms poll read those ticks as a natural end and auto-advanced;
+    // with a single-item playlist the "next" item is the same item, so resume restarted from zero.
+    private int _pauseResumeInFlight;
+
+    private async Task ShowSessionPauseAsync(bool paused)
     {
         IsPlaying = !paused;
-        return _playerShowSession?.SetPausedAsync(paused) ?? Task.CompletedTask;
+        if (_playerShowSession is not { } session)
+            return;
+        Interlocked.Increment(ref _pauseResumeInFlight);
+        try
+        {
+            await session.SetPausedAsync(paused).ConfigureAwait(true);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _pauseResumeInFlight);
+        }
     }
 
     private Task ShowSessionSeekAsync(TimeSpan position) =>
@@ -812,7 +829,8 @@ public partial class MediaPlayerViewModel
             // Guard on it two ways: skip while a seek/scrub is in flight, AND require the stopped state to
             // PERSIST across two ticks (a seek's pause is far shorter than the 250ms interval, so it can never
             // span two ticks; a genuine end does).
-            if (ConfirmShowSessionEnded(snap.IsRunning, IsPlaying, IsScrubbing, _seekArcRunning,
+            if (ConfirmShowSessionEnded(snap.IsRunning, IsPlaying, IsScrubbing,
+                    _seekArcRunning || Volatile.Read(ref _pauseResumeInFlight) > 0,
                     snap.TimelineGeneration, ref _showSessionLastTimelineGeneration,
                     ref _showSessionEndConfirmTicks))
             {
@@ -836,8 +854,11 @@ public partial class MediaPlayerViewModel
 
     /// <summary>Pure end-of-track decision for the deck poll. A coordinated seek transiently pauses the clip
     /// (IsRunning=false) while it reseeks the demux, so this treats "stopped while playing" as the true end
-    /// only when NOT mid-seek/scrub AND the stopped state has PERSISTED across two poll ticks — a seek's pause
-    /// is far shorter than the 250 ms poll interval, so it can never span two ticks; a genuine end does.
+    /// only when NOT mid-seek/scrub/pause-resume AND the stopped state has PERSISTED across two poll ticks — a
+    /// seek's pause is far shorter than the 250 ms poll interval, so it can never span two ticks; a genuine end
+    /// does. <paramref name="seekInFlight"/> also covers a resume in flight: the session's Play() prefills +
+    /// starts audio hardware before the clip clock runs, so IsRunning stays false (with IsPlaying already true)
+    /// long enough to span ticks — that window must never read as an end.
     /// A change of <paramref name="timelineGeneration"/> (the session's NXT-04 discontinuity signal: any
     /// seek/pause/resume/clip swap, including ones the deck did not initiate — e.g. a control-surface seek)
     /// authoritatively restarts the window, however long that discontinuity's transient pause lasts.

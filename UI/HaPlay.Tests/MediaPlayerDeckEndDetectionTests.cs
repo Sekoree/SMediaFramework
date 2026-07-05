@@ -58,6 +58,20 @@ public sealed class MediaPlayerDeckEndDetectionTests
     }
 
     [Fact]
+    public void ResumeInFlight_NeverEnds_AndResetsAnyPartialCount()
+    {
+        // Regression: resume flips the deck's IsPlaying=true immediately, but the session's Play() prefills
+        // and starts the audio hardware before the clip clock runs — IsRunning stays false (same generation)
+        // long enough to span poll ticks. That read as a natural end and auto-advanced; with a single-item
+        // playlist the "next" item is the same item, so pause→resume restarted from the beginning. The deck
+        // now raises the in-flight flag (same parameter as a seek arc) for the whole awaited resume.
+        var ticks = 1; // a stopped tick was already seen before the resume began
+        Assert.False(Confirm(isRunning: false, isPlaying: true, isScrubbing: false, seekInFlight: true, ref ticks));
+        Assert.False(Confirm(isRunning: false, isPlaying: true, isScrubbing: false, seekInFlight: true, ref ticks));
+        Assert.Equal(0, ticks); // however long the hardware start takes, no count accumulates
+    }
+
+    [Fact]
     public void Scrubbing_NeverEnds()
     {
         var ticks = 1;

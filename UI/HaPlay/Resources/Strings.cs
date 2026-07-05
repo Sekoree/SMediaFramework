@@ -965,4 +965,20 @@ public static class Strings
     public static string MediaPropertiesKindYouTube => Get(nameof(MediaPropertiesKindYouTube));
     public static string MediaPropertiesKindNDI => Get(nameof(MediaPropertiesKindNDI));
     public static string MediaPropertiesKindPortAudio => Get(nameof(MediaPropertiesKindPortAudio));
+    public static string CacheSectionHeader => Get(nameof(CacheSectionHeader));
+    public static string CacheSectionHint => Get(nameof(CacheSectionHint));
+    public static string CacheYouTubeLabel => Get(nameof(CacheYouTubeLabel));
+    public static string CacheYouTubeHint => Get(nameof(CacheYouTubeHint));
+    public static string CacheMMDBakeLabel => Get(nameof(CacheMMDBakeLabel));
+    public static string CacheMMDBakeHint => Get(nameof(CacheMMDBakeHint));
+    public static string CacheSizeCalculatingLabel => Get(nameof(CacheSizeCalculatingLabel));
+    public static string CacheEmptyLabel => Get(nameof(CacheEmptyLabel));
+    public static string CacheSizeFormat => Get(nameof(CacheSizeFormat));
+    public static string CacheClearedStatusFormat => Get(nameof(CacheClearedStatusFormat));
+    public static string CacheClearedWithSkipsStatusFormat => Get(nameof(CacheClearedWithSkipsStatusFormat));
+    public static string CacheOpenFolderButton => Get(nameof(CacheOpenFolderButton));
+    public static string CacheClearButton => Get(nameof(CacheClearButton));
+    public static string CacheRefreshButton => Get(nameof(CacheRefreshButton));
+    public static string YouTubeDownloadDetailFormat => Get(nameof(YouTubeDownloadDetailFormat));
+    public static string YouTubeDownloadDetailWithSpeedFormat => Get(nameof(YouTubeDownloadDetailWithSpeedFormat));
 }

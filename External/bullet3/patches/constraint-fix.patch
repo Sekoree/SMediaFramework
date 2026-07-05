@@ -1,0 +1,14 @@
+diff --git a/BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.cpp b/BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.cpp
+--- a/BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.cpp
++++ b/BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.cpp
+@@ -743,7 +743,9 @@
+ 			else
+ 			{
+ 				btVector3 ltd;  // Linear Torque Decoupling vector
+-				btVector3 c = m_calculatedTransformB.getOrigin() - transA.getOrigin();
++				// babylon-mmd constraint-fix.patch: use transform A's origin (not B) so the linear
++				// torque-decoupling arm matches MMD's Bullet behaviour for the 6DOF spring joints.
++				btVector3 c = m_calculatedTransformA.getOrigin() - transA.getOrigin();
+ 				ltd = c.cross(ax1);
+ 				info->m_J1angularAxis[srow + 0] = ltd[0];
+ 				info->m_J1angularAxis[srow + 1] = ltd[1];
