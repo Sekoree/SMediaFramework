@@ -77,7 +77,7 @@
       </StackPanel>
 
       <!-- Code editor -->
-      <Border Grid.Row="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0">
+      <Border Grid.Row="1" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
         <!-- Light editor surface — the dark pane was a Fluent-era holdover that clashed with the
              Classic theme (and its light text bled into a light-on-light mess under the Light variant). -->
         <ae:TextEditor x:Name="ScriptEditor"
@@ -89,7 +89,7 @@
       </Border>
 
       <!-- Triggers / Learn / Diagnostics -->
-      <Border Grid.Row="2" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
+      <Border Grid.Row="2" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
         <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Spacing="10">
 

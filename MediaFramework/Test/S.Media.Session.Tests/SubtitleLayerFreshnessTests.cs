@@ -86,8 +86,7 @@ public sealed class SubtitleLayerFreshnessTests
             Version: 1,
             Cues: [new CueDefinition("c", 1, "Video")],
             Clips: [new ShowClipBinding("c", "held://x", CompositionId: "screen", LayerIndex: 0, SubtitlePath: "sub.ass")],
-            Compositions: [new ShowComposition("screen", "Screen", 4, 4, 30, 1)],
-            Outputs: [], Routes: [], Devices: []));
+            Compositions: [new ShowComposition("screen", "Screen", 4, 4, 30, 1)], Routes: []));
 
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
 

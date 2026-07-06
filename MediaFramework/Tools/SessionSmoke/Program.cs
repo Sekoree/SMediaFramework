@@ -93,9 +93,7 @@ var document = new ShowDocument(
                 ],
                 OutputWidth: 1280, OutputHeight: 720)),
     ],
-    Outputs: [],
-    Routes: [],
-    Devices: []);
+    Routes: []);
 
 var json = document.ToJson();
 var reloaded = ShowDocument.FromJson(json);
@@ -324,7 +322,7 @@ await using (var trimSession = new ShowSession(registry, backend))
         1,
         [new CueDefinition("trim", 1, "Trim-in")],
         [new ShowClipBinding("trim", audioFile) { StartOffset = trimOffset }],
-        [], [], [], []));
+        [], []));
     await trimSession.GoAsync();
     await Task.Delay(800);
     var trim = (await trimSession.SnapshotAsync())[0];
@@ -351,7 +349,7 @@ await using (var loopSession = new ShowSession(registry, backend))
         1,
         [new CueDefinition("loop", 1, "Loop")],
         [new ShowClipBinding("loop", audioFile) { Loop = true, EndOffset = TimeSpan.FromSeconds(4) }],
-        [], [], [], []));
+        [], []));
     await loopSession.GoAsync();
     await Task.Delay(300);
     var dur = (await loopSession.SnapshotAsync())[0].ClipDuration;
@@ -375,7 +373,7 @@ await using (var fadeSession = new ShowSession(registry, backend))
         1,
         [new CueDefinition("fade", 1, "Fade")],
         [new ShowClipBinding("fade", audioFile) { FadeIn = TimeSpan.FromSeconds(1) }],
-        [], [], [], []));
+        [], []));
     await fadeSession.GoAsync();
     await Task.Delay(1500); // past the 1s fade ramp
     var faded = (await fadeSession.SnapshotAsync())[0];

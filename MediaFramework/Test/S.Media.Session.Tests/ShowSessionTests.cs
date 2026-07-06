@@ -9,9 +9,7 @@ public sealed class ShowSessionTests
         Cues: [new CueDefinition("cue1", 1, "One"), new CueDefinition("cue2", 2, "Two")],
         Clips: [new ShowClipBinding("cue1", "fake://1"), new ShowClipBinding("cue2", "fake://2")],
         Compositions: [],
-        Outputs: [],
-        Routes: [],
-        Devices: []);
+        Routes: []);
 
     [Fact]
     public async Task InvokeAsync_MarshalsCommandAndReturnsResult()
@@ -104,9 +102,7 @@ public sealed class ShowSessionTests
             Cues: [new CueDefinition("cue3", 3, "Three")],
             Clips: [new ShowClipBinding("cue3", "fake://3")],
             Compositions: [],
-            Outputs: [],
-            Routes: [],
-            Devices: []);
+            Routes: []);
 
         await session.LoadDocumentAsync(replacement);
 
@@ -133,7 +129,7 @@ public sealed class ShowSessionTests
         await session.LoadDocumentAsync(new ShowDocument(
             Version: 1,
             Cues: [new CueDefinition("empty", 1, "Unbound media cue")],
-            Clips: [], Compositions: [], Outputs: [], Routes: [], Devices: []));
+            Clips: [], Compositions: [], Routes: []));
 
         Assert.Equal(CueExecutionStatus.NotReady, await session.FireCueAsync("empty"));
         var entry = Assert.Single(await session.GetCueExecutionLogAsync());
@@ -182,7 +178,7 @@ public sealed class ShowSessionTests
         // DOC-01: numeric/path invariants are enforced at load rather than silently mis-played.
         static IReadOnlyList<string> ValidateClip(ShowClipBinding clip, params ShowComposition[] comps) =>
             ShowDocumentValidator.Validate(new ShowDocument(1,
-                [new CueDefinition("a", 1, "A")], [clip], comps, [], [], []));
+                [new CueDefinition("a", 1, "A")], [clip], comps, []));
 
         Assert.Contains(ValidateClip(new ShowClipBinding("a", "   ")), e => e.Contains("empty media path"));
         Assert.Contains(
@@ -227,44 +223,44 @@ public sealed class ShowSessionTests
     public void Validator_RejectsBadVersionDuplicatesDanglingAndCycles()
     {
         // NXT-12 / NXT-07: every structural problem is reported, and a well-formed show passes.
-        Assert.NotEmpty(ShowDocumentValidator.Validate(new ShowDocument(2, [], [], [], [], [], [])));
+        Assert.NotEmpty(ShowDocumentValidator.Validate(new ShowDocument(2, [], [], [], [])));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
-                [new CueDefinition("a", 1, "A"), new CueDefinition("b", 1, "B")], [], [], [], [], [])),
+                [new CueDefinition("a", 1, "A"), new CueDefinition("b", 1, "B")], [], [], [])),
             e => e.Contains("duplicate cue number"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
-                [new CueDefinition("a", 1, "A", FollowOnCueId: "ghost")], [], [], [], [], [])),
+                [new CueDefinition("a", 1, "A", FollowOnCueId: "ghost")], [], [], [])),
             e => e.Contains("unknown follow-on"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A", FollowOnCueId: "b", AutoContinue: true),
-                 new CueDefinition("b", 2, "B", FollowOnCueId: "a", AutoContinue: true)], [], [], [], [], [])),
+                 new CueDefinition("b", 2, "B", FollowOnCueId: "a", AutoContinue: true)], [], [], [])),
             e => e.Contains("cycle"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A")],
-                [new ShowClipBinding("a", "x"), new ShowClipBinding("a", "y")], [], [], [], [])),
+                [new ShowClipBinding("a", "x"), new ShowClipBinding("a", "y")], [], [])),
             e => e.Contains("more than one clip"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
-                [new CueDefinition("a", 1, "A"), new CueDefinition("a", 2, "A2")], [], [], [], [], [])),
+                [new CueDefinition("a", 1, "A"), new CueDefinition("a", 2, "A2")], [], [], [])),
             e => e.Contains("duplicate cue id"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
-                [new CueDefinition("a", 1, "")], [], [], [], [], [])),
+                [new CueDefinition("a", 1, "")], [], [], [])),
             e => e.Contains("empty label"));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
                 [new CueDefinition("a", 1, "A")],
-                [new ShowClipBinding("a", "x", CompositionId: "ghost")], [], [], [], [])),
+                [new ShowClipBinding("a", "x", CompositionId: "ghost")], [], [])),
             e => e.Contains("unknown composition"));
 
         // An extra fan-out placement pointing at a non-existent composition is caught at load, not dropped silently.
@@ -273,7 +269,7 @@ public sealed class ShowSessionTests
                 [new CueDefinition("a", 1, "A")],
                 [new ShowClipBinding("a", "x", CompositionId: "real")
                     { ExtraPlacements = [new ShowClipPlacement("ghost", 1)] }],
-                [new ShowComposition("real", "Real", 320, 240)], [], [], [])),
+                [new ShowComposition("real", "Real", 320, 240)], [])),
             e => e.Contains("extra placement on unknown composition"));
 
         Assert.Empty(ShowDocumentValidator.Validate(TwoAudioCues()));
@@ -290,7 +286,7 @@ public sealed class ShowSessionTests
             [new ShowClipBinding("a", "fake://a"),
              new ShowClipBinding("b", "fake://b"),
              new ShowClipBinding("c", "fake://c")],
-            [], [], [], []);
+            [], []);
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -312,7 +308,7 @@ public sealed class ShowSessionTests
         Assert.True(Assert.Single(session.Snapshot()).IsRunning);
 
         await Assert.ThrowsAsync<ShowDocumentValidationException>(
-            () => session.LoadDocumentAsync(new ShowDocument(2, [], [], [], [], [], []))); // unsupported version
+            () => session.LoadDocumentAsync(new ShowDocument(2, [], [], [], []))); // unsupported version
 
         // The original show is untouched: still running, still has its two cues.
         Assert.True(Assert.Single(session.Snapshot()).IsRunning);
@@ -326,7 +322,7 @@ public sealed class ShowSessionTests
         // fire and returns promptly instead of queuing behind the (here 30s) pre-wait.
         var doc = new ShowDocument(1,
             [new CueDefinition("slow", 1, "Slow", PreWait: TimeSpan.FromSeconds(30))],
-            [new ShowClipBinding("slow", "fake://x")], [], [], [], []);
+            [new ShowClipBinding("slow", "fake://x")], [], []);
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -350,7 +346,7 @@ public sealed class ShowSessionTests
         await session.LoadDocumentAsync(new ShowDocument(1,
             [new CueDefinition("c", 1, "C")],
             [new ShowClipBinding("c", "blocking://x")],
-            [], [], [], []));
+            [], []));
 
         var fire = session.FireCueAsync("c"); // cold open blocks until cancelled
         await Task.Delay(150);                 // let the fire reach the (blocked) open
@@ -372,7 +368,7 @@ public sealed class ShowSessionTests
         await session.LoadDocumentAsync(new ShowDocument(1,
             [new CueDefinition("c", 1, "C")],
             [new ShowClipBinding("c", "blocking://x")],
-            [], [], [], []));
+            [], []));
 
         var fire = session.FireCueAsync("c"); // open blocks indefinitely
         await Task.Delay(150);
@@ -395,12 +391,12 @@ public sealed class ShowSessionTests
         await session.LoadDocumentAsync(new ShowDocument(1,
             [new CueDefinition("c", 1, "C")],
             [new ShowClipBinding("c", "blocking://x")],
-            [], [], [], []));
+            [], []));
 
         var fire = session.FireCueAsync("c"); // open blocks
         await Task.Delay(150);
 
-        var reload = session.LoadDocumentAsync(new ShowDocument(1, [], [], [], [], [], []));
+        var reload = session.LoadDocumentAsync(new ShowDocument(1, [], [], [], []));
         var winner = await Task.WhenAny(reload, Task.Delay(TimeSpan.FromSeconds(5)));
         Assert.Same(reload, winner); // the reload completed while the fire's open was blocked
         await reload;
@@ -498,7 +494,7 @@ public sealed class ShowSessionTests
             1,
             [new CueDefinition("c", 1, "C")],
             [binding],
-            [], [], [], []);
+            [], []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry(frameCount: 900));
         await session.LoadDocumentAsync(doc);
         await session.GoAsync();
@@ -536,7 +532,7 @@ public sealed class ShowSessionTests
             [new CueDefinition("c", 1, "C")],
             [new ShowClipBinding("c", "live://v", CompositionId: "screen") { AudioRoutes = [] }],
             [new ShowComposition("screen", "Screen", 320, 240)],
-            [], [], []);
+            []);
         await using var session = new ShowSession(FakeLiveVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -678,7 +674,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [0, 1], Gain: 1f)],
                 },
             ],
-            Compositions: [], Outputs: [], Routes: [], Devices: []);
+            Compositions: [], Routes: []);
         await session.LoadDocumentAsync(doc);
         await session.GoAsync(); // cue1 active with its clip0 output attached
 
@@ -721,7 +717,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [new ShowClipAudioRoute(DeviceId: "ndi:cam", ChannelMatrix: [0, 1], Gain: 1f)],
                 },
             ],
-            Compositions: [], Outputs: [], Routes: [], Devices: []);
+            Compositions: [], Routes: []);
         await session.LoadDocumentAsync(doc);
         await session.GoAsync();
 
@@ -762,7 +758,7 @@ public sealed class ShowSessionTests
                     ],
                 },
             ],
-            Compositions: [], Outputs: [], Routes: [], Devices: []);
+            Compositions: [], Routes: []);
         await session.LoadDocumentAsync(doc);
         await session.GoAsync();
 
@@ -807,7 +803,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [new ShowClipAudioRoute(DeviceId: "hw:7", ChannelMatrix: [0, 1], Gain: 1f)],
                 },
             ],
-            Compositions: [], Outputs: [], Routes: [], Devices: []);
+            Compositions: [], Routes: []);
         await session.LoadDocumentAsync(doc);
 
         Assert.Empty(session.GetActiveAudioPumpStatsByDevice()); // idle → nothing driven
@@ -881,8 +877,7 @@ public sealed class ShowSessionTests
                     StartOffset = TimeSpan.FromMilliseconds(200),
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 4, 4)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 4, 4)], Routes: []);
 
         await using var session = new ShowSession(
             FakeVideoDecoderProvider.Registry(),
@@ -923,9 +918,7 @@ public sealed class ShowSessionTests
             Cues: [new CueDefinition("cue1", 1, "One")],
             Clips: [new ShowClipBinding("cue1", "fake://1")],
             Compositions: [],
-            Outputs: [],
-            Routes: [new OutputPatchRoute("cue1", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1])],
-            Devices: []);
+            Routes: [new OutputPatchRoute("cue1", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1])]);
         var backend = new RecordingAudioBackend();
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
         await session.LoadDocumentAsync(doc);
@@ -940,8 +933,7 @@ public sealed class ShowSessionTests
     {
         var doc = new ShowDocument(
             Version: 1, Cues: [], Clips: [],
-            Compositions: [new ShowComposition("screen", "S", 320, 240)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "S", 320, 240)], Routes: []);
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         session.LoadDocument(doc);
 
@@ -959,8 +951,7 @@ public sealed class ShowSessionTests
         var output = new DiscardingVideoOutput();
         var doc = new ShowDocument(
             Version: 1, Cues: [], Clips: [],
-            Compositions: [new ShowComposition("screen", "S", 320, 240)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "S", 320, 240)], Routes: []);
         await using var session = new ShowSession(
             FakeAudioDecoderProvider.Registry(),
             videoOutputFactory: (_, _, _, _) =>
@@ -984,8 +975,7 @@ public sealed class ShowSessionTests
         // feeding a newly-selected screen/NDI line live.
         var doc = new ShowDocument(
             Version: 1, Cues: [], Clips: [],
-            Compositions: [new ShowComposition("screen", "S", 320, 240)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "S", 320, 240)], Routes: []);
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         session.LoadDocument(doc);
 
@@ -1007,9 +997,7 @@ public sealed class ShowSessionTests
             Cues: [new CueDefinition("cue1", 1, "One")],
             Clips: [new ShowClipBinding("cue1", "fake://1")],
             Compositions: [],
-            Outputs: [],
-            Routes: [new OutputPatchRoute("cue1", "monitor", ChannelMatrix: [0, 1, 0, 1])],
-            Devices: [])
+            Routes: [new OutputPatchRoute("cue1", "monitor", ChannelMatrix: [0, 1, 0, 1])])
         {
             AudioOutputs = [new ShowAudioOutput("main"), new ShowAudioOutput("monitor")],
         };
@@ -1045,9 +1033,7 @@ public sealed class ShowSessionTests
                 },
             ],
             Compositions: [],
-            Outputs: [],
-            Routes: [],
-            Devices: [])
+            Routes: [])
         {
             AudioOutputs = [new ShowAudioOutput("main"), new ShowAudioOutput("monitor")],
         };
@@ -1076,7 +1062,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [], Outputs: [], Routes: [], Devices: []);
+            Compositions: [], Routes: []);
         var backend = new RecordingAudioBackend();
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
         await session.LoadDocumentAsync(doc);
@@ -1102,8 +1088,7 @@ public sealed class ShowSessionTests
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
             Clips: [],
-            Compositions: [new ShowComposition("screen", "Screen", 1280, 720, 30, 1)],
-            Outputs: [], Routes: [], Devices: []));
+            Compositions: [new ShowComposition("screen", "Screen", 1280, 720, 30, 1)], Routes: []));
 
         Assert.Contains(("screen", 1280, 720), seen);
     }
@@ -1125,8 +1110,7 @@ public sealed class ShowSessionTests
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
             Clips: [],
-            Compositions: [new ShowComposition("screen", "Screen", 640, 480, 30, 1)],
-            Outputs: [], Routes: [], Devices: []));
+            Compositions: [new ShowComposition("screen", "Screen", 640, 480, 30, 1)], Routes: []));
 
         Assert.Contains((640, 480), seen);
     }
@@ -1140,8 +1124,7 @@ public sealed class ShowSessionTests
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
             Clips: [new ShowClipBinding("c", "fake://v", CompositionId: "screen")],
-            Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)], Routes: []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -1171,8 +1154,7 @@ public sealed class ShowSessionTests
             [
                 new ShowComposition("a", "A", 320, 240, 30, 1),
                 new ShowComposition("b", "B", 320, 240, 30, 1),
-            ],
-            Outputs: [], Routes: [], Devices: []);
+            ], Routes: []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -1205,8 +1187,7 @@ public sealed class ShowSessionTests
             [
                 new ShowComposition("a", "A", 320, 240, 30, 1),
                 new ShowComposition("b", "B", 320, 240, 30, 1),
-            ],
-            Outputs: [], Routes: [], Devices: []);
+            ], Routes: []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -1228,8 +1209,7 @@ public sealed class ShowSessionTests
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
             Clips: [],
-            Compositions: [new ShowComposition("a", "A", 320, 240, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("a", "A", 320, 240, 30, 1)], Routes: []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
@@ -1265,8 +1245,7 @@ public sealed class ShowSessionTests
             [
                 new ShowComposition("a", "A", 320, 240, 30, 1),
                 new ShowComposition("b", "B", 320, 240, 30, 1),
-            ],
-            Outputs: [], Routes: [], Devices: []);
+            ], Routes: []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
         await session.GoAsync();
@@ -1286,8 +1265,7 @@ public sealed class ShowSessionTests
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
             Clips: [new ShowClipBinding("c", "fake://v", CompositionId: "screen")],
-            Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)], Routes: []);
         await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
 
         Assert.Null(session.GetCompositionStats("screen")); // nothing loaded yet
@@ -1298,7 +1276,7 @@ public sealed class ShowSessionTests
         Assert.Equal("screen", stats!.Value.CompositionId);
         Assert.Null(session.GetCompositionStats("nope")); // unknown composition
 
-        await session.LoadDocumentAsync(new ShowDocument(1, [], [], [], [], [], [])); // reload with no compositions
+        await session.LoadDocumentAsync(new ShowDocument(1, [], [], [], [])); // reload with no compositions
         Assert.Null(session.GetCompositionStats("screen")); // retired
     }
 
@@ -1322,8 +1300,7 @@ public sealed class ShowSessionTests
                     Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             FakeVideoDecoderProvider.Registry(),
             videoOutputFactory: (_, _, _, _) =>
@@ -1359,8 +1336,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             // 30s of fake video: the STOP must always win the fade claim — with the default 1s clip a slow
             // CI runner could reach the natural fade-out window first, and the stop then returns without
@@ -1401,8 +1377,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             FakeVideoDecoderProvider.Registry(),
             videoOutputFactory: (_, _, _, _) =>
@@ -1443,8 +1418,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         return (doc, output);
     }
 
@@ -1563,7 +1537,7 @@ public sealed class ShowSessionTests
         Version: 1,
         Cues: [new CueDefinition("cue1", 1, "A", GroupId: "A"), new CueDefinition("cue2", 2, "B", GroupId: "B")],
         Clips: [new ShowClipBinding("cue1", "fake://1"), new ShowClipBinding("cue2", "fake://2")],
-        Compositions: [], Outputs: [], Routes: [], Devices: []);
+        Compositions: [], Routes: []);
 
     [Fact]
     public async Task SetAllPausedAsync_PausesAndResumesEveryActiveGroup()
@@ -1663,8 +1637,7 @@ public sealed class ShowSessionTests
                 new ShowClipBinding("b", "fake://vb", CompositionId: "compB")
                     { Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"), AudioRoutes = [] },
             ],
-            Compositions: [new ShowComposition("compA", "A", 8, 8, 30, 1), new ShowComposition("compB", "B", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("compA", "A", 8, 8, 30, 1), new ShowComposition("compB", "B", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             FakeVideoDecoderProvider.Registry(),
             videoOutputFactory: (compId, name, _, _) =>
@@ -1714,8 +1687,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             UnboundedHeldProvider.Registry(TimeSpan.FromMilliseconds(400)),
             videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
@@ -1760,8 +1732,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             UnboundedHeldProvider.Registry(TimeSpan.FromMilliseconds(400)),
             videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
@@ -1797,8 +1768,7 @@ public sealed class ShowSessionTests
                     AudioRoutes = [],
                 },
             ],
-            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-            Outputs: [], Routes: [], Devices: []);
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
             UnboundedHeldProvider.Registry(TimeSpan.FromSeconds(30)), // long — stays up for the assertion
             videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
@@ -1860,8 +1830,7 @@ public sealed class ShowSessionTests
         Version: 1,
         Cues: [new CueDefinition("c", 1, "C")],
         Clips: [],
-        Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
-        Outputs: [], Routes: [], Devices: []);
+        Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)], Routes: []);
 
     [Fact]
     public async Task BorrowedVideoOutput_NotDisposed_OnReloadOrDispose()
@@ -1908,13 +1877,11 @@ public sealed class ShowSessionTests
             Cues: [new CueDefinition("cue1", 1, "One"), new CueDefinition("cue2", 2, "Two")],
             Clips: [new ShowClipBinding("cue1", "fake://1"), new ShowClipBinding("cue2", "fake://2")],
             Compositions: [],
-            Outputs: [],
             Routes:
             [
                 new OutputPatchRoute("cue2", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1, 0, 1]),
                 new OutputPatchRoute("cue1", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1]),
-            ],
-            Devices: []);
+            ]);
         var backend = new RecordingAudioBackend();
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
         await session.LoadDocumentAsync(doc);

@@ -318,7 +318,7 @@ public sealed class CueShowSessionCoordinator
             {
                 if (model.Source is not HaPlay.Models.TextPlaylistItem textItem)
                     return;
-                var frame = TextFrameRenderer.Render(textItem, new Rational(30, 1));
+                var frame = S.Media.Source.Text.TextFrameRenderer.Render(textItem.ToSpec(), new Rational(30, 1));
                 if (frame is null)
                 {
                     Trace.LogWarning("HaPlay: live text update cue {Cue} — render returned null", cueId);

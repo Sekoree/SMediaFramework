@@ -98,8 +98,7 @@ public sealed class SurfaceLayerSessionTests
                 AudioRoutes = [],
             },
         ],
-        Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-        Outputs: [], Routes: [], Devices: []);
+        Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
 
     [Fact]
     public async Task SurfaceCapableClip_OnSurfaceHostingCompositor_CompositesGpuSide()

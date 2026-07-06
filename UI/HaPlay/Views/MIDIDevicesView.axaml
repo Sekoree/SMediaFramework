@@ -33,12 +33,12 @@
 
     <Grid RowDefinitions="*,Auto" RowSpacing="10">
       <Grid Grid.Row="0" ColumnDefinitions="*,*" ColumnSpacing="10">
-        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
+        <Border Grid.Column="0" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
           <Grid RowDefinitions="Auto,*">
             <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
               <TextBlock Text="{x:Static res:Strings.InputsHeader}" FontWeight="SemiBold" />
               <Button HorizontalAlignment="Right"
-                      Content="Use selected input"
+                      Content="{x:Static res:Strings.MidiDevicesUseInput}"
                       Command="{Binding AddSelectedMIDIInputToControlCommand}" />
             </StackPanel>
             <ListBox Grid.Row="1"
@@ -57,12 +57,12 @@
           </Grid>
         </Border>
 
-        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
+        <Border Grid.Column="1" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
           <Grid RowDefinitions="Auto,*">
             <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
               <TextBlock Text="{x:Static res:Strings.OutputsHeader}" FontWeight="SemiBold" />
               <Button HorizontalAlignment="Right"
-                      Content="Use selected output"
+                      Content="{x:Static res:Strings.MidiDevicesUseOutput}"
                       Command="{Binding AddSelectedMIDIOutputToProjectCommand}" />
             </StackPanel>
             <ListBox Grid.Row="1"
@@ -83,16 +83,16 @@
       </Grid>
 
       <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="10">
-        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
+        <Border Grid.Column="0" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" ColumnSpacing="6" Margin="0,0,0,8">
-              <TextBlock Grid.Column="0" Text="Project MIDI inputs" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.MidiDevicesProjectInputsHeader}" FontWeight="SemiBold" VerticalAlignment="Center" />
               <Button Grid.Column="1"
                       Content="{x:Static res:Strings.RemoveButton}"
                       Command="{Binding RemoveSelectedProjectMIDIInputCommand}" />
             </Grid>
             <TextBlock DockPanel.Dock="Bottom"
-                       Text="Select an input above to make it available to Control scripts."
+                       Text="{x:Static res:Strings.MidiDevicesProjectInputsHint}"
                        Opacity="0.6"
                        FontSize="12"
                        TextWrapping="Wrap"
@@ -116,10 +116,10 @@
           </DockPanel>
         </Border>
 
-        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="10">
+        <Border Grid.Column="1" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
-              <TextBlock Grid.Column="0" Text="Project MIDI outputs" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.MidiDevicesProjectOutputsHeader}" FontWeight="SemiBold" VerticalAlignment="Center" />
               <Button Grid.Column="1"
                       Content="{x:Static res:Strings.TestDeviceButton}"
                       Command="{Binding TestSelectedProjectMIDIOutputCommand}" />
@@ -134,7 +134,7 @@
                        TextWrapping="Wrap"
                        Margin="0,8,0,0" />
             <TextBlock DockPanel.Dock="Bottom"
-                       Text="Select an output above to make it available to Control scripts and cue action targets."
+                       Text="{x:Static res:Strings.MidiDevicesProjectOutputsHint}"
                        Opacity="0.6"
                        FontSize="12"
                        TextWrapping="Wrap"

@@ -2716,6 +2716,57 @@
   <data name="RemoteApiTokenCopiedToast" xml:space="preserve">
     <value>Access token copied to clipboard.</value>
   </data>
+  <data name="MidiDevicesUseInput" xml:space="preserve">
+    <value>Use selected input</value>
+  </data>
+  <data name="MidiDevicesUseOutput" xml:space="preserve">
+    <value>Use selected output</value>
+  </data>
+  <data name="MidiDevicesProjectInputsHeader" xml:space="preserve">
+    <value>Project MIDI inputs</value>
+  </data>
+  <data name="MidiDevicesProjectInputsHint" xml:space="preserve">
+    <value>Select an input above to make it available to Control scripts.</value>
+  </data>
+  <data name="MidiDevicesProjectOutputsHeader" xml:space="preserve">
+    <value>Project MIDI outputs</value>
+  </data>
+  <data name="MidiDevicesProjectOutputsHint" xml:space="preserve">
+    <value>Select an output above to make it available to Control scripts and cue action targets.</value>
+  </data>
+  <data name="JumpToLabel" xml:space="preserve">
+    <value>Jump to</value>
+  </data>
+  <data name="JumpToWatermark" xml:space="preserve">
+    <value>mm:ss</value>
+  </data>
+  <data name="JumpToTooltip" xml:space="preserve">
+    <value>Type a position (mm:ss, hh:mm:ss, or add .ms) and press Enter to seek.</value>
+  </data>
+  <data name="DeckRoutingNone" xml:space="preserve">
+    <value>No output</value>
+  </data>
+  <data name="DeckRoutingCountOne" xml:space="preserve">
+    <value>1 output</value>
+  </data>
+  <data name="DeckRoutingCountFormat" xml:space="preserve">
+    <value>{0} outputs</value>
+  </data>
+  <data name="DeckRoutingWarnSuffixFormat" xml:space="preserve">
+    <value> · {0} reconnecting</value>
+  </data>
+  <data name="DeckRoutingErrorSuffixFormat" xml:space="preserve">
+    <value> · {0} offline</value>
+  </data>
+  <data name="DeckRoutingFlyoutTitle" xml:space="preserve">
+    <value>Outputs</value>
+  </data>
+  <data name="DeckRoutingChipTooltip" xml:space="preserve">
+    <value>Outputs this player is routing to. Click for per-output health.</value>
+  </data>
+  <data name="DeckRoutingNoneHint" xml:space="preserve">
+    <value>This player isn't routed to any output — it won't be seen or heard.</value>
+  </data>
   <data name="RemoteApiTokenNone" xml:space="preserve">
     <value>(none — authentication disabled)</value>
   </data>

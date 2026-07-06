@@ -66,7 +66,7 @@
       <TextBlock Grid.Column="7"
                  Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
-                 Foreground="#888888"
+                 Foreground="{StaticResource TextSecondary}"
                  TextTrimming="CharacterEllipsis"
                  ToolTip.Tip="{Binding DisplayedCueFilePath}"
                  IsVisible="{Binding DisplayedCueFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -335,7 +335,7 @@
                             ItemsSource="{Binding SelectedCueNode.AudioTrackChoices}"
                             SelectedItem="{Binding SelectedCueNode.SelectedAudioTrackChoice, Mode=TwoWay}" />
                 </StackPanel>
-                <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -426,7 +426,7 @@
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding VideoFrameRateMismatchWarning}" />
                 </Border>
-                <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -459,7 +459,7 @@
                 </WrapPanel>
 
                 <!-- Visual placement canvas: drag to move, bottom-right handle to resize, click to select -->
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" MinHeight="220">
+                <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" MinHeight="220">
                   <controls:CompositionPlacementCanvas
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
@@ -764,7 +764,7 @@
             <ItemsControl ItemsSource="{Binding NowPlayingRows}">
               <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
-                  <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0"
+                  <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4">
                     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">

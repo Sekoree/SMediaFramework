@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- SESSION-02: the `text:` cue source, promoted out of HaPlay into an optional first-party module so any host
+       running a ShowDocument can render a text cue identically. SkiaSharp (CPU raster) is isolated HERE — the
+       framework core stays Skia-free; only a host that loads this module pulls the dependency (same pattern as
+       the NDI / YouTube / MMD source modules carrying their own natives). -->
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- HaPlay.Tests covers the text: open/bind path (TextHeldVideoSource is an internal detail). -->
+    <InternalsVisibleTo Include="HaPlay.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+    <!-- The held-frame source converts the rendered BGRA card to the negotiated output format via swscale. -->
+    <ProjectReference Include="../S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+  </ItemGroup>
+
+</Project>

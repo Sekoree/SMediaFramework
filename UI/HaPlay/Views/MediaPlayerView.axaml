@@ -148,7 +148,7 @@
                              KeyDown="OnPlayerNameKeyDown" />
 
                     <Border Grid.Column="2" Classes="chip hide-compact" Margin="8,0,6,0"
-                            Background="#22808080"
+                            Background="{StaticResource ChipNeutral}"
                             ToolTip.Tip="{x:Static res:Strings.SourceKindTooltip}">
                         <TextBlock FontSize="11" FontWeight="SemiBold"
                                    Text="{Binding SourceKindLabel}" />
@@ -160,6 +160,57 @@
                                ToolTip.Tip="{Binding CurrentMediaDisplay}" />
 
                     <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+                        <!-- Multi-output aggregate: worst-case health dot + routed-output count, with a
+                             per-output health flyout. Read-only status view — full routing edits live in
+                             the pinned routing group box + editor (the flyout links straight to it). -->
+                        <Button Padding="8,4" VerticalAlignment="Center"
+                                IsVisible="{Binding !HasNoOutputs}"
+                                ToolTip.Tip="{x:Static res:Strings.DeckRoutingChipTooltip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                         Fill="{Binding DeckOutputHealthColor, FallbackValue=#666666}" />
+                                <TextBlock FontSize="11" VerticalAlignment="Center"
+                                           Text="{Binding DeckOutputSummary}" />
+                                <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <StackPanel Spacing="6" Margin="4" MinWidth="220" MaxWidth="340">
+                                        <TextBlock FontWeight="SemiBold" FontSize="12"
+                                                   Text="{x:Static res:Strings.DeckRoutingFlyoutTitle}" />
+                                        <TextBlock TextWrapping="Wrap" FontSize="11"
+                                                   Foreground="{StaticResource TextSecondary}"
+                                                   IsVisible="{Binding !HasRoutedOutputs}"
+                                                   Text="{x:Static res:Strings.DeckRoutingNoneHint}" />
+                                        <ItemsControl ItemsSource="{Binding SelectedOutputs}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8"
+                                                          Margin="0,2"
+                                                          ToolTip.Tip="{Binding Line.HealthToolTip}">
+                                                        <Ellipse Grid.Column="0" Width="9" Height="9"
+                                                                 VerticalAlignment="Center"
+                                                                 Fill="{Binding Line.HealthColor, FallbackValue=#666666}" />
+                                                        <TextBlock Grid.Column="1" VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   Text="{Binding Line.EffectiveName}" />
+                                                        <TextBlock Grid.Column="2" FontSize="11"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource TextSecondary}"
+                                                                   Text="{Binding Line.KindLabel}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <Button HorizontalAlignment="Stretch" Margin="0,2,0,0"
+                                                Content="{x:Static res:Strings.RoutingEditButton}"
+                                                Command="{Binding OpenRoutingCommand}"
+                                                ToolTip.Tip="{x:Static res:Strings.RoutingEditTooltip}" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+
                         <!-- Single overflow menu, labelled so its dropdown nature is obvious
                              (gear + "Player" + ▾). Player Settings lives inside it. -->
                         <Button Padding="8,4"
@@ -251,24 +302,27 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- P5 transport: the touch tier. Prev/Play/Next/Stop + HOLD are >=56 px panic-path
-                     controls; HOLD pushes the configured idle image to this player's video outputs
-                     (long-press the flyout arrow for the image picker). Mute/volume moved to the
-                     slim row below — frequently used, but not panic-path. -->
+                <!-- Jump-to-position: type a timecode (mm:ss / hh:mm:ss, optional .ms) and press Enter to seek.
+                     Input is restricted to digits, ':' and '.' in code-behind; a malformed value is ignored. -->
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
+                            Margin="0,4,0,0" IsVisible="{Binding IsTransportSeekable}">
+                    <TextBlock Text="{x:Static res:Strings.JumpToLabel}" VerticalAlignment="Center"
+                               Foreground="{StaticResource TextSecondary}" FontSize="12" />
+                    <TextBox Name="JumpBox" Width="100" MaxLength="12"
+                             PlaceholderText="{x:Static res:Strings.JumpToWatermark}"
+                             FontFamily="Consolas,monospace" VerticalContentAlignment="Center"
+                             IsEnabled="{Binding IsMediaLoaded}"
+                             KeyDown="OnJumpBoxKeyDown" TextInput="OnJumpBoxTextInput"
+                             ToolTip.Tip="{x:Static res:Strings.JumpToTooltip}" />
+                </StackPanel>
+
+                <!-- P5 transport (touch tier). Prev · Play · HOLD · Next are the panic-path controls;
+                     HOLD sits next to Play so pushing the idle image is one thumb-move from Pause
+                     (▾ opens the image picker). Stop is isolated on the far right and tinted (Danger)
+                     so it can't be fat-fingered in place of Pause. Mute/volume live in the row below. -->
                 <DockPanel LastChildFill="True">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6"
                                 VerticalAlignment="Center">
-                        <ToggleButton Classes="Touch Warn"
-                                      IsChecked="{Binding HoldFallbackVideo}"
-                                      Content="{x:Static res:Strings.HoldButtonLabel}"
-                                      ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
-                        <!-- HOLD image setup — promoted from a flyout to a real dialog (clearer flow). -->
-                        <Button Classes="Std" VerticalAlignment="Center"
-                                Click="OnHoldImageSetupClick"
-                                ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
-                            <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
-                        </Button>
-
                         <!-- Options flyout: loop / auto-advance / shuffle / repeat-all + active badge. -->
                         <Button Classes="Std" Padding="10,6"
                                 ToolTip.Tip="{x:Static res:Strings.PlaybackOptionsTooltip}">
@@ -301,6 +355,13 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
+                        <!-- Panic-path exit, isolated on the far right and tinted (Danger). -->
+                        <Button Classes="Touch Danger" VerticalAlignment="Center"
+                                Command="{Binding StopCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}"
+                                AutomationProperties.Name="{x:Static res:Strings.StopTrackTooltip}">
+                            <PathIcon Data="{x:Static views:AppIcons.Stop}" Width="14" Height="14" />
+                        </Button>
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
@@ -322,17 +383,21 @@
                                 <TextBlock Text="{Binding PlayPauseLabel}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
+                        <!-- HOLD (latched amber via ToggleButton.Warn) + its image-setup ▾, next to Play. -->
+                        <ToggleButton Classes="Touch Warn"
+                                      IsChecked="{Binding HoldFallbackVideo}"
+                                      Content="{x:Static res:Strings.HoldButtonLabel}"
+                                      ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
+                        <Button Classes="Std" VerticalAlignment="Center"
+                                Click="OnHoldImageSetupClick"
+                                ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
+                            <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
+                        </Button>
                         <Button Classes="Touch"
                                 Command="{Binding NextTrackCommand}"
                                 ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}"
                                 AutomationProperties.Name="{x:Static res:Strings.NextTrackTooltip}">
                             <PathIcon Data="{x:Static views:AppIcons.Next}" Width="14" Height="14" />
-                        </Button>
-                        <Button Classes="Touch"
-                                Command="{Binding StopCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}"
-                                AutomationProperties.Name="{x:Static res:Strings.StopTrackTooltip}">
-                            <PathIcon Data="{x:Static views:AppIcons.Stop}" Width="14" Height="14" />
                         </Button>
                     </StackPanel>
                 </DockPanel>
@@ -462,7 +527,7 @@
                                                         IsVisible="{Binding !IsRenaming}">
                                                 <!-- Marks the Set the player is currently playing from. -->
                                                 <TextBlock Text="&#x25B6;" FontSize="9" VerticalAlignment="Center"
-                                                           Foreground="#2E9E4B"
+                                                           Foreground="{StaticResource StateHealthy}"
                                                            IsVisible="{Binding IsPlaying}" />
                                                 <TextBlock Text="{Binding Name}" MinWidth="60"
                                                            VerticalAlignment="Center" Padding="2,0" />

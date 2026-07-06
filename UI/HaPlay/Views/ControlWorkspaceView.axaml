@@ -72,7 +72,7 @@
         <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2"
                    Text="{Binding ConfigFilePath}"
                    VerticalAlignment="Center"
-                   Foreground="#888888"
+                   Foreground="{StaticResource TextSecondary}"
                    TextTrimming="CharacterEllipsis"
                    ToolTip.Tip="{Binding ConfigFilePath}"
                    IsVisible="{Binding ConfigFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -204,7 +204,7 @@
                   <Button Content="Export built-ins" Classes="Dense" Command="{Binding ExportBuiltInProfilesCommand}" />
                   <Button Content="Remove project" Classes="Dense" Command="{Binding RemoveSelectedProjectProfileCommand}" />
                 </StackPanel>
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8"
+                <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
                         IsVisible="{Binding IsMIDIAvailable}">
                   <StackPanel Spacing="6">
                     <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />
@@ -324,7 +324,7 @@
                      PlaceholderText="device" />
           </Grid>
 
-          <Border Grid.Row="1" MinHeight="120" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0">
+          <Border Grid.Row="1" MinHeight="120" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
             <Grid>
               <TextBlock Text="Arm Control to see MIDI, OSC, script, and runtime activity here."
                          TextWrapping="Wrap"

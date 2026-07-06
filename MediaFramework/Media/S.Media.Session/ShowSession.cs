@@ -382,9 +382,7 @@ public sealed class ShowSession : IAsyncDisposable
             Cues = document.Cues ?? [],
             Clips = document.Clips ?? [],
             Compositions = document.Compositions ?? [],
-            Outputs = document.Outputs ?? [],
             Routes = document.Routes ?? [],
-            Devices = document.Devices ?? [],
             AudioOutputs = document.AudioOutputs ?? [],
         };
 

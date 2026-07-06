@@ -14,9 +14,7 @@ public class CompositionOutputAttachTests
             Cues: [],
             Clips: [],
             Compositions: [new ShowComposition("screen", "Screen", 640, 480, 24, 1)],
-            Outputs: [],
-            Routes: [],
-            Devices: []);
+            Routes: []);
         session.LoadDocument(document);
 
         // A loaded composition accepts a live output (the UI preview path); an unknown id is rejected, not thrown.

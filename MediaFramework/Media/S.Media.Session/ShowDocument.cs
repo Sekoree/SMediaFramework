@@ -224,9 +224,7 @@ public sealed record ShowDocument(
     IReadOnlyList<CueDefinition> Cues,
     IReadOnlyList<ShowClipBinding> Clips,
     IReadOnlyList<ShowComposition> Compositions,
-    IReadOnlyList<OutputPatchRoute> Outputs,
-    IReadOnlyList<OutputPatchRoute> Routes,
-    IReadOnlyList<string> Devices)
+    IReadOnlyList<OutputPatchRoute> Routes)
 {
     /// <summary>Per-group audio output endpoints (D11). Empty ⇒ each group plays on one implicit master
     /// output (<see cref="ShowSession.MasterOutputId"/>) on the backend default device; declare entries to
@@ -234,7 +232,7 @@ public sealed record ShowDocument(
     public IReadOnlyList<ShowAudioOutput> AudioOutputs { get; init; } = [];
 
     /// <summary>An empty version-1 show.</summary>
-    public static ShowDocument Empty { get; } = new(1, [], [], [], [], [], []);
+    public static ShowDocument Empty { get; } = new(1, [], [], [], []);
 
     /// <summary>Serializes to indented JSON via the source-generated context (no reflection — D10).</summary>
     public string ToJson() => JsonSerializer.Serialize(this, ShowDocumentJsonContext.Default.ShowDocument);

@@ -37,6 +37,10 @@ public sealed class ArchitectureTests
         // StbImageSharp are pure managed — a GL context only ever comes from the hosting compositor,
         // so the module still ships no native runtime of its own).
         ["S.Media.Source.MMD"] = ["S.Media.Core", "S.Media.Time", "S.Media.Compositor"],
+        // Text cue source (SESSION-02): a pure-managed SkiaSharp text rasterizer + held-frame source. References
+        // Decode.FFmpeg only for the swscale CPU converter that repacks the rendered BGRA card to the negotiated
+        // output format. SkiaSharp is a NuGet package (isolated here), not a first-party project ref.
+        ["S.Media.Source.Text"] = ["S.Media.Core", "S.Media.Decode.FFmpeg"],
         ["S.Media.Audio.PortAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "PALib"],
         ["S.Media.Audio.MiniAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "MALib"],
         ["S.Media.Present.SDL3"] = ["S.Media.Core", "S.Media.Gpu"],

@@ -176,7 +176,7 @@ internal static class MediaRuntime
 
             // Text cues (NXT-06 cutover): a `text:` provider so the ShowSession path can play a rendered text cue
             // through the registry like any other source (the old engine rendered it via a held frame directly).
-            b.AddDecoder(new Playback.TextDecoderProvider());
+            b.AddDecoder(new S.Media.Source.Text.TextDecoderProvider());
 
             // YouTube (Gate 5): plays prepared cache assets behind youtube:// URIs. Purely managed +
             // local-file playback, so no native probe is needed; shares the app-wide preparer/cache with

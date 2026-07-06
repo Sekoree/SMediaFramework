@@ -122,7 +122,7 @@
                                 Text="{Binding ProjectStatus}" />
 
     <Border DockPanel.Dock="Left"
-            BorderBrush="#22808080" BorderThickness="0,0,1,0"
+            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="0,0,1,0"
             Width="{Binding SidebarWidth}">
       <DockPanel>
         <Button DockPanel.Dock="Top"
@@ -286,7 +286,7 @@
           <Button Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
         <Grid ColumnDefinitions="1.05*,1.8*" ColumnSpacing="10">
-          <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+          <Border Grid.Column="0" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
             <DockPanel>
               <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
               <TextBlock DockPanel.Dock="Top"
@@ -312,7 +312,7 @@
             <!-- §8.6 Display preferences — per-machine, not part of the project file.
                  UI-01: hidden until the Classic theme has real dark + density resources (density is a
                  no-op today and Dark renders a broken half-dark window). Toggle via ShowAppearanceSettings. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8"
+            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
                     IsVisible="{Binding ShowAppearanceSettings}">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
@@ -346,7 +346,7 @@
             </Border>
 
             <!-- Remote API — per-machine HTTP control surface for show controllers. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.RemoteApiSectionHeader}" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Spacing="12">
@@ -409,7 +409,7 @@
             </Border>
 
             <!-- Media caches — per-machine prepared media (YouTube downloads, MMD bakes): size, open, clear. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.CacheSectionHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
