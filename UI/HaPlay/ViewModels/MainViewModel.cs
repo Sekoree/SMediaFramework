@@ -15,6 +15,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using HaPlay.Services;
 using Microsoft.Extensions.Logging;
 using S.Control;
 using S.Media.Core.Diagnostics;
@@ -39,9 +40,7 @@ public partial class MainViewModel : ViewModelBase
     // coordinator (extracted from this VM — review Part-5 #3); this VM only constructs and forwards to it.
     private readonly CueShowSessionCoordinator _cueShow;
     private bool _midiInitialized;
-    private CancellationTokenSource? _endpointHealthCts;
-    private DispatcherTimer? _endpointHealthTimer;
-    private int _endpointHealthRefreshInFlight;
+    private readonly EndpointHealthMonitor _endpointHealth;
 
     // Pre-roll refresh is suggested in bursts (standby moves, property edits). Collapse those to a
     // latest-request-wins refresh: a new request cancels the in-flight one's token, and the serial
@@ -81,17 +80,16 @@ public partial class MainViewModel : ViewModelBase
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         RefreshMIDIDeviceCatalog();
-        FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync startup");
-        // Keep endpoint LEDs current even when devices/network state changes after project load.
-        // APP-01: only run the 5 s poll while there are endpoints to probe — otherwise it logged a
-        // pointless "probed=0" sweep every 5 s. SyncEndpointHealthTimer flips it as the collection changes.
-        _endpointHealthTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) =>
-        {
-            FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync timer");
-        })
-        {
-            IsEnabled = ActionEndpoints.Count > 0,
-        };
+        // APP-02: the endpoint-health polling lifecycle (5 s timer, single-flight guard, per-run CTS, timing)
+        // lives in a dedicated service; the view model keeps only the probe loop (ProbeAllEndpointsAsync).
+        // APP-01 behaviour — poll only while endpoints exist — is preserved by the pending-count gate + SyncEnabled.
+        _endpointHealth = new EndpointHealthMonitor(
+            TimeSpan.FromSeconds(5),
+            () => OSCEndpointRows.Count + MIDIEndpointRows.Count,
+            ProbeAllEndpointsAsync,
+            Trace);
+        FireAndLog(_endpointHealth.RefreshAsync(), "EndpointHealthMonitor startup");
+        _endpointHealth.SyncEnabled();
 
         // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
         // Iterating the Players collection on each probe is fine: outputs are edited rarely, never
@@ -165,8 +163,9 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
 
-    private readonly Remote.RestApiServer _restApiServer = new();
-    private Remote.RemoteApiDispatcher? _restApiDispatcher;
+    // APP-02: the listener + dispatcher lifecycle lives in a dedicated host; the view model keeps only the
+    // bound settings + presentation below.
+    private readonly Remote.RemoteApiHost _remoteApi = new();
 
     /// <summary>Per-machine: serve the HTTP remote API. Off by default; token-protected when enabled.</summary>
     [ObservableProperty]
@@ -198,12 +197,12 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Shown in the Project workspace card (and the base for Copy-API-URL menus).</summary>
     public string RestApiBaseUrlDisplay =>
-        _restApiServer.IsRunning && _restApiServer.BaseUrl is { } url
+        _remoteApi.IsRunning && _remoteApi.BaseUrl is { } url
             ? url
             : Strings.RemoteApiDisabledStatus;
 
     /// <summary>Degradation note (e.g. Windows loopback fallback) or bind error; null when clean.</summary>
-    public string? RestApiStatusNote => _restApiServer.StatusNote;
+    public string? RestApiStatusNote => _remoteApi.StatusNote;
 
     public string RestApiSecurityStatus =>
         (RestApiAllowLan ? Strings.RemoteApiSecurityLan : Strings.RemoteApiSecurityLoopback)
@@ -260,16 +259,14 @@ public partial class MainViewModel : ViewModelBase
 
     private void RestartRestApi()
     {
-        _restApiDispatcher ??= new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control);
-        _restApiServer.Stop();
-        if (RestApiEnabled && RestApiPort is >= 1 and <= 65535)
-            _restApiServer.Start(RestApiPort, _restApiDispatcher, RestApiAccessToken, RestApiAllowLan);
+        _remoteApi.Restart(
+            RestApiEnabled, RestApiPort, RestApiAccessToken, RestApiAllowLan,
+            () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control));
 
         // Copy-API-URL menus keep working while the listener is off — the copied URL targets the
         // configured port and becomes live the moment the API is enabled. The token is never embedded in
         // copied URLs (API-01); a token-protected server expects the X-HaPlay-Api-Key header instead.
-        Remote.RemoteApi.BaseUrl = _restApiServer.BaseUrl
-                                   ?? $"http://{Remote.RestApiServer.ResolveAdvertisedHost(RestApiAllowLan)}:{RestApiPort}";
+        Remote.RemoteApi.BaseUrl = _remoteApi.AdvertisedBaseUrl(RestApiPort, RestApiAllowLan);
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
         OnPropertyChanged(nameof(RestApiStatusNote));
         OnPropertyChanged(nameof(RestApiSecurityStatus));
@@ -691,12 +688,8 @@ public partial class MainViewModel : ViewModelBase
         FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync endpoints-changed");
     }
 
-    /// <summary>APP-01: only poll endpoint health while endpoints exist.</summary>
-    private void SyncEndpointHealthTimer()
-    {
-        if (_endpointHealthTimer is { } timer)
-            timer.IsEnabled = ActionEndpoints.Count > 0;
-    }
+    /// <summary>APP-01/APP-02: enable endpoint-health polling only while endpoints exist (delegated to the monitor).</summary>
+    private void SyncEndpointHealthTimer() => _endpointHealth.SyncEnabled();
 
     private void RebuildEndpointWorkspaceLists()
     {
@@ -845,50 +838,23 @@ public partial class MainViewModel : ViewModelBase
             ? candidate
             : existing;
 
-    public async Task RefreshAllEndpointHealthAsync()
+    /// <summary>Runs an endpoint-health sweep now. The single-flight guard, per-run cancellation, timing, and the
+    /// "nothing to probe → skip" gate all live in <see cref="EndpointHealthMonitor"/> (APP-02); this stays public
+    /// for the startup and endpoint-set-changed callers.</summary>
+    public Task RefreshAllEndpointHealthAsync() => _endpointHealth.RefreshAsync();
+
+    /// <summary>The domain probe loop the monitor drives: probe every OSC + MIDI endpoint row under the run's
+    /// cancellation token and return how many were probed.</summary>
+    private async Task<int> ProbeAllEndpointsAsync(CancellationToken ct)
     {
-        // APP-01: nothing to probe → don't start a timed operation that logs a "probed=0" sweep.
-        if (OSCEndpointRows.Count == 0 && MIDIEndpointRows.Count == 0)
-            return;
-
-        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.RefreshAllEndpointHealthAsync", slowWarningMs: 1500);
-        if (Interlocked.CompareExchange(ref _endpointHealthRefreshInFlight, 1, 0) != 0)
+        var probed = 0;
+        foreach (var row in OSCEndpointRows.Concat(MIDIEndpointRows))
         {
-            timing?.SetOutcome("already-in-flight");
-            return;
+            ct.ThrowIfCancellationRequested();
+            await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
+            probed++;
         }
-
-        CancellationTokenSource? newCts = null;
-        _endpointHealthCts?.Cancel();
-        _endpointHealthCts?.Dispose();
-        _endpointHealthCts = newCts = new CancellationTokenSource();
-        var ct = newCts.Token;
-
-        try
-        {
-            var probed = 0;
-            foreach (var row in OSCEndpointRows.Concat(MIDIEndpointRows))
-            {
-                if (ct.IsCancellationRequested)
-                {
-                    timing?.SetOutcome($"cancelled probed={probed}");
-                    return;
-                }
-                await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
-                probed++;
-            }
-            timing?.SetOutcome($"probed={probed}");
-        }
-        finally
-        {
-            // Keep the latest CTS alive for targeted manual probes; only dispose if this run's CTS was replaced.
-            if (!ReferenceEquals(_endpointHealthCts, newCts))
-            {
-                try { newCts.Dispose(); } catch { /* best effort */ }
-            }
-
-            Interlocked.Exchange(ref _endpointHealthRefreshInFlight, 0);
-        }
+        return probed;
     }
 
     private async Task ProbeEndpointRowAsync(ActionEndpointRowViewModel row, CancellationToken ct)

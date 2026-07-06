@@ -41,6 +41,9 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
+        <!-- The actual decode test assembly (the entry above names a non-existent assembly, which is why the
+             older tests reach internals by reflection). FFMPEG-02 tests FFmpegTimestamps directly. -->
+        <InternalsVisibleTo Include="S.Media.Decode.FFmpeg.Tests" />
     </ItemGroup>
 
 </Project>

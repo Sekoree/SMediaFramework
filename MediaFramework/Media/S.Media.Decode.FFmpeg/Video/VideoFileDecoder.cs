@@ -296,7 +296,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoFileDecoder.Seek", slowWarningMs: 500);
         ResetReadYield();
 
-        var ts = (long)(position.TotalSeconds * _videoTimeBase.den / _videoTimeBase.num);
+        var ts = FFmpegTimestamps.ToStreamTimestamp(position, _videoTimeBase);
         var ret = av_seek_frame(_formatCtx, _videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
 
@@ -1036,9 +1036,8 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
     private TimeSpan ResolvePts(AVFrame* frame)
     {
-        var pts = frame->best_effort_timestamp;
-        if (pts == AV_NOPTS_VALUE) pts = frame->pts;
-        if (pts == AV_NOPTS_VALUE)
+        var pts = FFmpegTimestamps.ResolvePts(frame->best_effort_timestamp, frame->pts);
+        if (FFmpegTimestamps.IsNoPts(pts))
         {
             var fps = Format.FrameRate.ToDouble();
             return fps > 0
@@ -1048,8 +1047,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         return PtsToTimeSpan(pts);
     }
 
-    private TimeSpan PtsToTimeSpan(long pts)
-        => TimeSpan.FromSeconds((double)pts * _videoTimeBase.num / _videoTimeBase.den);
+    private TimeSpan PtsToTimeSpan(long pts) => FFmpegTimestamps.ToTimeSpan(pts, _videoTimeBase);
 
     private void ResetReadYield() => Volatile.Write(ref _readYieldRequested, 0);
 

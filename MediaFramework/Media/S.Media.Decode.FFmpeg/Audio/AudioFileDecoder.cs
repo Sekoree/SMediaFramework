@@ -219,7 +219,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
 
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioFileDecoder.Seek", slowWarningMs: 500);
-        var ts = (long)(position.TotalSeconds * _audioTimeBase.den / _audioTimeBase.num);
+        var ts = FFmpegTimestamps.ToStreamTimestamp(position, _audioTimeBase);
         var ret = av_seek_frame(_formatCtx, _audioStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
 
@@ -581,13 +581,11 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
 
     private TimeSpan ResolvePts()
     {
-        var pts = _frame->best_effort_timestamp;
-        if (pts == AV_NOPTS_VALUE) pts = _frame->pts;
-        return pts == AV_NOPTS_VALUE
+        var pts = FFmpegTimestamps.ResolvePts(_frame->best_effort_timestamp, _frame->pts);
+        return FFmpegTimestamps.IsNoPts(pts)
             ? TimeSpan.FromSeconds((double)_samplesEmitted / Format.SampleRate)
             : PtsToTimeSpan(pts);
     }
 
-    private TimeSpan PtsToTimeSpan(long pts)
-        => TimeSpan.FromSeconds((double)pts * _audioTimeBase.num / _audioTimeBase.den);
+    private TimeSpan PtsToTimeSpan(long pts) => FFmpegTimestamps.ToTimeSpan(pts, _audioTimeBase);
 }
