@@ -23,6 +23,16 @@
 extern "C" {
 #endif
 
+// ABI version of this shim. The managed binding compares mmd_abi_version() to the version its P/Invoke layer
+// was generated against BEFORE using the shim (MMD-03): a native library built from a different ABI is
+// treated as unavailable rather than mis-called (which would corrupt memory across the boundary). Bump on
+// any breaking change to the signatures below.
+#define MMD_ABI_VERSION 1u
+
+// Returns MMD_ABI_VERSION. Present since ABI v1; a shim that predates it exports no such symbol, so the
+// managed side's EntryPointNotFoundException is itself the "incompatible" signal.
+MMD_API uint32_t mmd_abi_version(void);
+
 // Shape types (match PMX rigid-body shapeType).
 enum { MMD_SHAPE_SPHERE = 0, MMD_SHAPE_BOX = 1, MMD_SHAPE_CAPSULE = 2, MMD_SHAPE_STATIC_PLANE = 3 };
 

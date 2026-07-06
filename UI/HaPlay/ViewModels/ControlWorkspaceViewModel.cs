@@ -287,9 +287,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private string _testOSCArgs = string.Empty;
 
+    /// <summary>Loads a project's control configuration. CTRL-04 safety: this always leaves the system
+    /// DISARMED — a freshly-opened project never runs its (trusted-code) scripts until the operator explicitly
+    /// arms it. <see cref="BuildSnapshot"/> likewise persists <c>IsArmed = false</c>, so an armed state is
+    /// never saved into a project and can never auto-run on open.</summary>
     public void LoadConfig(ControlSystemConfig config, string? configFilePath = null)
     {
-        StopSessionFireAndForget();
+        StopSessionFireAndForget(); // ensures a previously-armed session can't leak scripts across a project load
         _config = config ?? new ControlSystemConfig();
         _configFilePath = configFilePath;
         MonitorEntries.Clear();

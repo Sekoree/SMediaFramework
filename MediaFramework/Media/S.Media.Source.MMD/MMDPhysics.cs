@@ -68,6 +68,11 @@ public sealed class MMDPhysics : IDisposable
         if (model.RigidBodies.Count == 0 || model.RigidBodies.All(b => b.Mode == PMXPhysicsMode.FollowBone))
             return null;
 
+        // MMD-03: verify the native shim's ABI matches this binding before calling into it. A missing or
+        // incompatible shim means "no physics" (the model still renders with FK bones), not a mis-call.
+        if (!MMDBulletNative.IsAvailable)
+            return null;
+
         var world = MMDBulletNative.WorldCreate(0f, Gravity, 0f);
         if (world == nint.Zero)
             return null;

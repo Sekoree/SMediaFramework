@@ -78,6 +78,11 @@ static int RuntimeGroup(int group, bool nonDynamic)
     return nonDynamic ? (group | (btBroadphaseProxy::StaticFilter << 16)) : group;
 }
 
+extern "C" MMD_API uint32_t mmd_abi_version(void)
+{
+    return MMD_ABI_VERSION;
+}
+
 extern "C" mmd_world* mmd_world_create(float gx, float gy, float gz)
 {
     mmd_world* w = new mmd_world();

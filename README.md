@@ -140,6 +140,10 @@ dotnet publish UI/HaPlay.Desktop -c Release -r linux-x64   # or win-x64
   require authentication (compared in constant time); with no token the API is open on whatever it's bound to
   (intended for a closed show LAN). GET and POST are both accepted. See the Project workspace and
   `UI/HaPlay/Remote/`.
+- **Control scripts are trusted code.** A project's Control system can carry Mond scripts that run arbitrary
+  logic (MIDI/OSC glue) when the control system is **armed**. For safety a project always opens **disarmed**
+  and is never persisted armed, so opening a project never runs its scripts — arming is an explicit operator
+  action. Treat projects from untrusted sources the same as any code: review their scripts before arming.
 
 ---
 
