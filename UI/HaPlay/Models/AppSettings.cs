@@ -1,5 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using S.Media.Core.Diagnostics;
 
 namespace HaPlay.Models;
 
@@ -59,36 +61,84 @@ public sealed class AppSettings
         }
     }
 
+    /// <summary>Loads settings, recovering from the one-deep backup when the primary file is corrupt
+    /// (SET-01). A missing file is a clean first-run (no log); an unreadable file is logged.</summary>
     public static AppSettings Load()
     {
+        var path = FilePath;
+        if (TryLoadFrom(path, out var primary))
+            return primary;
+
+        var primaryExisted = File.Exists(path);
+        if (TryLoadFrom(path + ".bak", out var backup))
+        {
+            if (primaryExisted)
+                MediaDiagnostics.LogWarning("AppSettings: primary settings file was unreadable; recovered from backup.");
+            return backup;
+        }
+
+        if (primaryExisted)
+            MediaDiagnostics.LogWarning("AppSettings: settings file was unreadable and no usable backup exists; using defaults.");
+        return new AppSettings();
+    }
+
+    private static bool TryLoadFrom(string path, [NotNullWhen(true)] out AppSettings? settings)
+    {
+        settings = null;
         try
         {
-            var path = FilePath;
             if (!File.Exists(path))
-                return new AppSettings();
+                return false;
             using var stream = File.OpenRead(path);
-            return JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.AppSettings) ?? new AppSettings();
+            settings = JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.AppSettings);
+            return settings is not null;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return new AppSettings();
+            return false;
         }
     }
 
+    /// <summary>Persists settings atomically (temp file → flush → move), keeping one <c>.bak</c> of the
+    /// previous good file so a partial/corrupt write is recoverable (SET-01). Never throws.</summary>
     public void Save()
     {
+        var path = FilePath;
+        string? temp = null;
         try
         {
-            var path = FilePath;
             var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
-            using var stream = File.Create(path);
-            JsonSerializer.Serialize(stream, this, AppSettingsJsonContext.Default.AppSettings);
+
+            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(stream, this, AppSettingsJsonContext.Default.AppSettings);
+                stream.Flush(flushToDisk: true);
+            }
+
+            // Keep one backup of the last good file before overwriting it.
+            if (File.Exists(path))
+            {
+                try { File.Copy(path, path + ".bak", overwrite: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* backup is best-effort */ }
+            }
+
+            File.Move(temp, path, overwrite: true);
+            temp = null;
         }
-        catch
+        catch (Exception ex)
         {
-            /* best effort — losing this file just resets sidebar state on next launch */
+            MediaDiagnostics.LogWarning($"AppSettings.Save failed ({ex.GetType().Name}: {ex.Message}); previous settings retained.");
+        }
+        finally
+        {
+            if (temp is not null)
+            {
+                try { File.Delete(temp); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
+            }
         }
     }
 }

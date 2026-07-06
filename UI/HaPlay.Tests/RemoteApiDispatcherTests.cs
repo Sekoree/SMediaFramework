@@ -242,6 +242,39 @@ public sealed class RemoteApiDispatcherTests
     }
 
     [Fact]
+    public async Task HttpServer_OptionalToken_OpenWhenUnset_RequiredWhenSet()
+    {
+        var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly);
+        var (noTokenStatus, tokenNoKeyStatus, tokenWithKeyStatus) = await session.Dispatch(async () =>
+        {
+            var dispatcher = new RemoteApiDispatcher(
+                new CuePlayerViewModel(), () => [], new SoundboardWorkspaceViewModel(), null);
+            using var http = new HttpClient();
+
+            // No token configured → open (closed-LAN automation): status answers without a key.
+            using (var open = new RestApiServer())
+            {
+                var port = GetFreePort();
+                Assert.True(open.Start(port, dispatcher, accessToken: null));
+                var r = await http.GetAsync($"{open.BaseUrl}/api/v1/status");
+                var noToken = (int)r.StatusCode;
+
+                // Token configured → required: unauthenticated 401, correct key 200.
+                using var secured = new RestApiServer();
+                var port2 = GetFreePort();
+                Assert.True(secured.Start(port2, dispatcher, "secret-token"));
+                var unauth = (int)(await http.GetAsync($"{secured.BaseUrl}/api/v1/status")).StatusCode;
+                var auth = (int)(await http.GetAsync($"{secured.BaseUrl}/api/v1/status?key=secret-token")).StatusCode;
+                return (noToken, unauth, auth);
+            }
+        }, CancellationToken.None);
+
+        Assert.Equal(200, noTokenStatus);
+        Assert.Equal(401, tokenNoKeyStatus);
+        Assert.Equal(200, tokenWithKeyStatus);
+    }
+
+    [Fact]
     public void RemoteApi_CopyUrls_IncludeAccessToken()
     {
         var previousBase = RemoteApi.BaseUrl;

@@ -64,6 +64,9 @@ public sealed class YouTubeModuleTests : IDisposable
         public int ManifestCalls;
         public int DownloadCalls;
         public TimeSpan DownloadDelay = TimeSpan.Zero;
+        /// <summary>When set, the caption download writes a partial file then throws (simulating a mid-write
+        /// caller cancellation) so the preparer's partial-cleanup path can be exercised (YT-01).</summary>
+        public bool CaptionWritesPartialThenCancels;
 
         public YouTubeMediaManifest Manifest { get; set; } = new(
             "dQw4w9WgXcQ", "Test Video", "Test Author", TimeSpan.FromMinutes(3),
@@ -97,6 +100,12 @@ public sealed class YouTubeModuleTests : IDisposable
         {
             if (languageCode != "en")
                 return false;
+            if (CaptionWritesPartialThenCancels)
+            {
+                await File.WriteAllTextAsync(filePath, "partial-caption-bytes", CancellationToken.None);
+                throw new OperationCanceledException();
+            }
+
             await File.WriteAllTextAsync(
                 filePath, "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,hi\n", ct);
             return true;
@@ -155,6 +164,59 @@ public sealed class YouTubeModuleTests : IDisposable
 
         Assert.All(results, r => Assert.Equal(results[0].AssetPath, r.AssetPath));
         Assert.Equal(2, gateway.DownloadCalls); // one video + one audio leg TOTAL, not per caller
+    }
+
+    [Fact]
+    public async Task Prepare_OneCallerCancels_OthersStillComplete_SharedRunSurvives()
+    {
+        // YT-02: cancelling one caller's wait must not abort the shared prepare other callers joined.
+        var gateway = new FakeGateway { DownloadDelay = TimeSpan.FromMilliseconds(300) };
+        var preparer = NewPreparer(gateway);
+
+        using var cancelFirst = new CancellationTokenSource();
+        var a = preparer.PrepareAsync("dQw4w9WgXcQ", YouTubeStreamSelection.Best, cancellationToken: cancelFirst.Token);
+        var b = preparer.PrepareAsync("dQw4w9WgXcQ", YouTubeStreamSelection.Best);
+        var c = preparer.PrepareAsync("dQw4w9WgXcQ", YouTubeStreamSelection.Best);
+
+        cancelFirst.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => a);
+
+        var rb = await b;
+        var rc = await c;
+        Assert.Equal(rb.AssetPath, rc.AssetPath);
+        Assert.True(File.Exists(rb.AssetPath));
+        Assert.Equal(2, gateway.DownloadCalls); // one shared run (video+audio), not aborted by the cancel
+    }
+
+    [Fact]
+    public async Task Prepare_CaptionDownloadCancels_PropagatesAndLeavesNoPartial()
+    {
+        // YT-01: a caller cancellation during caption work propagates and the partial caption is cleaned up.
+        var gateway = new FakeGateway { CaptionWritesPartialThenCancels = true };
+        var preparer = NewPreparer(gateway);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preparer.PrepareAsync(
+            "dQw4w9WgXcQ",
+            new YouTubeStreamSelection(Audio: "opus|webm|en", SubtitleLanguage: "en") { IncludeVideo = false }));
+
+        Assert.Empty(Directory.GetFiles(_dir, "*.partial")); // partial caption removed by the finally
+        Assert.Empty(Directory.GetFiles(_dir, "*.ass"));      // nothing committed
+    }
+
+    [Fact]
+    public async Task Prepare_WithMaxCacheBytes_EvictsOldestAsset_KeepsJustPrepared()
+    {
+        // YT-03: after a successful prepare, LRU eviction trims the cache but never the asset just made.
+        var gateway = new FakeGateway();
+        var preparer = new YouTubePreparer(gateway, _dir, FakeRemux, maxCacheBytes: 60);
+
+        var first = await preparer.PrepareAsync(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en"));
+        var second = await preparer.PrepareAsync(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("720p|avc1|mp4", "opus|webm|ja"));
+
+        Assert.True(File.Exists(second.AssetPath));  // just-prepared asset protected
+        Assert.False(File.Exists(first.AssetPath));  // older asset evicted to stay under the cap
     }
 
     [Fact]

@@ -177,6 +177,53 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public void Validator_RejectsMalformedScalarsAndPaths()
+    {
+        // DOC-01: numeric/path invariants are enforced at load rather than silently mis-played.
+        static IReadOnlyList<string> ValidateClip(ShowClipBinding clip, params ShowComposition[] comps) =>
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A")], [clip], comps, [], [], []));
+
+        Assert.Contains(ValidateClip(new ShowClipBinding("a", "   ")), e => e.Contains("empty media path"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x") { StartOffset = TimeSpan.FromSeconds(-1) }),
+            e => e.Contains("negative start offset"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x") { FadeOut = TimeSpan.FromSeconds(-1) }),
+            e => e.Contains("negative fade-out"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x", LayerIndex: -1)),
+            e => e.Contains("negative layer index"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x", AudioStreamIndex: -2)),
+            e => e.Contains("audio stream index"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
+                { Placement = new ShowVideoPlacement(Opacity: 2) }, new ShowComposition("c", "C", 320, 240)),
+            e => e.Contains("opacity"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
+                { Placement = new ShowVideoPlacement(DestWidth: 0) }, new ShowComposition("c", "C", 320, 240)),
+            e => e.Contains("non-positive dest width"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
+                { Placement = new ShowVideoPlacement(RotationDegrees: double.NaN) }, new ShowComposition("c", "C", 320, 240)),
+            e => e.Contains("non-finite rotation"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x", CompositionId: "c")
+                { Placement = new ShowVideoPlacement(CropLeft: 0.6, CropRight: 0.6) }, new ShowComposition("c", "C", 320, 240)),
+            e => e.Contains("horizontal crops"));
+        Assert.Contains(
+            ValidateClip(new ShowClipBinding("a", "x") { AudioRoutes = [new ShowClipAudioRoute(SampleRate: 0)] }),
+            e => e.Contains("non-positive audio route sample rate"));
+
+        // A default clip and a fully-valid placement pass clean.
+        Assert.Empty(ValidateClip(new ShowClipBinding("a", "media://ok", CompositionId: "c")
+            { Placement = new ShowVideoPlacement(0.1, 0.1, 0.5, 0.5, 0.75, CropLeft: 0.1, CropRight: 0.1) },
+            new ShowComposition("c", "C", 320, 240)));
+    }
+
+    [Fact]
     public void Validator_RejectsBadVersionDuplicatesDanglingAndCycles()
     {
         // NXT-12 / NXT-07: every structural problem is reported, and a well-formed show passes.

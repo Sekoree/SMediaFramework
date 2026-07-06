@@ -77,6 +77,26 @@ Artifact jobs download scripts and “latest” FFmpeg archives directly during 
 
 Recommendation: pin immutable release URLs/commits, verify SHA-256 checksums, record licenses/versions in the artifact, and preferably mirror/cache approved native inputs. Generate a software bill of materials for each artifact.
 
+### BUILD-03 — The build-warning baseline under-counts (low, added 2026-07-06)
+
+The verified baseline recorded exactly one warning (`SessionSmoke/Program.cs:222`). A clean rebuild of
+`S.Media.Source.MMD` on 2026-07-06 additionally emits six `CA2014` warnings (`MMDPhysics.cs:144-149`,
+see `MMD-04`). The gap is an incremental-build artifact: warnings from already-up-to-date projects are
+not re-emitted, so an incremental whole-solution build hides them — precisely the drift `BUILD-01`
+warns about.
+
+Recommendation: derive the expected warning-ID/count set from a **clean** build (`-t:Rebuild` or a
+fresh `obj/`), and fail CI when the set changes. Do not baseline off an incremental build.
+
+### REPO-01 — Orphaned project directories (low, hygiene, added 2026-07-06)
+
+`UI/HaPlay.App`, `UI/HaPlay.Controls`, and `UI/HaPlay.Core` remain on disk with only `bin/` and `obj/`
+build artifacts and no `.csproj`; none is referenced by `MFPlayer.sln`. They are leftovers from removed
+projects and make `UI/` look like it holds six projects when only three are real (`HaPlay`,
+`HaPlay.Desktop`, `HaPlay.Tests`).
+
+Recommendation: delete the three directories.
+
 ## Recommended quality gates
 
 1. Required-native manifest and load probe for each uploaded RID.

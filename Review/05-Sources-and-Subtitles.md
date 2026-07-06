@@ -32,6 +32,20 @@ The C++ shim is the first-party ownership boundary over a large external physics
 
 Recommendation: add a small ABI/version export and a test for create/step/read/destroy, invalid handles/arguments, repeated construction, and deterministic cleanup. Validate that the staged library matches the managed binding before loading.
 
+### MMD-04 — `stackalloc` inside the joint loop (low/medium, added 2026-07-06)
+
+`MMDPhysics` allocates six `stackalloc float[3]` buffers **per iteration** of
+`foreach (var joint in model.Joints)` (`MMDPhysics.cs:144-149`), for the linear/angular limits and
+spring stiffness passed to `WorldAddSpringConstraint`. `stackalloc` is not released at end-of-iteration
+— it survives until the method returns — so the stack cost scales as `6 × 3 × 4 B × jointCount` and is
+bounded only by the asset. The compiler flags all six as `CA2014: Potential stack overflow. Move the
+stackalloc out of the loop.` The two frame buffers at `:120-121` are already correctly hoisted above
+the loop; these six were missed.
+
+Recommendation: hoist the six buffers next to `frameA`/`frameB` and overwrite `[0]/[1]/[2]` each
+iteration. Typical models stay under the thread stack today, but the allocation is unbounded by input
+and the fix also clears six standing build warnings (see `BUILD-03`).
+
 ### YT-01 — Caption fallbacks swallow cancellation (medium)
 
 `YouTubeGateway.GetManifestAsync` catches every exception around caption metadata (`YouTubeGateway.cs:83-94`). `TryDownloadCaptionsAssAsync` does the same for manifest, JSON3, and flat-caption paths (`:123-130, 146-160, 166-180`). This includes `OperationCanceledException`, so caller cancellation can turn into “captions unavailable,” continue fallback/network/file work, and potentially complete preparation rather than cancel it.

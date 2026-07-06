@@ -124,7 +124,8 @@
                 Classes="sidebar"
                 Classes.collapsed="{Binding SidebarCollapsed}"
                 Command="{Binding ToggleSidebarCommand}"
-                ToolTip.Tip="{x:Static res:Strings.TooltipToggleSidebar}">
+                ToolTip.Tip="{x:Static res:Strings.TooltipToggleSidebar}"
+                AutomationProperties.Name="{x:Static res:Strings.TooltipToggleSidebar}">
           <PathIcon Data="{x:Static views:AppIcons.Menu}" Classes="sidebar-glyph" />
         </Button>
 
@@ -135,7 +136,8 @@
                       Classes.collapsed="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SidebarCollapsed}"
                       Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectWorkspaceCommand}"
                       CommandParameter="{Binding}"
-                      ToolTip.Tip="{Binding Label}">
+                      ToolTip.Tip="{Binding Label}"
+                      AutomationProperties.Name="{Binding Label}">
                 <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal approach never
                      matched — the active workspace was never highlighted. Compare via MultiBinding. -->
                 <Classes.selected>
@@ -169,6 +171,7 @@
                   VerticalAlignment="Center" Margin="6,0,0,0" />
           <Button Grid.Column="2"
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  AutomationProperties.Name="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutPlayersClick"
                   VerticalAlignment="Center" Margin="6,0,0,0">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
@@ -229,6 +232,7 @@
                   Command="{Binding OpenTargetConfigurationCommand}" />
           <Button
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  AutomationProperties.Name="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutCuesClick">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
           </Button>
@@ -246,6 +250,7 @@
                     Spacing="6" Margin="0,0,0,6">
           <Button
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  AutomationProperties.Name="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutSoundboardClick">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
           </Button>
@@ -299,8 +304,11 @@
           </Border>
 
           <StackPanel Grid.Column="1" Spacing="10">
-            <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+            <!-- §8.6 Display preferences — per-machine, not part of the project file.
+                 UI-01: hidden until the Classic theme has real dark + density resources (density is a
+                 no-op today and Dark renders a broken half-dark window). Toggle via ShowAppearanceSettings. -->
+            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8"
+                    IsVisible="{Binding ShowAppearanceSettings}">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
@@ -346,11 +354,16 @@
                             IsChecked="{Binding RestApiAllowLan, Mode=TwoWay}" />
                 </StackPanel>
                 <SelectableTextBlock Text="{Binding RestApiBaseUrlDisplay}" FontFamily="monospace" FontSize="12" />
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RemoteApiTokenLabel}"
                              VerticalAlignment="Center" Opacity="0.75" FontSize="12" />
-                  <SelectableTextBlock Grid.Column="1" Text="{Binding RestApiAccessToken}"
-                                       FontFamily="monospace" FontSize="12" />
+                  <SelectableTextBlock Grid.Column="1" Text="{Binding RestApiAccessTokenDisplay}"
+                                       VerticalAlignment="Center" FontFamily="monospace" FontSize="12" />
+                  <Button Grid.Column="2" Content="{x:Static res:Strings.RemoteApiGenerateTokenLabel}"
+                          Command="{Binding RegenerateRestApiTokenCommand}" FontSize="12" Padding="8,2" />
+                  <Button Grid.Column="3" Content="{x:Static res:Strings.RemoteApiClearTokenLabel}"
+                          Command="{Binding ClearRestApiTokenCommand}"
+                          IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2" />
                 </Grid>
                 <TextBlock Text="{Binding RestApiSecurityStatus}" Opacity="0.75" FontSize="12"
                            TextWrapping="Wrap" />
@@ -452,7 +465,8 @@
                        FontSize="12"
                        PointerPressed="OnToastBodyPressed" />
             <StackPanel Grid.Column="2" Spacing="2">
-              <Button Padding="6,2" MinWidth="22" Command="{Binding CloseCommand}">
+              <Button Padding="6,2" MinWidth="22" Command="{Binding CloseCommand}"
+                      AutomationProperties.Name="{x:Static res:Strings.CloseButton}">
                 <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
               </Button>
               <PathIcon Data="{x:Static views:AppIcons.Pin}" Width="10" Height="10"

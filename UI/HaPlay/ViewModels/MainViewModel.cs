@@ -83,12 +83,14 @@ public partial class MainViewModel : ViewModelBase
         RefreshMIDIDeviceCatalog();
         FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync startup");
         // Keep endpoint LEDs current even when devices/network state changes after project load.
+        // APP-01: only run the 5 s poll while there are endpoints to probe — otherwise it logged a
+        // pointless "probed=0" sweep every 5 s. SyncEndpointHealthTimer flips it as the collection changes.
         _endpointHealthTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) =>
         {
             FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync timer");
         })
         {
-            IsEnabled = true,
+            IsEnabled = ActionEndpoints.Count > 0,
         };
 
         // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
@@ -105,8 +107,15 @@ public partial class MainViewModel : ViewModelBase
         // would re-save on first set; seed via backing fields so we don't fire that pointlessly.
         _theme = _appSettings.Theme;
         _density = _appSettings.Density;
-        AppearanceController.ApplyTheme(_theme);
-        AppearanceController.ApplyDensity(_density);
+        // UI-01: the in-repo Classic theme has no dark variant (Dark yields a light window with a few
+        // white-on-white islands) and density is a hard no-op (App.axaml replaced FluentTheme). Until real
+        // dark + density resources exist, keep the controls hidden (see ShowAppearanceSettings) and do NOT
+        // apply a persisted/hand-edited non-default theme at startup — that only produces the broken state.
+        if (ShowAppearanceSettings)
+        {
+            AppearanceController.ApplyTheme(_theme);
+            AppearanceController.ApplyDensity(_density);
+        }
         if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
             Playback.PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = _appSettings.PreferLiveUyvyPassthrough;
         var lastWorkspaceId = WorkspaceItem.MigrateLegacyId(_appSettings.LastSelectedWorkspace);
@@ -119,7 +128,9 @@ public partial class MainViewModel : ViewModelBase
         _restApiEnabled = _appSettings.RestApiEnabled;
         _restApiPort = _appSettings.RestApiPort is >= 1 and <= 65535 ? _appSettings.RestApiPort : 8990;
         _restApiAllowLan = _appSettings.RestApiAllowLan;
-        _restApiAccessToken = EnsureRestApiAccessToken(_appSettings);
+        // Optional token (API-01): no token by default — the remote API targets closed-LAN automation
+        // (e.g. Bitfocus Companion). A token is only required when the operator sets one.
+        _restApiAccessToken = _appSettings.RestApiAccessToken ?? string.Empty;
         RestartRestApi();
         timing?.SetOutcome($"players={Players.Count} outputs={OutputManagement.Outputs.Count} endpoints={ActionEndpoints.Count} restApi={RestApiEnabled}");
     }
@@ -172,6 +183,8 @@ public partial class MainViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
+    [NotifyPropertyChangedFor(nameof(RestApiAccessTokenDisplay))]
+    [NotifyPropertyChangedFor(nameof(HasRestApiAccessToken))]
     private string _restApiAccessToken = string.Empty;
 
     /// <summary>Shown in the Project workspace card (and the base for Copy-API-URL menus).</summary>
@@ -184,9 +197,18 @@ public partial class MainViewModel : ViewModelBase
     public string? RestApiStatusNote => _restApiServer.StatusNote;
 
     public string RestApiSecurityStatus =>
-        RestApiAllowLan
-            ? Strings.RemoteApiSecurityLan
-            : Strings.RemoteApiSecurityLoopback;
+        (RestApiAllowLan ? Strings.RemoteApiSecurityLan : Strings.RemoteApiSecurityLoopback)
+        + " "
+        + (string.IsNullOrEmpty(RestApiAccessToken)
+            ? Strings.RemoteApiTokenOptional
+            : Strings.RemoteApiTokenRequired);
+
+    /// <summary>Token field text: the token, or a "(none)" placeholder when authentication is off.</summary>
+    public string RestApiAccessTokenDisplay =>
+        string.IsNullOrEmpty(RestApiAccessToken) ? Strings.RemoteApiTokenNone : RestApiAccessToken;
+
+    /// <summary>True when a token is set (drives the Clear button's enabled state).</summary>
+    public bool HasRestApiAccessToken => !string.IsNullOrEmpty(RestApiAccessToken);
 
     /// <summary>Endpoint cheat-sheet rendered as a list by the Project workspace card. Paths are
     /// protocol, not prose — only the descriptions localize.</summary>
@@ -241,16 +263,21 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(RestApiSecurityStatus));
     }
 
-    private static string EnsureRestApiAccessToken(AppSettings settings)
+    partial void OnRestApiAccessTokenChanged(string value)
     {
-        if (!string.IsNullOrWhiteSpace(settings.RestApiAccessToken))
-            return settings.RestApiAccessToken;
-
-        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
-        settings.RestApiAccessToken = token;
-        settings.Save();
-        return token;
+        _appSettings.RestApiAccessToken = string.IsNullOrEmpty(value) ? null : value;
+        _appSettings.Save();
+        RestartRestApi();
     }
+
+    /// <summary>Opt in to auth by generating a random token (the remote API is token-less by default).</summary>
+    [RelayCommand]
+    private void RegenerateRestApiToken() =>
+        RestApiAccessToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+
+    /// <summary>Remove the token so the remote API accepts unauthenticated requests again.</summary>
+    [RelayCommand]
+    private void ClearRestApiToken() => RestApiAccessToken = string.Empty;
 
     // ----- UI rewrite P1 (plan §1): toast overlay queue -----------------------------------------
 
@@ -401,6 +428,12 @@ public partial class MainViewModel : ViewModelBase
     public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
 
     // ----- Phase E (§8.6): Theme & Density -------------------------------------------------------
+
+    /// <summary>UI-01: gates the Project workspace appearance controls. False while the Classic theme has
+    /// no working dark variant and density is a no-op, so the app never presents a setting that does
+    /// nothing (density) or produces a broken half-dark window (theme). Flip to <c>true</c> once the
+    /// Classic theme ships real dark + density resources, and the section reappears with no other change.</summary>
+    public bool ShowAppearanceSettings => false;
 
     public IReadOnlyList<AppThemeMode> ThemeChoices { get; } = Enum.GetValues<AppThemeMode>();
     public IReadOnlyList<AppDensityMode> DensityChoices { get; } = Enum.GetValues<AppDensityMode>();
@@ -628,7 +661,15 @@ public partial class MainViewModel : ViewModelBase
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         RemoveActionEndpointCommand.NotifyCanExecuteChanged();
+        SyncEndpointHealthTimer(); // APP-01: start when endpoints appear, stop when the last one is removed
         FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync endpoints-changed");
+    }
+
+    /// <summary>APP-01: only poll endpoint health while endpoints exist.</summary>
+    private void SyncEndpointHealthTimer()
+    {
+        if (_endpointHealthTimer is { } timer)
+            timer.IsEnabled = ActionEndpoints.Count > 0;
     }
 
     private void RebuildEndpointWorkspaceLists()
@@ -780,6 +821,10 @@ public partial class MainViewModel : ViewModelBase
 
     public async Task RefreshAllEndpointHealthAsync()
     {
+        // APP-01: nothing to probe → don't start a timed operation that logs a "probed=0" sweep.
+        if (OSCEndpointRows.Count == 0 && MIDIEndpointRows.Count == 0)
+            return;
+
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.RefreshAllEndpointHealthAsync", slowWarningMs: 1500);
         if (Interlocked.CompareExchange(ref _endpointHealthRefreshInFlight, 1, 0) != 0)
         {

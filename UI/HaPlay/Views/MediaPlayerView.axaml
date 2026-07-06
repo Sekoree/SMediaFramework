@@ -307,7 +307,8 @@
                                 VerticalAlignment="Center">
                         <Button Classes="Touch"
                                 Command="{Binding PreviousTrackCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}">
+                                ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}"
+                                AutomationProperties.Name="{x:Static res:Strings.PreviousTrackTooltip}">
                             <PathIcon Data="{x:Static views:AppIcons.Previous}" Width="14" Height="14" />
                         </Button>
                         <Button Classes="Touch Go" MinWidth="84"
@@ -323,12 +324,14 @@
                         </Button>
                         <Button Classes="Touch"
                                 Command="{Binding NextTrackCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}">
+                                ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}"
+                                AutomationProperties.Name="{x:Static res:Strings.NextTrackTooltip}">
                             <PathIcon Data="{x:Static views:AppIcons.Next}" Width="14" Height="14" />
                         </Button>
                         <Button Classes="Touch"
                                 Command="{Binding StopCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}">
+                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}"
+                                AutomationProperties.Name="{x:Static res:Strings.StopTrackTooltip}">
                             <PathIcon Data="{x:Static views:AppIcons.Stop}" Width="14" Height="14" />
                         </Button>
                     </StackPanel>

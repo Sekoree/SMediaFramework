@@ -59,6 +59,7 @@
       </Menu>
       <Button Grid.Column="6"
               ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
+              AutomationProperties.Name="{x:Static res:Strings.CueListSettingsTooltip}"
               Command="{Binding OpenCueListSettingsCommand}">
             <PathIcon Data="{x:Static views:AppIcons.Gear}" Width="13" Height="13" />
           </Button>
@@ -734,7 +735,8 @@
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                 <ToggleButton Classes="Dense"
                               IsChecked="{Binding NowPlayingSeekUnlocked}"
-                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}">
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}"
+                              AutomationProperties.Name="{x:Static res:Strings.NowPlayingSeekLockTooltip}">
                   <PathIcon Data="{x:Static views:AppIcons.Lock}" Width="11" Height="11" />
                 </ToggleButton>
                 <Button Content="{x:Static res:Strings.StopAllNowPlayingButton}"
@@ -758,7 +760,8 @@
                       </StackPanel>
                       <Button Grid.Row="0" Grid.Column="1" Padding="6,0" MinWidth="22"
                               Command="{Binding CancelCommand}"
-                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}">
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}"
+                              AutomationProperties.Name="{x:Static res:Strings.NowPlayingCancelTooltip}">
             <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
           </Button>
                       <ProgressBar Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
@@ -794,7 +797,8 @@
                         </StackPanel>
                         <Button Grid.Column="2" Padding="6,0" MinWidth="22"
                                 Command="{Binding CancelAllCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}">
+                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}"
+                                AutomationProperties.Name="{x:Static res:Strings.NowPlayingGroupCancelTooltip}">
             <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
           </Button>
                       </Grid>

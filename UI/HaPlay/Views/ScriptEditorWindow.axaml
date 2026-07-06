@@ -147,6 +147,7 @@
                               <TextBox Width="90" Text="{Binding IntervalMsText}"
                                        PlaceholderText="ms" IsVisible="{Binding ShowInterval}" Margin="0,0,6,6" />
                               <Button Padding="8,2" ToolTip.Tip="Remove trigger" Margin="0,0,0,6"
+                                      AutomationProperties.Name="Remove trigger"
                                       Command="{Binding RemoveCommand}">
             <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
           </Button>

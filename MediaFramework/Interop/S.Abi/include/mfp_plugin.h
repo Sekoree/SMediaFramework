@@ -34,6 +34,52 @@
  *     to the plugin's own thread. The (potentially slow) asset load for a layer happens in create/configure.
  *   - Trust: plugins run in-process with full rights (like any .so). Loading is opt-in from an explicit
  *     trusted directory/allowlist — "only load plugins you trust," same as VST/OBS.
+ *
+ * ============================  NORMATIVE CONTRACT (PLUG-01)  ============================
+ * The rules above are conventions; the rules below are REQUIREMENTS a conforming plugin and host both obey.
+ * "MUST" / "MUST NOT" are binding; violating them is undefined behaviour.
+ *
+ *  1. Per-instance call serialization (concurrency).
+ *       - The host MUST NOT invoke two methods of the SAME capability instance concurrently. Every vtable
+ *         call on a given instance is serialized (happens-before the next), so a plugin needs no internal
+ *         lock for its own per-instance state — EXCEPT the release_frame family and destroy, which observe
+ *         the ordering rules in (4)/(5) below.
+ *       - The host MAY call DIFFERENT instances (even of the same vtable) concurrently on different threads.
+ *         Any state a plugin shares across instances (globals, caches) MUST be synchronized by the plugin.
+ *       - A plugin's own background threads are the plugin's responsibility: they MUST NOT call host methods
+ *         except where a method's doc explicitly permits it, and MUST be quiesced by destroy (see (5)).
+ *
+ *  2. Re-entrancy.
+ *       - A plugin MUST NOT call back into the engine (any MfpHostApi method other than set_last_error, and
+ *         any capability it obtained) from within a REAL-TIME callback (audio submit/read, output submit,
+ *         layer render). set_last_error is always safe and is the only host call permitted from a failing
+ *         real-time path.
+ *       - The host guarantees it will not re-enter a plugin instance from within that instance's own callback:
+ *         a plugin method may assume it holds no host lock and may safely block on its own resources (but
+ *         MUST still return promptly from real-time calls — offload slow work to its own thread).
+ *
+ *  3. Pointer + buffer lifetime.
+ *       - Pointers the host passes INTO a call (formats, option structs, control args, string arguments) are
+ *         borrowed and valid ONLY for the duration of that call. A plugin that needs them later MUST copy.
+ *       - Frames/handles a plugin returns are owned by the plugin and MUST stay valid until the host calls the
+ *         owning capability's release_frame; the host MUST call release_frame exactly once per produced frame.
+ *       - Strings a plugin returns to the host (names, error text) MUST remain valid until the next call on the
+ *         same instance, or be copied by the host before then — the host copies immediately.
+ *
+ *  4. release_frame ordering.
+ *       - release_frame for a given instance MAY be called on a thread different from the producing call, but
+ *         the host guarantees it is never concurrent with another call on that same instance, and always
+ *         happens-before destroy for that instance. A producer therefore frees a frame's backing knowing no
+ *         other method of that instance runs concurrently.
+ *
+ *  5. destroy vs. in-flight work (no destroy-vs-work race).
+ *       - Before calling destroy on an instance the host QUIESCES it: it stops issuing real-time calls, waits
+ *         for any in-flight call on that instance to return, and releases all outstanding frames. destroy is
+ *         therefore never concurrent with any other method of that instance.
+ *       - destroy MUST join/stop the plugin's own worker threads and free all resources before returning. After
+ *         destroy the host never touches that instance again; the plugin MUST NOT use the host handle afterwards.
+ *       - The mirror on the outbound side (s_media_player.h) is enforced in code: mfp_session_destroy/shutdown
+ *         wait for in-flight ABI calls to drain before releasing the session.
  */
 #ifndef MFP_PLUGIN_H
 #define MFP_PLUGIN_H

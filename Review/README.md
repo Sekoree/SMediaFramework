@@ -1,6 +1,15 @@
 # MFPlayer / HaPlay critical review
 
-Review date: 2026-07-05
+Review date: 2026-07-05 · Verification pass: 2026-07-06
+
+> **2026-07-06 verification.** A second pass re-checked every prior finding against the current tree
+> (unchanged since 2026-07-05 apart from the review docs themselves), corroborated the paper findings
+> against a live HaPlay run with fresh screenshots of every workspace, and added new items. All
+> high-severity findings reproduce. See [Verification pass and addenda](11-Verification-2026-07-06.md).
+> New: **MMD-04** (`stackalloc` inside the joint loop — `CA2014`), **BUILD-03** (clean-build warning
+> baseline under-counts), **REPO-01** (orphaned `UI/HaPlay.{App,Controls,Core}` directories),
+> **APP-03** (startup exceeds the app's own 1 s budget), and a sharpened **UI-01** (dark theme is a
+> partial/broken variant, not a no-op).
 
 ## Scope and method
 
@@ -39,6 +48,10 @@ Severity means:
 | SET-01 | Medium | App settings overwrite in place and silently reset on a partial/corrupt write | HaPlay persistence |
 | LOG-01 | Medium | The desktop logger flushes every line and has an inefficient queue/semaphore implementation | HaPlay diagnostics |
 | A11Y-01 | Medium | 46 views contain no automation properties; soundboard tiles are pointer-only `Border` controls | HaPlay UX/accessibility |
+| MMD-04 | Low/Med | Six `stackalloc float[3]` inside the per-joint constraint loop accumulate stack unbounded by joint count (`CA2014` ×6) | MMD physics |
+| BUILD-03 | Low | Whole-solution incremental build hides per-project warnings; the "one warning" baseline under-counts (MMD `CA2014` were unlisted) | CI/build |
+| REPO-01 | Low | `UI/HaPlay.{App,Controls,Core}` remain on disk as orphaned `bin/obj`-only directories, not in the solution | Repo hygiene |
+| APP-03 | Low | Startup self-reports `slow completion in 1354ms (threshold=1000ms)`; too much synchronous work on the first-frame path | HaPlay startup |
 
 No defect was classified as critical in the sense of an immediately exploitable default configuration or guaranteed data loss. The six high findings should nevertheless be addressed before treating the framework or HaPlay artifacts as production-ready.
 
@@ -50,6 +63,11 @@ No defect was classified as critical in the sense of an immediately exploitable 
 4. Harden `ShowDocument`, settings persistence, and YouTube cancellation.
 5. Fix the appearance settings, keyboard/accessibility baseline, and live-operation control hierarchy.
 6. Replace stale rewrite-era documentation and expand hardware/native test coverage.
+
+## Consolidated checklist
+
+Every finding across all reports as one checkable work list (severity-tagged, with acceptance gates
+and guardrails): [Action checklist](00-Action-Checklist.md).
 
 ## Component reports
 
@@ -63,4 +81,5 @@ No defect was classified as critical in the sense of an immediately exploitable 
 - [HaPlay Application Engineering](08-HaPlay-Application.md)
 - [HaPlay UX and Accessibility](09-HaPlay-UX.md)
 - [Build, Tests, Documentation, and Release](10-Engineering-Quality.md)
+- [Verification pass and addenda (2026-07-06)](11-Verification-2026-07-06.md)
 

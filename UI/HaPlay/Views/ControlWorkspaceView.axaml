@@ -59,6 +59,7 @@
                 Command="{Binding AddScriptCommand}" />
         <Button Grid.Row="0" Grid.Column="6"
                 ToolTip.Tip="{x:Static res:Strings.PopoutTabButtonTooltip}"
+                AutomationProperties.Name="{x:Static res:Strings.PopoutTabButtonTooltip}"
                 Click="OnPopOutTabClick">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
           </Button>

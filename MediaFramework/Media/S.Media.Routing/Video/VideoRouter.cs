@@ -477,22 +477,26 @@ public sealed class VideoRouter : IDisposable
     {
         metrics = default;
         ArgumentException.ThrowIfNullOrEmpty(outputId);
+        VideoOutputPump? pump = null;
         lock (_gate)
         {
-            if (!_outputs.TryGetValue(outputId, out var reg))
-                return false;
-            if (reg.Output is VideoOutputPump pump)
-            {
-                metrics = new VideoOutputPumpMetrics(
-                    pump.DroppedFrames,
-                    pump.SubmittedFrames,
-                    pump.MaxQueueDepth,
-                    pump.CurrentQueuedDepth);
-                return true;
-            }
+            if (_outputs.TryGetValue(outputId, out var reg) && reg.Output is VideoOutputPump p)
+                pump = p;
         }
 
-        return false;
+        if (pump is null)
+            return false;
+
+        // ROUTE-01: read the pump counters OUTSIDE the router lock. CurrentQueuedDepth takes the pump's own
+        // gate, so resolving the pump reference under _gate and then reading its (Interlocked/Volatile)
+        // counters without it keeps the router→pump lock nest from ever pairing with a pump→router path
+        // (a pump-pressure subscriber that calls back into the router while the pump held its gate).
+        metrics = new VideoOutputPumpMetrics(
+            pump.DroppedFrames,
+            pump.SubmittedFrames,
+            pump.MaxQueueDepth,
+            pump.CurrentQueuedDepth);
+        return true;
     }
 
     /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoOutputPump"/>, returns dropped and submitted counts.</summary>

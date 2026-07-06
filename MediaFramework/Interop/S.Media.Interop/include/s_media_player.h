@@ -37,12 +37,16 @@ extern "C" {
 #define MFP_ERR_NOT_INITIALIZED -5
 #define MFP_ERR_NOT_FOUND       -6   /* unknown cue id / transport group */
 
-/* Transport state of a group, as returned by mfp_session_state(). */
+/* Transport state of a group, as returned by mfp_session_state().
+ * The headless runner reports IDLE / PLAYING / PAUSED: a group holding a clip is PLAYING while its clock
+ * advances, otherwise PAUSED (paused / frozen / held); no clip held is IDLE. ENDED and ERROR are RESERVED
+ * — the headless transport snapshot does not distinguish a played-through cue from idle (it reports IDLE
+ * once the clip releases) and carries no error flag. Do not rely on ENDED/ERROR being produced. */
 #define MFP_STATE_IDLE     0
 #define MFP_STATE_PLAYING  1
 #define MFP_STATE_PAUSED   2
-#define MFP_STATE_ENDED    3
-#define MFP_STATE_ERROR    4
+#define MFP_STATE_ENDED    3   /* reserved — not currently emitted */
+#define MFP_STATE_ERROR    4   /* reserved — not currently emitted */
 
 /* An opaque show session — one running show (its registry + ShowSession + transport groups). */
 typedef void* mfp_session;
@@ -62,9 +66,13 @@ const char* mfp_last_error(void);
 /* ------------------------------------------------------------------ session ---------------------- */
 
 /*
- * Create a headless show session: builds the media registry (FFmpeg decode + the available audio backends) and a
- * ShowSession over it. Returns an opaque handle, or NULL on failure (see mfp_last_error). Destroy with
- * mfp_session_destroy.
+ * Create a headless show session: builds the media registry (FFmpeg decode + the audio backend modules) and a
+ * ShowSession over it. The session drives transport + composition but does NOT open an audio output device by
+ * default (headless — CI-safe, no device dependency); audio-out on a real backend is a future create-with-audio
+ * variant. Returns an opaque handle, or NULL on failure (see mfp_last_error). Destroy with mfp_session_destroy.
+ *
+ * Concurrency: mfp_session_destroy() (and mfp_shutdown()) wait for any in-flight calls on the session to return
+ * before releasing it, so a destroy racing an in-progress go/seek/query will not tear state out from under it.
  */
 mfp_session mfp_session_create(void);
 

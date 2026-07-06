@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using S.Media.FFmpeg.Common;
@@ -27,20 +26,35 @@ public sealed class YouTubePreparer
 {
     private readonly IYouTubeGateway _gateway;
     private readonly string _cacheRoot;
-    private readonly ConcurrentDictionary<string, Lazy<Task<YouTubePreparedMedia>>> _inFlight = new(StringComparer.Ordinal);
     private readonly Action<string?, string?, string, CancellationToken> _remux;
+    private readonly long? _maxCacheBytes;
+    private readonly TimeSpan? _maxCacheAge;
+
+    // YT-02: coalesced prepares share ONE run with an internal lifetime that is decoupled from any single
+    // caller's token. Each entry is ref-counted; the shared run is only cancelled when the LAST caller
+    // leaves before it completes. Guarded by _inFlightGate so join/start/refcount is atomic.
+    private readonly object _inFlightGate = new();
+    private readonly Dictionary<string, PrepareEntry> _inFlight = new(StringComparer.Ordinal);
 
     /// <summary>Default cache root: <c>~/.cache/mfplayer/youtube</c> (or the platform equivalent).</summary>
     public static string DefaultCacheRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "mfplayer", "youtube-cache");
 
+    /// <param name="maxCacheBytes">YT-03: optional cap on total committed <c>.mkv</c> asset bytes; oldest
+    /// (LRU by last-write) beyond the cap are evicted after a successful prepare. Null = unbounded.</param>
+    /// <param name="maxCacheAge">YT-03: optional max age for committed assets; older ones are evicted after a
+    /// successful prepare. Null = never age out.</param>
     public YouTubePreparer(
         IYouTubeGateway gateway,
         string? cacheRoot = null,
-        Action<string?, string?, string, CancellationToken>? remux = null)
+        Action<string?, string?, string, CancellationToken>? remux = null,
+        long? maxCacheBytes = null,
+        TimeSpan? maxCacheAge = null)
     {
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _cacheRoot = cacheRoot ?? DefaultCacheRoot;
+        _maxCacheBytes = maxCacheBytes is > 0 ? maxCacheBytes : null;
+        _maxCacheAge = maxCacheAge is { } a && a > TimeSpan.Zero ? a : null;
         // The remux step is injectable so cache/coalescing behavior tests offline without FFmpeg natives.
         _remux = remux ?? new Action<string?, string?, string, CancellationToken>(
             // Explicit container: the atomic-commit temp path ends in ".partial", so libavformat
@@ -80,6 +94,11 @@ public sealed class YouTubePreparer
     /// Prepares (or returns the already-cached asset for) one selection. "Best" selections are resolved
     /// against the live manifest first, so their cache identity is the RESOLVED stream pair.
     /// </summary>
+    /// <remarks>Concurrent prepares of the same selection coalesce onto one run (YT-02). The caller's
+    /// <paramref name="cancellationToken"/> cancels only <em>this caller's wait</em>; the shared run keeps
+    /// going for other joiners and is aborted only when the last caller leaves before it finishes. Progress
+    /// is reported to the caller that <em>starts</em> the run; a later joiner sees no progress (there is only
+    /// one shared run) — poll <see cref="IsPrepared"/> instead.</remarks>
     public Task<YouTubePreparedMedia> PrepareAsync(
         string videoId,
         YouTubeStreamSelection selection,
@@ -91,20 +110,136 @@ public sealed class YouTubePreparer
 
         // Coalesce by request identity (pre-resolution): two "best" prepares of the same video share one run.
         var coalesceKey = $"{videoId}|{selection.Video}|{selection.Audio}|{selection.SubtitleLanguage}|{selection.IncludeVideo}";
-        var lazy = _inFlight.GetOrAdd(coalesceKey, _ => new Lazy<Task<YouTubePreparedMedia>>(
-            () => PrepareCoreAsync(videoId, selection, progress, cancellationToken)));
-        return AwaitAndRelease(lazy, coalesceKey);
-
-        async Task<YouTubePreparedMedia> AwaitAndRelease(Lazy<Task<YouTubePreparedMedia>> entry, string key)
+        PrepareEntry entry;
+        lock (_inFlightGate)
         {
-            try
+            if (!_inFlight.TryGetValue(coalesceKey, out entry!))
             {
-                return await entry.Value.ConfigureAwait(false);
+                entry = new PrepareEntry(coalesceKey);
+                // Shared run on the entry's internal token — decoupled from any one caller (YT-02).
+                entry.Task = PrepareCoreAsync(videoId, selection, progress, entry.Cts.Token);
+                _inFlight[coalesceKey] = entry;
+                var captured = entry;
+                _ = entry.Task.ContinueWith(
+                    _ => EvictEntry(captured),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
             }
-            finally
+
+            entry.Refs++;
+        }
+
+        return AwaitWithRefcountAsync(entry, cancellationToken);
+    }
+
+    private async Task<YouTubePreparedMedia> AwaitWithRefcountAsync(PrepareEntry entry, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Per-caller wait: cancelling abandons THIS await; the shared run is untouched (YT-02).
+            return await entry.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_inFlightGate)
             {
-                _inFlight.TryRemove(key, out _);
+                // Last caller gone before the run completed → abort the now-orphaned shared download.
+                if (--entry.Refs <= 0 && !entry.Task.IsCompleted)
+                {
+                    try { entry.Cts.Cancel(); }
+                    catch (ObjectDisposedException) { /* completed+evicted concurrently */ }
+                }
             }
+        }
+    }
+
+    private void EvictEntry(PrepareEntry entry)
+    {
+        lock (_inFlightGate)
+        {
+            if (_inFlight.TryGetValue(entry.Key, out var current) && ReferenceEquals(current, entry))
+                _inFlight.Remove(entry.Key);
+        }
+
+        entry.Cts.Dispose();
+    }
+
+    private sealed class PrepareEntry(string key)
+    {
+        public string Key { get; } = key;
+        public CancellationTokenSource Cts { get; } = new();
+        public Task<YouTubePreparedMedia> Task { get; set; } = null!;
+        public int Refs;
+    }
+
+    /// <summary>YT-03: bound the committed-asset cache. Evicts committed <c>.mkv</c> assets (and their
+    /// <c>.ass</c> subtitle sidecars) that are older than <see cref="_maxCacheAge"/> or, oldest-first, over
+    /// <see cref="_maxCacheBytes"/>. Only ever touches final committed assets — never <c>.partial</c> temps or
+    /// the per-stream <c>.v</c>/<c>.a</c> caches an in-flight remux may be reading — and always keeps the asset
+    /// that was just prepared. Best-effort; never throws into the prepare path. No-op unless a limit is set.</summary>
+    private void TryCleanupCache(string keepAssetPath)
+    {
+        if (_maxCacheBytes is null && _maxCacheAge is null)
+            return;
+
+        try
+        {
+            var dir = new DirectoryInfo(_cacheRoot);
+            if (!dir.Exists)
+                return;
+
+            var keep = Path.GetFullPath(keepAssetPath);
+            var assets = dir.GetFiles("*.mkv")
+                .Where(f => !string.Equals(f.FullName, keep, StringComparison.Ordinal))
+                .OrderBy(f => f.LastWriteTimeUtc) // LRU: oldest first
+                .ToList();
+
+            if (_maxCacheAge is { } age)
+            {
+                var cutoff = DateTime.UtcNow - age;
+                for (var i = assets.Count - 1; i >= 0; i--)
+                {
+                    if (assets[i].LastWriteTimeUtc >= cutoff)
+                        continue;
+                    DeleteAssetWithSidecars(assets[i]);
+                    assets.RemoveAt(i);
+                }
+            }
+
+            if (_maxCacheBytes is { } cap)
+            {
+                var total = assets.Sum(f => f.Length) + SafeLength(keep);
+                foreach (var asset in assets)
+                {
+                    if (total <= cap)
+                        break;
+                    total -= asset.Length;
+                    DeleteAssetWithSidecars(asset);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cache maintenance is best-effort — a locked/missing file must never fail a prepare.
+        }
+
+        static long SafeLength(string path)
+        {
+            try { return new FileInfo(path) is { Exists: true } fi ? fi.Length : 0; }
+            catch (IOException) { return 0; }
+        }
+    }
+
+    private static void DeleteAssetWithSidecars(FileInfo asset)
+    {
+        var key = Path.GetFileNameWithoutExtension(asset.Name); // "{videoId}-{assetHash}"
+        try { asset.Delete(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
+        foreach (var sidecar in asset.Directory!.EnumerateFiles($"{key}.*.ass"))
+        {
+            try { sidecar.Delete(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
         }
     }
 
@@ -197,6 +332,7 @@ public sealed class YouTubePreparer
         }
 
         progress?.Report(new(YouTubePreparePhase.Ready, 1));
+        TryCleanupCache(assetPath); // YT-03: LRU/age eviction, protecting the asset just prepared.
         var resolved = new YouTubeStreamSelection(videoDescriptor, audioDescriptor, selection.SubtitleLanguage)
         {
             IncludeVideo = selection.IncludeVideo,

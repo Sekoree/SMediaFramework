@@ -1,8 +1,10 @@
 <Project>
 
   <!-- Repo-root common build settings for MFPlayer (the v2 rewrite, promoted from next/ to the root
-       2026-07-04; the old parallel tree was removed). Design docs live in ./Next/. Directory.Build.targets
-       is intentionally minimal. -->
+       2026-07-04; the old parallel tree, including its ./Next/ design docs, was removed).
+       Directory.Build.targets is intentionally minimal. -->
+  <!-- Note: keep first-party analyzer/AOT warnings visible; see the review checklist BUILD-01/BUILD-03. -->
+
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

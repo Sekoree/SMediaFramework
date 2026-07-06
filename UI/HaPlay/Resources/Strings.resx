@@ -2636,16 +2636,31 @@
     <value>Access token</value>
   </data>
   <data name="RemoteApiSecurityLoopback" xml:space="preserve">
-    <value>Loopback only. Every request requires the token; copied URLs include ?key= automatically.</value>
+    <value>Loopback only — reachable from this machine.</value>
   </data>
   <data name="RemoteApiSecurityLan" xml:space="preserve">
-    <value>LAN access enabled. Every request requires the token; use only on a trusted show network.</value>
+    <value>LAN access enabled — reachable from your show network; use only on a trusted network.</value>
+  </data>
+  <data name="RemoteApiTokenRequired" xml:space="preserve">
+    <value>A token is set: every request must include it (copied URLs add ?key= automatically).</value>
+  </data>
+  <data name="RemoteApiTokenOptional" xml:space="preserve">
+    <value>No token: any client that can reach the port can control HaPlay. Set a token to require authentication.</value>
   </data>
   <data name="RemoteApiDisabledStatus" xml:space="preserve">
     <value>(disabled)</value>
   </data>
   <data name="RemoteApiHint" xml:space="preserve">
-    <value>Token-protected HTTP control for show controllers. GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL.</value>
+    <value>HTTP control for show controllers (e.g. Bitfocus Companion). GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL. The access token is optional — set one to require authentication.</value>
+  </data>
+  <data name="RemoteApiGenerateTokenLabel" xml:space="preserve">
+    <value>Generate token</value>
+  </data>
+  <data name="RemoteApiClearTokenLabel" xml:space="preserve">
+    <value>Clear</value>
+  </data>
+  <data name="RemoteApiTokenNone" xml:space="preserve">
+    <value>(none — authentication disabled)</value>
   </data>
   <data name="RemoteApiDocCues" xml:space="preserve">
     <value>Cue player transport (go fires the standby/selected cue)</value>

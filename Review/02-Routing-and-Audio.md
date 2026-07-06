@@ -36,6 +36,13 @@ Recommendation: expose backend availability/diagnostic records from module regis
 
 ## What should remain
 
+- **The audio router does not share ROUTE-01 (verified 2026-07-06).** The audio path raises pump
+  pressure from `AudioRouter.OutputPump.RecordDrop` (`AudioRouter.OutputPump.cs:117-122`), reached via
+  `Commit`, which operates on lock-free `ConcurrentQueue`/`BlockingCollection` buffers — no lock is held
+  when the subscriber callback runs. ROUTE-01 is genuinely video-pump-specific; do not wrap the audio
+  path in a lock "for symmetry" while fixing it. (One residual: the callback still runs on the
+  above-normal-priority mix thread, so a slow subscriber can glitch audio — keep pressure subscribers
+  cheap.)
 - Bounded video queues and explicit dropped-frame counters are correct defaults.
 - Conversion being staged outside the global router lock is a sound design.
 - Native bindings being isolated in PALib/MALib keeps higher layers testable.

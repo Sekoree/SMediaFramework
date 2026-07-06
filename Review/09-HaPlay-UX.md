@@ -4,6 +4,17 @@ Scope: all HaPlay views/dialogs, navigation, live playback workflows, visual hie
 
 ![HaPlay Players workspace](Assets/HaPlay-Players.png)
 
+> **Live walkthrough (2026-07-06).** Every workspace was launched and captured to corroborate the
+> findings below (see [the verification pass](11-Verification-2026-07-06.md) for the mapping):
+> [Cues](Assets/HaPlay-Cues.png) · [Soundboard](Assets/HaPlay-Soundboard.png) ·
+> [Control](Assets/HaPlay-Control.png) · [I/O](Assets/HaPlay-IO.png) ·
+> [Project](Assets/HaPlay-Project.png) · [Dark theme](Assets/HaPlay-DarkTheme-Players.png).
+> The captures confirm UX-01/UX-02 (Players), the Panic-next-to-Stop proximity risk (Cues), the token
+> shown in plaintext (Project), and UI-01 (dark theme still renders light). One small addition:
+> **empty-state consistency** — I/O has a helpful empty state ("No outputs yet…") while Players,
+> Soundboard, and Cues present blank areas; unify them behind one empty-state pattern (icon + one-line
+> explanation + primary action).
+
 ## Overall assessment
 
 The classic desktop visual language suits a technical show-control tool: controls are dense, grouping is visible, and there is little decorative animation. The workspace model (Players, Cues, Soundboard, Control, Outputs, Project) is understandable. The current presentation still reads as an internal test harness because hierarchy, status duplication, control sizing, branding, keyboard discovery, and accessibility are inconsistent.

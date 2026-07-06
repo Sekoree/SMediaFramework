@@ -34,6 +34,24 @@ Recommendation: add a bounded concurrency gate, per-request timeout/shutdown tok
 
 Recommendation: either remove/disable unsupported choices or implement them against Classic theme resources/classes. Add a headless UI test that changes each preference and asserts a measurable resource/control property, not just persisted enum state.
 
+> **Refinement (verified live 2026-07-06).** Density is a *guaranteed* no-op: `ApplyDensity` scans
+> `app.Styles` for a `FluentTheme` (`AppearanceController.cs:32-39`), but `App.axaml` replaced
+> `FluentTheme` with the Classic theme, so the loop never matches. `ApplyTheme` *is* called at startup
+> (`MainViewModel.cs:108`) and does set `RequestedThemeVariant = Dark`, but forcing `"theme":"dark"`
+> and relaunching still renders the light Classic chrome (`Assets/HaPlay-DarkTheme-Players.png`): the
+> Classic theme has no dark resources, so only variant-aware controls (AvaloniaEdit, validation) flip —
+> to unreadable white-on-white. "Dark" is thus a partial/broken theme, not merely inert.
+
+### APP-03 — Startup exceeds the app's own budget (low, added 2026-07-06)
+
+A cold `--no-build` Release launch self-reports `App.OnFrameworkInitializationCompleted: slow
+completion in 1354.83ms (threshold=1000.00ms)`, with `MainViewModel.ctor` accounting for ~218 ms and
+visible PortAudio acquire/release churn in the startup log. The composition root does more synchronous
+first-frame work than the 1 s budget it sets itself.
+
+Recommendation: profile initialization (module probing, audio-runtime ref-count churn) and defer
+non-essential work off the first-frame path. Ties into `APP-02` (oversized composition root).
+
 ### SET-01 — Per-machine settings are overwritten non-atomically (medium)
 
 `AppSettings.Save` calls `File.Create` on the live file and serializes in place, while swallowing all exceptions (`AppSettings.cs:78-92`). A crash, full disk, or interruption can leave a truncated file; `Load` catches everything and silently returns defaults (`:62-75`). This can lose window/dialog state, API configuration, and the token without diagnosis.
