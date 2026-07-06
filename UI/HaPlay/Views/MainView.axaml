@@ -45,6 +45,7 @@
   </UserControl.Styles>
 
   <UserControl.KeyBindings>
+    <KeyBinding Gesture="F1" Command="{Binding ShowKeyboardShortcutsCommand}" />
     <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
     <KeyBinding Gesture="Ctrl+N" Command="{Binding NewProjectCommand}" />
     <KeyBinding Gesture="Ctrl+O" Command="{Binding OpenProjectCommand}" />
@@ -108,6 +109,10 @@
         <Separator />
         <MenuItem Header="{x:Static res:Strings.MenuToggleSidebarHeader}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
         <MenuItem Header="{x:Static res:Strings.MenuTargetConfigurationHeader}" Command="{Binding OpenTargetConfigurationCommand}" />
+      </MenuItem>
+      <MenuItem Header="{x:Static res:Strings.MenuHelpHeader}">
+        <MenuItem Header="{x:Static res:Strings.KeyboardShortcutsMenuHeader}"
+                  Command="{Binding ShowKeyboardShortcutsCommand}" InputGesture="F1" />
       </MenuItem>
     </Menu>
 

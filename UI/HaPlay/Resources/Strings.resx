@@ -85,6 +85,42 @@
   <data name="MenuViewHeader" xml:space="preserve">
     <value>_View</value>
   </data>
+  <data name="MenuHelpHeader" xml:space="preserve">
+    <value>_Help</value>
+  </data>
+  <data name="KeyboardShortcutsMenuHeader" xml:space="preserve">
+    <value>Keyboard Shortcuts…</value>
+  </data>
+  <data name="KeyboardShortcutsDialogTitle" xml:space="preserve">
+    <value>Keyboard Shortcuts</value>
+  </data>
+  <data name="ShortcutsSearchPlaceholder" xml:space="preserve">
+    <value>Search shortcuts…</value>
+  </data>
+  <data name="ShortcutsNoResults" xml:space="preserve">
+    <value>No shortcuts match your search.</value>
+  </data>
+  <data name="ShortcutGroupProject" xml:space="preserve">
+    <value>Project</value>
+  </data>
+  <data name="ShortcutGroupWorkspaces" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
+  <data name="ShortcutGroupPlayback" xml:space="preserve">
+    <value>Playback</value>
+  </data>
+  <data name="ShortcutSwitchWorkspace" xml:space="preserve">
+    <value>Switch to a workspace (Players … Project)</value>
+  </data>
+  <data name="ShortcutGo" xml:space="preserve">
+    <value>Fire the next cue (Cues workspace)</value>
+  </data>
+  <data name="ShortcutPanic" xml:space="preserve">
+    <value>Panic — stop everything (Cues workspace)</value>
+  </data>
+  <data name="ShortcutPlayPause" xml:space="preserve">
+    <value>Play / pause the focused player or cue</value>
+  </data>
   <data name="MenuToggleSidebarHeader" xml:space="preserve">
     <value>_Toggle Sidebar</value>
   </data>

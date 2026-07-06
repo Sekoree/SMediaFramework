@@ -412,6 +412,16 @@ public partial class MainViewModel : ViewModelBase
         await dialog.ShowDialog(owner);
     }
 
+    /// <summary>UX-03: open the searchable keyboard-shortcut help overlay (Help menu / F1).</summary>
+    [RelayCommand]
+    private async Task ShowKeyboardShortcutsAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+        await new Views.Dialogs.KeyboardShortcutsDialog().ShowDialog(owner);
+    }
+
     /// <summary>Ctrl+1..N keyboard handler. Index is 1-based to match the modifier key. (§12.5)</summary>
     public void SelectWorkspaceByIndex(int oneBasedIndex)
     {
