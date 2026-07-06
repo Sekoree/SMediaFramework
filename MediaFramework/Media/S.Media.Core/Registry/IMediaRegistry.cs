@@ -11,6 +11,14 @@ namespace S.Media.Core.Registry;
 /// registered module provides the capability — which is how "no audio module ⇒ no audio output" falls
 /// out without special-casing.
 /// </summary>
+/// <remarks>
+/// <strong>Lifetime/lease semantics (CORE-01).</strong> The registry is <em>owned</em> by the host that
+/// built it (via <c>MediaHost</c>/<c>MediaRegistry.Build</c>); disposing it releases every module's native
+/// runtime. Players/sessions handed a registry are <em>borrowers</em> and must NOT dispose it. The owner
+/// disposes only once all borrowers are done. After disposal the concrete registry rejects capability
+/// operations (open/create) with <see cref="ObjectDisposedException"/> instead of touching released native
+/// runtime; disposal itself is idempotent and thread-safe.
+/// </remarks>
 public interface IMediaRegistry
 {
     /// <summary>Registered audio backends, in registration order. Empty ⇒ no audio I/O available.</summary>

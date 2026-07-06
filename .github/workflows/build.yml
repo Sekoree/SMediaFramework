@@ -149,8 +149,11 @@ jobs:
           dotnet publish UI/HaPlay.Desktop/HaPlay.Desktop.csproj
           -c Release -r ${{ matrix.rid }} -o haplay-publish
 
-      # Best-effort for now (missing portaudio/portmidi native libs on the runner — operator deferred);
-      # the AOT publish above stays GATING (pure compile/link, no runtime deps).
+      # Best-effort in THIS (gate) job: it publishes without the staged native libs, so backends that need
+      # them (PortAudio/PortMidi/…) can't load here — the app still starts and self-exits on the render path.
+      # EXIT CRITERION (REL-02): promote to gating once a launch + backend-enumeration probe runs in the
+      # `artifacts` job against the native-bundled publish (the REL-01 load-probe follow-up), or the staged
+      # natives are shared into this job. The AOT publish above stays GATING (pure compile/link, no runtime deps).
       - name: HaPlay launch smoke (xvfb, HAPLAY_SMOKE self-exit)
         if: runner.os == 'Linux'
         continue-on-error: true
@@ -366,6 +369,14 @@ jobs:
           if [ -d natives-stage ]; then cp -v natives-stage/* haplay-publish/ 2>/dev/null || true; fi
           echo "--- native libs in the artifact ---"
           ls haplay-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
+
+      # REL-01: gate the upload on a required-native manifest. The staging steps above are best-effort
+      # (continue-on-error / "WARN: not found"), so without this a missing Windows/Linux native would ship
+      # as a silently-broken release. check-native-manifest.sh fails here (before upload) if any library in
+      # .github/native-manifest/<rid>.txt is absent from the publish dir.
+      - name: Validate required natives (REL-01)
+        shell: bash
+        run: bash scripts/check-native-manifest.sh ${{ matrix.rid }} haplay-publish
 
       - name: Upload HaPlay.Desktop artifact
         uses: actions/upload-artifact@v4
