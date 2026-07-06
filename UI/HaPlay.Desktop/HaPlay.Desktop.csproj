@@ -15,6 +15,9 @@
              binary for an XDG ".Desktop" entry. Ship a plain, distinct binary name instead. A case-only
              variant (HAPlay) would collide with HaPlay.dll on case-insensitive filesystems, so keep it clear.
              The launch smokes in .github/workflows/next-build.yml reference this exact name. -->
+        <!-- Executable output name. NOT "HaPlay": that collides with the HaPlay library project (both would
+             emit HaPlay.dll → "Ambiguous project name"). The user-facing name/wordmark is "HaPlay" (window
+             title + strings); this binary name only disambiguates the exe from the library (UX-06). -->
         <AssemblyName>HaPlayer</AssemblyName>
 
         <!-- Real-time audio latency hint (COMPLEMENTARY, not the fix). The AOT-only audio drops were
