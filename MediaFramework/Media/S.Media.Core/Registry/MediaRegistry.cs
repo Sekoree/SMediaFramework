@@ -139,12 +139,30 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
-    /// <summary>Builds an immutable registry from a configuration callback (the composition root).</summary>
+    /// <summary>Builds an immutable registry from a configuration callback (the composition root). If a module
+    /// throws part-way through registration, the lifetimes already acquired are rolled back in reverse order
+    /// before the exception propagates (CORE-02) — a failed build must not leak native-runtime holds.</summary>
     public static MediaRegistry Build(Action<IMediaRegistryBuilder> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
         var builder = new MediaRegistryBuilder();
-        configure(builder);
+        try
+        {
+            configure(builder);
+        }
+        catch
+        {
+            // Reverse-order rollback (mirrors MediaRegistry.Dispose): the later a lifetime was acquired, the
+            // sooner it is released, so a half-registered module chain unwinds like a successful teardown.
+            for (var i = builder.Lifetimes.Count - 1; i >= 0; i--)
+            {
+                try { builder.Lifetimes[i].Dispose(); }
+                catch { /* a rollback release must never mask the original build failure */ }
+            }
+
+            throw;
+        }
+
         return new MediaRegistry(builder);
     }
 

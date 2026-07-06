@@ -21,6 +21,35 @@ public class MediaRegistryTests
         public void Dispose() => onDispose();
     }
 
+    private sealed class LifetimeModule(string name, Action onDisposeLifetime) : IMediaModule
+    {
+        public string Name => name;
+        public void Register(IMediaRegistryBuilder builder) => builder.AddLifetime(new DisposeSpy(onDisposeLifetime));
+    }
+
+    private sealed class ThrowingModule : IMediaModule
+    {
+        public string Name => "throwing";
+        public void Register(IMediaRegistryBuilder builder) => throw new InvalidOperationException("boom");
+    }
+
+    [Fact]
+    public void Build_RollsBackAcquiredLifetimes_InReverseOrder_WhenAModuleThrows()
+    {
+        // CORE-02: two modules register a native-runtime lifetime each, then a third throws mid-build. The
+        // acquired lifetimes must be rolled back (reverse order) so a failed composition leaks nothing.
+        var order = new List<string>();
+        var ex = Assert.Throws<InvalidOperationException>(() => MediaRegistry.Build(b =>
+        {
+            b.Use(new LifetimeModule("first", () => order.Add("first")));
+            b.Use(new LifetimeModule("second", () => order.Add("second")));
+            b.Use(new ThrowingModule());
+        }));
+
+        Assert.Equal("boom", ex.Message);
+        Assert.Equal(new[] { "second", "first" }, order); // reverse-order rollback, like a normal teardown
+    }
+
     [Fact]
     public async Task Dispose_IsInterlocked_AndRejectsCapabilityOpsAfterward()
     {
