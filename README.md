@@ -123,6 +123,9 @@ These invariants hold across the framework — respect them when extending it:
   thread-local last-error and per-session call leases so `destroy`/`shutdown` drain in-flight calls before
   releasing a session.
 
+For the per-frame-type owner / release / thread rules (CPU frames, DMA-BUF, Win32 D3D11 shared handles, GL
+textures, compositor surfaces, presenters) see [docs/gpu-frame-ownership.md](docs/gpu-frame-ownership.md).
+
 ---
 
 ## HaPlay — build, run, config, security
