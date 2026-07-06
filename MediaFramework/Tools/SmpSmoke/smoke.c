@@ -7,18 +7,81 @@
  *   ./smoke <media-path>    → a one-cue show whose clip plays <media-path> (e.g. an ffmpeg-generated tone) — also
  *                             exercises the cue-list query + a real GO that opens the clip.
  *
- * Build (Linux): gcc smoke.c -I<S.Media.Interop/include> <publish>/s_media_player.so -o smoke -Wl,-rpath,<publish>
+ * Beyond the happy path it treats the header as a spec (ABI-03): the documented error codes (MFP_ERR_LOAD_FAILED,
+ * MFP_ERR_NOT_FOUND), thread-local last-error semantics, per-session concurrent call leasing (ABI-02), and
+ * repeated init/shutdown are all asserted here from C.
+ *
+ * Build (Linux): gcc smoke.c -I<S.Media.Interop/include> <publish>/s_media_player.so -o smoke -lpthread -Wl,-rpath,<publish>
  */
 #include "s_media_player.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 
 static const char* EMPTY_SHOW =
     "{\"Version\":1,\"Cues\":[],\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
 
 #define CHECK(cond, what) \
     do { if (!(cond)) { fprintf(stderr, "FAIL: %s (last_error=\"%s\")\n", (what), mfp_last_error()); return 1; } } while (0)
+
+/* ABI-01/ABI-03: the documented error + last-error contract, on a throwaway session so the main run is undisturbed. */
+static int run_error_contract_checks(void) {
+    mfp_session s = mfp_session_create();
+    CHECK(s != NULL, "error-contract: create");
+
+    /* Malformed JSON is a clean MFP_ERR_LOAD_FAILED with a diagnostic — not a crash, not a generic error. The
+     * live document is untouched (validate-then-stage), so the session stays usable afterwards. */
+    CHECK(mfp_session_load_show(s, "{ this is not valid json ]") == MFP_ERR_LOAD_FAILED, "malformed json -> LOAD_FAILED");
+    CHECK(strlen(mfp_last_error()) > 0, "a failed load sets a thread-local last-error message");
+
+    CHECK(mfp_session_load_show(s, EMPTY_SHOW) == MFP_OK, "empty show still loads after a failed load");
+    CHECK(strlen(mfp_last_error()) == 0, "a successful call clears the last-error");
+
+    /* Unknown cue id / transport group are MFP_ERR_NOT_FOUND (the header's dedicated code), not a generic error. */
+    CHECK(mfp_session_fire_cue(s, "no-such-cue") == MFP_ERR_NOT_FOUND, "unknown cue id -> NOT_FOUND");
+    CHECK(mfp_session_state(s, "no-such-group") == MFP_ERR_NOT_FOUND, "unknown transport group -> NOT_FOUND");
+
+    mfp_session_destroy(s);
+    return 0;
+}
+
+/* ABI-02/ABI-03: many concurrent in-flight calls on one session. The per-session call lease must let readers run
+ * at once (ActiveCalls > 1) without corrupting the handle table; destroy then drains them cleanly. All workers
+ * join before destroy, so the check is deterministic (no timing-dependent race that could flake CI). */
+#define CC_THREADS 4
+#define CC_ITERS 4000
+typedef struct { mfp_session s; int rc; } cc_arg;
+
+static void* cc_worker(void* p) {
+    cc_arg* a = (cc_arg*)p;
+    a->rc = 0;
+    for (int i = 0; i < CC_ITERS; i++) {
+        if (mfp_session_state(a->s, NULL) < 0 || mfp_session_position_ticks(a->s, NULL) < 0) { a->rc = 1; return NULL; }
+    }
+    return NULL;
+}
+
+static int run_concurrency_check(void) {
+    mfp_session s = mfp_session_create();
+    CHECK(s != NULL, "concurrency: create");
+    CHECK(mfp_session_load_show(s, EMPTY_SHOW) == MFP_OK, "concurrency: load");
+
+    pthread_t th[CC_THREADS];
+    cc_arg args[CC_THREADS];
+    for (int i = 0; i < CC_THREADS; i++) {
+        args[i].s = s;
+        args[i].rc = -1;
+        CHECK(pthread_create(&th[i], NULL, cc_worker, &args[i]) == 0, "spawn concurrent reader");
+    }
+    for (int i = 0; i < CC_THREADS; i++) {
+        pthread_join(th[i], NULL);
+        CHECK(args[i].rc == 0, "concurrent reader saw only valid state under the call lease");
+    }
+
+    mfp_session_destroy(s); /* leases already drained (all readers joined) */
+    return 0;
+}
 
 int main(int argc, char** argv) {
     const char* media = argc > 1 ? argv[1] : NULL;
@@ -86,13 +149,28 @@ int main(int argc, char** argv) {
     CHECK(mfp_session_state(s, NULL) < 0, "use-after-destroy rejected");
     mfp_session_destroy(s); /* double destroy */
 
+    /* ABI-03 conformance extensions — run while the runtime is still initialized. */
+    if (run_error_contract_checks() != 0) return 1;
+    if (run_concurrency_check() != 0) return 1;
+
     mfp_shutdown();
     /* After shutdown the runtime refuses handles but does not crash, and destroy stays valid (no-op). */
     CHECK(mfp_session_state(s, NULL) < 0, "post-shutdown call rejected");
     mfp_session_destroy(s);
 
-    printf("SmpSmoke OK — a C host ran a %s show (load/cue-list/go/query/stop/close) through s_media_player.h, "
-           "and bad/stale/double-freed/post-shutdown handles were rejected without crashing.\n",
+    /* ABI-03: the runtime survives repeated init/shutdown cycles (no one-shot global state left behind). */
+    CHECK(mfp_initialize() == MFP_OK, "re-initialize after shutdown");
+    {
+        mfp_session s2 = mfp_session_create();
+        CHECK(s2 != NULL, "create session after re-init");
+        CHECK(mfp_session_load_show(s2, EMPTY_SHOW) == MFP_OK, "load show after re-init");
+        mfp_session_destroy(s2);
+    }
+    mfp_shutdown();
+
+    printf("SmpSmoke OK — a C host ran a %s show (load/cue-list/go/query/stop/close) through s_media_player.h; "
+           "the error/NOT_FOUND + last-error contract, concurrent per-session call leases, repeated init/shutdown, "
+           "and bad/stale/double-freed/post-shutdown handles all behaved without crashing.\n",
            media ? "media" : "empty");
     return 0;
 }

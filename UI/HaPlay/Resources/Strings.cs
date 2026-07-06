@@ -85,6 +85,9 @@ public static class Strings
     public static string RemoteApiTokenNone => Get(nameof(RemoteApiTokenNone));
     public static string RemoteApiGenerateTokenLabel => Get(nameof(RemoteApiGenerateTokenLabel));
     public static string RemoteApiClearTokenLabel => Get(nameof(RemoteApiClearTokenLabel));
+    public static string RemoteApiRevealTokenLabel => Get(nameof(RemoteApiRevealTokenLabel));
+    public static string RemoteApiCopyTokenLabel => Get(nameof(RemoteApiCopyTokenLabel));
+    public static string RemoteApiTokenCopiedToast => Get(nameof(RemoteApiTokenCopiedToast));
     public static string RemoteApiDisabledStatus => Get(nameof(RemoteApiDisabledStatus));
     public static string RemoteApiHint => Get(nameof(RemoteApiHint));
     public static string RemoteApiDocCues => Get(nameof(RemoteApiDocCues));

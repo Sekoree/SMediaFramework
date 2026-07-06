@@ -93,11 +93,13 @@ jobs:
       - name: Run native AOT smoke
         shell: bash
         run: |
-          if [ -f aot-publish/AotSmoke.exe ]; then
-            ./aot-publish/AotSmoke.exe
-          else
-            ./aot-publish/AotSmoke
-          fi
+          if [ -f aot-publish/AotSmoke.exe ]; then bin=./aot-publish/AotSmoke.exe; else bin=./aot-publish/AotSmoke; fi
+          out="$("$bin")"; rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ]; then echo "AOT smoke exited $rc"; exit $rc; fi
+          # AOT-01: the trimmed image must run Mond's runtime-error / StackFrame path — the exact code IL2026
+          # flags — and report success, proving the accepted warning is detail-only, not a correctness problem.
+          echo "$out" | grep -q "mond error path=error-path OK" || { echo "AOT smoke: Mond error/stack path regressed"; exit 1; }
 
       # The native plugin host gate: gcc-compile the C test plugin, load it, exercise every adapter. Linux only (gcc).
       - name: ABI plugin smoke
@@ -132,7 +134,7 @@ jobs:
         run: |
           PUB="$RUNNER_TEMP/smp"
           dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o "$PUB"
-          gcc MediaFramework/Tools/SmpSmoke/smoke.c -I MediaFramework/Interop/S.Media.Interop/include "$PUB/s_media_player.so" -o "$PUB/smoke" -Wl,-rpath,"$PUB"
+          gcc MediaFramework/Tools/SmpSmoke/smoke.c -I MediaFramework/Interop/S.Media.Interop/include "$PUB/s_media_player.so" -o "$PUB/smoke" -lpthread -Wl,-rpath,"$PUB"
           echo "--- empty show (gating) ---"
           "$PUB/smoke"
           echo "--- media show (best-effort) ---"

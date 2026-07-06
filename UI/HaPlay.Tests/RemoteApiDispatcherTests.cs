@@ -275,23 +275,25 @@ public sealed class RemoteApiDispatcherTests
     }
 
     [Fact]
-    public void RemoteApi_CopyUrls_IncludeAccessToken()
+    public void RemoteApi_CopyUrls_AreTokenless_ForHeaderAuth()
     {
+        // API-01: the token is NEVER embedded in a copied URL (it would land in the clipboard, shell history, or
+        // a shared controller config). A token-protected server expects the X-HaPlay-Api-Key header instead; the
+        // server still accepts ?key= for manual use, but the app does not generate it.
         var previousBase = RemoteApi.BaseUrl;
-        var previousToken = RemoteApi.AccessToken;
         try
         {
             RemoteApi.BaseUrl = "http://localhost:8990";
-            RemoteApi.AccessToken = "abc 123";
 
             var url = RemoteApi.TileTapUrl(2, 4);
 
-            Assert.Equal("http://localhost:8990/api/v1/soundboards/2/4/tap?key=abc%20123", url);
+            Assert.Equal("http://localhost:8990/api/v1/soundboards/2/4/tap", url);
+            Assert.DoesNotContain("key=", url);
+            Assert.DoesNotContain("token=", url);
         }
         finally
         {
             RemoteApi.BaseUrl = previousBase;
-            RemoteApi.AccessToken = previousToken;
         }
     }
 

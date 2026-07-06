@@ -187,6 +187,15 @@ public partial class MainViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(HasRestApiAccessToken))]
     private string _restApiAccessToken = string.Empty;
 
+    /// <summary>When false (default) the token is shown masked; the Reveal toggle flips it (API-01), so the
+    /// secret is not shoulder-surfed or captured in a screenshot of the Project workspace.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RestApiAccessTokenDisplay))]
+    private bool _revealRestApiToken;
+
+    /// <summary>Fixed-width mask (length-independent, so it does not leak the token length).</summary>
+    private const string RestApiTokenMask = "••••••••••••••••";
+
     /// <summary>Shown in the Project workspace card (and the base for Copy-API-URL menus).</summary>
     public string RestApiBaseUrlDisplay =>
         _restApiServer.IsRunning && _restApiServer.BaseUrl is { } url
@@ -203,9 +212,12 @@ public partial class MainViewModel : ViewModelBase
             ? Strings.RemoteApiTokenOptional
             : Strings.RemoteApiTokenRequired);
 
-    /// <summary>Token field text: the token, or a "(none)" placeholder when authentication is off.</summary>
+    /// <summary>Token field text: a "(none)" placeholder when auth is off, the raw token when revealed, else a
+    /// fixed-width mask so it is not shoulder-surfed or captured in a screenshot (API-01).</summary>
     public string RestApiAccessTokenDisplay =>
-        string.IsNullOrEmpty(RestApiAccessToken) ? Strings.RemoteApiTokenNone : RestApiAccessToken;
+        string.IsNullOrEmpty(RestApiAccessToken) ? Strings.RemoteApiTokenNone
+        : RevealRestApiToken ? RestApiAccessToken
+        : RestApiTokenMask;
 
     /// <summary>True when a token is set (drives the Clear button's enabled state).</summary>
     public bool HasRestApiAccessToken => !string.IsNullOrEmpty(RestApiAccessToken);
@@ -254,8 +266,8 @@ public partial class MainViewModel : ViewModelBase
             _restApiServer.Start(RestApiPort, _restApiDispatcher, RestApiAccessToken, RestApiAllowLan);
 
         // Copy-API-URL menus keep working while the listener is off — the copied URL targets the
-        // configured port and becomes live the moment the API is enabled.
-        Remote.RemoteApi.AccessToken = RestApiAccessToken;
+        // configured port and becomes live the moment the API is enabled. The token is never embedded in
+        // copied URLs (API-01); a token-protected server expects the X-HaPlay-Api-Key header instead.
         Remote.RemoteApi.BaseUrl = _restApiServer.BaseUrl
                                    ?? $"http://{Remote.RestApiServer.ResolveAdvertisedHost(RestApiAllowLan)}:{RestApiPort}";
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
@@ -277,7 +289,11 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Remove the token so the remote API accepts unauthenticated requests again.</summary>
     [RelayCommand]
-    private void ClearRestApiToken() => RestApiAccessToken = string.Empty;
+    private void ClearRestApiToken()
+    {
+        RevealRestApiToken = false; // a subsequently generated token starts masked again
+        RestApiAccessToken = string.Empty;
+    }
 
     // ----- UI rewrite P1 (plan §1): toast overlay queue -----------------------------------------
 

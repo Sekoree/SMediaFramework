@@ -359,14 +359,23 @@
                             IsChecked="{Binding RestApiAllowLan, Mode=TwoWay}" />
                 </StackPanel>
                 <SelectableTextBlock Text="{Binding RestApiBaseUrlDisplay}" FontFamily="monospace" FontSize="12" />
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RemoteApiTokenLabel}"
                              VerticalAlignment="Center" Opacity="0.75" FontSize="12" />
                   <SelectableTextBlock Grid.Column="1" Text="{Binding RestApiAccessTokenDisplay}"
                                        VerticalAlignment="Center" FontFamily="monospace" FontSize="12" />
-                  <Button Grid.Column="2" Content="{x:Static res:Strings.RemoteApiGenerateTokenLabel}"
+                  <!-- API-01: token is masked by default; Reveal/Copy are enabled only when one is set. -->
+                  <ToggleButton Grid.Column="2" Content="{x:Static res:Strings.RemoteApiRevealTokenLabel}"
+                                IsChecked="{Binding RevealRestApiToken, Mode=TwoWay}"
+                                IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2"
+                                AutomationProperties.Name="{x:Static res:Strings.RemoteApiRevealTokenLabel}" />
+                  <Button Grid.Column="3" Content="{x:Static res:Strings.RemoteApiCopyTokenLabel}"
+                          Click="OnCopyRestApiTokenClick"
+                          IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2"
+                          AutomationProperties.Name="{x:Static res:Strings.RemoteApiCopyTokenLabel}" />
+                  <Button Grid.Column="4" Content="{x:Static res:Strings.RemoteApiGenerateTokenLabel}"
                           Command="{Binding RegenerateRestApiTokenCommand}" FontSize="12" Padding="8,2" />
-                  <Button Grid.Column="3" Content="{x:Static res:Strings.RemoteApiClearTokenLabel}"
+                  <Button Grid.Column="5" Content="{x:Static res:Strings.RemoteApiClearTokenLabel}"
                           Command="{Binding ClearRestApiTokenCommand}"
                           IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2" />
                 </Grid>

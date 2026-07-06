@@ -12,22 +12,16 @@ public sealed record RemoteApiEndpointDoc(string Path, string Description);
 public static class RemoteApi
 {
     public static string? BaseUrl { get; set; }
-    public static string? AccessToken { get; set; }
 
+    // API-01: copied URLs never embed the access token. When a token is configured the operator sends it as an
+    // `X-HaPlay-Api-Key` (or `Authorization: Bearer`) header, so the long-lived secret is not written to the
+    // clipboard, a shell history, or a shared automation config's URL field. The server still ACCEPTS `?key=`
+    // for manual/browser use (see RestApiServer.IsAuthorized) — it is simply never generated here.
     public static string TileTapUrl(int boardNumber, int tileNumber) =>
-        WithAccessToken($"{BaseUrl}/api/v1/soundboards/{boardNumber}/{tileNumber}/tap");
+        $"{BaseUrl}/api/v1/soundboards/{boardNumber}/{tileNumber}/tap";
 
     public static string PlaylistItemPlayUrl(int playerNumber, int playlistNumber, int itemNumber) =>
-        WithAccessToken($"{BaseUrl}/api/v1/players/{playerNumber}/{playlistNumber}/{itemNumber}/play");
+        $"{BaseUrl}/api/v1/players/{playerNumber}/{playlistNumber}/{itemNumber}/play";
 
-    public static string CueGoUrl() => WithAccessToken($"{BaseUrl}/api/v1/cues/go");
-
-    private static string WithAccessToken(string url)
-    {
-        if (string.IsNullOrWhiteSpace(AccessToken))
-            return url;
-
-        var separator = url.Contains('?') ? '&' : '?';
-        return $"{url}{separator}key={Uri.EscapeDataString(AccessToken)}";
-    }
+    public static string CueGoUrl() => $"{BaseUrl}/api/v1/cues/go";
 }
