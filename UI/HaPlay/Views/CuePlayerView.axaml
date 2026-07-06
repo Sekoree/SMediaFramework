@@ -722,7 +722,20 @@
       </Expander>
 
       <Grid ColumnDefinitions="*,Auto,260">
-        <TreeDataGrid Grid.Column="0" Name="CueTreeGrid" DragDrop.AllowDrop="True"/>
+        <Panel Grid.Column="0">
+          <TreeDataGrid Name="CueTreeGrid" DragDrop.AllowDrop="True"/>
+          <!-- UX-10: empty-list call-to-action (icon + one line + primary action), matching the I/O
+               workspace's empty state instead of a bare grid. -->
+          <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360"
+                      IsVisible="{Binding HasNoCues}">
+            <PathIcon Data="{x:Static views:AppIcons.Cue}" Width="34" Height="34" Opacity="0.3"
+                      HorizontalAlignment="Center" />
+            <TextBlock Text="{x:Static res:Strings.CueEmptyHint}" Opacity="0.65"
+                       TextWrapping="Wrap" TextAlignment="Center" />
+            <Button Content="{x:Static res:Strings.CueEmptyAction}"
+                    Command="{Binding AddMediaCueCommand}" HorizontalAlignment="Center" />
+          </StackPanel>
+        </Panel>
         <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
 
         <!-- Phase 5.3 — Now Playing panel: active cues (with progress + per-cue ✕) and the

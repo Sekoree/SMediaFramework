@@ -449,9 +449,29 @@ public partial class CuePlayerViewModel : ViewModelBase
                   ? string.Empty
                   : Strings.Format(nameof(Strings.CueTransportNextFormat), CueDisplay(StandbyCueNode)));
 
+    /// <summary>UX-10: true when the selected list has no cues (or none selected) — drives the empty-state
+    /// call-to-action over the cue tree instead of a blank grid.</summary>
+    public bool HasNoCues => SelectedCueList is null || SelectedCueList.Nodes.Count == 0;
+
+    private CueListEditorViewModel? _watchedCueListForNodes;
+
+    private void ResubscribeCueNodesWatch(CueListEditorViewModel? value)
+    {
+        if (_watchedCueListForNodes is not null)
+            _watchedCueListForNodes.Nodes.CollectionChanged -= OnCueNodesCollectionChanged;
+        _watchedCueListForNodes = value;
+        if (value is not null)
+            value.Nodes.CollectionChanged += OnCueNodesCollectionChanged;
+    }
+
+    private void OnCueNodesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        OnPropertyChanged(nameof(HasNoCues));
+
     partial void OnSelectedCueListChanged(CueListEditorViewModel? value)
     {
         CancelTransportRun();
+        ResubscribeCueNodesWatch(value);
+        OnPropertyChanged(nameof(HasNoCues));
         OnPropertyChanged(nameof(VisibleNodes));
         OnPropertyChanged(nameof(VisibleCompositions));
         OnPropertyChanged(nameof(VisibleVideoOutputs));

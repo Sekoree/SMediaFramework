@@ -57,9 +57,25 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
             SelectedTile = null;
         else
             RefreshOutputOptions();
+        NotifyEmptyStateChanged();
     }
 
-    partial void OnSelectedBoardChanged(SoundboardViewModel? value) => SelectedTile = null;
+    partial void OnSelectedBoardChanged(SoundboardViewModel? value)
+    {
+        SelectedTile = null;
+        NotifyEmptyStateChanged();
+    }
+
+    /// <summary>UX-10: a first-run call-to-action shown over an empty board (no tiles bound yet) while not
+    /// in edit mode — mirrors the I/O workspace's empty state instead of presenting a blank grid.</summary>
+    public bool ShowEmptyBoardHint =>
+        !IsEditMode && SelectedBoard is { } board && board.Tiles.All(t => !t.IsBound);
+
+    private void NotifyEmptyStateChanged() => OnPropertyChanged(nameof(ShowEmptyBoardHint));
+
+    /// <summary>Empty-board CTA action: switch to edit mode so tiles become drop targets.</summary>
+    [RelayCommand]
+    private void EnableEditMode() => IsEditMode = true;
 
     /// <summary>Live volume: while the edit panel's slider moves a PLAYING tile, push the change
     /// straight into the engine (it rewrites the routes' base gains, so a later fade still ramps
@@ -230,6 +246,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
         board.BindTile(tile, filePath);
         if (IsEditMode)
             SelectedTile = tile;
+        NotifyEmptyStateChanged();
 
         if (ProbeDurationCallback is { } probe && await probe(filePath).ConfigureAwait(false) is { } durationMs)
             tile.DurationMs = durationMs;
@@ -318,6 +335,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
     {
         if (SelectedTile is { } tile)
             FindBoardOf(tile)?.ClearTile(tile);
+        NotifyEmptyStateChanged();
     }
 
     [RelayCommand]

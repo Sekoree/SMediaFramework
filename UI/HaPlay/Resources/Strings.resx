@@ -2581,6 +2581,18 @@
   <data name="SoundboardNoTileSelectedHint" xml:space="preserve">
     <value>Tap a tile to edit it, or drop a sound file onto a tile to bind it.</value>
   </data>
+  <data name="SoundboardEmptyBoardHint" xml:space="preserve">
+    <value>This board is empty. Turn on Edit, then drop sound files onto the tiles to build it.</value>
+  </data>
+  <data name="SoundboardEmptyBoardAction" xml:space="preserve">
+    <value>Edit this board</value>
+  </data>
+  <data name="CueEmptyHint" xml:space="preserve">
+    <value>No cues yet. Add a media, image, or text cue to start building your show.</value>
+  </data>
+  <data name="CueEmptyAction" xml:space="preserve">
+    <value>Add media cue</value>
+  </data>
   <data name="SoundboardPickFileDialogTitle" xml:space="preserve">
     <value>Pick a sound file</value>
   </data>

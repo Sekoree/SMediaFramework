@@ -62,6 +62,10 @@ public static class Strings
     public static string RemoteApiPortLabel => Get(nameof(RemoteApiPortLabel));
     public static string RemoteApiAllowLanLabel => Get(nameof(RemoteApiAllowLanLabel));
     public static string RemoteApiTokenLabel => Get(nameof(RemoteApiTokenLabel));
+    public static string SoundboardEmptyBoardHint => Get(nameof(SoundboardEmptyBoardHint));
+    public static string SoundboardEmptyBoardAction => Get(nameof(SoundboardEmptyBoardAction));
+    public static string CueEmptyHint => Get(nameof(CueEmptyHint));
+    public static string CueEmptyAction => Get(nameof(CueEmptyAction));
     public static string RemoteApiSecurityLoopback => Get(nameof(RemoteApiSecurityLoopback));
     public static string RemoteApiSecurityLan => Get(nameof(RemoteApiSecurityLan));
     public static string RemoteApiTokenRequired => Get(nameof(RemoteApiTokenRequired));

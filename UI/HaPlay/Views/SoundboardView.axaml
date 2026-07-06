@@ -235,7 +235,20 @@
 
     <!-- Tile grid — one classic group box per board, headed by the board's name. -->
     <HeaderedContentControl Header="{Binding SelectedBoard.Name}" Padding="6">
-    <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}">
+    <Panel>
+    <!-- UX-10: empty-board call-to-action (icon + one line + primary action), matching the I/O workspace's
+         empty state instead of showing a blank grid. Hidden in edit mode (the tiles show "+" drop hints). -->
+    <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center"
+                MaxWidth="380" IsVisible="{Binding ShowEmptyBoardHint}">
+      <PathIcon Data="{x:Static views:AppIcons.Grid}" Width="34" Height="34" Opacity="0.3"
+                HorizontalAlignment="Center" />
+      <TextBlock Text="{x:Static res:Strings.SoundboardEmptyBoardHint}" Opacity="0.65"
+                 TextWrapping="Wrap" TextAlignment="Center" />
+      <Button Content="{x:Static res:Strings.SoundboardEmptyBoardAction}"
+              Command="{Binding EnableEditModeCommand}" HorizontalAlignment="Center" />
+    </StackPanel>
+    <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}"
+                  IsVisible="{Binding !ShowEmptyBoardHint}">
       <ItemsControl.ItemsPanel>
         <ItemsPanelTemplate>
           <UniformGrid Rows="{Binding SelectedBoard.Rows}" Columns="{Binding SelectedBoard.Columns}" />
@@ -310,6 +323,7 @@
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+    </Panel>
     </HeaderedContentControl>
   </DockPanel>
 </UserControl>
