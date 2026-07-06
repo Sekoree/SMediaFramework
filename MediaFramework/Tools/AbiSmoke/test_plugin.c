@@ -109,6 +109,10 @@ static int media_audio_format(void* src, MfpAudioFormat* out) {
 static int media_audio_read(void* src, float* dst, int float_count) {
     int i;
     (void)src;
+    /* PLUG-02: block inside the plugin on demand so the host can dispose/unload while a native call is in
+     * flight, exercising the per-adapter lease that must keep this library mapped until the call returns. */
+    const char* slow_ms = getenv("MFP_TEST_PLUGIN_SLOW_MS");
+    if (slow_ms && slow_ms[0]) usleep((useconds_t)(atoi(slow_ms) * 1000));
     if (g_media_audio_emitted) return MFP_ERR_END;
     for (i = 0; i < float_count; i++) dst[i] = 0.25f;
     g_media_audio_emitted = 1;

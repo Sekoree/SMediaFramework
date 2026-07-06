@@ -37,6 +37,13 @@ capability simply doesn't register).
 CI stages the non-NuGet natives next to the published binary (`.github/workflows/build.yml`). To run
 locally on Linux: `sudo apt-get install -y ffmpeg libass9 fontconfig fonts-dejavu-core libportaudio2 libportmidi0`.
 
+> **Local dev — build the MMD physics shim.** `libmmd_bullet.so` is **not** committed (it's git-ignored); CI
+> builds it every run, but a fresh clone has no copy. Run `bash MediaFramework/Native/mmd_bullet/build.sh`
+> once (and again after any change to the shim or a bump of its ABI version). The managed binding checks the
+> shim's `mmd_abi_version` and, if the library is missing or stale, **fails safe by playing MMD models without
+> physics** rather than mis-calling a mismatched ABI — so a forgotten rebuild shows up as "physics off", not a
+> crash. `S.Media.Source.MMD.Tests` will fail until the shim is built.
+
 ---
 
 ## Repository layout

@@ -30,10 +30,16 @@ public interface IMediaRegistry
     /// <summary>True if some decoder reports non-zero confidence for <paramref name="uri"/> (D2/D3).</summary>
     bool CanOpen(string uri, MediaKind kind);
 
-    /// <summary>Opens the video track of <paramref name="uri"/> via the highest-confidence decoder (D3).</summary>
+    /// <summary>Opens the video track of <paramref name="uri"/> via the highest-confidence decoder (D3). The
+    /// boolean is decoder <em>selection</em>, not open success: it returns <c>false</c> when no registered
+    /// provider claims the URI, and <c>true</c> once a provider is chosen. A provider that claims the URI but
+    /// then cannot open it (e.g. the container has no video stream) <strong>throws</strong> — that is a genuine
+    /// open failure, distinct from "nothing here can play this".</summary>
     bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, [MaybeNullWhen(false)] out IVideoSource source);
 
-    /// <summary>Opens an audio track of <paramref name="uri"/> via the highest-confidence decoder (D3).</summary>
+    /// <summary>Opens an audio track of <paramref name="uri"/> via the highest-confidence decoder (D3). As with
+    /// <see cref="TryOpenVideo(string, VideoSourceOpenOptions?, IVideoSource)"/>, <c>false</c> means no provider
+    /// claims the URI; a claimed source that cannot be opened (e.g. no audio stream) throws.</summary>
     bool TryOpenAudio(string uri, AudioSourceOpenOptions? options, [MaybeNullWhen(false)] out IAudioSource source);
 
     /// <summary>The decoder provider registered under <paramref name="name"/> (case-insensitive), or <c>null</c>.</summary>

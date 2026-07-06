@@ -177,6 +177,46 @@ if (sp[0] != 99 || sp[1] != 99 || sp[2] != 99 || sp[3] != 255)
     return 16;
 }
 
+// (g) PLUG-02: dispose a plugin while a native call is BLOCKED inside it. The per-adapter lease must keep the
+// library mapped until the in-flight call returns — unloading it out from under a running callback would crash.
+// This uses an ISOLATED copy of the .so so this plugin's unload actually unmaps ITS OWN library (the plugin
+// above is a different mapping), making it a real free-during-blocked-call race. The plugin's audio read blocks
+// on MFP_TEST_PLUGIN_SLOW_MS; we start a read on a thread, dispose the plugin mid-block, then release the adapter.
+{
+    var slowSo = Path.Combine(Path.GetTempPath(), "mfp_test_plugin_slow.so");
+    File.Copy(so, slowSo, overwrite: true);
+    Environment.SetEnvironmentVariable("MFP_TEST_PLUGIN_SLOW_MS", "400");
+    try
+    {
+        var slowPlugin = AbiPluginHost.Load(slowSo);
+        var slowProvider = AbiPluginHost.BindMediaSourceProviders(slowPlugin).Single().Provider;
+        var slowAudio = slowProvider.TryOpenAudio("testsrc://demo")
+                        ?? throw new InvalidOperationException("slow plugin audio open failed");
+
+        var readCount = int.MinValue;
+        var reader = new Thread(() => { var buf = new float[4]; readCount = slowAudio.ReadInto(buf); }) { IsBackground = true };
+        reader.Start();
+        Thread.Sleep(100);        // let the read enter the native usleep
+        slowPlugin.Dispose();     // request unload WHILE the read is blocked — the lease must defer NativeLibrary.Free
+
+        if (!reader.Join(TimeSpan.FromSeconds(5)))
+        {
+            Console.Error.WriteLine("FAIL: a native read blocked during dispose never returned (lease/unload deadlock?).");
+            return 18;
+        }
+        // The blocked native call returned without the library being unmapped under it (no crash reaching here).
+        (slowAudio as IDisposable)?.Dispose();
+        (slowProvider as IDisposable)?.Dispose();
+        Console.WriteLine($"PLUG-02: dispose during a blocked native read was safely deferred by the lease " +
+                          $"(read returned {readCount} floats, library stayed mapped through the in-flight call).");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("MFP_TEST_PLUGIN_SLOW_MS", null);
+        try { File.Delete(Path.Combine(Path.GetTempPath(), "mfp_test_plugin_slow.so")); } catch { /* best effort */ }
+    }
+}
+
 vframe.Dispose();
 (decoder as IDisposable)?.Dispose();
 provider.Dispose();
@@ -195,7 +235,7 @@ if (!plugin.IsUnloaded || AbiPluginHost.LastLogMessage != "unregister:ok")
     return 17;
 }
 
-Console.WriteLine("AbiSmoke OK — all six ABI capabilities run through managed adapters, including correlated A/V, audio clock/backpressure/input semantics, scoped registries, and deferred plugin unload.");
+Console.WriteLine("AbiSmoke OK — all six ABI capabilities run through managed adapters, including correlated A/V, audio clock/backpressure/input semantics, scoped registries, deferred plugin unload, and (PLUG-02) a plugin dispose safely deferred while a native call was blocked inside it.");
 return 0;
 
 static bool CompilePlugin(string cFile, string includeDir, string outSo)

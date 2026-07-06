@@ -30,10 +30,12 @@ const double AllocBudgetKiB = 512;
 // reference box vs the declared 24), so the sync-gate SAMPLE WINDOWS scale up to keep the minimum-count
 // clauses meaningful; the skew tolerances themselves are identical across configs. Without this a Debug
 // run false-fails purely on sample count (n<10/n<8) — especially on a loaded box.
+// Non-const on purpose: as a const, the Release value (1.0) makes `SyncWindowScale > 1.0` a compile-time-false
+// branch and the compiler flags the reachable-only-in-Debug log line as CS0162 unreachable code (BUILD-03).
 #if DEBUG
-const double SyncWindowScale = 3.0;
+double SyncWindowScale = 3.0;
 #else
-const double SyncWindowScale = 1.0;
+double SyncWindowScale = 1.0;
 #endif
 
 // A sidecar SRT shown over the video cue's composition — a non-ASS format, so it exercises the full

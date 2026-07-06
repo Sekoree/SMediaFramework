@@ -116,9 +116,12 @@ jobs:
           dotnet run --project MediaFramework/Tools/SubtitleDecodeSmoke/SubtitleDecodeSmoke.csproj
           -c Release --no-build -- Reference/TestSubs/karaoke-timing.ass
 
-      - name: ABI GL layer-surface smoke (xvfb, software GL)
+      # PRESENT-01: the ONE gating software-GL presentation path. A native plugin GL layer surface is rendered
+      # into the compositor canvas FBO on a real (Mesa llvmpipe) GL context under xvfb — proven reliable, so it
+      # is a hard gate (no continue-on-error). Hardware-accelerated presentation stays optional/best-effort in
+      # the launch smokes below; this guarantees the software-GL compositor path never silently regresses.
+      - name: ABI GL layer-surface smoke (xvfb, software GL) [gating]
         if: runner.os == 'Linux'
-        continue-on-error: true
         env:
           MFPLAYER_NEXT_ROOT: ${{ github.workspace }}/next
           LIBGL_ALWAYS_SOFTWARE: 1
@@ -244,6 +247,9 @@ jobs:
           gcc -O2 -shared -fPIC -I miniaudio-0.11.25 -o natives-stage/libminiaudio.so ma_impl.c -lpthread -lm -ldl
 
           # NDI v6 runtime via the DistroAV helper (accepts the NDI license non-interactively).
+          # BUILD-02 (partial): this fetches from `master` — NOT immutable. Pin to a specific DistroAV commit
+          # (and SHA-256 the helper) for a fully reproducible supply chain. The shipped lib's version + hash are
+          # recorded in the artifact SBOM (generate-native-sbom.sh) regardless.
           curl -fsSL https://raw.githubusercontent.com/DistroAV/DistroAV/master/CI/libndi-get.sh -o libndi-get.sh
           chmod +x libndi-get.sh
           sudo ./libndi-get.sh install
@@ -251,6 +257,9 @@ jobs:
           if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: libndi.so.6 not found"; fi
 
           # FFmpeg 8.1 shared (avcodec-62), bundled as the fallback for hosts without a matching system FFmpeg.
+          # BUILD-02 (partial): the `latest` release tag is a rolling ref — NOT immutable. Pin to a dated BtbN
+          # `autobuild-*` release URL (and verify its SHA-256) for reproducibility. The exact shipped .so hashes
+          # are captured in the artifact SBOM regardless, so a build is at least auditable after the fact.
           curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
           cp -vL ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib/lib*.so.* natives-stage/ 2>/dev/null || true
           for f in natives-stage/libav*.so.* natives-stage/libsw*.so.*; do [ -e "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" || true; done
@@ -371,6 +380,13 @@ jobs:
           if [ -d natives-stage ]; then cp -v natives-stage/* haplay-publish/ 2>/dev/null || true; fi
           echo "--- native libs in the artifact ---"
           ls haplay-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
+
+      # BUILD-02: record a provenance / SBOM manifest of the bundled natives (project, pinned version, source
+      # URL, license, and the SHA-256 of the exact shipped file) into the artifact, so every release carries an
+      # auditable record of the native code it contains. Advisory — never fails the build.
+      - name: Write native SBOM (BUILD-02)
+        shell: bash
+        run: bash scripts/generate-native-sbom.sh ${{ matrix.rid }} haplay-publish
 
       # REL-01: gate the upload on a required-native manifest. The staging steps above are best-effort
       # (continue-on-error / "WARN: not found"), so without this a missing Windows/Linux native would ship
