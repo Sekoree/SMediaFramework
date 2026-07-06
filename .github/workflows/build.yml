@@ -61,8 +61,12 @@ jobs:
         shell: bash
         run: MediaFramework/Native/mmd_bullet/build.sh   # CMake + MSVC are preinstalled on the runner
 
+      # --no-incremental forces a full recompile so warnings-as-errors (Directory.Build.targets, BUILD-01)
+      # always evaluates every project — an "up-to-date" project can otherwise skip a warning that is now an
+      # error (the incremental-build blind spot BUILD-03 called out). CI checkouts are fresh anyway; this
+      # makes the guarantee explicit.
       - name: Build (Release)
-        run: dotnet build MFPlayer.sln -c Release
+        run: dotnet build MFPlayer.sln -c Release --no-incremental
 
       # --blame-hang: a test that never completes on the runner (device-less audio/MIDI environment) would
       # otherwise stall the job until the 6h job timeout with NO name in the log. The hang timeout kills the

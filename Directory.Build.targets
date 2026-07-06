@@ -1,8 +1,31 @@
 <Project>
 
-  <!-- Intentionally minimal. the repo is self-contained and deliberately keeps this minimal;
-       repo-root Directory.Build.targets (which stages the old tree's WinNatives). Per-module native
-       deployment (PortAudio, PortMidi, SDL3, FFmpeg, NDI, libass, …) is added in the phase that
-       introduces the native dependency — Phase 2 onward. -->
+  <!-- Intentionally minimal. The repo is self-contained; per-module native deployment (PortAudio, PortMidi,
+       SDL3, FFmpeg, NDI, libass, …) is added in the phase that introduces the native dependency. -->
+
+  <!-- BUILD-01: treat first-party compiler/analyzer/trim/AOT warnings as ERRORS on the production library
+       surface, so a new warning fails the build instead of blending into the tail. Scope:
+         • Production libraries only — IsAotCompatible is true (test projects opt out with false) and the
+           project is not an executable (Exe tools/app opt out via OutputType).
+         • A project may still override by setting TreatWarningsAsErrors explicitly, and narrow, documented
+           per-warning exceptions go in a project's own <NoWarn>.
+       This lives in .targets (not .props) so the condition sees the project's own final IsAotCompatible /
+       OutputType (which .props evaluates before the project body could override them). We force the value
+       (the SDK has already defaulted TreatWarningsAsErrors to 'false' by now); a production library that
+       genuinely must opt out sets <SkipWarningsAsErrors>true</SkipWarningsAsErrors>. -->
+  <PropertyGroup Condition="'$(IsAotCompatible)' == 'true' and '$(OutputType)' != 'Exe' and '$(SkipWarningsAsErrors)' != 'true'">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- DOCS-02: only the reusable framework libraries under MediaFramework/ publish as NuGet packages (the
+       chosen per-project model). Everything else is forced non-packable so `dotnet pack` never emits
+       accidental packages: the UI app + its VM/view library (UI/), the smoke tools + launcher (Exe/WinExe),
+       and test projects. External/ carries its own Directory.Build.props and is unaffected by this file. -->
+  <PropertyGroup>
+    <IsFrameworkLibrary Condition="'$(OutputType)' != 'Exe' and '$(OutputType)' != 'WinExe' and $(MSBuildProjectDirectory.Contains('MediaFramework'))">true</IsFrameworkLibrary>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(IsFrameworkLibrary)' != 'true'">
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
 
 </Project>
