@@ -106,6 +106,12 @@ jobs:
       # so green runs pay nothing.
       - name: Tests (arch rules + Core/Time/Routing)
         id: tests
+        env:
+          # Overloaded shared runners (a normally-12s assembly has taken ~7 min on these Windows instances) can
+          # blow vstest's default 90s testhost-connection handshake — "failed to connect to testhost after 90
+          # seconds ... machine slowness". Raise it (seconds) so a slow testhost *startup* isn't mistaken for a
+          # failure. This is startup-only; the 4-min blame-hang still catches a genuinely wedged test.
+          VSTEST_CONNECTION_TIMEOUT: '300'
         run: >
           dotnet test MFPlayer.sln -c Release --no-build
           --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type full
