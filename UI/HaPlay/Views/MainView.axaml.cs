@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -87,5 +88,14 @@ public partial class MainView : UserControl
             return;
 
         _ = player.QuickPlayDroppedFilesAsync(paths);
+    }
+
+    private void MenuItem_OnClick(object? sender, RoutedEventArgs e)
+    {
+        var topLevel = TopLevel.GetTopLevel(this) as Window;
+        if (topLevel is null)
+            return;
+        
+        topLevel.Close();
     }
 }

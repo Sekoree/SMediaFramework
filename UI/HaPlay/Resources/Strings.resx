@@ -3088,4 +3088,7 @@
   <data name="ControlResetLayoutTooltip" xml:space="preserve">
     <value>Restore the default docking layout — brings back any pane that was closed or floated out</value>
   </data>
+  <data name="MenuExitHeader" xml:space="preserve">
+    <value>_Exit</value>
+  </data>
 </root>

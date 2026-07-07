@@ -85,11 +85,13 @@
           </MenuItem.ItemTemplate>
           <MenuItem.Styles>
             <Style Selector="MenuItem">
-              <Setter Property="Command" Value="{Binding $parent[Menu].((vm:MainViewModel)DataContext).OpenRecentCommand}" />
+              <Setter Property="Command" Value="{Binding $parent[Menu].((vm:MainViewModel)DataContext)?.OpenRecentCommand}" />
               <Setter Property="CommandParameter" Value="{Binding}" />
             </Style>
           </MenuItem.Styles>
         </MenuItem>
+        <Separator />
+        <MenuItem Header="{x:Static res:Strings.MenuExitHeader}" Click="MenuItem_OnClick"/>
       </MenuItem>
       <MenuItem Header="{x:Static res:Strings.MenuViewHeader}">
         <!-- Workspace navigation duplicated here so the Ctrl+1…5 shortcuts are discoverable

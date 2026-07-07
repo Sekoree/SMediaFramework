@@ -65,6 +65,7 @@ public static class Strings
     public static string CueEmptyHint => Get(nameof(CueEmptyHint));
     public static string CueEmptyAction => Get(nameof(CueEmptyAction));
     public static string MenuHelpHeader => Get(nameof(MenuHelpHeader));
+    public static string MenuExitHeader => Get(nameof(MenuExitHeader));
     public static string KeyboardShortcutsMenuHeader => Get(nameof(KeyboardShortcutsMenuHeader));
     public static string KeyboardShortcutsDialogTitle => Get(nameof(KeyboardShortcutsDialogTitle));
     public static string ShortcutsSearchPlaceholder => Get(nameof(ShortcutsSearchPlaceholder));
