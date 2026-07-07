@@ -59,13 +59,14 @@
       </Menu>
       <Button Grid.Column="6"
               ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
+              AutomationProperties.Name="{x:Static res:Strings.CueListSettingsTooltip}"
               Command="{Binding OpenCueListSettingsCommand}">
             <PathIcon Data="{x:Static views:AppIcons.Gear}" Width="13" Height="13" />
           </Button>
       <TextBlock Grid.Column="7"
                  Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
-                 Foreground="#888888"
+                 Foreground="{StaticResource TextSecondary}"
                  TextTrimming="CharacterEllipsis"
                  ToolTip.Tip="{Binding DisplayedCueFilePath}"
                  IsVisible="{Binding DisplayedCueFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -334,7 +335,7 @@
                             ItemsSource="{Binding SelectedCueNode.AudioTrackChoices}"
                             SelectedItem="{Binding SelectedCueNode.SelectedAudioTrackChoice, Mode=TwoWay}" />
                 </StackPanel>
-                <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -425,7 +426,7 @@
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding VideoFrameRateMismatchWarning}" />
                 </Border>
-                <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -458,7 +459,7 @@
                 </WrapPanel>
 
                 <!-- Visual placement canvas: drag to move, bottom-right handle to resize, click to select -->
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" MinHeight="220">
+                <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" MinHeight="220">
                   <controls:CompositionPlacementCanvas
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
@@ -721,7 +722,20 @@
       </Expander>
 
       <Grid ColumnDefinitions="*,Auto,260">
-        <TreeDataGrid Grid.Column="0" Name="CueTreeGrid" DragDrop.AllowDrop="True"/>
+        <Panel Grid.Column="0">
+          <TreeDataGrid Name="CueTreeGrid" DragDrop.AllowDrop="True"/>
+          <!-- UX-10: empty-list call-to-action (icon + one line + primary action), matching the I/O
+               workspace's empty state instead of a bare grid. -->
+          <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360"
+                      IsVisible="{Binding HasNoCues}">
+            <PathIcon Data="{x:Static views:AppIcons.Cue}" Width="34" Height="34" Opacity="0.3"
+                      HorizontalAlignment="Center" />
+            <TextBlock Text="{x:Static res:Strings.CueEmptyHint}" Opacity="0.65"
+                       TextWrapping="Wrap" TextAlignment="Center" />
+            <Button Content="{x:Static res:Strings.CueEmptyAction}"
+                    Command="{Binding AddMediaCueCommand}" HorizontalAlignment="Center" />
+          </StackPanel>
+        </Panel>
         <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
 
         <!-- Phase 5.3 — Now Playing panel: active cues (with progress + per-cue ✕) and the
@@ -734,7 +748,8 @@
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                 <ToggleButton Classes="Dense"
                               IsChecked="{Binding NowPlayingSeekUnlocked}"
-                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}">
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}"
+                              AutomationProperties.Name="{x:Static res:Strings.NowPlayingSeekLockTooltip}">
                   <PathIcon Data="{x:Static views:AppIcons.Lock}" Width="11" Height="11" />
                 </ToggleButton>
                 <Button Content="{x:Static res:Strings.StopAllNowPlayingButton}"
@@ -749,7 +764,7 @@
             <ItemsControl ItemsSource="{Binding NowPlayingRows}">
               <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
-                  <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0"
+                  <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4">
                     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">
@@ -758,7 +773,8 @@
                       </StackPanel>
                       <Button Grid.Row="0" Grid.Column="1" Padding="6,0" MinWidth="22"
                               Command="{Binding CancelCommand}"
-                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}">
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}"
+                              AutomationProperties.Name="{x:Static res:Strings.NowPlayingCancelTooltip}">
             <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
           </Button>
                       <ProgressBar Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
@@ -794,7 +810,8 @@
                         </StackPanel>
                         <Button Grid.Column="2" Padding="6,0" MinWidth="22"
                                 Command="{Binding CancelAllCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}">
+                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}"
+                                AutomationProperties.Name="{x:Static res:Strings.NowPlayingGroupCancelTooltip}">
             <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
           </Button>
                       </Grid>

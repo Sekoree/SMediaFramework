@@ -262,6 +262,22 @@ public sealed class MMDBakedPhysics
 /// background bake and plays with live physics; every later open — the show's actual GO — loads the
 /// cached bake instantly (the YouTube reliable-mode pattern: prepare once, never compute on GO).
 /// </summary>
+/// <remarks>
+/// <para><strong>Eviction (MMD-01).</strong> <see cref="Pending"/> holds only <em>in-flight</em> bakes.
+/// A completing bake removes its own entry in a continuation, but only when the entry still refers to
+/// that same task, so a retry started after it finished is never clobbered. Completed results are not
+/// pinned in the static dictionary; the returned <see cref="MMDBakedPhysics"/> (and its arrays) become
+/// collectable once callers drop it.</para>
+/// <para><strong>Shared lifetime vs. per-caller waiting (MMD-01).</strong> The background bake runs on
+/// <see cref="CancellationToken.None"/> — one caller cancelling must not abort the bake other callers
+/// joined. <see cref="BakeAsync"/> honours its caller token by awaiting the shared task through
+/// <c>WaitAsync(callerToken)</c>: cancelling stops that caller's wait, not the shared work. A faulted or
+/// cancelled shared task is treated as retryable (never re-joined).</para>
+/// <para><strong>Persistence (MMD-02).</strong> Writes go to a per-bake unique temp file, are flushed to
+/// disk, then atomically moved into place. A corrupt/incompatible cache found on read is deleted and
+/// rebaked; a storage failure while writing is reported (logged) and best-effort cleaned up, but the valid
+/// in-memory bake is still returned so playback is never blocked by a caching problem.</para>
+/// </remarks>
 public static class MMDPhysicsBakeCache
 {
     private static readonly Dictionary<string, Task<MMDBakedPhysics?>> Pending = new(StringComparer.Ordinal);
@@ -269,6 +285,12 @@ public static class MMDPhysicsBakeCache
 
     public static string CacheDirectory { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "mfplayer", "mmd-bake");
+
+    /// <summary>Test/diagnostic hook: number of bakes currently in flight (evicted on completion).</summary>
+    internal static int PendingBakeCount
+    {
+        get { lock (Gate) return Pending.Count; }
+    }
 
     /// <summary>Returns the cached bake when it exists; otherwise starts (or joins) ONE background
     /// bake for this pair and returns its task so callers can hot-swap when it lands.</summary>
@@ -278,28 +300,15 @@ public static class MMDPhysicsBakeCache
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(motion);
         var file = CacheFileFor(modelPath, motionPath);
-        if (File.Exists(file))
-        {
-            try
-            {
-                using var stream = File.OpenRead(file);
-                if (MMDBakedPhysics.TryLoad(stream, model) is { } cached)
-                    return (cached, Task.FromResult<MMDBakedPhysics?>(cached));
-            }
-            catch (IOException)
-            {
-                // unreadable cache — fall through to re-bake
-            }
-        }
+        if (TryLoadFromDisk(file, model) is { } cached)
+            return (cached, Task.FromResult<MMDBakedPhysics?>(cached));
 
         lock (Gate)
         {
-            if (Pending.TryGetValue(file, out var running) && !running.IsFaulted)
+            if (Pending.TryGetValue(file, out var running) && !running.IsCompleted)
                 return (null, running);
 
-            var task = StartBake(file, model, motion, progress: null, CancellationToken.None);
-            Pending[file] = task;
-            return (null, task);
+            return (null, StartBakeLocked(file, model, motion, progress: null));
         }
     }
 
@@ -311,6 +320,7 @@ public static class MMDPhysicsBakeCache
     /// Explicit user-triggered bake (the dialog's "bake now" button). Joins the running background
     /// bake when one exists (its progress isn't observable — callers show indeterminate); otherwise
     /// starts a bake that reports 0..1 progress. Returns the cached bake immediately when present.
+    /// The <paramref name="cancellation"/> token cancels this caller's <em>wait</em>, not the shared bake.
     /// </summary>
     public static Task<MMDBakedPhysics?> BakeAsync(
         string modelPath, string motionPath, PMXDocument model, VMDDocument motion,
@@ -319,50 +329,127 @@ public static class MMDPhysicsBakeCache
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(motion);
         var file = CacheFileFor(modelPath, motionPath);
-        if (File.Exists(file))
+        if (TryLoadFromDisk(file, model) is { } cached)
         {
-            try
-            {
-                using var stream = File.OpenRead(file);
-                if (MMDBakedPhysics.TryLoad(stream, model) is { } cached)
-                {
-                    progress?.Invoke(1f);
-                    return Task.FromResult<MMDBakedPhysics?>(cached);
-                }
-            }
-            catch (IOException)
-            {
-                // unreadable cache — fall through to re-bake
-            }
+            progress?.Invoke(1f);
+            return Task.FromResult<MMDBakedPhysics?>(cached);
         }
 
+        Task<MMDBakedPhysics?> shared;
         lock (Gate)
         {
-            if (Pending.TryGetValue(file, out var running) && !running.IsFaulted)
-                return running;
+            shared = Pending.TryGetValue(file, out var running) && !running.IsCompleted
+                ? running
+                : StartBakeLocked(file, model, motion, progress);
+        }
 
-            var task = StartBake(file, model, motion, progress, cancellation);
-            Pending[file] = task;
-            return task;
+        // Per-caller waiting: cancelling stops THIS await, the shared bake keeps running for other joiners.
+        return cancellation.CanBeCanceled ? shared.WaitAsync(cancellation) : shared;
+    }
+
+    /// <summary>Reads a bake from disk. Returns null when absent or unreadable; deletes an existing-but-
+    /// incompatible/corrupt cache so the next open rebakes cleanly (MMD-02: bad cache → delete + rebake).</summary>
+    private static MMDBakedPhysics? TryLoadFromDisk(string file, PMXDocument model)
+    {
+        if (!File.Exists(file))
+            return null;
+        try
+        {
+            using (var stream = File.OpenRead(file))
+            {
+                if (MMDBakedPhysics.TryLoad(stream, model) is { } cached)
+                    return cached;
+            }
+        }
+        catch (IOException)
+        {
+            return null; // storage/read unavailable — fall through to (re)bake, don't delete
+        }
+
+        // File exists but is not a valid bake for this model (bad magic / version / bone-count mismatch).
+        TryDeleteQuietly(file);
+        return null;
+    }
+
+    /// <summary>Starts a background bake, registers it in <see cref="Pending"/>, and arranges self-eviction
+    /// on completion. Caller holds <see cref="Gate"/>.</summary>
+    private static Task<MMDBakedPhysics?> StartBakeLocked(
+        string file, PMXDocument model, VMDDocument motion, Action<float>? progress)
+    {
+        // Shared bake lifetime is independent of any caller token (MMD-01).
+        var task = Task.Run(() => RunBake(file, model, motion, progress), CancellationToken.None);
+        Pending[file] = task;
+        _ = task.ContinueWith(
+            static (completed, state) =>
+            {
+                var key = (string)state!;
+                lock (Gate)
+                {
+                    // Evict ONLY if the entry still refers to the task that just completed — a retry may have
+                    // already replaced it (MMD-01: cancelled/faulted work is retryable).
+                    if (Pending.TryGetValue(key, out var current) && ReferenceEquals(current, completed))
+                        Pending.Remove(key);
+                }
+            },
+            file,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return task;
+    }
+
+    private static MMDBakedPhysics? RunBake(string file, PMXDocument model, VMDDocument motion, Action<float>? progress)
+    {
+        var baked = MMDBakedPhysics.Bake(model, motion, CancellationToken.None, progress);
+        if (baked is not null)
+            TryPersist(file, baked);
+        return baked;
+    }
+
+    /// <summary>Persists a completed bake: unique temp file → flush → atomic move. A storage failure is
+    /// logged and the temp cleaned up, but never propagated — the in-memory bake stays usable (MMD-02).</summary>
+    private static void TryPersist(string file, MMDBakedPhysics baked)
+    {
+        string? temp = null;
+        try
+        {
+            Directory.CreateDirectory(CacheDirectory);
+            temp = file + "." + Guid.NewGuid().ToString("N") + ".partial";
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                baked.Save(stream);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temp, file, overwrite: true);
+            temp = null; // moved — nothing to clean up
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // Storage unavailable: report it, but the caller still gets the valid in-memory bake.
+            S.Media.Core.Diagnostics.MediaDiagnostics.LogWarning(
+                $"MMDPhysicsBakeCache: could not persist bake to '{file}' ({ex.GetType().Name}: {ex.Message}); " +
+                "playback continues from the in-memory bake, cache will be recomputed next time.");
+        }
+        finally
+        {
+            if (temp is not null)
+                TryDeleteQuietly(temp);
         }
     }
 
-    private static Task<MMDBakedPhysics?> StartBake(
-        string file, PMXDocument model, VMDDocument motion, Action<float>? progress, CancellationToken cancellation) =>
-        Task.Run(() =>
+    private static void TryDeleteQuietly(string path)
+    {
+        try
         {
-            var baked = MMDBakedPhysics.Bake(model, motion, cancellation, progress);
-            if (baked is not null)
-            {
-                Directory.CreateDirectory(CacheDirectory);
-                var partial = file + ".partial";
-                using (var stream = File.Create(partial))
-                    baked.Save(stream);
-                File.Move(partial, file, overwrite: true);
-            }
-
-            return baked;
-        }, CancellationToken.None);
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // best-effort cleanup
+        }
+    }
 
     private static string CacheFileFor(string modelPath, string motionPath)
     {

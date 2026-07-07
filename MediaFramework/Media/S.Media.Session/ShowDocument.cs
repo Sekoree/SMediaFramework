@@ -5,8 +5,8 @@ using S.Media.Core.Audio;
 namespace S.Media.Session;
 
 /// <summary>What a clip does when it reaches its (trimmed) end. Mirrors the GUI cue end behaviour
-/// (<c>CueEndBehavior</c>); honoured by the playback runtime in the 8b convergence slice (carried by
-/// the document until then).</summary>
+/// (<c>CueEndBehavior</c>) and is honoured by the playback runtime (<see cref="ShowSession"/>'s clip
+/// playback path resolves Loop / FreezeLastFrame / FadeOutAndStop against the clip's end window).</summary>
 public enum ClipEndBehavior
 {
     Stop,
@@ -118,9 +118,11 @@ public sealed record ShowClipBinding(
             : [new ShowSubtitleSelection(SubtitlePath)];
     }
 
-    // --- Clip playback parameters (Phase 8a convergence) ----------------------------------------
-    // Carried so a GUI media cue maps losslessly onto a ShowDocument. PlayClipAsync honours these at
-    // runtime in the 8b playback slice; until then a clip opens head-to-tail (no trim/loop/fade).
+    // --- Clip playback parameters -----------------------------------------------------------------
+    // A GUI media cue maps losslessly onto a ShowDocument. The playback runtime honours these:
+    // ShowSession opens the clip with StartOffset/EndOffset as its trim window, drives FadeIn/FadeOut on
+    // the route, and resolves Loop/EndBehavior against the end window. All are validated at load
+    // (ShowDocumentValidator: non-negative offsets/fades, DOC-01). Values are immutable per document.
 
     /// <summary>Trim from the source start (GUI <c>MediaCueNode.StartOffsetMs</c>). Zero = from the head.</summary>
     public TimeSpan StartOffset { get; init; }
@@ -222,9 +224,7 @@ public sealed record ShowDocument(
     IReadOnlyList<CueDefinition> Cues,
     IReadOnlyList<ShowClipBinding> Clips,
     IReadOnlyList<ShowComposition> Compositions,
-    IReadOnlyList<OutputPatchRoute> Outputs,
-    IReadOnlyList<OutputPatchRoute> Routes,
-    IReadOnlyList<string> Devices)
+    IReadOnlyList<OutputPatchRoute> Routes)
 {
     /// <summary>Per-group audio output endpoints (D11). Empty ⇒ each group plays on one implicit master
     /// output (<see cref="ShowSession.MasterOutputId"/>) on the backend default device; declare entries to
@@ -232,7 +232,7 @@ public sealed record ShowDocument(
     public IReadOnlyList<ShowAudioOutput> AudioOutputs { get; init; } = [];
 
     /// <summary>An empty version-1 show.</summary>
-    public static ShowDocument Empty { get; } = new(1, [], [], [], [], [], []);
+    public static ShowDocument Empty { get; } = new(1, [], [], [], []);
 
     /// <summary>Serializes to indented JSON via the source-generated context (no reflection — D10).</summary>
     public string ToJson() => JsonSerializer.Serialize(this, ShowDocumentJsonContext.Default.ShowDocument);

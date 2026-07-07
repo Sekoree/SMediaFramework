@@ -1,6 +1,7 @@
 using HaPlay.Models;
 using HaPlay.Playback;
 using S.Media.Core.Video;
+using S.Media.Source.Text;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -20,7 +21,7 @@ public sealed class TextFrameRendererTests
             BackgroundArgb = 0xFF112233, // opaque
         };
 
-        var frame = TextFrameRenderer.Render(text, new Rational(30, 1));
+        var frame = TextFrameRenderer.Render(text.ToSpec(), new Rational(30, 1));
 
         Assert.NotNull(frame);
         using (frame)
@@ -47,7 +48,7 @@ public sealed class TextFrameRendererTests
             BackgroundArgb = 0x00000000, // transparent
         };
 
-        var frame = TextFrameRenderer.Render(text, new Rational(30, 1));
+        var frame = TextFrameRenderer.Render(text.ToSpec(), new Rational(30, 1));
 
         Assert.NotNull(frame);
         using (frame)

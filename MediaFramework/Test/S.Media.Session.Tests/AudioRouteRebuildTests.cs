@@ -78,7 +78,7 @@ public sealed class AudioRouteRebuildTests
         Version: 1,
         Cues: [new CueDefinition("c", 1, "C")],
         Clips: [new ShowClipBinding("c", "long://x") { AudioRoutes = routes }],
-        Compositions: [], Outputs: [], Routes: [], Devices: []);
+        Compositions: [], Routes: []);
 
     private static async Task<long> WaitForSubmitsAsync(CountingAudioOutput output, TimeSpan timeout)
     {

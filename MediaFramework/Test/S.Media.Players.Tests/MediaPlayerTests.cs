@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using S.Media.Core;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace S.Media.Players.Tests;
 
-public sealed class MediaPlayerTests
+public sealed class MediaPlayerTests(ITestOutputHelper output)
 {
     [Fact]
     public void OpenAudio_WiresDecodedSourceToOutput()
@@ -114,6 +116,56 @@ public sealed class MediaPlayerTests
             player.Play();
 
             Assert.True(player.IsRunning);
+        }
+    }
+
+    [TimingFact] // per-clip-thread scheduling soak — hangs the testhost on an oversubscribed CI VM regardless
+                 // of thread count; opt-in via MFP_TIMING_TESTS=1 (players still scale with core count below).
+    public void ManySimultaneousPlayers_AllStayScheduled_ThreadCostMeasured()
+    {
+        // TIME-01: evidence for the per-clip-thread scheduling model at a representative max simultaneous clip
+        // count. Each player runs its own decode/pump; if that model missed deadlines or starved a clip under
+        // load, some players would produce no audio within the soak window. We assert every player stays
+        // scheduled and record the thread cost, so a "consolidate the scheduler" decision can be made on
+        // evidence rather than speculation (the finding: the per-clip model keeps every clip scheduled here).
+        // Scale the count with core count: the representative max is 24, but a constrained CI runner (2 cores,
+        // heavily contended) would otherwise be oversubscribed into a multi-minute stall / blame-hang. Kept at
+        // ≥2× cores so the per-clip model is still exercised under real oversubscription — which is the point.
+        var players = Math.Clamp(Environment.ProcessorCount * 2, 4, 24);
+        var startThreads = Process.GetCurrentProcess().Threads.Count;
+
+        var running = new List<(MediaPlayer Player, CollectingBackend Backend)>();
+        try
+        {
+            for (var i = 0; i < players; i++)
+            {
+                var source = new ToneSource(sampleRate: 48_000, channels: 2, chunks: 10_000_000); // effectively infinite for the soak
+                var backend = new CollectingBackend();
+                var registry = MediaRegistry.Build(b => b.AddDecoder(new FixedDecoderProvider(source)));
+                var player = MediaPlayer.OpenAudio(registry, backend, $"file:///tone{i}.wav");
+                player.Play();
+                running.Add((player, backend));
+            }
+
+            // Every player must reach non-zero output within the window — i.e. none is starved of scheduling.
+            var allScheduled = SpinWait.SpinUntil(
+                () => running.All(r => r.Backend.Output.NonZeroSamples > 0),
+                TimeSpan.FromSeconds(15));
+
+            var peakThreads = Process.GetCurrentProcess().Threads.Count;
+            var progressed = running.Count(r => r.Backend.Output.NonZeroSamples > 0);
+            output.WriteLine(
+                $"TIME-01 soak: {players} simultaneous players, {progressed}/{players} producing audio, " +
+                $"process threads {startThreads} → {peakThreads} (~{peakThreads - startThreads} added, " +
+                $"{(peakThreads - startThreads) / (double)players:0.0}/player)");
+
+            Assert.True(allScheduled,
+                $"only {progressed}/{players} simultaneous players stayed scheduled — the per-clip model starved a clip under load");
+        }
+        finally
+        {
+            foreach (var (player, _) in running)
+                player.Dispose();
         }
     }
 

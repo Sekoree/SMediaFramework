@@ -67,8 +67,10 @@ sealed class Program
         var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Trace);
         var dir = GetArg(args, "--media-log-dir")
                   ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
-        var queueCapacity = GetIntArg(args, "--media-log-queue", fallback: 131_072, min: 1024);
-        var retainCount = GetIntArg(args, "--media-log-retain", fallback: 50, min: 1);
+        // Operational defaults match RollingFileLoggerOptions: enough burst headroom without retaining tens of
+        // megabytes of formatted strings when a native backend floods logs (LOG-01).
+        var queueCapacity = GetIntArg(args, "--media-log-queue", fallback: 2_048, min: 64);
+        var retainCount = GetIntArg(args, "--media-log-retain", fallback: 10, min: 1);
 
         var fileProvider = new RollingFileLoggerProvider(new RollingFileLoggerOptions
         {

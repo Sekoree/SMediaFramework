@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading;
 using Avalonia;
@@ -401,6 +402,54 @@ public partial class MediaPlayerViewModel
         return SeekToSliderCommand.CanExecute(null)
             ? SeekToSliderCommand.ExecuteAsync(null)
             : Task.CompletedTask;
+    }
+
+    /// <summary>Jump to a typed timecode (the deck's jump-to-position box). Accepts <c>ss</c>, <c>mm:ss</c>, or
+    /// <c>hh:mm:ss</c> with an optional fractional-seconds part (<c>.mmm</c>); the value is clamped to the clip
+    /// duration and committed through the same coalesced seek arc as the scrubber. A malformed value is ignored.</summary>
+    [RelayCommand(CanExecute = nameof(CanSeek))]
+    private Task SeekToPositionTextAsync(string? text)
+    {
+        if (Duration <= TimeSpan.Zero || !TryParseClock(text, out var target))
+            return Task.CompletedTask;
+        if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+        if (target > Duration) target = Duration;
+        SeekSliderValue = target.Ticks * 1000.0 / Duration.Ticks;
+        return SeekToSliderCommand.CanExecute(null)
+            ? SeekToSliderCommand.ExecuteAsync(null)
+            : Task.CompletedTask;
+    }
+
+    /// <summary>Parses a timecode into a position: <c>ss[.fff]</c>, <c>mm:ss[.fff]</c>, or <c>hh:mm:ss[.fff]</c>
+    /// (invariant culture). The last (seconds) component may carry a fractional part (milliseconds); every
+    /// component must be a non-negative number. The inverse-ish of <see cref="FormatClock"/> (which also parses
+    /// the jump box's own display format back). Returns false for anything malformed.</summary>
+    internal static bool TryParseClock(string? text, out TimeSpan result)
+    {
+        result = TimeSpan.Zero;
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var parts = text.Trim().Split(':');
+        if (parts.Length is < 1 or > 3)
+            return false;
+
+        var ci = CultureInfo.InvariantCulture;
+        double h = 0, m = 0, s;
+        try
+        {
+            s = double.Parse(parts[^1], NumberStyles.AllowDecimalPoint, ci);
+            if (parts.Length >= 2) m = int.Parse(parts[^2], NumberStyles.None, ci);
+            if (parts.Length == 3) h = int.Parse(parts[0], NumberStyles.None, ci);
+        }
+        catch (FormatException) { return false; }
+        catch (OverflowException) { return false; }
+
+        if (h < 0 || m < 0 || s < 0 || double.IsNaN(s))
+            return false;
+
+        result = TimeSpan.FromHours(h) + TimeSpan.FromMinutes(m) + TimeSpan.FromSeconds(s);
+        return true;
     }
 
     private const double KeyboardVolumeStepDb = 1.0;

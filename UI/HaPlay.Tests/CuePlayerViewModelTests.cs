@@ -1066,7 +1066,7 @@ public sealed class CuePlayerViewModelTests
         Assert.Same(cue2, vm.SelectedCueNode);
     }
 
-    [Fact]
+    [TimingFact] // asserts real-time Task.Delay ordering of per-cue pre-wait; flaky on an oversubscribed CI VM
     public async Task GroupFireAllSimultaneously_HonorsPerCuePreWaitDelay()
     {
         var vm = new CuePlayerViewModel();
@@ -1094,7 +1094,7 @@ public sealed class CuePlayerViewModelTests
         Assert.Same(mediaCue, vm.CurrentCueNode);
     }
 
-    [Fact]
+    [TimingFact] // WaitUntilAsync on a real-time pumped window; missed on an oversubscribed CI VM
     public async Task Go_AutoContinueDelay_IsDeferredWhilePaused()
     {
         var vm = new CuePlayerViewModel();

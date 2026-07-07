@@ -183,6 +183,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Wire the cue player to the shared output registry. Audio routes and video output
     /// bindings pick lines from this list directly — no per-cue-list device config.</summary>
+    // Video output lines we've hooked for window-resize → PlacementCanvasAspect refresh (see
+    // WatchVideoOutputLinesForResize). Held so the handlers can be detached before a rebucket.
+    private readonly List<OutputLineViewModel> _resizeWatchedOutputLines = new();
+
     public void SetAvailableOutputs(ObservableCollection<OutputLineViewModel> outputs)
     {
         AvailableOutputs = outputs;
@@ -212,7 +216,29 @@ public partial class CuePlayerViewModel : ViewModelBase
                     AvailableVideoOutputs.Add(line);
             }
         }
+        WatchVideoOutputLinesForResize();
         ResolveAllBindingLineRefs();
+    }
+
+    // A local output's window resize replaces the line's Definition (OutputManagementViewModel
+    // .NotifyLocalPreviewResized); watch each video line so PlacementCanvasAspect re-reads the new window
+    // size and the placement canvas re-lays-out to match. Re-subscribed whenever the bucket is rebuilt.
+    private void WatchVideoOutputLinesForResize()
+    {
+        foreach (var line in _resizeWatchedOutputLines)
+            line.PropertyChanged -= OnAvailableOutputLineChanged;
+        _resizeWatchedOutputLines.Clear();
+        foreach (var line in AvailableVideoOutputs)
+        {
+            line.PropertyChanged += OnAvailableOutputLineChanged;
+            _resizeWatchedOutputLines.Add(line);
+        }
+    }
+
+    private void OnAvailableOutputLineChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(OutputLineViewModel.Definition))
+            OnPropertyChanged(nameof(PlacementCanvasAspect));
     }
 
     private OutputLineViewModel? ResolveOutputLine(Guid lineId) =>
@@ -359,8 +385,30 @@ public partial class CuePlayerViewModel : ViewModelBase
                 ? SelectedCueList?.Compositions.FirstOrDefault(c => c.Id == p.CompositionId)
                 : null;
             comp ??= SelectedComposition ?? SelectedCueList?.Compositions.FirstOrDefault();
-            return comp is { Width: > 0, Height: > 0 } ? (double)comp.Width / comp.Height : 16.0 / 9.0;
+            if (comp is null)
+                return 16.0 / 9.0;
+            // A composition wired to a resizable local window follows that window's live aspect, so the
+            // placement canvas matches what the operator actually sees on that output while they drag a
+            // resize handle. Re-raised from OnAvailableOutputLineChanged when the window reports a resize.
+            return TryGetBoundLocalWindowAspect(comp)
+                ?? (comp is { Width: > 0, Height: > 0 } ? (double)comp.Width / comp.Height : 16.0 / 9.0);
         }
+    }
+
+    /// <summary>Live w/h of a resizable local window output the composition feeds, or null when the
+    /// composition has no bound windowed output (then the canvas uses the composition's own resolution).</summary>
+    private double? TryGetBoundLocalWindowAspect(CueCompositionViewModel comp)
+    {
+        if (SelectedCueList is null)
+            return null;
+        foreach (var binding in SelectedCueList.VideoOutputs)
+        {
+            if (binding.CompositionId != comp.Id)
+                continue;
+            if (binding.LineRef?.Definition is Models.LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv)
+                return (double)lv.WindowWidth.Value / lv.WindowHeight.Value;
+        }
+        return null;
     }
 
     public bool HasSelectedMediaCue => SelectedCueNode?.Kind == CueNodeKind.Media;
@@ -449,9 +497,29 @@ public partial class CuePlayerViewModel : ViewModelBase
                   ? string.Empty
                   : Strings.Format(nameof(Strings.CueTransportNextFormat), CueDisplay(StandbyCueNode)));
 
+    /// <summary>UX-10: true when the selected list has no cues (or none selected) — drives the empty-state
+    /// call-to-action over the cue tree instead of a blank grid.</summary>
+    public bool HasNoCues => SelectedCueList is null || SelectedCueList.Nodes.Count == 0;
+
+    private CueListEditorViewModel? _watchedCueListForNodes;
+
+    private void ResubscribeCueNodesWatch(CueListEditorViewModel? value)
+    {
+        if (_watchedCueListForNodes is not null)
+            _watchedCueListForNodes.Nodes.CollectionChanged -= OnCueNodesCollectionChanged;
+        _watchedCueListForNodes = value;
+        if (value is not null)
+            value.Nodes.CollectionChanged += OnCueNodesCollectionChanged;
+    }
+
+    private void OnCueNodesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        OnPropertyChanged(nameof(HasNoCues));
+
     partial void OnSelectedCueListChanged(CueListEditorViewModel? value)
     {
         CancelTransportRun();
+        ResubscribeCueNodesWatch(value);
+        OnPropertyChanged(nameof(HasNoCues));
         OnPropertyChanged(nameof(VisibleNodes));
         OnPropertyChanged(nameof(VisibleCompositions));
         OnPropertyChanged(nameof(VisibleVideoOutputs));

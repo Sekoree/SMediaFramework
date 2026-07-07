@@ -68,6 +68,11 @@ public sealed class MMDPhysics : IDisposable
         if (model.RigidBodies.Count == 0 || model.RigidBodies.All(b => b.Mode == PMXPhysicsMode.FollowBone))
             return null;
 
+        // MMD-03: verify the native shim's ABI matches this binding before calling into it. A missing or
+        // incompatible shim means "no physics" (the model still renders with FK bones), not a mis-call.
+        if (!MMDBulletNative.IsAvailable)
+            return null;
+
         var world = MMDBulletNative.WorldCreate(0f, Gravity, 0f);
         if (world == nint.Zero)
             return null;
@@ -117,8 +122,17 @@ public sealed class MMDPhysics : IDisposable
 
             // Joints → 6-DOF spring constraints. Frames are the joint frame expressed in each body's
             // local space: frame = jointTransform · bodyBind⁻¹ (row-vector), matching babylon-mmd.
+            // All per-iteration scratch is hoisted above the loop: C# stackalloc is released only when the
+            // method returns, so allocating inside the loop grows the stack by jointCount (CA2014). We reuse
+            // these buffers and overwrite [0]/[1]/[2] each iteration.
             var frameA = stackalloc float[16];
             var frameB = stackalloc float[16];
+            var linLower = stackalloc float[3];
+            var linUpper = stackalloc float[3];
+            var angLower = stackalloc float[3];
+            var angUpper = stackalloc float[3];
+            var springPos = stackalloc float[3];
+            var springRot = stackalloc float[3];
             foreach (var joint in model.Joints)
             {
                 if ((uint)joint.RigidBodyA >= (uint)bodies.Length || (uint)joint.RigidBodyB >= (uint)bodies.Length)
@@ -141,12 +155,12 @@ public sealed class MMDPhysics : IDisposable
                 WriteMatrix(jointTransform * bindAInv, frameA);
                 WriteMatrix(jointTransform * bindBInv, frameB);
 
-                var linLower = stackalloc float[3] { joint.LinearLowerLimit.X, joint.LinearLowerLimit.Y, joint.LinearLowerLimit.Z };
-                var linUpper = stackalloc float[3] { joint.LinearUpperLimit.X, joint.LinearUpperLimit.Y, joint.LinearUpperLimit.Z };
-                var angLower = stackalloc float[3] { joint.AngularLowerLimit.X, joint.AngularLowerLimit.Y, joint.AngularLowerLimit.Z };
-                var angUpper = stackalloc float[3] { joint.AngularUpperLimit.X, joint.AngularUpperLimit.Y, joint.AngularUpperLimit.Z };
-                var springPos = stackalloc float[3] { joint.LinearSpring.X, joint.LinearSpring.Y, joint.LinearSpring.Z };
-                var springRot = stackalloc float[3] { joint.AngularSpring.X, joint.AngularSpring.Y, joint.AngularSpring.Z };
+                linLower[0] = joint.LinearLowerLimit.X; linLower[1] = joint.LinearLowerLimit.Y; linLower[2] = joint.LinearLowerLimit.Z;
+                linUpper[0] = joint.LinearUpperLimit.X; linUpper[1] = joint.LinearUpperLimit.Y; linUpper[2] = joint.LinearUpperLimit.Z;
+                angLower[0] = joint.AngularLowerLimit.X; angLower[1] = joint.AngularLowerLimit.Y; angLower[2] = joint.AngularLowerLimit.Z;
+                angUpper[0] = joint.AngularUpperLimit.X; angUpper[1] = joint.AngularUpperLimit.Y; angUpper[2] = joint.AngularUpperLimit.Z;
+                springPos[0] = joint.LinearSpring.X; springPos[1] = joint.LinearSpring.Y; springPos[2] = joint.LinearSpring.Z;
+                springRot[0] = joint.AngularSpring.X; springRot[1] = joint.AngularSpring.Y; springRot[2] = joint.AngularSpring.Z;
 
                 MMDBulletNative.WorldAddSpringConstraint(
                     world, a.NativeHandle, b.NativeHandle, frameA, frameB,

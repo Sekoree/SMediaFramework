@@ -1,0 +1,20 @@
+# REL-01 — required native libraries a win-x64 release artifact MUST contain.
+# Checked by scripts/check-native-manifest.sh against the publish directory: each entry is a PREFIX (so
+# avcodec-62.dll matches "avcodec-"). '#' comments and blank lines are ignored.
+# Optional natives (NDI — licensing; ASIO — optional PortAudio host API) are intentionally NOT listed here.
+
+# Decode (FFmpeg 8.1 — from the FFmpeg.GPL NuGet, lands in the publish):
+avcodec-
+avformat-
+avutil-
+swresample-
+swscale-
+
+# Audio backends:
+portaudio.dll
+miniaudio.dll
+
+# MIDI, subtitles, MMD physics (shipped features):
+portmidi.dll
+ass.dll
+mmd_bullet.dll

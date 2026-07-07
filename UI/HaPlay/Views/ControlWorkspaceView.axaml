@@ -5,24 +5,16 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:res="using:HaPlay.Resources"
+             xmlns:dock="using:Dock.Avalonia.Controls"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="680"
              x:Class="HaPlay.Views.ControlWorkspaceView"
              x:DataType="vm:ControlWorkspaceViewModel">
-  <UserControl.Styles>
-    <Style Selector="Grid.error TextBlock">
-      <Setter Property="Foreground" Value="#FF6B6B" />
-    </Style>
-    <Style Selector="TextBlock.col">
-      <Setter Property="VerticalAlignment" Value="Center" />
-      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace" />
-      <Setter Property="FontSize" Value="12" />
-    </Style>
-  </UserControl.Styles>
+  <!-- The four dock panes' document VMs are mapped to their views in App.axaml's Application.DataTemplates
+       (app-wide so Dock's recycling presenter and floated windows always resolve the right view). -->
 
-  <!-- UI rewrite P3 (plan §4): the single mega-scroll page became tabs — Surfaces (devices,
-       listeners, layers, profiles) / Scripts / Monitor / Tools. The arm bar + counts stay above
-       the tabs: global state must be visible from every tab. Each tab owns exactly one scroll
-       region. -->
+  <!-- UI rewrite: the four tabs (Surfaces / Scripts / Monitor / Tools) became a Dock.Avalonia docking
+       layout so they can be split, floated, or re-docked — watch the Monitor while editing Scripts. The
+       arm bar + counts stay above the dock: global state must be visible from every pane. -->
   <Grid Margin="16" RowDefinitions="Auto,Auto,*">
 
     <!-- Arm + summary (global, always visible) -->
@@ -53,15 +45,13 @@
                       Command="{Binding ImportLayerCommand}" />
           </MenuItem>
         </Menu>
-        <Button Grid.Row="0" Grid.Column="5"
-                Content="Add script…"
-                ToolTip.Tip="Create a project, device, endpoint, or layer script"
-                Command="{Binding AddScriptCommand}" />
+        <!-- Add-script lives only on the Scripts tab now (next to the list). Tab pop-out is gone too — the
+             Dock.Avalonia layout below floats/splits panes natively (drag a tab out of the dock). Reset layout
+             brings every pane back to the default tabbed arrangement (the way back from a closed/floated pane). -->
         <Button Grid.Row="0" Grid.Column="6"
-                ToolTip.Tip="{x:Static res:Strings.PopoutTabButtonTooltip}"
-                Click="OnPopOutTabClick">
-            <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
-          </Button>
+                Content="{x:Static res:Strings.ControlResetLayoutButton}"
+                ToolTip.Tip="{x:Static res:Strings.ControlResetLayoutTooltip}"
+                Command="{Binding ResetDockLayoutCommand}" />
         <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="16" Opacity="0.85">
           <TextBlock Text="{Binding DeviceCount, StringFormat='Devices: {0}'}" />
           <TextBlock Text="{Binding ListenerCount, StringFormat='Listeners: {0}'}" />
@@ -71,352 +61,17 @@
         <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2"
                    Text="{Binding ConfigFilePath}"
                    VerticalAlignment="Center"
-                   Foreground="#888888"
+                   Foreground="{StaticResource TextSecondary}"
                    TextTrimming="CharacterEllipsis"
                    ToolTip.Tip="{Binding ConfigFilePath}"
                    IsVisible="{Binding ConfigFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       </Grid>
     </Border>
 
-    <TabControl Grid.Row="2" x:Name="ControlTabs">
-
-      <!-- ===== Surfaces: devices / listeners / layers + profiles ===== -->
-      <TabItem Header="{x:Static res:Strings.ControlTabSurfaces}">
-        <ContentControl x:Name="SurfacesPopoutHost">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-          <StackPanel Margin="0,8,0,0">
-
-            <Border Classes="Card" Margin="0,0,0,10">
-              <DockPanel>
-                <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
-                  <TextBlock Grid.Column="0" Classes="SectionText" Text="Project structure" VerticalAlignment="Center" />
-                  <Button Grid.Column="1" Content="Add layer…"
-                          ToolTip.Tip="Add a control layer (mutually-exclusive set of layer-scoped scripts)"
-                          Command="{Binding AddLayerCommand}" />
-                  <Button Grid.Column="2" Content="Add OSC device…"
-                          ToolTip.Tip="Add an OSC device such as an X32 or X-Air"
-                          Command="{Binding AddOSCDeviceCommand}" />
-                  <Button Grid.Column="3" Content="Add OSC listener…"
-                          ToolTip.Tip="Add an inbound OSC listener port for external control sources"
-                          Command="{Binding AddOSCListenerCommand}" />
-                  <Button Grid.Column="4" Content="Resolve MIDI…"
-                          ToolTip.Tip="Pick current ports for ambiguous or missing MIDI devices"
-                          Command="{Binding ResolveMIDIDevicesCommand}"
-                          IsVisible="{Binding IsMIDIAvailable}" />
-                </Grid>
-                <ItemsControl DockPanel.Dock="Bottom" ItemsSource="{Binding ProfileWarnings}" Margin="0,8,0,0">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding}" Foreground="#D7A300" TextWrapping="Wrap" />
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <TextBlock DockPanel.Dock="Top"
-                           Text="Scripts can be added from the button above, from the Scripts tab, or from a layer/device/endpoint row menu."
-                           Classes="CaptionText"
-                           TextWrapping="Wrap"
-                           Margin="0,0,0,6" />
-                <ListBox ItemsSource="{Binding StructureRows}"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                         Background="Transparent">
-                  <ListBox.ItemTemplate>
-                    <DataTemplate DataType="vm:ControlStructureRowViewModel">
-                      <Grid ColumnDefinitions="Auto,72,150,*,76,Auto" ColumnSpacing="8" Margin="0,2">
-                        <Grid.ContextMenu>
-                          <ContextMenu x:DataType="vm:ControlStructureRowViewModel">
-                            <MenuItem Header="Add device script" Command="{Binding AddDeviceScriptCommand}" IsVisible="{Binding CanAddDeviceScript}" />
-                            <MenuItem Header="Add endpoint script" Command="{Binding AddEndpointScriptCommand}" IsVisible="{Binding CanAddEndpointScript}" />
-                            <MenuItem Header="Add OSC listener…" Command="{Binding AddOSCListenerCommand}" />
-                            <MenuItem Header="Edit OSC listener…" Command="{Binding EditOSCListenerCommand}" IsVisible="{Binding CanEditOSCListener}" />
-                            <MenuItem Header="Remove OSC listener" Command="{Binding RemoveOSCListenerCommand}" IsVisible="{Binding CanEditOSCListener}" />
-                            <MenuItem Header="Add layer script" Command="{Binding AddLayerScriptCommand}" IsVisible="{Binding CanAddLayerScript}" />
-                            <MenuItem Header="Add layer…" Command="{Binding AddLayerCommand}" />
-                            <MenuItem Header="Activate layer" Command="{Binding ActivateLayerCommand}" IsVisible="{Binding CanActivateLayer}" />
-                            <MenuItem Header="Edit layer…" Command="{Binding EditLayerCommand}" IsVisible="{Binding CanEditLayer}" />
-                            <MenuItem Header="{x:Static res:Strings.ExportLayerMenuHeader}" Command="{Binding ExportLayerCommand}" IsVisible="{Binding CanEditLayer}" />
-                            <MenuItem Header="Remove layer" Command="{Binding RemoveLayerCommand}" IsVisible="{Binding CanEditLayer}" />
-                            <MenuItem Header="Add periodic OSC send…" Command="{Binding AddPeriodicSendCommand}" IsVisible="{Binding CanAddPeriodicSend}" />
-                            <MenuItem Header="Edit periodic send…" Command="{Binding EditPeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
-                            <MenuItem Header="Remove periodic send" Command="{Binding RemovePeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
-                            <Separator IsVisible="{Binding CanAddDeviceScript}" />
-                            <MenuItem Header="Edit OSC device…" Command="{Binding EditOSCDeviceCommand}" IsVisible="{Binding CanEditOSCDevice}" />
-                            <MenuItem Header="Remove OSC device" Command="{Binding RemoveOSCDeviceCommand}" IsVisible="{Binding CanEditOSCDevice}" />
-                            <MenuItem Header="Test OSC send" Command="{Binding TestOSCCommand}" IsVisible="{Binding CanTestOSC}" />
-                            <MenuItem Header="Edit MIDI device…" Command="{Binding EditMIDIDeviceCommand}" IsVisible="{Binding CanEditMIDIDevice}" />
-                            <MenuItem Header="Test MIDI send" Command="{Binding TestMIDICommand}" IsVisible="{Binding CanTestMIDI}" />
-                          </ContextMenu>
-                        </Grid.ContextMenu>
-                        <Border Grid.Column="0" Width="{Binding IndentWidth}" />
-                        <TextBlock Grid.Column="1"
-                                   Text="{Binding Kind}"
-                                   Opacity="0.7"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2"
-                                   Text="{Binding Name}"
-                                   FontWeight="SemiBold"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="3"
-                                   Text="{Binding Detail}"
-                                   Opacity="0.72"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="4"
-                                   Text="{Binding State}"
-                                   Opacity="0.7"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis" />
-                        <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                          <Button Content="Activate" Classes="Dense" ToolTip.Tip="Activate this layer (mutually exclusive)"
-                                  IsVisible="{Binding CanActivateLayer}" Command="{Binding ActivateLayerCommand}" />
-                          <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit layer"
-                                  IsVisible="{Binding CanEditLayer}" Command="{Binding EditLayerCommand}" />
-                          <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove layer"
-                                  IsVisible="{Binding CanEditLayer}" Command="{Binding RemoveLayerCommand}" />
-                          <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit OSC device"
-                                  IsVisible="{Binding CanEditOSCDevice}" Command="{Binding EditOSCDeviceCommand}" />
-                          <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove OSC device"
-                                  IsVisible="{Binding CanEditOSCDevice}" Command="{Binding RemoveOSCDeviceCommand}" />
-                          <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit OSC listener"
-                                  IsVisible="{Binding CanEditOSCListener}" Command="{Binding EditOSCListenerCommand}" />
-                          <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove OSC listener"
-                                  IsVisible="{Binding CanEditOSCListener}" Command="{Binding RemoveOSCListenerCommand}" />
-                          <Button Content="Edit" Classes="Dense" ToolTip.Tip="Edit periodic send"
-                                  IsVisible="{Binding CanEditPeriodicSend}" Command="{Binding EditPeriodicSendCommand}" />
-                          <Button Content="Remove" Classes="Dense" ToolTip.Tip="Remove periodic send"
-                                  IsVisible="{Binding CanEditPeriodicSend}" Command="{Binding RemovePeriodicSendCommand}" />
-                        </StackPanel>
-                      </Grid>
-                    </DataTemplate>
-                  </ListBox.ItemTemplate>
-                </ListBox>
-              </DockPanel>
-            </Border>
-
-            <Border Classes="Card" Margin="0,0,0,10">
-              <StackPanel Spacing="8">
-                <TextBlock Classes="SectionText" Text="Profiles" />
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Button Content="Import" Classes="Dense" Command="{Binding ImportProfileCommand}" />
-                  <Button Content="Export selected" Classes="Dense" Command="{Binding ExportSelectedProfileCommand}" />
-                  <Button Content="Export built-ins" Classes="Dense" Command="{Binding ExportBuiltInProfilesCommand}" />
-                  <Button Content="Remove project" Classes="Dense" Command="{Binding RemoveSelectedProjectProfileCommand}" />
-                </StackPanel>
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8"
-                        IsVisible="{Binding IsMIDIAvailable}">
-                  <StackPanel Spacing="6">
-                    <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />
-                    <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="6">
-                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile" VerticalAlignment="Center" />
-                      <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ProfileBuilderDisplayName}" PlaceholderText="Custom MIDI Surface" />
-                      <TextBlock Grid.Row="0" Grid.Column="2" Text="ID" VerticalAlignment="Center" />
-                      <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding ProfileBuilderId}" PlaceholderText="auto" />
-                      <TextBlock Grid.Row="1" Grid.Column="0" Text="Control" VerticalAlignment="Center" />
-                      <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ProfileBuilderControlName}" PlaceholderText="Fader 1" />
-                      <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="Channel" VerticalAlignment="Center" />
-                        <TextBox Width="54" Text="{Binding ProfileBuilderMIDIChannelText}" />
-                        <TextBlock Text="CC" VerticalAlignment="Center" />
-                        <TextBox Width="54" Text="{Binding ProfileBuilderMIDIControllerText}" />
-                        <CheckBox Content="14-bit CC" IsChecked="{Binding ProfileBuilderHighResolution14Bit}" VerticalAlignment="Center" />
-                      </StackPanel>
-                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Range" VerticalAlignment="Center" />
-                      <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
-                        <TextBox Width="80" Text="{Binding ProfileBuilderMinValueText}" PlaceholderText="min" />
-                        <TextBox Width="80" Text="{Binding ProfileBuilderMaxValueText}" PlaceholderText="max" />
-                        <Button Content="Save project profile" Command="{Binding SaveMIDIProfileBuilderCommand}" />
-                      </StackPanel>
-                      <TextBlock Grid.Row="2" Grid.Column="3"
-                                 Text="{Binding ProfileBuilderStatus}"
-                                 Opacity="0.7"
-                                 VerticalAlignment="Center"
-                                 TextTrimming="CharacterEllipsis" />
-                    </Grid>
-                  </StackPanel>
-                </Border>
-                <ListBox ItemsSource="{Binding ProfileRows}"
-                         SelectedItem="{Binding SelectedProfileRow}"
-                         MaxHeight="180"
-                         Background="Transparent">
-                  <ListBox.ItemTemplate>
-                    <DataTemplate DataType="vm:ControlProfileRowViewModel">
-                      <Grid ColumnDefinitions="180,90,90,*" ColumnSpacing="8" Margin="0,2">
-                        <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="1" Text="{Binding Protocol}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2" Text="{Binding Source}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="3" Text="{Binding Summary}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                      </Grid>
-                    </DataTemplate>
-                  </ListBox.ItemTemplate>
-                </ListBox>
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-        </ContentControl>
-      </TabItem>
-
-      <!-- ===== Scripts ===== -->
-      <TabItem Header="{x:Static res:Strings.ControlTabScripts}">
-        <ContentControl x:Name="ScriptsPopoutHost">
-        <Border Classes="Card" Margin="0,8,0,0">
-          <DockPanel>
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,8">
-              <TextBlock Grid.Column="0" Classes="SectionText" Text="Scripts" VerticalAlignment="Center" />
-              <Button Grid.Column="1" Content="+" Classes="Dense" ToolTip.Tip="Add script" Command="{Binding AddScriptCommand}" />
-              <Button Grid.Column="2" Content="Add helper" Classes="Dense" ToolTip.Tip="Add imported helper script file" Command="{Binding AddHelperFileCommand}" />
-              <Button Grid.Column="3" Content="–" Classes="Dense" ToolTip.Tip="Remove selected script" Command="{Binding RemoveSelectedScriptCommand}" />
-              <Button Grid.Column="4" Content="Edit…" Classes="Dense" Click="OnEditScriptClick"
-                      ToolTip.Tip="Open the selected script in a separate editor window" />
-            </Grid>
-            <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Classes="CaptionText" TextWrapping="Wrap"
-                       Text="Double-click a script (or use Edit…) to open it in a separate editor window with the code editor, triggers, and learn mode." />
-            <ListBox x:Name="ScriptList"
-                     ItemsSource="{Binding ScriptRows}"
-                     SelectedItem="{Binding SelectedScriptRow, Mode=TwoWay}"
-                     DoubleTapped="OnScriptListDoubleTapped">
-              <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:ControlScriptRowViewModel">
-                  <StackPanel Spacing="1">
-                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding DisplayScriptPath}" FontSize="12" Opacity="0.72" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding ScopeText}" FontSize="12" Opacity="0.6" />
-                  </StackPanel>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </DockPanel>
-        </Border>
-        </ContentControl>
-      </TabItem>
-
-      <!-- ===== Monitor: live event tail (fills the tab; the ListBox is the scroll region) ===== -->
-      <TabItem Header="{x:Static res:Strings.ControlTabMonitor}">
-        <ContentControl x:Name="MonitorPopoutHost">
-        <Grid RowDefinitions="Auto,*" Margin="0,8,0,0">
-          <Grid Grid.Row="0"
-                ColumnDefinitions="*,130,130,160,Auto,Auto,Auto"
-                RowDefinitions="Auto,Auto"
-                ColumnSpacing="8"
-                RowSpacing="6"
-                Margin="0,0,0,6">
-            <TextBlock Grid.Row="0" Grid.Column="0" Classes="SectionText" Text="Live monitor" VerticalAlignment="Center" />
-            <CheckBox Grid.Row="0" Grid.Column="4" Content="Errors only" IsChecked="{Binding ErrorsOnly}" />
-            <CheckBox Grid.Row="0" Grid.Column="5" Content="Pause" IsChecked="{Binding IsPaused}" />
-            <Button Grid.Row="0" Grid.Column="6" Content="Clear" Command="{Binding ClearMonitorCommand}" />
-            <TextBox Grid.Row="1"
-                     Grid.Column="0"
-                     Text="{Binding FilterText}"
-                     PlaceholderText="filter: address, message…" />
-            <ComboBox Grid.Row="1"
-                      Grid.Column="1"
-                      ItemsSource="{Binding MonitorDirectionOptions}"
-                      SelectedItem="{Binding SelectedMonitorDirection, Mode=TwoWay}" />
-            <ComboBox Grid.Row="1"
-                      Grid.Column="2"
-                      ItemsSource="{Binding MonitorProtocolOptions}"
-                      SelectedItem="{Binding SelectedMonitorProtocol, Mode=TwoWay}" />
-            <TextBox Grid.Row="1"
-                     Grid.Column="3"
-                     Text="{Binding DeviceFilterText}"
-                     PlaceholderText="device" />
-          </Grid>
-
-          <Border Grid.Row="1" MinHeight="120" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0">
-            <Grid>
-              <TextBlock Text="Arm Control to see MIDI, OSC, script, and runtime activity here."
-                         TextWrapping="Wrap"
-                         Opacity="0.55"
-                         HorizontalAlignment="Center"
-                         VerticalAlignment="Center"
-                         IsVisible="{Binding HasNoMonitorEntries}" />
-              <ListBox ItemsSource="{Binding MonitorEntries}" Background="Transparent">
-                <ListBox.ItemTemplate>
-                  <DataTemplate DataType="vm:ControlMonitorEntryViewModel">
-                    <Grid ColumnDefinitions="90,70,70,70,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
-                      <TextBlock Grid.Column="0" Classes="col" Opacity="0.7" Text="{Binding Time}" />
-                      <TextBlock Grid.Column="1" Classes="col" Text="{Binding Protocol}" />
-                      <TextBlock Grid.Column="2" Classes="col" Opacity="0.85" Text="{Binding Direction}" />
-                      <TextBlock Grid.Column="3" Classes="col" Opacity="0.85" Text="{Binding Result}" />
-                      <TextBlock Grid.Column="4" Classes="col" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
-                    </Grid>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
-            </Grid>
-          </Border>
-        </Grid>
-        </ContentControl>
-      </TabItem>
-
-      <!-- ===== Tools: X32 browser + manual test sends ===== -->
-      <TabItem Header="{x:Static res:Strings.ControlTabTools}">
-        <ContentControl x:Name="ToolsPopoutHost">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-          <StackPanel Margin="0,8,0,0" Spacing="10">
-
-            <Border Classes="Card">
-              <StackPanel Spacing="4">
-                <TextBlock Classes="SectionText" Text="X32 command/cache browser" />
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Text="{Binding X32CommandFilterText}" PlaceholderText="Filter device, group, address, cache" />
-                  <Button Grid.Column="1" Content="Use as test" Classes="Dense" Command="{Binding UseSelectedX32CommandForTestSendCommand}" />
-                  <Button Grid.Column="2" Content="Request" Classes="Dense" Command="{Binding RequestSelectedX32CommandCommand}" />
-                </Grid>
-                <Grid ColumnDefinitions="120,110,180,*,90,80,130" ColumnSpacing="8" Opacity="0.65" Margin="0,2,0,2">
-                  <TextBlock Grid.Column="0" Text="Device" />
-                  <TextBlock Grid.Column="1" Text="Group" />
-                  <TextBlock Grid.Column="2" Text="Command" />
-                  <TextBlock Grid.Column="3" Text="Address" />
-                  <TextBlock Grid.Column="4" Text="Value" />
-                  <TextBlock Grid.Column="5" Text="Access" />
-                  <TextBlock Grid.Column="6" Text="Cache" />
-                </Grid>
-                <ListBox ItemsSource="{Binding X32CommandRows}"
-                         SelectedItem="{Binding SelectedX32CommandRow}"
-                         MaxHeight="320"
-                         Background="Transparent">
-                  <ListBox.ItemTemplate>
-                    <DataTemplate DataType="vm:ControlX32CommandRowViewModel">
-                      <Grid ColumnDefinitions="120,110,180,*,90,80,130" ColumnSpacing="8" Margin="0,2">
-                        <TextBlock Grid.Column="0" Text="{Binding DeviceName}" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="1" Text="{Binding Group}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2" Text="{Binding CommandName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="3" Text="{Binding Address}" FontFamily="Cascadia Code, Consolas, monospace" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="4" Text="{Binding ValueKind}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="5" Text="{Binding Access}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="6" Text="{Binding CacheValue}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                      </Grid>
-                    </DataTemplate>
-                  </ListBox.ItemTemplate>
-                </ListBox>
-              </StackPanel>
-            </Border>
-
-            <Border Classes="Card">
-              <StackPanel Spacing="6">
-                <TextBlock Classes="SectionText" Text="{x:Static res:Strings.ControlManualSendsTitle}" />
-                <Grid ColumnDefinitions="Auto,140,Auto,80,Auto,*" ColumnSpacing="6">
-                  <TextBlock Grid.Column="0" Text="Host" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="1" Text="{Binding TestOSCHost}" />
-                  <TextBlock Grid.Column="2" Text="Port" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="3" Text="{Binding TestOSCPort}" />
-                  <TextBlock Grid.Column="4" Text="Address" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="5" Text="{Binding TestOSCAddress}" />
-                </Grid>
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
-                  <TextBlock Grid.Column="0" Text="Args" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="1" Text="{Binding TestOSCArgs}" PlaceholderText="comma-separated, e.g. 0.5, 1, true, name" />
-                  <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOSCCommand}" />
-                  <Button Grid.Column="3" Content="Run all manual triggers" Command="{Binding RunManualScriptsCommand}" />
-                </Grid>
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-        </ContentControl>
-      </TabItem>
-    </TabControl>
+    <!-- The four Control panes as a dockable layout (ControlDockFactory builds it on the VM). Drag a
+         tab to split the pane or float it into its own window. ControlRecycling keys the pane views by
+         dockable Id — without it the shared content presenter reuses one recycled view for every tab, so
+         every pane rendered as Surfaces. -->
+    <dock:DockControl Grid.Row="2" Layout="{Binding DockLayout}" />
   </Grid>
 </UserControl>

@@ -180,6 +180,13 @@ public partial class OutputManagementViewModel : ViewModelBase
     public bool HasOutputs => Outputs.Count > 0;
     public bool HasNoOutputs => Outputs.Count == 0;
 
+    /// <summary>AUDIO-02: one-line media-backend availability (e.g. "FFmpeg ✓  PortAudio ✓  NDI ✗ (native
+    /// library not installed)") so a missing optional backend is visible on the I/O workspace, not just in
+    /// the log. Sourced from <see cref="MediaRuntime.ModuleDiagnostics"/>.</summary>
+    public string MediaBackendsSummary =>
+        string.Join("    ", MediaRuntime.ModuleDiagnostics.Select(
+            d => d.Available ? $"{d.Name} ✓" : $"{d.Name} ✗ ({d.Detail})"));
+
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
         ? Strings.AggregateSummaryIdle
@@ -367,7 +374,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         };
         buttons.Children.Add(cancel);
         buttons.Children.Add(ok);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
 
         var message = new TextBlock
         {
@@ -969,7 +976,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         buttons.Children.Add(cancel);
         buttons.Children.Add(reconnect);
         buttons.Children.Add(continueLive);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
 
         var message = new TextBlock
         {

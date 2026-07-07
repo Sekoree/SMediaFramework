@@ -485,6 +485,90 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>The subset of <see cref="Outputs"/> this player is actually routing to (checkbox on).
+    /// Drives the deck header's aggregate output chip and its per-output flyout.</summary>
+    public IEnumerable<PlayerOutputBinding> SelectedOutputs => Outputs.Where(b => b.IsSelected);
+
+    /// <summary>True when at least one output is routed — used to swap the header flyout between the
+    /// per-output list and the "not routed anywhere" warning.</summary>
+    public bool HasRoutedOutputs => Outputs.Any(b => b.IsSelected);
+
+    /// <summary>Worst-case health across the routed outputs — the aggregate dot's state. Error dominates
+    /// Warning dominates Healthy; an unrouted or all-unknown set stays
+    /// <see cref="OutputLineHealthState.Unknown"/> (the enum is ordered Unknown &lt; Healthy &lt; Warning &lt; Error).</summary>
+    public OutputLineHealthState DeckOutputHealth
+    {
+        get
+        {
+            var worst = OutputLineHealthState.Unknown;
+            foreach (var b in Outputs)
+                if (b.IsSelected && b.Line.Health > worst)
+                    worst = b.Line.Health;
+            return worst;
+        }
+    }
+
+    /// <summary>Fill for the aggregate health dot. Mirrors the semantic state tokens (StateHealthy /
+    /// AccentWarn / StatePanic) as hex so it binds like the per-line
+    /// <see cref="OutputLineViewModel.HealthColor"/>.</summary>
+    public string DeckOutputHealthColor => DeckOutputHealth switch
+    {
+        OutputLineHealthState.Healthy => "#2E9E4B", // StateHealthy
+        OutputLineHealthState.Warning => "#F9A825", // AccentWarn
+        OutputLineHealthState.Error => "#C0392B",   // StatePanic
+        _ => "#99888888",                           // TextDisabled
+    };
+
+    /// <summary>Compact aggregate label for the header chip: routed-output count plus a worst-case note
+    /// when degraded ("3 outputs", "3 outputs · 1 reconnecting", "4 outputs · 1 offline").</summary>
+    public string DeckOutputSummary
+    {
+        get
+        {
+            var selected = 0;
+            var warnings = 0;
+            var errors = 0;
+            foreach (var b in Outputs)
+            {
+                if (!b.IsSelected) continue;
+                selected++;
+                switch (b.Line.Health)
+                {
+                    case OutputLineHealthState.Warning: warnings++; break;
+                    case OutputLineHealthState.Error: errors++; break;
+                }
+            }
+            if (selected == 0) return Resources.Strings.DeckRoutingNone;
+            var text = selected == 1
+                ? Resources.Strings.DeckRoutingCountOne
+                : Resources.Strings.Format(nameof(Resources.Strings.DeckRoutingCountFormat), selected);
+            if (errors > 0)
+                text += Resources.Strings.Format(nameof(Resources.Strings.DeckRoutingErrorSuffixFormat), errors);
+            else if (warnings > 0)
+                text += Resources.Strings.Format(nameof(Resources.Strings.DeckRoutingWarnSuffixFormat), warnings);
+            return text;
+        }
+    }
+
+    /// <summary>Re-push every derived header-aggregate property. Called when the routed set changes
+    /// (selection toggle / outputs resync) or when a routed line's health changes.</summary>
+    private void NotifyDeckOutputAggregate()
+    {
+        OnPropertyChanged(nameof(SelectedOutputs));
+        OnPropertyChanged(nameof(HasRoutedOutputs));
+        OnPropertyChanged(nameof(DeckOutputHealth));
+        OnPropertyChanged(nameof(DeckOutputHealthColor));
+        OnPropertyChanged(nameof(DeckOutputSummary));
+    }
+
+    /// <summary>Watches each routed line's health so the header aggregate dot/summary refresh live
+    /// (the per-player <see cref="PlayerOutputBinding"/> does not forward the shared line's changes).</summary>
+    private void OnOutputLinePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(OutputLineViewModel.Health))
+            NotifyDeckOutputAggregate();
+    }
+
     /// <summary>Short header text for the hold-image expander.</summary>
     public string HoldImageSummary
     {
@@ -1368,6 +1452,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         foreach (var b in Outputs)
         {
             b.PropertyChanged -= OnOutputBindingPropertyChanged;
+            b.Line.PropertyChanged -= OnOutputLinePropertyChanged;
             UnwatchMatrixCells(b);
         }
         Outputs.Clear();
@@ -1378,11 +1463,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (!keep.TryGetValue(line, out var binding))
                 binding = new PlayerOutputBinding(line);
             binding.PropertyChanged += OnOutputBindingPropertyChanged;
+            binding.Line.PropertyChanged += OnOutputLinePropertyChanged;
             WatchMatrixCells(binding);
             Outputs.Add(binding);
         }
         OnPropertyChanged(nameof(HasNoOutputs));
         OnPropertyChanged(nameof(RoutingSummary));
+        NotifyDeckOutputAggregate();
     }
 
     private int SanitizedCustomOutputWidth() => Math.Clamp(CustomOutputWidth, 16, 7680);
@@ -1586,7 +1673,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         };
         buttons.Children.Add(cancel);
         buttons.Children.Add(rewire);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
 
         var message = new TextBlock
         {
@@ -1624,6 +1711,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             }
 
             OnPropertyChanged(nameof(RoutingSummary));
+            NotifyDeckOutputAggregate();
             if (binding.IsSelected)
                 binding.Matrix.Resize(MatrixInputChannelCount, OutputChannelCountOrZero(binding.Line));
             RebuildAudioMatrixRows();

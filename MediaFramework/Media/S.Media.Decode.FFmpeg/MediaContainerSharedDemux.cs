@@ -1142,13 +1142,13 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 {
                     if (_hasVideo)
                     {
-                        var vTs = (long)(position.TotalSeconds * _vTb.den / _vTb.num);
+                        var vTs = FFmpegTimestamps.ToStreamTimestamp(position, _vTb);
                         ret = av_seek_frame(_fmt, _vStream, vTs, AVSEEK_FLAG_BACKWARD);
                         FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
                     }
                     else if (_hasAudio)
                     {
-                        var aTs = (long)(position.TotalSeconds * _aTb.den / _aTb.num);
+                        var aTs = FFmpegTimestamps.ToStreamTimestamp(position, _aTb);
                         ret = av_seek_frame(_fmt, _aStream, aTs, AVSEEK_FLAG_BACKWARD);
                         FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
                     }
@@ -1323,11 +1323,9 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         if (_fmt == null) throw new ObjectDisposedException(nameof(MediaContainerSharedDemux));
     }
 
-    private TimeSpan PtsToTimeSpanAudio(long pts)
-        => TimeSpan.FromSeconds((double)pts * _aTb.num / _aTb.den);
+    private TimeSpan PtsToTimeSpanAudio(long pts) => FFmpegTimestamps.ToTimeSpan(pts, _aTb);
 
-    private TimeSpan PtsToTimeSpanVideo(long pts)
-        => TimeSpan.FromSeconds((double)pts * _vTb.num / _vTb.den);
+    private TimeSpan PtsToTimeSpanVideo(long pts) => FFmpegTimestamps.ToTimeSpan(pts, _vTb);
 
     private void ReleaseSws()
     {
@@ -1460,9 +1458,8 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     private TimeSpan ResolveAudioPts()
     {
-        var pts = _aFrame->best_effort_timestamp;
-        if (pts == AV_NOPTS_VALUE) pts = _aFrame->pts;
-        return pts == AV_NOPTS_VALUE
+        var pts = FFmpegTimestamps.ResolvePts(_aFrame->best_effort_timestamp, _aFrame->pts);
+        return FFmpegTimestamps.IsNoPts(pts)
             ? TimeSpan.FromSeconds((double)_aSamplesEmitted / Audio.Format.SampleRate)
             : PtsToTimeSpanAudio(pts);
     }
@@ -2171,9 +2168,8 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     private TimeSpan ResolveVideoPts(AVFrame* frame)
     {
-        var pts = frame->best_effort_timestamp;
-        if (pts == AV_NOPTS_VALUE) pts = frame->pts;
-        if (pts == AV_NOPTS_VALUE)
+        var pts = FFmpegTimestamps.ResolvePts(frame->best_effort_timestamp, frame->pts);
+        if (FFmpegTimestamps.IsNoPts(pts))
         {
             var fps = Video.Format.FrameRate.ToDouble();
             return fps > 0

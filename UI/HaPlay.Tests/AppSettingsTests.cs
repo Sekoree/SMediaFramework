@@ -5,6 +5,33 @@ namespace HaPlay.Tests;
 
 public sealed class AppSettingsTests
 {
+    [Fact]
+    public void Save_RecoversFromBackup_WithoutOverwritingItWithCorruptPrimary()
+    {
+        var dir = Directory.CreateTempSubdirectory("haplay-settings-").FullName;
+        var path = Path.Combine(dir, "app-settings.json");
+        AppSettings.FilePathOverride = path;
+        try
+        {
+            new AppSettings { LastSelectedWorkspace = "players" }.Save();
+            new AppSettings { LastSelectedWorkspace = "cues" }.Save(); // backup now contains "players"
+            File.WriteAllText(path, "{ corrupt");
+
+            var recovered = AppSettings.Load();
+            Assert.Equal("players", recovered.LastSelectedWorkspace);
+            recovered.Save();
+
+            File.Delete(path); // force the next load through the backup
+            Assert.Equal("players", AppSettings.Load().LastSelectedWorkspace);
+            Assert.Empty(Directory.GetFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            AppSettings.FilePathOverride = null;
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     /// <summary>Phase E (§8.7) — a saved <see cref="WindowStateSnapshot"/> round-trips through the
     /// camelCase JSON contract without loss. Guards against renames on the snapshot fields silently
     /// breaking restore on next launch.</summary>

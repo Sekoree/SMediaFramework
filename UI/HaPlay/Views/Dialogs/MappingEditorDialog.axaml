@@ -43,7 +43,8 @@
       <DockPanel Grid.Column="0">
         <WrapPanel DockPanel.Dock="Top" ItemSpacing="4" Margin="0,0,0,6">
           <Button Content="+" Command="{Binding AddSectionCommand}" ToolTip.Tip="Add section" />
-          <Button Command="{Binding DuplicateSectionCommand}" ToolTip.Tip="Duplicate selected">
+          <Button Command="{Binding DuplicateSectionCommand}" ToolTip.Tip="Duplicate selected"
+                  AutomationProperties.Name="Duplicate selected">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
           </Button>
           <Button Content="–" Command="{Binding RemoveSectionCommand}" ToolTip.Tip="Remove selected" />

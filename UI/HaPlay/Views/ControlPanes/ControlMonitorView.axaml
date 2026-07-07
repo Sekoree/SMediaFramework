@@ -1,0 +1,63 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HaPlay.ViewModels"
+             x:Class="HaPlay.Views.ControlPanes.ControlMonitorView"
+             x:DataType="vm:ControlWorkspaceViewModel">
+  <!-- Monitor dock tab (extracted for Dock.Avalonia): live MIDI / OSC / script / runtime event tail. -->
+  <UserControl.Styles>
+    <Style Selector="Grid.error TextBlock">
+      <Setter Property="Foreground" Value="#FF6B6B" />
+    </Style>
+    <Style Selector="TextBlock.col">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,*" Margin="0,8,0,0">
+    <Grid Grid.Row="0"
+          ColumnDefinitions="*,130,130,160,Auto,Auto,Auto"
+          RowDefinitions="Auto,Auto"
+          ColumnSpacing="8"
+          RowSpacing="6"
+          Margin="0,0,0,6">
+      <TextBlock Grid.Row="0" Grid.Column="0" Classes="SectionText" Text="Live monitor" VerticalAlignment="Center" />
+      <CheckBox Grid.Row="0" Grid.Column="4" Content="Errors only" IsChecked="{Binding ErrorsOnly}" />
+      <CheckBox Grid.Row="0" Grid.Column="5" Content="Pause" IsChecked="{Binding IsPaused}" />
+      <Button Grid.Row="0" Grid.Column="6" Content="Clear" Command="{Binding ClearMonitorCommand}" />
+      <TextBox Grid.Row="1" Grid.Column="0" Text="{Binding FilterText}" PlaceholderText="filter: address, message…" />
+      <ComboBox Grid.Row="1" Grid.Column="1"
+                ItemsSource="{Binding MonitorDirectionOptions}"
+                SelectedItem="{Binding SelectedMonitorDirection, Mode=TwoWay}" />
+      <ComboBox Grid.Row="1" Grid.Column="2"
+                ItemsSource="{Binding MonitorProtocolOptions}"
+                SelectedItem="{Binding SelectedMonitorProtocol, Mode=TwoWay}" />
+      <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding DeviceFilterText}" PlaceholderText="device" />
+    </Grid>
+
+    <Border Grid.Row="1" MinHeight="120" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
+      <Grid>
+        <TextBlock Text="Arm Control to see MIDI, OSC, script, and runtime activity here."
+                   TextWrapping="Wrap"
+                   Opacity="0.55"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   IsVisible="{Binding HasNoMonitorEntries}" />
+        <ListBox ItemsSource="{Binding MonitorEntries}" Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlMonitorEntryViewModel">
+              <Grid ColumnDefinitions="90,70,70,70,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
+                <TextBlock Grid.Column="0" Classes="col" Opacity="0.7" Text="{Binding Time}" />
+                <TextBlock Grid.Column="1" Classes="col" Text="{Binding Protocol}" />
+                <TextBlock Grid.Column="2" Classes="col" Opacity="0.85" Text="{Binding Direction}" />
+                <TextBlock Grid.Column="3" Classes="col" Opacity="0.85" Text="{Binding Result}" />
+                <TextBlock Grid.Column="4" Classes="col" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

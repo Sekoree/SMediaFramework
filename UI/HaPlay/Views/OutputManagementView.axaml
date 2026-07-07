@@ -32,6 +32,9 @@
         <TextBlock Text="{x:Static res:Strings.OutputManagementHeader}" FontSize="22" FontWeight="SemiBold" />
         <TextBlock Classes="hint"
                    Text="{x:Static res:Strings.OutputManagementHint}" />
+        <!-- AUDIO-02: which media backends registered, and why any optional one was skipped. -->
+        <TextBlock Classes="hint" FontFamily="monospace" Opacity="0.55"
+                   Text="{Binding MediaBackendsSummary}" />
       </StackPanel>
       <!-- §8.1 aggregate health chip — recolors when any line is warn/error. -->
       <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="0"

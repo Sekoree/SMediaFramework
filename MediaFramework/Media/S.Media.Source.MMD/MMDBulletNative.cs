@@ -14,6 +14,33 @@ internal static unsafe partial class MMDBulletNative
 {
     private const string Library = "mmd_bullet";
 
+    /// <summary>ABI version this binding was generated against. MUST equal the shim's <c>MMD_ABI_VERSION</c>
+    /// (see <c>mmd_bullet.h</c>) — bumped together on any breaking change to the signatures below (MMD-03).</summary>
+    public const uint AbiVersion = 1;
+
+    private static readonly Lazy<bool> LazyAvailable = new(ProbeAvailable);
+
+    /// <summary>True when the native shim is present AND reports an ABI version matching this binding (MMD-03).
+    /// Probed once and cached. A missing library, a pre-versioning shim (no <c>mmd_abi_version</c> export), a
+    /// wrong-architecture library, or a version mismatch all read as unavailable — callers then run without
+    /// physics rather than mis-calling an incompatible ABI across the boundary (which could corrupt memory).</summary>
+    public static bool IsAvailable => LazyAvailable.Value;
+
+    private static bool ProbeAvailable()
+    {
+        try
+        {
+            return NativeAbiVersion() == AbiVersion;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            return false;
+        }
+    }
+
+    [LibraryImport(Library, EntryPoint = "mmd_abi_version")]
+    public static partial uint NativeAbiVersion();
+
     // Shape types (match PMXRigidShape / native MMD_SHAPE_*).
     public const int ShapeSphere = 0;
     public const int ShapeBox = 1;

@@ -1,0 +1,41 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:dmc="clr-namespace:Dock.Model.Controls;assembly=Dock.Model"
+                    xmlns:commonControls="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia">
+  <Design.PreviewWith>
+    <Border>
+      <PinnedDockControl />
+    </Border>
+  </Design.PreviewWith>
+
+  <ControlTheme x:Key="{x:Type PinnedDockControl}" TargetType="PinnedDockControl">
+
+    <Setter Property="PinnedDockAlignment" Value="{CompiledBinding PinnedDock.Alignment}" x:DataType="dmc:IRootDock" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid Name="PART_PinnedDockGrid"
+              IsVisible="{Binding !PinnedDock.IsEmpty, FallbackValue=False}"
+              x:DataType="dmc:IRootDock"
+              x:CompileBindings="True">
+          <ContentControl Content="{Binding PinnedDock}" Name="PART_PinnedDock">
+            <ContentControl.Styles>
+              <Style Selector="ToolDockControl">
+                <Setter Property="Background">
+                  <MultiBinding Converter="{x:Static EitherNotNullConverter.Instance}">
+                    <Binding Path="$parent[Window].Background" />
+                    <Binding Path="$parent[Window].TransparencyBackgroundFallback" />
+                  </MultiBinding>
+                </Setter>
+              </Style>
+              <Style Selector="ToolControl">
+                <Setter Property="IsHitTestVisible" Value="{CompiledBinding !$parent[DockControl].IsDraggingDock}" />
+              </Style>
+            </ContentControl.Styles>
+          </ContentControl>
+          <GridSplitter Grid.Column="1" Grid.Row="1" MinWidth="4" MinHeight="4" Background="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+</ResourceDictionary>

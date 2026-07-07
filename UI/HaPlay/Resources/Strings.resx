@@ -85,6 +85,42 @@
   <data name="MenuViewHeader" xml:space="preserve">
     <value>_View</value>
   </data>
+  <data name="MenuHelpHeader" xml:space="preserve">
+    <value>_Help</value>
+  </data>
+  <data name="KeyboardShortcutsMenuHeader" xml:space="preserve">
+    <value>Keyboard Shortcuts…</value>
+  </data>
+  <data name="KeyboardShortcutsDialogTitle" xml:space="preserve">
+    <value>Keyboard Shortcuts</value>
+  </data>
+  <data name="ShortcutsSearchPlaceholder" xml:space="preserve">
+    <value>Search shortcuts…</value>
+  </data>
+  <data name="ShortcutsNoResults" xml:space="preserve">
+    <value>No shortcuts match your search.</value>
+  </data>
+  <data name="ShortcutGroupProject" xml:space="preserve">
+    <value>Project</value>
+  </data>
+  <data name="ShortcutGroupWorkspaces" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
+  <data name="ShortcutGroupPlayback" xml:space="preserve">
+    <value>Playback</value>
+  </data>
+  <data name="ShortcutSwitchWorkspace" xml:space="preserve">
+    <value>Switch to a workspace (Players … Project)</value>
+  </data>
+  <data name="ShortcutGo" xml:space="preserve">
+    <value>Fire the next cue (Cues workspace)</value>
+  </data>
+  <data name="ShortcutPanic" xml:space="preserve">
+    <value>Panic — stop everything (Cues workspace)</value>
+  </data>
+  <data name="ShortcutPlayPause" xml:space="preserve">
+    <value>Play / pause the focused player or cue</value>
+  </data>
   <data name="MenuToggleSidebarHeader" xml:space="preserve">
     <value>_Toggle Sidebar</value>
   </data>
@@ -128,7 +164,22 @@
     <value>Display</value>
   </data>
   <data name="DisplaySettingsHint" xml:space="preserve">
-    <value>Theme and density apply to this machine and persist in app-settings.json — they are not saved in the project.</value>
+    <value>Style, theme and density apply to this machine and persist in app-settings.json — they are not saved in the project.</value>
+  </data>
+  <data name="StyleLabel" xml:space="preserve">
+    <value>Style</value>
+  </data>
+  <data name="StyleTooltip" xml:space="preserve">
+    <value>Overall control look. Classic is the Windows-classic skin (light only); Simple and Fluent are modern themes that also support dark mode. Appearance changes take effect after restarting the app.</value>
+  </data>
+  <data name="AppearanceRestartHint" xml:space="preserve">
+    <value>Appearance changes apply after a restart. Restart now, or keep the current look and apply on the next launch?</value>
+  </data>
+  <data name="RestartNowButton" xml:space="preserve">
+    <value>Restart now</value>
+  </data>
+  <data name="RestartLaterButton" xml:space="preserve">
+    <value>Later</value>
   </data>
   <data name="ThemeLabel" xml:space="preserve">
     <value>Theme</value>
@@ -2488,9 +2539,6 @@
   <data name="PopoutButtonTooltip" xml:space="preserve">
     <value>Pop out into a separate window</value>
   </data>
-  <data name="PopoutTabButtonTooltip" xml:space="preserve">
-    <value>Pop out the selected tab into a separate window</value>
-  </data>
   <data name="PopoutPlaceholderFormat" xml:space="preserve">
     <value>{0} is open in a separate window.</value>
   </data>
@@ -2499,9 +2547,6 @@
   </data>
   <data name="PopoutRestoreButton" xml:space="preserve">
     <value>Restore here</value>
-  </data>
-  <data name="PopoutControlTabTitleFormat" xml:space="preserve">
-    <value>Control — {0}</value>
   </data>
   <data name="MappingButtonLabel" xml:space="preserve">
     <value>Mapping…</value>
@@ -2581,6 +2626,18 @@
   <data name="SoundboardNoTileSelectedHint" xml:space="preserve">
     <value>Tap a tile to edit it, or drop a sound file onto a tile to bind it.</value>
   </data>
+  <data name="SoundboardEmptyBoardHint" xml:space="preserve">
+    <value>This board is empty. Turn on Edit, then drop sound files onto the tiles to build it.</value>
+  </data>
+  <data name="SoundboardEmptyBoardAction" xml:space="preserve">
+    <value>Edit this board</value>
+  </data>
+  <data name="CueEmptyHint" xml:space="preserve">
+    <value>No cues yet. Add a media, image, or text cue to start building your show.</value>
+  </data>
+  <data name="CueEmptyAction" xml:space="preserve">
+    <value>Add media cue</value>
+  </data>
   <data name="SoundboardPickFileDialogTitle" xml:space="preserve">
     <value>Pick a sound file</value>
   </data>
@@ -2636,16 +2693,91 @@
     <value>Access token</value>
   </data>
   <data name="RemoteApiSecurityLoopback" xml:space="preserve">
-    <value>Loopback only. Every request requires the token; copied URLs include ?key= automatically.</value>
+    <value>Loopback only — reachable from this machine.</value>
   </data>
   <data name="RemoteApiSecurityLan" xml:space="preserve">
-    <value>LAN access enabled. Every request requires the token; use only on a trusted show network.</value>
+    <value>LAN access enabled — reachable from your show network; use only on a trusted network.</value>
+  </data>
+  <data name="RemoteApiTokenRequired" xml:space="preserve">
+    <value>A token is set: every request must include it via the "X-HaPlay-Api-Key" header (or "Authorization: Bearer"). Copied URLs no longer embed the token — use Copy to grab it for your controller.</value>
+  </data>
+  <data name="RemoteApiTokenOptional" xml:space="preserve">
+    <value>No token: any client that can reach the port can control HaPlay. Set a token to require authentication.</value>
   </data>
   <data name="RemoteApiDisabledStatus" xml:space="preserve">
     <value>(disabled)</value>
   </data>
   <data name="RemoteApiHint" xml:space="preserve">
-    <value>Token-protected HTTP control for show controllers. GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL.</value>
+    <value>HTTP control for show controllers (e.g. Bitfocus Companion). GET reads status; commands use POST. All indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL. The access token is optional — set one to require authentication, then send it as the "X-HaPlay-Api-Key" header (copied URLs never contain the token).</value>
+  </data>
+  <data name="RemoteApiGenerateTokenLabel" xml:space="preserve">
+    <value>Generate token</value>
+  </data>
+  <data name="RemoteApiClearTokenLabel" xml:space="preserve">
+    <value>Clear</value>
+  </data>
+  <data name="RemoteApiRevealTokenLabel" xml:space="preserve">
+    <value>Reveal</value>
+  </data>
+  <data name="RemoteApiCopyTokenLabel" xml:space="preserve">
+    <value>Copy</value>
+  </data>
+  <data name="RemoteApiTokenCopiedToast" xml:space="preserve">
+    <value>Access token copied to clipboard.</value>
+  </data>
+  <data name="MidiDevicesUseInput" xml:space="preserve">
+    <value>Use selected input</value>
+  </data>
+  <data name="MidiDevicesUseOutput" xml:space="preserve">
+    <value>Use selected output</value>
+  </data>
+  <data name="MidiDevicesProjectInputsHeader" xml:space="preserve">
+    <value>Project MIDI inputs</value>
+  </data>
+  <data name="MidiDevicesProjectInputsHint" xml:space="preserve">
+    <value>Select an input above to make it available to Control scripts.</value>
+  </data>
+  <data name="MidiDevicesProjectOutputsHeader" xml:space="preserve">
+    <value>Project MIDI outputs</value>
+  </data>
+  <data name="MidiDevicesProjectOutputsHint" xml:space="preserve">
+    <value>Select an output above to make it available to Control scripts and cue action targets.</value>
+  </data>
+  <data name="JumpToLabel" xml:space="preserve">
+    <value>Jump to</value>
+  </data>
+  <data name="JumpToWatermark" xml:space="preserve">
+    <value>mm:ss</value>
+  </data>
+  <data name="JumpToTooltip" xml:space="preserve">
+    <value>Type a position (mm:ss, hh:mm:ss, or add .ms) and press Enter to seek.</value>
+  </data>
+  <data name="DeckRoutingNone" xml:space="preserve">
+    <value>No output</value>
+  </data>
+  <data name="DeckRoutingCountOne" xml:space="preserve">
+    <value>1 output</value>
+  </data>
+  <data name="DeckRoutingCountFormat" xml:space="preserve">
+    <value>{0} outputs</value>
+  </data>
+  <data name="DeckRoutingWarnSuffixFormat" xml:space="preserve">
+    <value> · {0} reconnecting</value>
+  </data>
+  <data name="DeckRoutingErrorSuffixFormat" xml:space="preserve">
+    <value> · {0} offline</value>
+  </data>
+  <data name="DeckRoutingFlyoutTitle" xml:space="preserve">
+    <value>Outputs</value>
+  </data>
+  <data name="DeckRoutingChipTooltip" xml:space="preserve">
+    <value>Outputs this player is routing to. Click for per-output health.</value>
+  </data>
+  <data name="DeckRoutingNoneHint" xml:space="preserve">
+    <value>This player isn't routed to any output — it won't be seen or heard.</value>
+  </data>
+  <data name="RemoteApiTokenNone" xml:space="preserve">
+    <value>(none — authentication disabled)</value>
   </data>
   <data name="RemoteApiDocCues" xml:space="preserve">
     <value>Cue player transport (go fires the standby/selected cue)</value>
@@ -2925,5 +3057,38 @@
   </data>
   <data name="YouTubeDownloadDetailWithSpeedFormat" xml:space="preserve">
     <value>{0} / {1} · {2}/s</value>
+  </data>
+  <data name="ScriptEditorUnsavedBanner" xml:space="preserve">
+    <value>Unsaved changes — this script hasn't been written to disk yet.</value>
+  </data>
+  <data name="ScriptEditorDiscardButton" xml:space="preserve">
+    <value>Discard</value>
+  </data>
+  <data name="ScriptEditorDiscardTooltip" xml:space="preserve">
+    <value>Revert to the version on disk</value>
+  </data>
+  <data name="UnsavedScriptsDialogTitle" xml:space="preserve">
+    <value>Unsaved scripts</value>
+  </data>
+  <data name="UnsavedScriptsHeader" xml:space="preserve">
+    <value>You have scripts that only exist in the temporary cache.</value>
+  </data>
+  <data name="UnsavedScriptsBody" xml:space="preserve">
+    <value>They were created before this project was saved. Save the project now to keep them alongside it, or discard them and close.</value>
+  </data>
+  <data name="UnsavedScriptsSaveButton" xml:space="preserve">
+    <value>Save project…</value>
+  </data>
+  <data name="UnsavedScriptsDontSaveButton" xml:space="preserve">
+    <value>Don't save</value>
+  </data>
+  <data name="ControlResetLayoutButton" xml:space="preserve">
+    <value>Reset layout</value>
+  </data>
+  <data name="ControlResetLayoutTooltip" xml:space="preserve">
+    <value>Restore the default docking layout — brings back any pane that was closed or floated out</value>
+  </data>
+  <data name="MenuExitHeader" xml:space="preserve">
+    <value>_Exit</value>
   </data>
 </root>

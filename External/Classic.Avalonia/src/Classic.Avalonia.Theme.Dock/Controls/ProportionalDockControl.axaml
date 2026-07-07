@@ -1,0 +1,43 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:converters="using:Dock.Avalonia.Converters"
+                    xmlns:core="using:Dock.Model.Core"
+                    xmlns:controls="clr-namespace:Dock.Model.Controls;assembly=Dock.Model">
+  <Design.PreviewWith>
+    <ProportionalDockControl Width="300" Height="300" />
+  </Design.PreviewWith>
+
+  <ControlTheme x:Key="{x:Type ProportionalDockControl}" TargetType="ProportionalDockControl" x:DataType="controls:IProportionalDock">
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <DockableControl TrackingMode="Visible">
+          <ItemsControl Name="PART_ItemsControl" ItemsSource="{Binding VisibleDockables}">
+            <ItemsControl.Styles>
+              <Style Selector="ItemsControl > ContentPresenter">
+                <Setter x:DataType="core:IDock" Property="(ProportionalStackPanel.Proportion)" Value="{Binding Proportion}" />
+                <Setter Property="(ProportionalStackPanel.IsCollapsed)">
+                  <Setter.Value>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}" x:DataType="core:IDock">
+                      <Binding Path="IsCollapsable" />
+                      <Binding Path="IsEmpty" />
+                    </MultiBinding>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+            </ItemsControl.Styles>
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <ProportionalStackPanel DockProperties.IsDropArea="True"
+                                        Background="Transparent"
+                                        Orientation="{Binding Orientation, Converter={x:Static converters:OrientationConverter.Instance}}" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+          </ItemsControl>
+        </DockableControl>
+      </ControlTemplate>
+    </Setter>
+
+  </ControlTheme>
+
+</ResourceDictionary>

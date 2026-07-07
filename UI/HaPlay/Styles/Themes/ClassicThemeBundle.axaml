@@ -1,0 +1,41 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:classic="using:Classic.Avalonia.Theme"
+        xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
+        x:Class="HaPlay.Themes.ClassicThemeBundle">
+  <!-- The Windows-Classic look (in-repo Avalonia-12 port, External/Classic.Avalonia) bundled with its
+       bespoke TreeDataGrid + ColorPicker themes. Composed in XAML so the StyleIncludes stay compile-time
+       (trim/AOT-safe); AppearanceController constructs this type to swap Styles[0]. FontAliasing off: the
+       theme's authentic Win95 aliased text is hard to read on modern displays. -->
+  <classic:ClassicTheme FontAliasing="False" />
+
+  <!-- The app-wide AvaloniaEdit Fluent theme resolves Fluent-palette keys ClassicTheme doesn't define; without
+       them the script editor's TextEditor crashes under Classic ("Static resource 'ControlContentThemeFontSize'
+       not found"). FluentCompatResources supplies them at bundle scope — see that file for the full rationale.
+       (Classic uses its own ClassicTreeDataGrid below, so it needs none of the TreeDataGrid colours, but the
+       shared dictionary carries them harmlessly.) -->
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://HaPlay/Styles/Themes/FluentCompatResources.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <StyleInclude Source="avares://HaPlay/Styles/ClassicTreeDataGrid.axaml" />
+  <StyleInclude Source="avares://Classic.Avalonia.Theme.ColorPicker/Classic.axaml" />
+  <!-- Windows-Classic skin for the Dock.Avalonia docking controls (Control workspace) — the in-repo
+       Avalonia-12 port under External/Classic.Avalonia/src/Classic.Avalonia.Theme.Dock. -->
+  <StyleInclude Source="avares://Classic.Avalonia.Theme.Dock/Classic.axaml" />
+
+  <!-- Classic-only AppIcons foreground: paint PathIcons with the Classic Win32 text colour, flipping to
+       HighlightText inside a selected row so they stay readable on the Highlight-blue band. This is scoped
+       to Classic on purpose — the Simple/Fluent bundles omit it so their PathIcons inherit the theme's
+       variant-aware foreground (and stay visible on dark backgrounds). -->
+  <Style Selector="PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlTextBrushKey}}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.HighlightTextBrushKey}}" />
+  </Style>
+</Styles>

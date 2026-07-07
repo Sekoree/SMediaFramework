@@ -1,0 +1,26 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:simple="using:Avalonia.Themes.Simple"
+        x:Class="HaPlay.Themes.SimpleThemeBundle">
+  <!-- Avalonia's built-in Simple theme (a flat, light middle-ground between Classic and Fluent) with the
+       package TreeDataGrid + ColorPicker themes. Variant-aware: honours the light/dark RequestedThemeVariant. -->
+  <simple:SimpleTheme />
+
+  <!-- The bundled TreeDataGrid Fluent theme (below) and the app-wide AvaloniaEdit Fluent theme both resolve
+       Fluent-palette keys the SimpleTheme doesn't define; without them the Cue player's TreeDataGrid and the
+       script editor's TextEditor crash under Simple ("Static resource '…' not found"). FluentCompatResources
+       supplies them at bundle scope — see that file for the full rationale (incl. why bundle scope, not
+       app-wide). -->
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://HaPlay/Styles/Themes/FluentCompatResources.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml" />
+  <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Simple/Simple.xaml" />
+  <!-- Dock.Avalonia docking chrome (Control workspace), matched to the Simple base theme. -->
+  <StyleInclude Source="avares://Dock.Avalonia.Themes.Simple/DockSimpleTheme.axaml" />
+</Styles>

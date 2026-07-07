@@ -1,7 +1,10 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using HaPlay.Models;
+using HaPlay.Resources;
 using HaPlay.ViewModels;
 using HaPlay.Views.Dialogs;
 
@@ -29,6 +32,24 @@ public partial class MainView : UserControl
 
     private void OnPopOutSoundboardClick(object? sender, RoutedEventArgs e) =>
         _soundboardPopout.OpenOrActivate(SoundboardPopoutHost, WorkspaceItem.Soundboard.Label, TopLevel.GetTopLevel(this) as Window);
+
+    /// <summary>Copies the remote-API access token to the clipboard (API-01) so the operator can paste it into
+    /// their controller's header config without revealing it on screen. The toast deliberately does not echo the
+    /// token value.</summary>
+    private async void OnCopyRestApiTokenClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (DataContext is not MainViewModel main || string.IsNullOrEmpty(main.RestApiAccessToken))
+            return;
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+
+        await clipboard.SetTextAsync(main.RestApiAccessToken);
+        ToastCenter.Info(Strings.RemoteApiTokenCopiedToast);
+    }
 
     /// <summary>Toast body click = pin/unpin (stops the auto-dismiss); the ✕ button closes.</summary>
     private void OnToastBodyPressed(object? sender, PointerPressedEventArgs e)
@@ -67,5 +88,14 @@ public partial class MainView : UserControl
             return;
 
         _ = player.QuickPlayDroppedFilesAsync(paths);
+    }
+
+    private void MenuItem_OnClick(object? sender, RoutedEventArgs e)
+    {
+        var topLevel = TopLevel.GetTopLevel(this) as Window;
+        if (topLevel is null)
+            return;
+        
+        topLevel.Close();
     }
 }

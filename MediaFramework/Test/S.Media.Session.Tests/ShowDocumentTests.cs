@@ -20,9 +20,7 @@ public sealed class ShowDocumentTests
                 new ShowClipBinding("cue2", "/video/b.mp4", CompositionId: "screen", LayerIndex: 2),
             ],
             Compositions: [new ShowComposition("screen", "Main", 1920, 1080, 30, 1)],
-            Outputs: [],
-            Routes: [],
-            Devices: ["dev-a"]);
+            Routes: []);
 
         var reloaded = ShowDocument.FromJson(doc.ToJson());
 
@@ -32,11 +30,35 @@ public sealed class ShowDocumentTests
         Assert.Equal(doc.Cues, reloaded.Cues);
         Assert.Equal(doc.Clips, reloaded.Clips);
         Assert.Equal(doc.Compositions, reloaded.Compositions);
-        Assert.Equal(doc.Devices, reloaded.Devices);
         Assert.Equal(TimeSpan.FromMilliseconds(250), reloaded.Cues[0].PreWait);
         Assert.Equal("screen", reloaded.Clips[1].CompositionId);
         Assert.Equal(2, reloaded.Clips[1].LayerIndex);
         Assert.Equal(1920, reloaded.Compositions[0].Width);
+    }
+
+    [Fact]
+    public void FromJson_IgnoresRemovedOutputsAndDevicesFields_ForBackwardCompatibility()
+    {
+        // DOC-02: the dead `Outputs` + `Devices` collections were removed from the schema. A show saved by an
+        // older build still carries those JSON properties; loading it must succeed (the unknown properties are
+        // skipped), so no existing project file breaks on upgrade.
+        const string legacyJson = """
+            {
+              "Version": 1,
+              "Cues": [ { "Id": "c1", "Number": 1, "Label": "One" } ],
+              "Clips": [],
+              "Compositions": [],
+              "Outputs": [ { "SourceId": "c1", "OutputId": "_master" } ],
+              "Routes": [ { "SourceId": "c1", "OutputId": "_master" } ],
+              "Devices": [ "dev-a", "dev-b" ]
+            }
+            """;
+
+        var doc = ShowDocument.FromJson(legacyJson);
+
+        Assert.Equal(1, doc.Version);
+        Assert.Equal("c1", Assert.Single(doc.Cues).Id);
+        Assert.Equal("_master", Assert.Single(doc.Routes).OutputId); // the still-supported field loads
     }
 
     [Fact]

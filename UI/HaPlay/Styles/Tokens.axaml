@@ -39,6 +39,17 @@
       <SolidColorBrush x:Key="StatusInfoFg" Color="#37474F" />
       <SolidColorBrush x:Key="StatusWarnFg" Color="#8A5A00" />
       <SolidColorBrush x:Key="StatusErrorFg" Color="#B71C1C" />
+
+      <!-- Operational-state roles (UX-05). Semantic names so a critical state is never communicated by a raw
+           hex only; reserve these saturated colors for live operation. Single-variant to match the (light)
+           Classic chrome — they gain dark values if/when a real dark theme lands (UI-01). -->
+      <SolidColorBrush x:Key="StateSelected" Color="#333B82F6" />  <!-- selection highlight (translucent blue) -->
+      <SolidColorBrush x:Key="StateLive"     Color="#2E9E4B" />    <!-- playing / active output -->
+      <SolidColorBrush x:Key="StateHeld"     Color="#E67E22" />    <!-- latched HOLD (engaged safety state) -->
+      <SolidColorBrush x:Key="StateHealthy"  Color="#2E9E4B" />    <!-- endpoint / route healthy -->
+      <SolidColorBrush x:Key="StatePanic"    Color="#C0392B" />    <!-- panic / stop-all / error -->
+      <SolidColorBrush x:Key="TextSecondary" Color="#888888" />    <!-- muted secondary text -->
+      <SolidColorBrush x:Key="TextDisabled"  Color="#99888888" />  <!-- disabled -->
     </ResourceDictionary>
   </Styles.Resources>
 
@@ -97,21 +108,48 @@
   <Style Selector="Button.Std, ToggleButton.Std">
     <Setter Property="MinHeight" Value="36" />
     <Setter Property="Padding" Value="10,6" />
+    <!-- Center content explicitly: Classic centres button content by default but Fluent does not, which
+         left a lone glyph (e.g. the HOLD ▾ picker) top-aligned under Fluent. -->
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
   <Style Selector="Button.Dense, ToggleButton.Dense">
     <Setter Property="MinHeight" Value="28" />
     <Setter Property="Padding" Value="8,3" />
     <Setter Property="FontSize" Value="12" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
 
   <!-- Primary action accent (GO, Play) -->
+  <!-- Accent buttons set Background for templates that honour it (Classic/Simple) AND the template
+       ContentPresenter for templates that don't (Fluent paints its buttons from theme resources, ignoring
+       Button.Background) — so Go stays green / Danger stays red across all base themes. The presenter's
+       TextElement.Foreground keeps the label + PathIcon white on the accent fill. -->
   <Style Selector="Button.Go">
     <Setter Property="Background" Value="{StaticResource AccentGo}" />
     <Setter Property="Foreground" Value="White" />
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
+  <Style Selector="Button.Go /template/ ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource AccentGo}" />
+    <Setter Property="TextElement.Foreground" Value="White" />
+  </Style>
   <Style Selector="Button.Go:pointerover /template/ ContentPresenter">
     <Setter Property="Background" Value="{StaticResource AccentGoHover}" />
+  </Style>
+  <!-- Panic-path action (Stop) — mirrors Button.Go in the stop/error hue. -->
+  <Style Selector="Button.Danger">
+    <Setter Property="Background" Value="{StaticResource StatePanic}" />
+    <Setter Property="Foreground" Value="White" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="Button.Danger /template/ ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource StatePanic}" />
+    <Setter Property="TextElement.Foreground" Value="White" />
+  </Style>
+  <Style Selector="Button.Danger:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource AccentDanger}" />
   </Style>
   <!-- Engaged warning state (HOLD active) -->
   <Style Selector="ToggleButton.Warn:checked /template/ ContentPresenter">

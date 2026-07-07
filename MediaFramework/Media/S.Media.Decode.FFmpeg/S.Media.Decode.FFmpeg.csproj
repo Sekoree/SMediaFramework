@@ -40,7 +40,9 @@
     </ItemGroup>
 
     <ItemGroup>
-        <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
+        <!-- The decode test assembly. (A prior entry named a non-existent 'S.Media.FFmpeg.Tests', which is why
+             some older tests reach internals by reflection; that stale entry has been removed.) -->
+        <InternalsVisibleTo Include="S.Media.Decode.FFmpeg.Tests" />
     </ItemGroup>
 
 </Project>

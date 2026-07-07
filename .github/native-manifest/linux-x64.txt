@@ -1,0 +1,20 @@
+# REL-01 — required native libraries a linux-x64 release artifact MUST contain.
+# Checked by scripts/check-native-manifest.sh against the publish directory: each entry is a PREFIX, so a
+# soname tail (e.g. libavcodec.so.62.6.100) still matches. '#' comments and blank lines are ignored.
+# Optional natives (NDI — licensing; ASIO — Windows-only) are intentionally NOT listed here.
+
+# Decode (FFmpeg 8.1, staged as the fallback):
+libavcodec.so
+libavformat.so
+libavutil.so
+libswresample.so
+libswscale.so
+
+# Audio backends:
+libportaudio.so.2
+libminiaudio.so
+
+# MIDI, subtitles, MMD physics (shipped features):
+libportmidi.so.2
+libass.so
+libmmd_bullet.so

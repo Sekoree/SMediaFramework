@@ -22,24 +22,35 @@ public sealed class NullControlMonitorSink : IControlMonitorSink
     }
 }
 
+/// <summary>
+/// Fixed-capacity, drop-oldest monitor ring (CTRL-03). Backed by a pre-sized array with a moving start
+/// index, so <see cref="Record"/> is O(1) at any fill level — the previous <c>List.RemoveAt(0)</c> shifted
+/// every remaining element on each add once the buffer was full, i.e. O(n) at exactly the sustained
+/// meter/update rate the monitor is meant to absorb.
+/// </summary>
 public sealed class ControlMonitorBuffer : IControlMonitorSink
 {
     private readonly object _gate = new();
-    private readonly List<ControlMonitorRecord> _records = new();
-    private readonly int _maxRecords;
+    private readonly ControlMonitorRecord[] _ring;
+    private int _start; // index of the oldest record
+    private int _count;
 
     public ControlMonitorBuffer(int maxRecords)
     {
-        _maxRecords = Math.Max(1, maxRecords);
+        _ring = new ControlMonitorRecord[Math.Max(1, maxRecords)];
     }
 
+    /// <summary>Snapshot of buffered records, oldest first.</summary>
     public IReadOnlyList<ControlMonitorRecord> Records
     {
         get
         {
             lock (_gate)
             {
-                return _records.ToArray();
+                var result = new ControlMonitorRecord[_count];
+                for (var i = 0; i < _count; i++)
+                    result[i] = _ring[(_start + i) % _ring.Length];
+                return result;
             }
         }
     }
@@ -50,9 +61,17 @@ public sealed class ControlMonitorBuffer : IControlMonitorSink
 
         lock (_gate)
         {
-            _records.Add(record);
-            while (_records.Count > _maxRecords)
-                _records.RemoveAt(0);
+            if (_count < _ring.Length)
+            {
+                _ring[(_start + _count) % _ring.Length] = record;
+                _count++;
+            }
+            else
+            {
+                // Full: overwrite the oldest slot and advance the window — O(1) drop-oldest.
+                _ring[_start] = record;
+                _start = (_start + 1) % _ring.Length;
+            }
         }
     }
 
@@ -60,7 +79,9 @@ public sealed class ControlMonitorBuffer : IControlMonitorSink
     {
         lock (_gate)
         {
-            _records.Clear();
+            Array.Clear(_ring, 0, _ring.Length);
+            _start = 0;
+            _count = 0;
         }
     }
 }

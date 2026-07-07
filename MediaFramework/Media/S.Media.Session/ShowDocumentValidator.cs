@@ -71,6 +71,28 @@ public static class ShowDocumentValidator
                 errors.Add($"a clip binds unknown cue '{clip.CueId}'.");
             if (clip.CompositionId is { Length: > 0 } cid && !compIds.Contains(cid))
                 errors.Add($"the clip for cue '{clip.CueId}' references unknown composition '{cid}'.");
+
+            // DOC-01: scalar/path sanity so a malformed clip is caught at load, not silently mis-played.
+            if (string.IsNullOrWhiteSpace(clip.MediaPath))
+                errors.Add($"the clip for cue '{clip.CueId}' has an empty media path.");
+            if (clip.StartOffset < TimeSpan.Zero)
+                errors.Add($"the clip for cue '{clip.CueId}' has a negative start offset.");
+            if (clip.EndOffset < TimeSpan.Zero)
+                errors.Add($"the clip for cue '{clip.CueId}' has a negative end offset.");
+            if (clip.FadeIn < TimeSpan.Zero)
+                errors.Add($"the clip for cue '{clip.CueId}' has a negative fade-in.");
+            if (clip.FadeOut < TimeSpan.Zero)
+                errors.Add($"the clip for cue '{clip.CueId}' has a negative fade-out.");
+            if (clip.LayerIndex < 0)
+                errors.Add($"the clip for cue '{clip.CueId}' has a negative layer index {clip.LayerIndex}.");
+            if (clip.AudioStreamIndex is { } asi && asi < -1)
+                errors.Add($"the clip for cue '{clip.CueId}' has an audio stream index {asi} below -1 (use -1 for none, null for auto).");
+            foreach (var sub in clip.GetSubtitleSelections())
+                if (sub.StreamIndex < -1)
+                    errors.Add($"the clip for cue '{clip.CueId}' has a subtitle stream index {sub.StreamIndex} below -1.");
+            if (clip.Placement is { } placement)
+                ValidatePlacement(clip.CueId, "its placement", placement, errors);
+
             // A clip may fan its video onto several compositions (ExtraPlacements); every one must resolve too,
             // else the placement is silently dropped at play time instead of caught at load.
             foreach (var extra in clip.ExtraPlacements ?? [])
@@ -79,12 +101,18 @@ public static class ShowDocumentValidator
                     errors.Add($"the clip for cue '{clip.CueId}' has an extra placement with an empty composition id.");
                 else if (!compIds.Contains(extra.CompositionId))
                     errors.Add($"the clip for cue '{clip.CueId}' has an extra placement on unknown composition '{extra.CompositionId}'.");
+                if (extra.LayerIndex < 0)
+                    errors.Add($"the clip for cue '{clip.CueId}' has an extra placement with a negative layer index {extra.LayerIndex}.");
+                if (extra.Placement is { } extraPlacement)
+                    ValidatePlacement(clip.CueId, $"its placement on '{extra.CompositionId}'", extraPlacement, errors);
             }
 
             foreach (var audioRoute in clip.AudioRoutes ?? [])
             {
                 if (!float.IsFinite(audioRoute.Gain) || audioRoute.Gain < 0f)
                     errors.Add($"the clip for cue '{clip.CueId}' has an invalid audio-route gain.");
+                if (audioRoute.SampleRate is { } rate && rate <= 0)
+                    errors.Add($"the clip for cue '{clip.CueId}' has a non-positive audio route sample rate {rate}.");
                 if (audioRoute.MatrixOutputChannels is <= 0)
                     errors.Add($"the clip for cue '{clip.CueId}' has a non-positive audio matrix output count.");
                 foreach (var cell in audioRoute.MatrixCells ?? [])
@@ -116,6 +144,8 @@ public static class ShowDocumentValidator
                 errors.Add("an audio output has an empty id.");
             else if (!audioOutputIds.Add(output.Id))
                 errors.Add($"duplicate audio output id '{output.Id}'.");
+            if (string.IsNullOrWhiteSpace(output.GroupId))
+                errors.Add($"audio output '{output.Id}' has an empty group id.");
         }
 
         foreach (var route in document.Routes ?? [])
@@ -130,6 +160,50 @@ public static class ShowDocumentValidator
         }
 
         return errors;
+    }
+
+    /// <summary>DOC-01: a placement's geometry must be finite and in range so the compositor is never handed
+    /// a NaN/Infinity transform, a collapsed/negative dest rect, or crops that erase the whole frame.</summary>
+    private static void ValidatePlacement(string cueId, string where, ShowVideoPlacement p, List<string> errors)
+    {
+        void Finite(double v, string name)
+        {
+            if (!double.IsFinite(v))
+                errors.Add($"the clip for cue '{cueId}' has a non-finite {name} in {where}.");
+        }
+
+        Finite(p.DestX, "dest X");
+        Finite(p.DestY, "dest Y");
+        Finite(p.DestWidth, "dest width");
+        Finite(p.DestHeight, "dest height");
+        Finite(p.Opacity, "opacity");
+        Finite(p.RotationDegrees, "rotation");
+        Finite(p.CropLeft, "left crop");
+        Finite(p.CropTop, "top crop");
+        Finite(p.CropRight, "right crop");
+        Finite(p.CropBottom, "bottom crop");
+
+        if (double.IsFinite(p.DestWidth) && p.DestWidth <= 0)
+            errors.Add($"the clip for cue '{cueId}' has a non-positive dest width in {where}.");
+        if (double.IsFinite(p.DestHeight) && p.DestHeight <= 0)
+            errors.Add($"the clip for cue '{cueId}' has a non-positive dest height in {where}.");
+        if (double.IsFinite(p.Opacity) && p.Opacity is < 0 or > 1)
+            errors.Add($"the clip for cue '{cueId}' has an opacity {p.Opacity} outside [0, 1] in {where}.");
+
+        CheckCrop(p.CropLeft, "left crop");
+        CheckCrop(p.CropTop, "top crop");
+        CheckCrop(p.CropRight, "right crop");
+        CheckCrop(p.CropBottom, "bottom crop");
+        if (double.IsFinite(p.CropLeft) && double.IsFinite(p.CropRight) && p.CropLeft + p.CropRight >= 1)
+            errors.Add($"the clip for cue '{cueId}' has horizontal crops that erase the whole frame in {where}.");
+        if (double.IsFinite(p.CropTop) && double.IsFinite(p.CropBottom) && p.CropTop + p.CropBottom >= 1)
+            errors.Add($"the clip for cue '{cueId}' has vertical crops that erase the whole frame in {where}.");
+
+        void CheckCrop(double v, string name)
+        {
+            if (double.IsFinite(v) && v is < 0 or > 1)
+                errors.Add($"the clip for cue '{cueId}' has a {name} {v} outside [0, 1] in {where}.");
+        }
     }
 
     /// <summary>Throws <see cref="ShowDocumentValidationException"/> if <paramref name="document"/> is invalid.</summary>

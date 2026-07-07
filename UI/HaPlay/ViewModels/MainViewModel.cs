@@ -15,6 +15,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using HaPlay.Services;
 using Microsoft.Extensions.Logging;
 using S.Control;
 using S.Media.Core.Diagnostics;
@@ -38,10 +39,9 @@ public partial class MainViewModel : ViewModelBase
     // The cue workspace's ShowSession runtime, its output leases, reloads, and progress polls all live on the
     // coordinator (extracted from this VM — review Part-5 #3); this VM only constructs and forwards to it.
     private readonly CueShowSessionCoordinator _cueShow;
+    private int _shutdownCleanupStarted;
     private bool _midiInitialized;
-    private CancellationTokenSource? _endpointHealthCts;
-    private DispatcherTimer? _endpointHealthTimer;
-    private int _endpointHealthRefreshInFlight;
+    private readonly EndpointHealthMonitor _endpointHealth;
 
     // Pre-roll refresh is suggested in bursts (standby moves, property edits). Collapse those to a
     // latest-request-wins refresh: a new request cancels the in-flight one's token, and the serial
@@ -54,10 +54,7 @@ public partial class MainViewModel : ViewModelBase
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor", slowWarningMs: 1000);
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
-        Control = new ControlWorkspaceViewModel
-        {
-            EnsureProjectSavedAsync = EnsureProjectSavedForScriptsAsync,
-        };
+        Control = new ControlWorkspaceViewModel();
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
         Players.CollectionChanged += (_, _) => OnPlayersChangedForPlayerTabs();
@@ -81,15 +78,16 @@ public partial class MainViewModel : ViewModelBase
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         RefreshMIDIDeviceCatalog();
-        FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync startup");
-        // Keep endpoint LEDs current even when devices/network state changes after project load.
-        _endpointHealthTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) =>
-        {
-            FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync timer");
-        })
-        {
-            IsEnabled = true,
-        };
+        // APP-02: the endpoint-health polling lifecycle (5 s timer, single-flight guard, per-run CTS, timing)
+        // lives in a dedicated service; the view model keeps only the probe loop (ProbeAllEndpointsAsync).
+        // APP-01 behaviour — poll only while endpoints exist — is preserved by the pending-count gate + SyncEnabled.
+        _endpointHealth = new EndpointHealthMonitor(
+            TimeSpan.FromSeconds(5),
+            () => OSCEndpointRows.Count + MIDIEndpointRows.Count,
+            ProbeAllEndpointsAsync,
+            Trace);
+        FireAndLog(_endpointHealth.RefreshAsync(), "EndpointHealthMonitor startup");
+        _endpointHealth.SyncEnabled();
 
         // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
         // Iterating the Players collection on each probe is fine: outputs are edited rarely, never
@@ -101,10 +99,19 @@ public partial class MainViewModel : ViewModelBase
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
-        // Theme/density (§8.6) — load saved values and apply them immediately. The OnXChanged hooks
-        // would re-save on first set; seed via backing fields so we don't fire that pointlessly.
+        // Appearance (§8.6) — load saved values and apply them immediately. The OnXChanged hooks would
+        // re-save on first set; seed via backing fields so we don't fire that pointlessly.
+        _baseTheme = _appSettings.BaseTheme;
         _theme = _appSettings.Theme;
         _density = _appSettings.Density;
+        // Snapshot what we compose this launch; a later change to any of these is "pending" until the next
+        // restart (see AppearanceChangePending). All appearance settings are apply-at-startup only.
+        _startupBaseTheme = _baseTheme;
+        _startupTheme = _theme;
+        _startupDensity = _density;
+        // Base theme first (it decides whether the variant/density even apply), then variant + density.
+        // ApplyTheme pins Light for Classic; ApplyDensity is a no-op unless Fluent is active.
+        AppearanceController.ApplyBaseTheme(_baseTheme);
         AppearanceController.ApplyTheme(_theme);
         AppearanceController.ApplyDensity(_density);
         if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
@@ -119,7 +126,9 @@ public partial class MainViewModel : ViewModelBase
         _restApiEnabled = _appSettings.RestApiEnabled;
         _restApiPort = _appSettings.RestApiPort is >= 1 and <= 65535 ? _appSettings.RestApiPort : 8990;
         _restApiAllowLan = _appSettings.RestApiAllowLan;
-        _restApiAccessToken = EnsureRestApiAccessToken(_appSettings);
+        // Optional token (API-01): no token by default — the remote API targets closed-LAN automation
+        // (e.g. Bitfocus Companion). A token is only required when the operator sets one.
+        _restApiAccessToken = _appSettings.RestApiAccessToken ?? string.Empty;
         RestartRestApi();
         timing?.SetOutcome($"players={Players.Count} outputs={OutputManagement.Outputs.Count} endpoints={ActionEndpoints.Count} restApi={RestApiEnabled}");
     }
@@ -150,12 +159,20 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Best-effort shutdown teardown (called by the app lifetime): tears down the cue workspace's
     /// ShowSession + its output leases via the coordinator. Players are reclaimed by process-exit, as before.</summary>
-    public void ShutdownCleanup() => _cueShow.ShutdownCleanup();
+    public void ShutdownCleanup()
+    {
+        if (Interlocked.Exchange(ref _shutdownCleanupStarted, 1) != 0)
+            return;
+        _endpointHealth.Dispose();
+        _remoteApi.Dispose();
+        _cueShow.ShutdownCleanup();
+    }
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
 
-    private readonly Remote.RestApiServer _restApiServer = new();
-    private Remote.RemoteApiDispatcher? _restApiDispatcher;
+    // APP-02: the listener + dispatcher lifecycle lives in a dedicated host; the view model keeps only the
+    // bound settings + presentation below.
+    private readonly Remote.RemoteApiHost _remoteApi = new();
 
     /// <summary>Per-machine: serve the HTTP remote API. Off by default; token-protected when enabled.</summary>
     [ObservableProperty]
@@ -172,21 +189,44 @@ public partial class MainViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
+    [NotifyPropertyChangedFor(nameof(RestApiAccessTokenDisplay))]
+    [NotifyPropertyChangedFor(nameof(HasRestApiAccessToken))]
     private string _restApiAccessToken = string.Empty;
+
+    /// <summary>When false (default) the token is shown masked; the Reveal toggle flips it (API-01), so the
+    /// secret is not shoulder-surfed or captured in a screenshot of the Project workspace.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RestApiAccessTokenDisplay))]
+    private bool _revealRestApiToken;
+
+    /// <summary>Fixed-width mask (length-independent, so it does not leak the token length).</summary>
+    private const string RestApiTokenMask = "••••••••••••••••";
 
     /// <summary>Shown in the Project workspace card (and the base for Copy-API-URL menus).</summary>
     public string RestApiBaseUrlDisplay =>
-        _restApiServer.IsRunning && _restApiServer.BaseUrl is { } url
+        _remoteApi.IsRunning && _remoteApi.BaseUrl is { } url
             ? url
             : Strings.RemoteApiDisabledStatus;
 
     /// <summary>Degradation note (e.g. Windows loopback fallback) or bind error; null when clean.</summary>
-    public string? RestApiStatusNote => _restApiServer.StatusNote;
+    public string? RestApiStatusNote => _remoteApi.StatusNote;
 
     public string RestApiSecurityStatus =>
-        RestApiAllowLan
-            ? Strings.RemoteApiSecurityLan
-            : Strings.RemoteApiSecurityLoopback;
+        (RestApiAllowLan ? Strings.RemoteApiSecurityLan : Strings.RemoteApiSecurityLoopback)
+        + " "
+        + (string.IsNullOrEmpty(RestApiAccessToken)
+            ? Strings.RemoteApiTokenOptional
+            : Strings.RemoteApiTokenRequired);
+
+    /// <summary>Token field text: a "(none)" placeholder when auth is off, the raw token when revealed, else a
+    /// fixed-width mask so it is not shoulder-surfed or captured in a screenshot (API-01).</summary>
+    public string RestApiAccessTokenDisplay =>
+        string.IsNullOrEmpty(RestApiAccessToken) ? Strings.RemoteApiTokenNone
+        : RevealRestApiToken ? RestApiAccessToken
+        : RestApiTokenMask;
+
+    /// <summary>True when a token is set (drives the Clear button's enabled state).</summary>
+    public bool HasRestApiAccessToken => !string.IsNullOrEmpty(RestApiAccessToken);
 
     /// <summary>Endpoint cheat-sheet rendered as a list by the Project workspace card. Paths are
     /// protocol, not prose — only the descriptions localize.</summary>
@@ -226,30 +266,37 @@ public partial class MainViewModel : ViewModelBase
 
     private void RestartRestApi()
     {
-        _restApiDispatcher ??= new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control);
-        _restApiServer.Stop();
-        if (RestApiEnabled && RestApiPort is >= 1 and <= 65535)
-            _restApiServer.Start(RestApiPort, _restApiDispatcher, RestApiAccessToken, RestApiAllowLan);
+        _remoteApi.Restart(
+            RestApiEnabled, RestApiPort, RestApiAccessToken, RestApiAllowLan,
+            () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control));
 
         // Copy-API-URL menus keep working while the listener is off — the copied URL targets the
-        // configured port and becomes live the moment the API is enabled.
-        Remote.RemoteApi.AccessToken = RestApiAccessToken;
-        Remote.RemoteApi.BaseUrl = _restApiServer.BaseUrl
-                                   ?? $"http://{Remote.RestApiServer.ResolveAdvertisedHost(RestApiAllowLan)}:{RestApiPort}";
+        // configured port and becomes live the moment the API is enabled. The token is never embedded in
+        // copied URLs (API-01); a token-protected server expects the X-HaPlay-Api-Key header instead.
+        Remote.RemoteApi.BaseUrl = _remoteApi.AdvertisedBaseUrl(RestApiPort, RestApiAllowLan);
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
         OnPropertyChanged(nameof(RestApiStatusNote));
         OnPropertyChanged(nameof(RestApiSecurityStatus));
     }
 
-    private static string EnsureRestApiAccessToken(AppSettings settings)
+    partial void OnRestApiAccessTokenChanged(string value)
     {
-        if (!string.IsNullOrWhiteSpace(settings.RestApiAccessToken))
-            return settings.RestApiAccessToken;
+        _appSettings.RestApiAccessToken = string.IsNullOrEmpty(value) ? null : value;
+        _appSettings.Save();
+        RestartRestApi();
+    }
 
-        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
-        settings.RestApiAccessToken = token;
-        settings.Save();
-        return token;
+    /// <summary>Opt in to auth by generating a random token (the remote API is token-less by default).</summary>
+    [RelayCommand]
+    private void RegenerateRestApiToken() =>
+        RestApiAccessToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+
+    /// <summary>Remove the token so the remote API accepts unauthenticated requests again.</summary>
+    [RelayCommand]
+    private void ClearRestApiToken()
+    {
+        RevealRestApiToken = false; // a subsequently generated token starts masked again
+        RestApiAccessToken = string.Empty;
     }
 
     // ----- UI rewrite P1 (plan §1): toast overlay queue -----------------------------------------
@@ -339,6 +386,19 @@ public partial class MainViewModel : ViewModelBase
     public bool IsControlWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Control;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
 
+    // Construct the three largest hidden views on first visit, not during the first-frame path. Once loaded,
+    // retain their content so editor state and pop-out hosts survive subsequent workspace switches (PERF-01).
+    private bool _cueWorkspaceLoaded;
+    private bool _soundboardWorkspaceLoaded;
+    private bool _controlWorkspaceLoaded;
+    public CuePlayerViewModel? LoadedCueWorkspace => _cueWorkspaceLoaded ? CuePlayer : null;
+    public SoundboardWorkspaceViewModel? LoadedSoundboardWorkspace => _soundboardWorkspaceLoaded ? Soundboard : null;
+    public ControlWorkspaceViewModel? LoadedControlWorkspace => _controlWorkspaceLoaded ? Control : null;
+
+    /// <summary>True when the operator has authored control scripts but never saved the project — they live
+    /// only in the scratch cache and would be lost on close. Drives the on-close "save your work?" prompt.</summary>
+    public bool HasUnsavedScratchScripts => LoadedControlWorkspace?.HasUnsavedScratchScripts == true;
+
     partial void OnSidebarCollapsedChanged(bool value)
     {
         _appSettings.SidebarCollapsed = value;
@@ -347,6 +407,21 @@ public partial class MainViewModel : ViewModelBase
 
     partial void OnSelectedWorkspaceChanged(WorkspaceItem value)
     {
+        if (value == WorkspaceItem.Cues && !_cueWorkspaceLoaded)
+        {
+            _cueWorkspaceLoaded = true;
+            OnPropertyChanged(nameof(LoadedCueWorkspace));
+        }
+        else if (value == WorkspaceItem.Soundboard && !_soundboardWorkspaceLoaded)
+        {
+            _soundboardWorkspaceLoaded = true;
+            OnPropertyChanged(nameof(LoadedSoundboardWorkspace));
+        }
+        else if (value == WorkspaceItem.Control && !_controlWorkspaceLoaded)
+        {
+            _controlWorkspaceLoaded = true;
+            OnPropertyChanged(nameof(LoadedControlWorkspace));
+        }
         _appSettings.LastSelectedWorkspace = value.Id;
         _appSettings.Save();
         if (value == WorkspaceItem.Project)
@@ -385,6 +460,16 @@ public partial class MainViewModel : ViewModelBase
         await dialog.ShowDialog(owner);
     }
 
+    /// <summary>UX-03: open the searchable keyboard-shortcut help overlay (Help menu / F1).</summary>
+    [RelayCommand]
+    private async Task ShowKeyboardShortcutsAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+        await new Views.Dialogs.KeyboardShortcutsDialog().ShowDialog(owner);
+    }
+
     /// <summary>Ctrl+1..N keyboard handler. Index is 1-based to match the modifier key. (§12.5)</summary>
     public void SelectWorkspaceByIndex(int oneBasedIndex)
     {
@@ -402,32 +487,101 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Phase E (§8.6): Theme & Density -------------------------------------------------------
 
+    /// <summary>Gates the Project workspace appearance controls. Now that Simple/Fluent ship real dark +
+    /// density resources (the Classic-only limitation UI-01 called out), the section is shown. All three
+    /// settings (style / variant / density) are composed at startup; changing any surfaces a restart prompt
+    /// (<see cref="ShowAppearanceRestartPrompt"/>). The variant + density controls disable themselves for base
+    /// themes that don't support them (see <see cref="IsVariantSelectable"/> / <see cref="IsDensitySelectable"/>).</summary>
+    public bool ShowAppearanceSettings => true;
+
+    public IReadOnlyList<AppBaseTheme> BaseThemeChoices { get; } = Enum.GetValues<AppBaseTheme>();
     public IReadOnlyList<AppThemeMode> ThemeChoices { get; } = Enum.GetValues<AppThemeMode>();
     public IReadOnlyList<AppDensityMode> DensityChoices { get; } = Enum.GetValues<AppDensityMode>();
 
-    /// <summary>Phase E (§8.6) — chrome theme. Setting this both persists the choice and applies it
-    /// live to <see cref="Application.RequestedThemeVariant"/> so the UI repaints without restart.</summary>
+    /// <summary>Base control theme (§8.6). ALL appearance settings apply at startup only: a live control-theme
+    /// swap isn't reliable in Avalonia (realized controls keep their old templates, and re-styling mid-event
+    /// can corrupt the tree), and the variant/density are grouped with it so the whole panel follows one
+    /// consistent "change → restart to apply" model. Setting persists the choice; a change surfaces the
+    /// restart prompt (see <see cref="ShowAppearanceRestartPrompt"/>).</summary>
+    [ObservableProperty]
+    private AppBaseTheme _baseTheme;
+
+    /// <summary>Phase E (§8.6) — chrome light/dark variant. Persisted; composed at the next startup.</summary>
     [ObservableProperty]
     private AppThemeMode _theme;
 
-    /// <summary>Phase E (§8.6) — Fluent density. Setting this both persists and applies the change to
-    /// the live <see cref="Avalonia.Themes.Fluent.FluentTheme.DensityStyle"/>.</summary>
+    /// <summary>Phase E (§8.6) — Fluent density. Persisted; composed at the next startup.</summary>
     [ObservableProperty]
     private AppDensityMode _density;
+
+    // The appearance actually painting the running window, captured at launch. A saved value that differs
+    // from its snapshot is pending a restart.
+    private AppBaseTheme _startupBaseTheme;
+    private AppThemeMode _startupTheme;
+    private AppDensityMode _startupDensity;
+    private bool _appearancePromptDismissed;
+
+    /// <summary>True when any appearance setting (style / variant / density) differs from what's running, so a
+    /// restart is needed to compose it.</summary>
+    public bool AppearanceChangePending =>
+        BaseTheme != _startupBaseTheme || Theme != _startupTheme || Density != _startupDensity;
+
+    /// <summary>Drives the "restart now / later" prompt: shown while a change is pending and the user hasn't
+    /// chosen "Later" for it yet.</summary>
+    public bool ShowAppearanceRestartPrompt => AppearanceChangePending && !_appearancePromptDismissed;
+
+    /// <summary>The light/dark variant only applies to variant-aware base themes (Simple/Fluent); Classic
+    /// is light-only, so its selector disables.</summary>
+    public bool IsVariantSelectable => BaseTheme != AppBaseTheme.Classic;
+
+    /// <summary>Density is a Fluent-only axis; the selector disables for Classic/Simple.</summary>
+    public bool IsDensitySelectable => BaseTheme == AppBaseTheme.Fluent;
+
+    partial void OnBaseThemeChanged(AppBaseTheme value)
+    {
+        _appSettings.BaseTheme = value;
+        _appSettings.Save();
+        // The variant/density selectors gate on the newly-selected base theme so the user can pre-pick them
+        // for the pending style.
+        OnPropertyChanged(nameof(IsVariantSelectable));
+        OnPropertyChanged(nameof(IsDensitySelectable));
+        MarkAppearanceChanged();
+    }
 
     partial void OnThemeChanged(AppThemeMode value)
     {
         _appSettings.Theme = value;
         _appSettings.Save();
-        AppearanceController.ApplyTheme(value);
+        MarkAppearanceChanged();
     }
 
     partial void OnDensityChanged(AppDensityMode value)
     {
         _appSettings.Density = value;
         _appSettings.Save();
-        AppearanceController.ApplyDensity(value);
+        MarkAppearanceChanged();
     }
+
+    // Re-surface the restart prompt on every appearance change (even if a prior change was dismissed) and
+    // refresh the pending state.
+    private void MarkAppearanceChanged()
+    {
+        _appearancePromptDismissed = false;
+        OnPropertyChanged(nameof(AppearanceChangePending));
+        OnPropertyChanged(nameof(ShowAppearanceRestartPrompt));
+    }
+
+    /// <summary>"Later" — keep the running appearance; the saved choice applies on the next launch.</summary>
+    [RelayCommand]
+    private void DismissAppearanceRestart()
+    {
+        _appearancePromptDismissed = true;
+        OnPropertyChanged(nameof(ShowAppearanceRestartPrompt));
+    }
+
+    /// <summary>"Restart now" — relaunch so the saved appearance is composed fresh at startup.</summary>
+    [RelayCommand]
+    private void RestartApp() => AppRestart.Restart();
 
     // ----- Player tabs --------------------------------------------------------------------------
     // The full player list remains the project/remote/source of truth. The tab collection excludes
@@ -628,8 +782,12 @@ public partial class MainViewModel : ViewModelBase
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         RemoveActionEndpointCommand.NotifyCanExecuteChanged();
+        SyncEndpointHealthTimer(); // APP-01: start when endpoints appear, stop when the last one is removed
         FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync endpoints-changed");
     }
+
+    /// <summary>APP-01/APP-02: enable endpoint-health polling only while endpoints exist (delegated to the monitor).</summary>
+    private void SyncEndpointHealthTimer() => _endpointHealth.SyncEnabled();
 
     private void RebuildEndpointWorkspaceLists()
     {
@@ -778,46 +936,23 @@ public partial class MainViewModel : ViewModelBase
             ? candidate
             : existing;
 
-    public async Task RefreshAllEndpointHealthAsync()
+    /// <summary>Runs an endpoint-health sweep now. The single-flight guard, per-run cancellation, timing, and the
+    /// "nothing to probe → skip" gate all live in <see cref="EndpointHealthMonitor"/> (APP-02); this stays public
+    /// for the startup and endpoint-set-changed callers.</summary>
+    public Task RefreshAllEndpointHealthAsync() => _endpointHealth.RefreshAsync();
+
+    /// <summary>The domain probe loop the monitor drives: probe every OSC + MIDI endpoint row under the run's
+    /// cancellation token and return how many were probed.</summary>
+    private async Task<int> ProbeAllEndpointsAsync(CancellationToken ct)
     {
-        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.RefreshAllEndpointHealthAsync", slowWarningMs: 1500);
-        if (Interlocked.CompareExchange(ref _endpointHealthRefreshInFlight, 1, 0) != 0)
+        var probed = 0;
+        foreach (var row in OSCEndpointRows.Concat(MIDIEndpointRows))
         {
-            timing?.SetOutcome("already-in-flight");
-            return;
+            ct.ThrowIfCancellationRequested();
+            await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
+            probed++;
         }
-
-        CancellationTokenSource? newCts = null;
-        _endpointHealthCts?.Cancel();
-        _endpointHealthCts?.Dispose();
-        _endpointHealthCts = newCts = new CancellationTokenSource();
-        var ct = newCts.Token;
-
-        try
-        {
-            var probed = 0;
-            foreach (var row in OSCEndpointRows.Concat(MIDIEndpointRows))
-            {
-                if (ct.IsCancellationRequested)
-                {
-                    timing?.SetOutcome($"cancelled probed={probed}");
-                    return;
-                }
-                await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
-                probed++;
-            }
-            timing?.SetOutcome($"probed={probed}");
-        }
-        finally
-        {
-            // Keep the latest CTS alive for targeted manual probes; only dispose if this run's CTS was replaced.
-            if (!ReferenceEquals(_endpointHealthCts, newCts))
-            {
-                try { newCts.Dispose(); } catch { /* best effort */ }
-            }
-
-            Interlocked.Exchange(ref _endpointHealthRefreshInFlight, 0);
-        }
+        return probed;
     }
 
     private async Task ProbeEndpointRowAsync(ActionEndpointRowViewModel row, CancellationToken ct)

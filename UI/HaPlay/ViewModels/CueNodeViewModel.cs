@@ -187,7 +187,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     /// <summary>The tight bounding box of this text cue's rendered text, as fractions (0..1) of its canvas — for
     /// the placement editor to outline the actual text extent inside the placed frame. Null for a non-text cue.</summary>
     public Avalonia.Rect? TextBounds =>
-        TextSource is { } t && HaPlay.Playback.TextFrameRenderer.MeasureNormalizedBounds(t) is { } b
+        TextSource is { } t && S.Media.Source.Text.TextFrameRenderer.MeasureNormalizedBounds(HaPlay.Playback.TextSourceSpecMapper.ToSpec(t)) is { } b
             ? new Avalonia.Rect(b.X, b.Y, b.W, b.H)
             : null;
 

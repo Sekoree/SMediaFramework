@@ -132,20 +132,6 @@ public partial class MainViewModel
     private Task SaveProjectAsync() =>
         string.IsNullOrEmpty(CurrentProjectPath) ? SaveProjectAsAsync() : SaveProjectToPathAsync(CurrentProjectPath!);
 
-    /// <summary>
-    /// Used by the Control workspace before writing a script file: scripts are stored next to the project,
-    /// so if the project has never been saved we run the Save-As flow first. Returns true once the project
-    /// has a path on disk (which also sets the Control workspace's project root).
-    /// </summary>
-    private async Task<bool> EnsureProjectSavedForScriptsAsync()
-    {
-        if (!string.IsNullOrEmpty(CurrentProjectPath))
-            return true;
-
-        await SaveProjectAsAsync();
-        return !string.IsNullOrEmpty(CurrentProjectPath);
-    }
-
     /// <summary>Save/load rework: export a partial project file carrying only the checked sections
     /// (see <see cref="ProjectSections"/>). Opening such a file later imports just those sections.</summary>
     [RelayCommand]

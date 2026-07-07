@@ -16,7 +16,7 @@ A bit of mixing functionality for (mostly audio) to route N amount of channel to
 
 ### Core Extras
 Mainly the composition things. Helpful when just displaying one type of media at a time isnt enough, supporting layers, images, text inculding positioning.<br>
- See Cue Player stuff in the HaPlayer demo app<br>
+See Cue Player stuff in the HaPlayer demo app<br>
 
 ### Other Extras
 Aka. the OSC and MIDI library. Why? I'm forsed to use tablet mixers at work currently, so these are for gluing random MIDI controllers to mixer OSC commands.<br>

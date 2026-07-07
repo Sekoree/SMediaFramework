@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:views="using:HaPlay.Views"
+             xmlns:themes="using:HaPlay.Themes"
              xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
              x:Class="HaPlay.App"
              RequestedThemeVariant="Light">
@@ -13,18 +14,43 @@
     <DataTemplate DataType="vm:MediaPlayerViewModel">
       <views:MediaPlayerView />
     </DataTemplate>
+    <!-- The Control workspace dock panes are mapped to their views in code (App.RegisterDockPaneTemplates) —
+         see the comment there for why they can't be compiled-binding XAML templates. -->
   </Application.DataTemplates>
 
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- Classic Win32 system colours (Classic.CommonControls SystemColors.*BrushKey). Kept merged for
+             ALL base themes so the app's classic-coloured accents (info banner, soundboard selection,
+             PathIcon foreground, the in-app TreeDataGrid theme) still resolve under Simple/Fluent, which
+             don't define these keys. Harmlessly duplicates the values the Classic bundle also brings. -->
+        <ResourceInclude Source="avares://Classic.Avalonia.Theme/Colors/Colors.axaml"/>
+      </ResourceDictionary.MergedDictionaries>
+      <!-- Script editor (AvaloniaEdit) surface colours — variant-aware so the editor follows light/dark
+           instead of staying a bright white box under the Simple/Fluent dark variant. Classic is pinned
+           Light, so it always gets the light values; Simple/Fluent honour the chosen variant. -->
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+          <SolidColorBrush x:Key="ScriptEditorBackgroundBrush" Color="#FFFFFFFF" />
+          <SolidColorBrush x:Key="ScriptEditorForegroundBrush" Color="#FF1A1A1A" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="ScriptEditorBackgroundBrush" Color="#FF1E1E1E" />
+          <SolidColorBrush x:Key="ScriptEditorForegroundBrush" Color="#FFD4D4D4" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+
   <Application.Styles>
-    <!-- The Windows-Classic look (in-repo Avalonia-12 port, External/Classic.Avalonia) — replaces FluentTheme.
-         FontAliasing off: the theme's authentic Win95 aliased text is hard to read on modern displays. -->
-    <ClassicTheme FontAliasing="False" />
+    <!-- Slot 0: the active base-theme bundle (control theme + its TreeDataGrid + ColorPicker themes).
+         Classic is composed here so the app renders correctly at XAML load; AppearanceController swaps this
+         slot live (Classic / Simple / Fluent) from the persisted AppBaseTheme. -->
+    <themes:ClassicThemeBundle/>
     <!-- UI rewrite P1: the "Deck" design tokens; the single home for spacing/type/surface/touch styles. -->
     <StyleInclude Source="avares://HaPlay/Styles/Tokens.axaml"/>
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"/>
-    <!-- Classic-styled TreeDataGrid theme authored in-app (the theme repo ships none). -->
-    <StyleInclude Source="avares://HaPlay/Styles/ClassicTreeDataGrid.axaml"/>
-    <StyleInclude Source="avares://Classic.Avalonia.Theme.ColorPicker/Classic.axaml" />
     <!-- Xaml.Behaviors drag-to-reorder: provides the ListBox.draggable style used by the playlist. -->
     <StyleInclude Source="avares://Xaml.Behaviors.Interactions.Draggable/Styles.axaml"/>
     <!-- Drag feedback: the row being dragged dims + lifts above its neighbours. -->
@@ -39,13 +65,9 @@
     <Style Selector="Expander.dense">
       <Setter Property="Padding" Value="0"/>
     </Style>
-    <!-- App icon set (AppIcons geometries): paint with the Classic text color by default, and flip
-         to HighlightText inside selected rows so icons stay readable on the Highlight-blue band. -->
-    <Style Selector="PathIcon">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlTextBrushKey}}"/>
-    </Style>
-    <Style Selector="ListBoxItem:selected PathIcon">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.HighlightTextBrushKey}}"/>
-    </Style>
+    <!-- NOTE: the AppIcons PathIcon foreground styling is deliberately NOT here — it's pinned to the Classic
+         Win32 text colour, which is dark and would vanish on the Simple/Fluent dark variants. It lives in
+         ClassicThemeBundle so only Classic applies it; under Simple/Fluent PathIcons inherit the theme's
+         (variant-aware) foreground and stay visible in dark mode. -->
   </Application.Styles>
 </Application>

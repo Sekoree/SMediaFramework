@@ -324,6 +324,20 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 
     public long VideoFramesUnpacked => Interlocked.Read(ref _videoFramesUnpacked);
 
+    /// <summary>NDI-02: one consistent snapshot of this receiver's health — frames unpacked, the several
+    /// drop tallies (unpack / overflow / audio-conversion), currently-buffered video frames, whether the
+    /// native capture thread is wedged, and the process-wide live NDI connection count. Consolidates the
+    /// counters that were previously exposed one-off so callers/soak tests can read them together.</summary>
+    public NDIReceiveDiagnostics GetReceiveDiagnostics() => new(
+        VideoFramesUnpacked: Interlocked.Read(ref _videoFramesUnpacked),
+        VideoUnpackDrops: Interlocked.Read(ref _videoUnpackDrops),
+        VideoOverflowFrames: Interlocked.Read(ref _videoOverflowFrames),
+        AudioOverflowFloats: Volatile.Read(ref _audioOverflowFloats),
+        AudioConversionDrops: Interlocked.Read(ref _audioConversionDrops),
+        QueuedVideoFrames: _videoQueue.Count,
+        CaptureThreadStuck: Volatile.Read(ref _captureThreadStuck) != 0,
+        LiveNDIConnections: LiveConnectionCount);
+
     public void RebaseToLatest(TimeSpan videoNextPresentationTime = default, TimeSpan audioKeepBuffered = default)
     {
         if (_receiveAudio)

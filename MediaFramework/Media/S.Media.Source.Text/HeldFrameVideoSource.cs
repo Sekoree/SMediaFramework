@@ -1,13 +1,13 @@
 using S.Media.Core.Video;
 using S.Media.Decode.FFmpeg.Video;
 
-namespace HaPlay.Playback;
+namespace S.Media.Source.Text;
 
 /// <summary>
-/// An <see cref="IVideoSource"/> that emits copies of a single static BGRA frame indefinitely. Used to
-/// show a still image or a rendered text card for a cue's custom duration — the cue's clip window ends
-/// playback. The player presents frames on its own tick (<c>LatestOnTick</c>), so frame timing here is a
-/// no-op; each read just hands out a fresh copy of the held frame.
+/// An <see cref="IVideoSource"/> that emits copies of a single static BGRA frame indefinitely — used to hold a
+/// rendered text card for a cue's duration (the cue's clip window ends playback). Each read hands out a fresh
+/// owned copy; <see cref="SelectOutputFormat"/> converts the held BGRA template to the negotiated output format
+/// once (swscale) so the pipeline pulls it zero-conversion afterward.
 /// </summary>
 internal sealed class HeldFrameVideoSource : IVideoSource, IDisposable
 {
@@ -18,7 +18,7 @@ internal sealed class HeldFrameVideoSource : IVideoSource, IDisposable
     public HeldFrameVideoSource(VideoFrame bgraTemplate)
     {
         _bgraTemplate = bgraTemplate ?? throw new ArgumentNullException(nameof(bgraTemplate));
-        _emit = FallbackImageLoader.CloneHoldTemplate(bgraTemplate);
+        _emit = VideoFrameCpuClone.DuplicateCpuBacking(bgraTemplate, bgraTemplate.ColorTransferHint);
     }
 
     public VideoFormat Format => _emit.Format;
@@ -35,7 +35,7 @@ internal sealed class HeldFrameVideoSource : IVideoSource, IDisposable
         VideoFrame? next = null;
         if (format == PixelFormat.Bgra32)
         {
-            next = FallbackImageLoader.CloneHoldTemplate(_bgraTemplate);
+            next = VideoFrameCpuClone.DuplicateCpuBacking(_bgraTemplate, _bgraTemplate.ColorTransferHint);
         }
         else if (VideoCpuFrameConverter.CanConvert(PixelFormat.Bgra32, format, _bgraTemplate.Format.Width, _bgraTemplate.Format.Height))
         {
@@ -60,7 +60,7 @@ internal sealed class HeldFrameVideoSource : IVideoSource, IDisposable
             return false;
         }
 
-        frame = FallbackImageLoader.CloneHoldTemplate(_emit);
+        frame = VideoFrameCpuClone.DuplicateCpuBacking(_emit, _emit.ColorTransferHint);
         return true;
     }
 

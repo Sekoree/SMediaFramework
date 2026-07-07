@@ -1,5 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using S.Media.Core.Diagnostics;
 
 namespace HaPlay.Models;
 
@@ -10,6 +12,8 @@ namespace HaPlay.Models;
 /// </summary>
 public sealed class AppSettings
 {
+    private static readonly Lock FileGate = new();
+    internal static string? FilePathOverride { get; set; }
     public bool SidebarCollapsed { get; set; }
 
     /// <summary>Workspace selected on last shutdown — restored on next launch.</summary>
@@ -34,6 +38,12 @@ public sealed class AppSettings
     /// tight pre-§8.6 spacing (the default), <see cref="AppDensityMode.Normal"/> opens it up.</summary>
     public AppDensityMode Density { get; set; } = AppDensityMode.Compact;
 
+    /// <summary>Base control theme (overall chrome look). <see cref="AppBaseTheme.Classic"/> is the in-repo
+    /// Windows-Classic skin (light only); <see cref="AppBaseTheme.Simple"/> and <see cref="AppBaseTheme.Fluent"/>
+    /// are Avalonia's built-in themes and honour the <see cref="Theme"/> light/dark variant. Saved as
+    /// "classic"/"simple"/"fluent".</summary>
+    public AppBaseTheme BaseTheme { get; set; } = AppBaseTheme.Classic;
+
     /// <summary>
     /// When true, live NDI (and similar) video keeps native UYVY into local SDL outputs instead of
     /// converting to BGRA32 first. Requires correct full-range metadata on frames.
@@ -54,41 +64,110 @@ public sealed class AppSettings
     {
         get
         {
+            if (FilePathOverride is { Length: > 0 } overridden)
+                return overridden;
+            if (Environment.GetEnvironmentVariable("HAPLAY_SETTINGS_PATH") is { Length: > 0 } environmentPath)
+                return Path.GetFullPath(environmentPath);
             var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            // NativeAOT can return an empty special-folder path in minimal/service environments. Falling
+            // through to Path.Combine("", ...) writes settings into the process working directory (and can
+            // contaminate a release staging tree), so retain a user-scoped fallback.
+            if (string.IsNullOrWhiteSpace(local))
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                local = string.IsNullOrWhiteSpace(home)
+                    ? Path.Combine(Path.GetTempPath(), "HaPlay-user")
+                    : Path.Combine(home, ".local", "share");
+            }
             return Path.Combine(local, "HaPlay", "app-settings.json");
         }
     }
 
+    /// <summary>Loads settings, recovering from the one-deep backup when the primary file is corrupt
+    /// (SET-01). A missing file is a clean first-run (no log); an unreadable file is logged.</summary>
     public static AppSettings Load()
     {
-        try
+        lock (FileGate)
         {
             var path = FilePath;
-            if (!File.Exists(path))
-                return new AppSettings();
-            using var stream = File.OpenRead(path);
-            return JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.AppSettings) ?? new AppSettings();
-        }
-        catch
-        {
+            if (TryLoadFrom(path, out var primary))
+                return primary;
+
+            var primaryExisted = File.Exists(path);
+            if (TryLoadFrom(path + ".bak", out var backup))
+            {
+                if (primaryExisted)
+                    MediaDiagnostics.LogWarning("AppSettings: primary settings file was unreadable; recovered from backup.");
+                return backup;
+            }
+
+            if (primaryExisted)
+                MediaDiagnostics.LogWarning("AppSettings: settings file was unreadable and no usable backup exists; using defaults.");
             return new AppSettings();
         }
     }
 
-    public void Save()
+    private static bool TryLoadFrom(string path, [NotNullWhen(true)] out AppSettings? settings)
     {
+        settings = null;
         try
         {
-            var path = FilePath;
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-            using var stream = File.Create(path);
-            JsonSerializer.Serialize(stream, this, AppSettingsJsonContext.Default.AppSettings);
+            if (!File.Exists(path))
+                return false;
+            using var stream = File.OpenRead(path);
+            settings = JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.AppSettings);
+            return settings is not null;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            /* best effort — losing this file just resets sidebar state on next launch */
+            return false;
+        }
+    }
+
+    /// <summary>Persists settings atomically (temp file → flush → move), keeping one <c>.bak</c> of the
+    /// previous good file so a partial/corrupt write is recoverable (SET-01). Never throws.</summary>
+    public void Save()
+    {
+        lock (FileGate)
+        {
+            var path = FilePath;
+            string? temp = null;
+            try
+            {
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir))
+                    Directory.CreateDirectory(dir);
+
+                temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    JsonSerializer.Serialize(stream, this, AppSettingsJsonContext.Default.AppSettings);
+                    stream.Flush(flushToDisk: true);
+                }
+
+                // Keep one backup of the last KNOWN-GOOD primary. Never overwrite a valid backup with a corrupt
+                // primary recovered from that backup; if the final move then failed, both copies would be lost.
+                if (TryLoadFrom(path, out _))
+                {
+                    try { File.Copy(path, path + ".bak", overwrite: true); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* backup is best-effort */ }
+                }
+
+                File.Move(temp, path, overwrite: true);
+                temp = null;
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning($"AppSettings.Save failed ({ex.GetType().Name}: {ex.Message}); previous settings retained.");
+            }
+            finally
+            {
+                if (temp is not null)
+                {
+                    try { File.Delete(temp); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
+                }
+            }
         }
     }
 }
@@ -134,6 +213,17 @@ public enum AppDensityMode
 {
     Compact,
     Normal,
+}
+
+/// <summary>Base control theme (the overall chrome look). <see cref="Classic"/> is light-only; <see cref="Simple"/>
+/// and <see cref="Fluent"/> are variant-aware (they honour <see cref="AppThemeMode"/>) and <see cref="Fluent"/>
+/// additionally supports <see cref="AppDensityMode"/>.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<AppBaseTheme>))]
+public enum AppBaseTheme
+{
+    Classic,
+    Simple,
+    Fluent,
 }
 
 

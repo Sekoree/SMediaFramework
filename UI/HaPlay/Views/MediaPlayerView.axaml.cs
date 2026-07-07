@@ -253,6 +253,24 @@ public partial class MediaPlayerView : UserControl
         }
     }
 
+    // Jump-to-position box: restrict typed input to the timecode alphabet (digits, ':' and '.').
+    private void OnJumpBoxTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(e.Text) && e.Text.Any(c => !char.IsAsciiDigit(c) && c != ':' && c != '.'))
+            e.Handled = true;
+    }
+
+    // Enter commits the jump: parse the timecode, seek (clamped to duration), and clear the box for the next one.
+    private void OnJumpBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || sender is not TextBox box || DataContext is not MediaPlayerViewModel vm)
+            return;
+        if (vm.SeekToPositionTextCommand.CanExecute(box.Text))
+            vm.SeekToPositionTextCommand.Execute(box.Text);
+        box.Text = string.Empty;
+        e.Handled = true;
+    }
+
     private void OnUserControlKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Handled) return;

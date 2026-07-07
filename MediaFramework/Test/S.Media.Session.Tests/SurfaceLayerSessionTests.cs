@@ -98,8 +98,7 @@ public sealed class SurfaceLayerSessionTests
                 AudioRoutes = [],
             },
         ],
-        Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
-        Outputs: [], Routes: [], Devices: []);
+        Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
 
     [Fact]
     public async Task SurfaceCapableClip_OnSurfaceHostingCompositor_CompositesGpuSide()
@@ -117,7 +116,7 @@ public sealed class SurfaceLayerSessionTests
         // the surface path.
         RecordingSurface? surface;
         lock (provider.Opened)
-            surface = Assert.Single(provider.Opened.Where(s => s.CreatedSurface is not null)).CreatedSurface;
+            surface = Assert.Single(provider.Opened, s => s.CreatedSurface is not null).CreatedSurface;
         Assert.NotNull(surface);
 
         // The pump composites the surface with the transport timeline's SOURCE time — poll until at

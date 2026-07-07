@@ -11,31 +11,54 @@
              x:DataType="vm:SoundboardWorkspaceViewModel">
 
   <UserControl.Styles>
-    <!-- Tile chrome by state. An unbound tile outside edit mode stays fully blank but KEEPS its
-         grid cell (UniformGrid arranges by child order), so bound tiles never shift under a
+    <!-- A11Y-02: tiles are Buttons, not bare Borders — focusable, keyboard-activatable (Space/Enter),
+         and exposed to screen readers with a Button role + name. A minimal flat template keeps the exact
+         pre-existing chrome (state classes recolour PART_Chrome) while the base Button supplies focus,
+         keyboard activation, and a visible focus ring. An unbound tile outside edit mode stays fully blank
+         but KEEPS its grid cell (UniformGrid arranges by child order), so bound tiles never shift under a
          touch operator's fingers. -->
-    <Style Selector="Border.tile">
+    <Style Selector="Button.tile">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Stretch" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Name="PART_Chrome"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}">
+            <ContentPresenter Content="{TemplateBinding Content}"
+                              HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
     </Style>
-    <Style Selector="Border.tile.editing">
+    <Style Selector="Button.tile.editing /template/ Border#PART_Chrome">
       <Setter Property="Background" Value="#0D808080" />
       <Setter Property="BorderBrush" Value="#33808080" />
     </Style>
-    <Style Selector="Border.tile.bound">
+    <Style Selector="Button.tile.bound /template/ Border#PART_Chrome">
       <Setter Property="Background" Value="#1E808080" />
       <Setter Property="BorderBrush" Value="#55808080" />
     </Style>
-    <Style Selector="Border.tile.playing">
+    <Style Selector="Button.tile.playing /template/ Border#PART_Chrome">
       <Setter Property="Background" Value="#2A4A9A4A" />
       <Setter Property="BorderBrush" Value="#7F4ACA4A" />
     </Style>
-    <Style Selector="Border.tile.fading">
+    <Style Selector="Button.tile.fading /template/ Border#PART_Chrome">
       <Setter Property="Background" Value="#2ABA8A2A" />
       <Setter Property="BorderBrush" Value="#7FDAAA3A" />
     </Style>
-    <Style Selector="Border.tile.selected">
+    <Style Selector="Button.tile.selected /template/ Border#PART_Chrome">
       <!-- Classic Highlight — the old SystemAccentColor was a Fluent resource that no longer resolves. -->
+      <Setter Property="BorderBrush" Value="{DynamicResource {x:Static common:SystemColors.HighlightBrushKey}}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <!-- Keyboard focus ring (defined last so it wins over the state border while focused). -->
+    <Style Selector="Button.tile:focus-visible /template/ Border#PART_Chrome">
       <Setter Property="BorderBrush" Value="{DynamicResource {x:Static common:SystemColors.HighlightBrushKey}}" />
       <Setter Property="BorderThickness" Value="2" />
     </Style>
@@ -212,7 +235,20 @@
 
     <!-- Tile grid — one classic group box per board, headed by the board's name. -->
     <HeaderedContentControl Header="{Binding SelectedBoard.Name}" Padding="6">
-    <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}">
+    <Panel>
+    <!-- UX-10: empty-board call-to-action (icon + one line + primary action), matching the I/O workspace's
+         empty state instead of showing a blank grid. Hidden in edit mode (the tiles show "+" drop hints). -->
+    <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center"
+                MaxWidth="380" IsVisible="{Binding ShowEmptyBoardHint}">
+      <PathIcon Data="{x:Static views:AppIcons.Grid}" Width="34" Height="34" Opacity="0.3"
+                HorizontalAlignment="Center" />
+      <TextBlock Text="{x:Static res:Strings.SoundboardEmptyBoardHint}" Opacity="0.65"
+                 TextWrapping="Wrap" TextAlignment="Center" />
+      <Button Content="{x:Static res:Strings.SoundboardEmptyBoardAction}"
+              Command="{Binding EnableEditModeCommand}" HorizontalAlignment="Center" />
+    </StackPanel>
+    <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}"
+                  IsVisible="{Binding !ShowEmptyBoardHint}">
       <ItemsControl.ItemsPanel>
         <ItemsPanelTemplate>
           <UniformGrid Rows="{Binding SelectedBoard.Rows}" Columns="{Binding SelectedBoard.Columns}" />
@@ -220,13 +256,15 @@
       </ItemsControl.ItemsPanel>
       <ItemsControl.ItemTemplate>
         <DataTemplate DataType="vm:SoundboardTileViewModel">
-          <Border Classes="tile"
+          <Button Classes="tile"
                   Classes.bound="{Binding IsBound}"
                   Classes.playing="{Binding IsPlaying}"
                   Classes.fading="{Binding IsFading}"
                   Classes.editing="{Binding IsEditing}"
                   Margin="3" CornerRadius="0" BorderThickness="1.5" MinHeight="84"
-                  Tapped="OnTileTapped">
+                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                  AutomationProperties.Name="{Binding DisplayName}"
+                  Click="OnTileTapped">
             <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal selected-highlight
                  never matched — compare via MultiBinding instead. -->
             <Classes.selected>
@@ -235,12 +273,13 @@
                 <Binding />
               </MultiBinding>
             </Classes.selected>
-            <Border.ContextMenu>
+            <!-- Keyboard-accessible overflow (Menu key / Shift+F10 once the tile is focused). -->
+            <Button.ContextMenu>
               <ContextMenu>
                 <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
                           Click="OnCopyTileApiUrlClick" />
               </ContextMenu>
-            </Border.ContextMenu>
+            </Button.ContextMenu>
             <Panel Margin="8,6">
               <!-- Unbound + edit mode: drop-target hint. -->
               <TextBlock Text="+" FontSize="26" Opacity="0.3"
@@ -280,10 +319,11 @@
                          Margin="0,0,1,-2"
                          IsVisible="{Binding ShowsGridIndex}" />
             </Panel>
-          </Border>
+          </Button>
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+    </Panel>
     </HeaderedContentControl>
   </DockPanel>
 </UserControl>

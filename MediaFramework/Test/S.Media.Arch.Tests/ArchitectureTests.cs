@@ -4,15 +4,16 @@ using Xunit;
 namespace S.Media.Arch.Tests;
 
 /// <summary>
-/// Enforces the layered dependency rules from <c>Next/01-Architecture-and-Principles.md</c> §3:
-/// dependencies point down only, and each project may reference only its allowed set. The test reads
-/// the <c>next/</c> <c>*.csproj</c> graph directly, so it is independent of build order.
+/// Enforces the layered dependency rules: dependencies point down only, and each project may reference
+/// only its allowed set. The test reads the <c>*.csproj</c> graph directly, so it is independent of build
+/// order. Every first-party production project (framework libraries + native wrappers) must appear in
+/// <see cref="Allowed"/>; <c>Tools/</c> and <c>Test/</c> are harness and exempt.
 /// </summary>
 public sealed class ArchitectureTests
 {
-    // project -> ProjectReference target names it is ALLOWED to have. Native-wrapper names
-    // (PALib/MALib/NDILib/OSCLib/PMLib/LibAssLib) are pre-listed so the phase that moves them in needs
-    // no edit here; they simply don't exist on disk yet. Keep in sync with 01 §3.
+    // project -> ProjectReference target names it is ALLOWED to have. Native-wrapper projects
+    // (PALib/MALib/NDILib/OSCLib/PMLib/LibAssLib) reference no other first-party project, so their allowed
+    // set is empty.
     private static readonly IReadOnlyDictionary<string, string[]> Allowed = new Dictionary<string, string[]>
     {
         ["S.Media.Core"] = [],
@@ -36,7 +37,10 @@ public sealed class ArchitectureTests
         // StbImageSharp are pure managed — a GL context only ever comes from the hosting compositor,
         // so the module still ships no native runtime of its own).
         ["S.Media.Source.MMD"] = ["S.Media.Core", "S.Media.Time", "S.Media.Compositor"],
-        ["S.Media.Encode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
+        // Text cue source (SESSION-02): a pure-managed SkiaSharp text rasterizer + held-frame source. References
+        // Decode.FFmpeg only for the swscale CPU converter that repacks the rendered BGRA card to the negotiated
+        // output format. SkiaSharp is a NuGet package (isolated here), not a first-party project ref.
+        ["S.Media.Source.Text"] = ["S.Media.Core", "S.Media.Decode.FFmpeg"],
         ["S.Media.Audio.PortAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "PALib"],
         ["S.Media.Audio.MiniAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "MALib"],
         ["S.Media.Present.SDL3"] = ["S.Media.Core", "S.Media.Gpu"],
@@ -45,7 +49,6 @@ public sealed class ArchitectureTests
         ["S.Media.Present.SDL3.Compositor"] = ["S.Media.Core", "S.Media.Gpu", "S.Media.Compositor", "S.Media.Present.SDL3"],
         ["S.Media.Present.Avalonia"] = ["S.Media.Core", "S.Media.Gpu"],
         ["S.Media.NDI"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "NDILib"],
-        ["S.Media.Images.Skia"] = ["S.Media.Core"],
         ["S.Media.Subtitles"] = ["S.Media.Core", "LibAssLib"],
         ["S.Control.Abstractions"] = ["OSCLib"],
         ["S.Control"] = ["S.Media.Core", "S.Media.Session", "S.Control.Abstractions", "PMLib", "OSCLib"],
@@ -55,16 +58,26 @@ public sealed class ArchitectureTests
         [
             "S.Media.Core", "S.Media.Session", "S.Media.Time", "S.Media.Routing", "S.Media.Gpu",
             "S.Media.Compositor", "S.Media.Players", "S.Media.FFmpeg.Common", "S.Media.Decode.FFmpeg",
-            "S.Media.Encode.FFmpeg", "S.Media.Audio.PortAudio", "S.Media.Audio.MiniAudio",
-            "S.Media.Present.SDL3", "S.Media.Present.Avalonia", "S.Media.NDI", "S.Media.Images.Skia",
+            "S.Media.Audio.PortAudio", "S.Media.Audio.MiniAudio",
+            "S.Media.Present.SDL3", "S.Media.Present.Avalonia", "S.Media.NDI",
             "S.Media.Subtitles",
         ],
+        // Native-runtime wrapper projects: pure P/Invoke bindings, no first-party project references.
+        ["PALib"] = [],
+        ["MALib"] = [],
+        ["PMLib"] = [],
+        ["NDILib"] = [],
+        ["OSCLib"] = [],
+        ["LibAssLib"] = [],
     };
 
-    // Framework subtrees that MUST be covered by the Allowed map (Tools/ and Test/ are harness, exempt).
-    private static readonly string[] FrameworkDirs = ["Media", "Control", "Interop"];
+    // First-party production subtrees that MUST be covered by the Allowed map (Tools/ and Test/ are harness,
+    // exempt). Includes the native-wrapper trees (TEST-02) so PALib/MALib/PMLib/NDILib/OSCLib/LibAssLib are
+    // checked too, not just the S.Media.* / S.Control.* / S.Abi projects.
+    private static readonly string[] FrameworkDirs =
+        ["Media", "Control", "Interop", "Audio", "MIDI", "NDI", "OSC", "Subtitles"];
 
-    private static string NextRoot()
+    private static string RepoRoot()  // repo root = the directory holding MFPlayer.sln
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MFPlayer.sln")))
@@ -96,11 +109,11 @@ public sealed class ArchitectureTests
     [Fact]
     public void EveryFrameworkProjectIsRegisteredInTheRules()
     {
-        foreach (var csproj in FrameworkProjects(NextRoot()))
+        foreach (var csproj in FrameworkProjects(RepoRoot()))
         {
             var name = Path.GetFileNameWithoutExtension(csproj);
             Assert.True(Allowed.ContainsKey(name),
-                $"'{name}' is not in the Allowed map. Add it here and to Next/01 §3 before adding the project.");
+                $"'{name}' is not in the Allowed map. Add it here (with its allowed downward references) before adding the project.");
         }
     }
 
@@ -108,7 +121,7 @@ public sealed class ArchitectureTests
     public void ProjectReferencesAreDownwardAndAllowed()
     {
         var violations = new List<string>();
-        foreach (var csproj in FrameworkProjects(NextRoot()))
+        foreach (var csproj in FrameworkProjects(RepoRoot()))
         {
             var name = Path.GetFileNameWithoutExtension(csproj);
             if (!Allowed.TryGetValue(name, out var allowed))
@@ -119,14 +132,14 @@ public sealed class ArchitectureTests
         }
 
         Assert.True(violations.Count == 0,
-            "Disallowed project references (violate Next/01 §3 — fix the ref or update the rules):\n  "
+            "Disallowed project references (violate the layering rules — fix the ref or update the Allowed map):\n  "
             + string.Join("\n  ", violations));
     }
 
     [Fact]
     public void CoreHasNoProjectReferences()
     {
-        var core = FrameworkProjects(NextRoot())
+        var core = FrameworkProjects(RepoRoot())
             .Single(f => Path.GetFileNameWithoutExtension(f) == "S.Media.Core");
         Assert.Empty(ProjectRefNames(core));
     }
@@ -134,9 +147,13 @@ public sealed class ArchitectureTests
     [Theory]
     [InlineData("MIDI/PMLib/PMLib.csproj")]
     [InlineData("OSC/OSCLib/OSCLib.csproj")]
-    public void TransportWrappersHaveNoFrameworkProjectReferences(string relativePath)
+    [InlineData("Audio/PALib/PALib.csproj")]
+    [InlineData("Audio/MALib/MALib.csproj")]
+    [InlineData("NDI/NDILib/NDILib.csproj")]
+    [InlineData("Subtitles/LibAssLib/LibAssLib.csproj")]
+    public void NativeWrappersHaveNoFrameworkProjectReferences(string relativePath)
     {
-        var project = Path.Combine(NextRoot(), "MediaFramework", relativePath);
+        var project = Path.Combine(RepoRoot(), "MediaFramework", relativePath);
         Assert.Empty(ProjectRefNames(project));
     }
 
@@ -144,7 +161,7 @@ public sealed class ArchitectureTests
     public void EveryProjectReferencePathResolves()
     {
         var missing = new List<string>();
-        foreach (var csproj in FrameworkProjects(NextRoot()))
+        foreach (var csproj in FrameworkProjects(RepoRoot()))
         {
             var dir = Path.GetDirectoryName(csproj)!;
             foreach (var inc in XDocument.Load(csproj).Descendants("ProjectReference")

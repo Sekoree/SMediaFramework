@@ -30,10 +30,12 @@ const double AllocBudgetKiB = 512;
 // reference box vs the declared 24), so the sync-gate SAMPLE WINDOWS scale up to keep the minimum-count
 // clauses meaningful; the skew tolerances themselves are identical across configs. Without this a Debug
 // run false-fails purely on sample count (n<10/n<8) — especially on a loaded box.
+// Non-const on purpose: as a const, the Release value (1.0) makes `SyncWindowScale > 1.0` a compile-time-false
+// branch and the compiler flags the reachable-only-in-Debug log line as CS0162 unreachable code (BUILD-03).
 #if DEBUG
-const double SyncWindowScale = 3.0;
+double SyncWindowScale = 3.0;
 #else
-const double SyncWindowScale = 1.0;
+double SyncWindowScale = 1.0;
 #endif
 
 // A sidecar SRT shown over the video cue's composition — a non-ASS format, so it exercises the full
@@ -91,9 +93,7 @@ var document = new ShowDocument(
                 ],
                 OutputWidth: 1280, OutputHeight: 720)),
     ],
-    Outputs: [],
-    Routes: [],
-    Devices: []);
+    Routes: []);
 
 var json = document.ToJson();
 var reloaded = ShowDocument.FromJson(json);
@@ -322,7 +322,7 @@ await using (var trimSession = new ShowSession(registry, backend))
         1,
         [new CueDefinition("trim", 1, "Trim-in")],
         [new ShowClipBinding("trim", audioFile) { StartOffset = trimOffset }],
-        [], [], [], []));
+        [], []));
     await trimSession.GoAsync();
     await Task.Delay(800);
     var trim = (await trimSession.SnapshotAsync())[0];
@@ -349,7 +349,7 @@ await using (var loopSession = new ShowSession(registry, backend))
         1,
         [new CueDefinition("loop", 1, "Loop")],
         [new ShowClipBinding("loop", audioFile) { Loop = true, EndOffset = TimeSpan.FromSeconds(4) }],
-        [], [], [], []));
+        [], []));
     await loopSession.GoAsync();
     await Task.Delay(300);
     var dur = (await loopSession.SnapshotAsync())[0].ClipDuration;
@@ -373,7 +373,7 @@ await using (var fadeSession = new ShowSession(registry, backend))
         1,
         [new CueDefinition("fade", 1, "Fade")],
         [new ShowClipBinding("fade", audioFile) { FadeIn = TimeSpan.FromSeconds(1) }],
-        [], [], [], []));
+        [], []));
     await fadeSession.GoAsync();
     await Task.Delay(1500); // past the 1s fade ramp
     var faded = (await fadeSession.SnapshotAsync())[0];

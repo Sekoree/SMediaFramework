@@ -26,10 +26,19 @@ public partial class App : Application
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.Initialize", slowWarningMs: 250);
         AvaloniaXamlLoader.Load(this);
+        RegisterDockPaneTemplates();
 #if DEBUG
         this.AttachDeveloperTools();
 #endif
         timing?.SetOutcome("xaml-loaded");
+    }
+
+    // Maps the Control workspace dock panes to their views — see ControlDockPaneTemplates for why they're
+    // registered in code rather than App.axaml.
+    private void RegisterDockPaneTemplates()
+    {
+        foreach (var template in Views.ControlPanes.ControlDockPaneTemplates.Create())
+            DataTemplates.Add(template);
     }
 
     public override void OnFrameworkInitializationCompleted()

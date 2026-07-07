@@ -21,6 +21,7 @@ internal static class MediaRuntime
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.MediaRuntime");
     private static readonly object Gate = new();
+    private static readonly List<ModuleDiagnostic> _moduleDiagnostics = [];
     private static MediaHost? _host;
     private static S.Abi.MediaPluginDirectory? _plugins;
     private static S.Media.Compositor.ICompositorRegistry _compositorSurfaces =
@@ -78,6 +79,19 @@ internal static class MediaRuntime
     public static IMediaRegistry Registry => Host.Registry;
 
     public static bool IsInitialized => _host is not null;
+
+    /// <summary>AUDIO-02: per-module availability captured during the registry build, so HaPlay can SHOW which
+    /// backends registered and why an optional one (e.g. NDI, PortAudio) was skipped — instead of that only
+    /// living in a log line. Building the host first ensures the list is populated.</summary>
+    public static IReadOnlyList<ModuleDiagnostic> ModuleDiagnostics
+    {
+        get
+        {
+            _ = Host;
+            lock (Gate)
+                return [.. _moduleDiagnostics];
+        }
+    }
 
     /// <summary>Eagerly builds the registry at startup (for deterministic timing/logging). Idempotent.</summary>
     public static void Initialize() => _ = Host;
@@ -141,6 +155,9 @@ internal static class MediaRuntime
             Trace.LogWarning(ex, "MediaRuntime: plugin directory scan failed — continuing without plugins");
         }
 
+        lock (Gate)
+            _moduleDiagnostics.Clear(); // fresh per build (a post-shutdown rebuild re-probes)
+
         var surfaceBuilder = new S.Media.Compositor.CompositorRegistryBuilder();
         var host = MediaHost.Build(b =>
         {
@@ -152,11 +169,14 @@ internal static class MediaRuntime
             if (RuntimeModules.IsNDIAvailable)
                 TryUse(b, static () => new NDIModule(), "NDI");
             else
+            {
                 Trace.LogInformation("MediaRuntime: NDI module skipped — {Reason}", RuntimeModules.NDIUnavailableReason);
+                RecordDiagnostic(new ModuleDiagnostic("NDI", false, RuntimeModules.NDIUnavailableReason));
+            }
 
             // Text cues (NXT-06 cutover): a `text:` provider so the ShowSession path can play a rendered text cue
             // through the registry like any other source (the old engine rendered it via a held frame directly).
-            b.AddDecoder(new Playback.TextDecoderProvider());
+            b.AddDecoder(new S.Media.Source.Text.TextDecoderProvider());
 
             // YouTube (Gate 5): plays prepared cache assets behind youtube:// URIs. Purely managed +
             // local-file playback, so no native probe is needed; shares the app-wide preparer/cache with
@@ -197,14 +217,32 @@ internal static class MediaRuntime
         try
         {
             builder.Use(factory());
+            RecordDiagnostic(new ModuleDiagnostic(name, true, null));
         }
         catch (Exception ex)
         {
             // A module's Register runs synchronously inside Build's configure callback, so a throw here just
             // skips that one module — the others still register.
             Trace.LogWarning(ex, "MediaRuntime: '{Module}' module unavailable — continuing without it", name);
+            RecordDiagnostic(new ModuleDiagnostic(name, false, DescribeUnavailability(ex)));
         }
     }
+
+    private static void RecordDiagnostic(ModuleDiagnostic diagnostic)
+    {
+        lock (Gate)
+            _moduleDiagnostics.Add(diagnostic);
+    }
+
+    /// <summary>Maps a module registration failure to the AUDIO-02 vocabulary (not installed / incompatible /
+    /// open failed) so the surfaced reason is meaningful rather than a raw exception dump.</summary>
+    private static string DescribeUnavailability(Exception ex) => ex switch
+    {
+        DllNotFoundException => "native library not installed",
+        BadImageFormatException => "native library incompatible (wrong architecture)",
+        EntryPointNotFoundException => "native library incompatible (missing entry point)",
+        _ => $"failed to initialize ({ex.GetType().Name})",
+    };
 
     /// <summary>Looks up a registered audio backend by name (the new-framework replacement for AudioBackends.TryGet).</summary>
     public static bool TryGetAudioBackend(string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IAudioBackend? backend)
@@ -214,3 +252,7 @@ internal static class MediaRuntime
         return backend is not null;
     }
 }
+
+/// <summary>AUDIO-02: the availability of one media module after the registry build. <paramref name="Detail"/>
+/// explains an unavailable one (e.g. "native library not installed").</summary>
+public readonly record struct ModuleDiagnostic(string Name, bool Available, string? Detail);

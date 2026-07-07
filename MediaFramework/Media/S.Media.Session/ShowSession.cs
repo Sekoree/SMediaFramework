@@ -241,6 +241,7 @@ public sealed class ShowSession : IAsyncDisposable
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
+        _deviceCache = new AudioOutputDeviceCache(audioBackend);
         _subtitleFactory = subtitleFactory;
         _videoOutputFactory = videoOutputFactory;
         _compositorFactory = compositorFactory;
@@ -381,9 +382,7 @@ public sealed class ShowSession : IAsyncDisposable
             Cues = document.Cues ?? [],
             Clips = document.Clips ?? [],
             Compositions = document.Compositions ?? [],
-            Outputs = document.Outputs ?? [],
             Routes = document.Routes ?? [],
-            Devices = document.Devices ?? [],
             AudioOutputs = document.AudioOutputs ?? [],
         };
 
@@ -720,49 +719,11 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
     // NXT-24: backend device enumeration is not free (PortAudio walks the host API's device table, and a flaky
-    // ALSA setup makes it worse) and the spec builder runs on EVERY fire / warm / voice. Cache the list briefly;
-    // thread-safe because the fire path builds specs OFF the dispatcher.
-    private static readonly TimeSpan DeviceCacheTtl = TimeSpan.FromSeconds(5);
-    private readonly object _deviceCacheGate = new();
-    private IReadOnlyList<AudioDeviceInfo>? _cachedOutputDevices;
-    private long _cachedOutputDevicesAtMs;
+    // ALSA setup makes it worse) and the spec builder runs on EVERY fire / warm / voice. SESSION-01: the caching
+    // + backend-rate resolution now lives in AudioOutputDeviceCache; the session just holds one.
+    private readonly AudioOutputDeviceCache _deviceCache;
 
-    /// <summary>The backend's output devices, cached for <see cref="DeviceCacheTtl"/> (NXT-24) — device
-    /// hot-plug is still picked up on the next refresh, but a burst of fires/warms enumerates once.</summary>
-    private IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevicesCached()
-    {
-        var now = Environment.TickCount64;
-        lock (_deviceCacheGate)
-        {
-            if (_cachedOutputDevices is { } cached && now - _cachedOutputDevicesAtMs < (long)DeviceCacheTtl.TotalMilliseconds)
-                return cached;
-        }
-
-        var devices = _audioBackend!.EnumerateOutputDevices();
-        lock (_deviceCacheGate)
-        {
-            _cachedOutputDevices = devices;
-            _cachedOutputDevicesAtMs = now;
-        }
-
-        return devices;
-    }
-
-    /// <summary>Returns the hardware/backend nominal rate for a device. JACK devices expose their fixed
-    /// graph rate here; opening PortAudio at the media's source rate would fail for 44.1 kHz media on a
-    /// 48 kHz JACK graph.</summary>
-    private int? ResolveBackendSampleRate(string? deviceId)
-    {
-        if (_audioBackend is null)
-            return null;
-        var devices = EnumerateOutputDevicesCached();
-        var device = !string.IsNullOrWhiteSpace(deviceId)
-            ? devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))
-            : devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
-        return device is { DefaultSampleRate: > 0 }
-            ? checked((int)Math.Round(device.DefaultSampleRate))
-            : null;
-    }
+    private int? ResolveBackendSampleRate(string? deviceId) => _deviceCache.ResolveBackendSampleRate(deviceId);
 
     private static VideoPlacementSpec BuildVideoPlacementSpec(string compositionId, int layerIndex, ShowVideoPlacement? p) =>
         p is null

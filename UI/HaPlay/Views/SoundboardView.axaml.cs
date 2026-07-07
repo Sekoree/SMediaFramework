@@ -24,7 +24,9 @@ public partial class SoundboardView : UserControl
 
     private SoundboardWorkspaceViewModel? Vm => DataContext as SoundboardWorkspaceViewModel;
 
-    private void OnTileTapped(object? sender, TappedEventArgs e)
+    // A11Y-02: the tile is now a Button, so this fires on both pointer taps and keyboard activation
+    // (Space/Enter) — the soundboard is fully operable from the keyboard.
+    private void OnTileTapped(object? sender, RoutedEventArgs e)
     {
         if (Vm is not { } vm || (sender as Control)?.DataContext is not SoundboardTileViewModel tile)
             return;

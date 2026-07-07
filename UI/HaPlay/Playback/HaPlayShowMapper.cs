@@ -143,7 +143,7 @@ public static class HaPlayShowMapper
         // Text cues encode their render spec + duration into a `text:` URI so the ShowSession `text:` provider can
         // render + play them (NXT-06); every other source resolves to a path/scheme URI.
         var mediaPath = media.Source is TextPlaylistItem text
-            ? TextSourceUri.Encode(text, media.DurationMs)
+            ? S.Media.Source.Text.TextSourceUri.Encode(text.ToSpec(media.DurationMs))
             : ResolveMediaPath(media.Source);
         if (mediaPath is null)
             return null; // media cue with no resolvable source (unbound) — nothing to play yet.

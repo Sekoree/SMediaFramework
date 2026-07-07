@@ -99,7 +99,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     private readonly AdaptiveRateOutputFactory? _adaptiveRate;
     private readonly Func<VideoFormat, IDeinterlacer>? _deinterlacer;
     private readonly List<IDisposable> _lifetimes;
-    private bool _disposed;
+    private int _disposed; // 0 = live, 1 = disposed. Interlocked transition (CORE-01).
 
     public IReadOnlyList<IAudioBackend> AudioBackends { get; }
 
@@ -118,13 +118,15 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     }
 
     /// <summary>Releases the native/runtime lifetimes registered by modules (NXT-05), in reverse registration
-    /// order. Idempotent. Dispose only when no player/session still uses the registry — that is the owning
-    /// host's responsibility (a borrowing <c>ShowSession</c> must NOT dispose a registry it was handed).</summary>
+    /// order. Idempotent and thread-safe (CORE-01: an interlocked transition, so concurrent disposals release
+    /// each lifetime exactly once). Dispose only when no player/session still uses the registry — that is the
+    /// owning host's responsibility (a borrowing <c>ShowSession</c> must NOT dispose a registry it was handed;
+    /// see <see cref="IMediaRegistry"/>). After disposal, capability operations throw
+    /// <see cref="ObjectDisposedException"/> rather than touch released native runtime.</summary>
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        _disposed = true;
         for (var i = _lifetimes.Count - 1; i >= 0; i--)
         {
             try { _lifetimes[i].Dispose(); }
@@ -132,12 +134,35 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         }
     }
 
-    /// <summary>Builds an immutable registry from a configuration callback (the composition root).</summary>
+    /// <summary>Rejects a capability operation issued after disposal (CORE-01) — the registry's native runtime
+    /// has been released, so opening/creating against it would be use-after-free.</summary>
+    private void ThrowIfDisposed() =>
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    /// <summary>Builds an immutable registry from a configuration callback (the composition root). If a module
+    /// throws part-way through registration, the lifetimes already acquired are rolled back in reverse order
+    /// before the exception propagates (CORE-02) — a failed build must not leak native-runtime holds.</summary>
     public static MediaRegistry Build(Action<IMediaRegistryBuilder> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
         var builder = new MediaRegistryBuilder();
-        configure(builder);
+        try
+        {
+            configure(builder);
+        }
+        catch
+        {
+            // Reverse-order rollback (mirrors MediaRegistry.Dispose): the later a lifetime was acquired, the
+            // sooner it is released, so a half-registered module chain unwinds like a successful teardown.
+            for (var i = builder.Lifetimes.Count - 1; i >= 0; i--)
+            {
+                try { builder.Lifetimes[i].Dispose(); }
+                catch { /* a rollback release must never mask the original build failure */ }
+            }
+
+            throw;
+        }
+
         return new MediaRegistry(builder);
     }
 
@@ -145,6 +170,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     // order and replacing only on a strictly-greater score yields exactly that.
     private IMediaDecoderProvider? PickDecoder(string uri, MediaKind kind)
     {
+        ThrowIfDisposed(); // covers CanOpen + the confidence-selected TryOpenVideo/Audio
         IMediaDecoderProvider? best = null;
         var bestScore = 0.0;
         foreach (var d in _decoders)
@@ -197,6 +223,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     public IMediaDecoderProvider? FindDecoder(string name)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
+        ThrowIfDisposed(); // covers the pinned-provider TryOpenVideo/Audio too
         foreach (var d in _decoders)
             if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase))
                 return d;
@@ -234,6 +261,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     public bool TryOpenImage(string path, [MaybeNullWhen(false)] out IVideoSource source)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        ThrowIfDisposed();
         var ext = MediaRegistryBuilder.NormalizeExtension(Path.GetExtension(path));
         if (_imageFactories.TryGetValue(ext, out var factory))
         {
@@ -245,11 +273,16 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         return false;
     }
 
-    public IVideoCpuFrameConverter? CreateCpuConverter() => _cpuConverter?.Invoke();
+    public IVideoCpuFrameConverter? CreateCpuConverter()
+    {
+        ThrowIfDisposed();
+        return _cpuConverter?.Invoke();
+    }
 
     public IAudioSource? CreateResampler(IAudioSource source, int targetSampleRate)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ThrowIfDisposed();
         return _resampler?.Invoke(source, targetSampleRate);
     }
 
@@ -259,9 +292,13 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(playbackPpmBias);
+        ThrowIfDisposed();
         return _adaptiveRate?.Invoke(inner, playbackPpmBias, maxRateDeltaHz, biasSource);
     }
 
-    public IDeinterlacer CreateDeinterlacer(VideoFormat input) =>
-        _deinterlacer?.Invoke(input) ?? new BobDeinterlacer(input);
+    public IDeinterlacer CreateDeinterlacer(VideoFormat input)
+    {
+        ThrowIfDisposed();
+        return _deinterlacer?.Invoke(input) ?? new BobDeinterlacer(input);
+    }
 }

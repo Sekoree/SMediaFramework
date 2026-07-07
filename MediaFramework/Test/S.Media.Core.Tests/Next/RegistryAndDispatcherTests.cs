@@ -21,6 +21,84 @@ public class MediaRegistryTests
         public void Dispose() => onDispose();
     }
 
+    private sealed class LifetimeModule(string name, Action onDisposeLifetime) : IMediaModule
+    {
+        public string Name => name;
+        public void Register(IMediaRegistryBuilder builder) => builder.AddLifetime(new DisposeSpy(onDisposeLifetime));
+    }
+
+    private sealed class ThrowingModule : IMediaModule
+    {
+        public string Name => "throwing";
+        public void Register(IMediaRegistryBuilder builder) => throw new InvalidOperationException("boom");
+    }
+
+    [Fact]
+    public void Build_RollsBackAcquiredLifetimes_InReverseOrder_WhenAModuleThrows()
+    {
+        // CORE-02: two modules register a native-runtime lifetime each, then a third throws mid-build. The
+        // acquired lifetimes must be rolled back (reverse order) so a failed composition leaks nothing.
+        var order = new List<string>();
+        var ex = Assert.Throws<InvalidOperationException>(() => MediaRegistry.Build(b =>
+        {
+            b.Use(new LifetimeModule("first", () => order.Add("first")));
+            b.Use(new LifetimeModule("second", () => order.Add("second")));
+            b.Use(new ThrowingModule());
+        }));
+
+        Assert.Equal("boom", ex.Message);
+        Assert.Equal(new[] { "second", "first" }, order); // reverse-order rollback, like a normal teardown
+    }
+
+    [Fact]
+    public async Task Dispose_IsInterlocked_AndRejectsCapabilityOpsAfterward()
+    {
+        // CORE-01: concurrent disposal releases each lifetime EXACTLY once (interlocked transition), and
+        // capability ops issued after disposal throw ObjectDisposedException instead of touching released
+        // native runtime. Stress: race repeated Dispose() against many TryOpenVideo() calls.
+        var disposeCount = 0;
+        var registry = MediaRegistry.Build(b =>
+        {
+            b.AddDecoder(new FakeDecoderProvider("fake", 0.9));
+            b.AddLifetime(new DisposeSpy(() => Interlocked.Increment(ref disposeCount)));
+        });
+
+        var tasks = new List<Task>();
+        for (var i = 0; i < 16; i++)
+        {
+            tasks.Add(Task.Run(() =>
+            {
+                for (var j = 0; j < 250; j++)
+                {
+                    try
+                    {
+                        if (registry.TryOpenVideo("file:///x.mp4", null, out var s))
+                            (s as IDisposable)?.Dispose();
+                    }
+                    catch (ObjectDisposedException) { /* expected once disposal wins the race */ }
+                }
+            }));
+        }
+
+        tasks.Add(Task.Run(() =>
+        {
+            for (var k = 0; k < 8; k++)
+                registry.Dispose(); // repeated + concurrent with the openers
+        }));
+
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(1, disposeCount); // interlocked: released exactly once despite 8 concurrent disposals
+
+        // Steady state after disposal: every capability op rejects.
+        Assert.Throws<ObjectDisposedException>(() => registry.CanOpen("file:///x.mp4", MediaKind.Video));
+        Assert.Throws<ObjectDisposedException>(() => registry.TryOpenVideo("file:///x.mp4", null, out _));
+        Assert.Throws<ObjectDisposedException>(() => registry.TryOpenAudio("file:///x.mp4", null, out _));
+        Assert.Throws<ObjectDisposedException>(() => registry.TryOpenImage("x.png", out _));
+        Assert.Throws<ObjectDisposedException>(() => registry.CreateCpuConverter());
+        Assert.Throws<ObjectDisposedException>(() => registry.FindDecoder("fake"));
+    }
+
     [Fact]
     public void Dispose_ReleasesRegisteredLifetimes_InReverseOrder_AndIsIdempotent()
     {

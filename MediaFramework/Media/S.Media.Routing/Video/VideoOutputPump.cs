@@ -218,6 +218,8 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     public void Submit(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        var dropped = false;
+        long droppedTotal = 0;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -231,14 +233,22 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             {
                 var victim = _queue.Dequeue().Frame;
                 victim.Dispose();
-                var total = Interlocked.Increment(ref _dropped);
-                RaisePumpPressure(total);
+                droppedTotal = Interlocked.Increment(ref _dropped);
+                dropped = true;
                 ThrottledWarnQueueDrop();
             }
 
             _queue.Enqueue((frame, _formatVersion));
             _pending.Set();
         }
+
+        // ROUTE-01: raise pump pressure AFTER releasing _gate. The subscriber is arbitrary external code
+        // that may query router/pump metrics (taking the router lock) or remove this output — invoking it
+        // while holding _gate creates a callback/re-entrancy hazard and an ABBA lock path against the
+        // router. The event payload is a monotonic running total, so collapsing the (possibly several)
+        // drops in one Submit into a single post-lock raise carrying the final total is equivalent.
+        if (dropped)
+            RaisePumpPressure(droppedTotal);
     }
 
     public void AbandonQueuedFrames()

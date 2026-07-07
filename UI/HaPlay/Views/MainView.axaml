@@ -45,6 +45,7 @@
   </UserControl.Styles>
 
   <UserControl.KeyBindings>
+    <KeyBinding Gesture="F1" Command="{Binding ShowKeyboardShortcutsCommand}" />
     <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
     <KeyBinding Gesture="Ctrl+N" Command="{Binding NewProjectCommand}" />
     <KeyBinding Gesture="Ctrl+O" Command="{Binding OpenProjectCommand}" />
@@ -84,11 +85,13 @@
           </MenuItem.ItemTemplate>
           <MenuItem.Styles>
             <Style Selector="MenuItem">
-              <Setter Property="Command" Value="{Binding $parent[Menu].((vm:MainViewModel)DataContext).OpenRecentCommand}" />
+              <Setter Property="Command" Value="{Binding $parent[Menu].((vm:MainViewModel)DataContext)?.OpenRecentCommand}" />
               <Setter Property="CommandParameter" Value="{Binding}" />
             </Style>
           </MenuItem.Styles>
         </MenuItem>
+        <Separator />
+        <MenuItem Header="{x:Static res:Strings.MenuExitHeader}" Click="MenuItem_OnClick"/>
       </MenuItem>
       <MenuItem Header="{x:Static res:Strings.MenuViewHeader}">
         <!-- Workspace navigation duplicated here so the Ctrl+1…5 shortcuts are discoverable
@@ -109,6 +112,10 @@
         <MenuItem Header="{x:Static res:Strings.MenuToggleSidebarHeader}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
         <MenuItem Header="{x:Static res:Strings.MenuTargetConfigurationHeader}" Command="{Binding OpenTargetConfigurationCommand}" />
       </MenuItem>
+      <MenuItem Header="{x:Static res:Strings.MenuHelpHeader}">
+        <MenuItem Header="{x:Static res:Strings.KeyboardShortcutsMenuHeader}"
+                  Command="{Binding ShowKeyboardShortcutsCommand}" InputGesture="F1" />
+      </MenuItem>
     </Menu>
 
     <!-- P1: fixed-height status line — text changes, layout never does (no banner push-down). -->
@@ -117,14 +124,15 @@
                                 Text="{Binding ProjectStatus}" />
 
     <Border DockPanel.Dock="Left"
-            BorderBrush="#22808080" BorderThickness="0,0,1,0"
+            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="0,0,1,0"
             Width="{Binding SidebarWidth}">
       <DockPanel>
         <Button DockPanel.Dock="Top"
                 Classes="sidebar"
                 Classes.collapsed="{Binding SidebarCollapsed}"
                 Command="{Binding ToggleSidebarCommand}"
-                ToolTip.Tip="{x:Static res:Strings.TooltipToggleSidebar}">
+                ToolTip.Tip="{x:Static res:Strings.TooltipToggleSidebar}"
+                AutomationProperties.Name="{x:Static res:Strings.TooltipToggleSidebar}">
           <PathIcon Data="{x:Static views:AppIcons.Menu}" Classes="sidebar-glyph" />
         </Button>
 
@@ -135,7 +143,8 @@
                       Classes.collapsed="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SidebarCollapsed}"
                       Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectWorkspaceCommand}"
                       CommandParameter="{Binding}"
-                      ToolTip.Tip="{Binding Label}">
+                      ToolTip.Tip="{Binding Label}"
+                      AutomationProperties.Name="{Binding Label}">
                 <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal approach never
                      matched — the active workspace was never highlighted. Compare via MultiBinding. -->
                 <Classes.selected>
@@ -169,6 +178,7 @@
                   VerticalAlignment="Center" Margin="6,0,0,0" />
           <Button Grid.Column="2"
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  AutomationProperties.Name="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutPlayersClick"
                   VerticalAlignment="Center" Margin="6,0,0,0">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
@@ -229,12 +239,21 @@
                   Command="{Binding OpenTargetConfigurationCommand}" />
           <Button
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  AutomationProperties.Name="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutCuesClick">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
           </Button>
         </StackPanel>
         <ContentControl x:Name="CuesPopoutHost">
-          <views:CuePlayerView DataContext="{Binding CuePlayer}" />
+          <!-- The outer host must contain a Control for PopoutRegion to reparent. The inner ContentControl
+               keeps the heavy view deferred until LoadedCueWorkspace becomes non-null. -->
+          <ContentControl Content="{Binding LoadedCueWorkspace}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:CuePlayerViewModel">
+                <views:CuePlayerView />
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
         </ContentControl>
       </DockPanel>
 
@@ -246,17 +265,30 @@
                     Spacing="6" Margin="0,0,0,6">
           <Button
                   ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  AutomationProperties.Name="{x:Static res:Strings.PopoutButtonTooltip}"
                   Click="OnPopOutSoundboardClick">
             <PathIcon Data="{x:Static views:AppIcons.Duplicate}" Width="11" Height="11" />
           </Button>
         </StackPanel>
         <ContentControl x:Name="SoundboardPopoutHost">
-          <views:SoundboardView DataContext="{Binding Soundboard}" />
+          <ContentControl Content="{Binding LoadedSoundboardWorkspace}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:SoundboardWorkspaceViewModel">
+                <views:SoundboardView />
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
         </ContentControl>
       </DockPanel>
 
-      <views:ControlWorkspaceView DataContext="{Binding Control}"
-          IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsControlWorkspaceSelected}" />
+      <ContentControl Content="{Binding LoadedControlWorkspace}"
+                      IsVisible="{Binding IsControlWorkspaceSelected}">
+        <ContentControl.ContentTemplate>
+          <DataTemplate x:DataType="vm:ControlWorkspaceViewModel">
+            <views:ControlWorkspaceView />
+          </DataTemplate>
+        </ContentControl.ContentTemplate>
+      </ContentControl>
 
       <!-- Scrolls when the window is too short for the display / remote-api / media-cache sections
            (the cache rows at the bottom used to land out of bounds on a small window). -->
@@ -276,7 +308,7 @@
           <Button Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
         <Grid ColumnDefinitions="1.05*,1.8*" ColumnSpacing="10">
-          <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+          <Border Grid.Column="0" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
             <DockPanel>
               <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
               <TextBlock DockPanel.Dock="Top"
@@ -299,17 +331,36 @@
           </Border>
 
           <StackPanel Grid.Column="1" Spacing="10">
-            <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+            <!-- §8.6 Display preferences — per-machine, not part of the project file.
+                 Style = base control theme (Classic / Simple / Fluent). The Theme (light/dark) and Density
+                 controls disable for base themes that don't support them: Classic is light-only, and only
+                 Fluent has a density axis. -->
+            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
+                    IsVisible="{Binding ShowAppearanceSettings}">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.DisplaySettingsHint}" />
-                <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto" Margin="0,4,0,0">
-                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
-                  <ComboBox Grid.Column="1"
+                <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto,Auto" Margin="0,4,0,0">
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.StyleLabel}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Row="0" Grid.Column="1"
+                            ItemsSource="{Binding BaseThemeChoices}"
+                            SelectedItem="{Binding BaseTheme}"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="{x:Static res:Strings.StyleTooltip}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Grid.Row="0" Grid.Column="3" Text="{x:Static res:Strings.ThemeLabel}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Row="0" Grid.Column="4"
                             ItemsSource="{Binding ThemeChoices}"
                             SelectedItem="{Binding Theme}"
+                            IsEnabled="{Binding IsVariantSelectable}"
                             HorizontalAlignment="Stretch">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
@@ -317,11 +368,13 @@
                       </DataTemplate>
                     </ComboBox.ItemTemplate>
                   </ComboBox>
-                  <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
-                  <ComboBox Grid.Column="4"
+                  <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.DensityLabel}"
+                             VerticalAlignment="Center" Margin="0,6,0,0" />
+                  <ComboBox Grid.Row="1" Grid.Column="1"
                             ItemsSource="{Binding DensityChoices}"
                             SelectedItem="{Binding Density}"
-                            HorizontalAlignment="Stretch">
+                            IsEnabled="{Binding IsDensitySelectable}"
+                            HorizontalAlignment="Stretch" Margin="0,6,0,0">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -329,11 +382,27 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                 </Grid>
+                <!-- Appearance changes are composed at startup only (a live control-theme swap isn't reliable
+                     in Avalonia), so when a setting differs from what's running, ask whether to restart now
+                     or later (Later keeps the current look; the choice applies on the next launch). -->
+                <Border IsVisible="{Binding ShowAppearanceRestartPrompt}" Margin="0,4,0,0"
+                        Background="{StaticResource ChipNeutral}" CornerRadius="0" Padding="8,6">
+                  <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                    <PathIcon Grid.Column="0" Data="{x:Static views:AppIcons.Info}" Width="13" Height="13"
+                              VerticalAlignment="Center" Foreground="{StaticResource AccentWarn}" />
+                    <TextBlock Grid.Column="1" Text="{x:Static res:Strings.AppearanceRestartHint}" FontSize="12"
+                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Classes="Std Go" Content="{x:Static res:Strings.RestartNowButton}"
+                            Command="{Binding RestartAppCommand}" />
+                    <Button Grid.Column="3" Classes="Std" Content="{x:Static res:Strings.RestartLaterButton}"
+                            Command="{Binding DismissAppearanceRestartCommand}" />
+                  </Grid>
+                </Border>
               </StackPanel>
             </Border>
 
             <!-- Remote API — per-machine HTTP control surface for show controllers. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.RemoteApiSectionHeader}" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Spacing="12">
@@ -346,11 +415,25 @@
                             IsChecked="{Binding RestApiAllowLan, Mode=TwoWay}" />
                 </StackPanel>
                 <SelectableTextBlock Text="{Binding RestApiBaseUrlDisplay}" FontFamily="monospace" FontSize="12" />
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RemoteApiTokenLabel}"
                              VerticalAlignment="Center" Opacity="0.75" FontSize="12" />
-                  <SelectableTextBlock Grid.Column="1" Text="{Binding RestApiAccessToken}"
-                                       FontFamily="monospace" FontSize="12" />
+                  <SelectableTextBlock Grid.Column="1" Text="{Binding RestApiAccessTokenDisplay}"
+                                       VerticalAlignment="Center" FontFamily="monospace" FontSize="12" />
+                  <!-- API-01: token is masked by default; Reveal/Copy are enabled only when one is set. -->
+                  <ToggleButton Grid.Column="2" Content="{x:Static res:Strings.RemoteApiRevealTokenLabel}"
+                                IsChecked="{Binding RevealRestApiToken, Mode=TwoWay}"
+                                IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2"
+                                AutomationProperties.Name="{x:Static res:Strings.RemoteApiRevealTokenLabel}" />
+                  <Button Grid.Column="3" Content="{x:Static res:Strings.RemoteApiCopyTokenLabel}"
+                          Click="OnCopyRestApiTokenClick"
+                          IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2"
+                          AutomationProperties.Name="{x:Static res:Strings.RemoteApiCopyTokenLabel}" />
+                  <Button Grid.Column="4" Content="{x:Static res:Strings.RemoteApiGenerateTokenLabel}"
+                          Command="{Binding RegenerateRestApiTokenCommand}" FontSize="12" Padding="8,2" />
+                  <Button Grid.Column="5" Content="{x:Static res:Strings.RemoteApiClearTokenLabel}"
+                          Command="{Binding ClearRestApiTokenCommand}"
+                          IsEnabled="{Binding HasRestApiAccessToken}" FontSize="12" Padding="8,2" />
                 </Grid>
                 <TextBlock Text="{Binding RestApiSecurityStatus}" Opacity="0.75" FontSize="12"
                            TextWrapping="Wrap" />
@@ -382,7 +465,7 @@
             </Border>
 
             <!-- Media caches — per-machine prepared media (YouTube downloads, MMD bakes): size, open, clear. -->
-            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="0" Padding="8">
+            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.CacheSectionHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
@@ -452,7 +535,8 @@
                        FontSize="12"
                        PointerPressed="OnToastBodyPressed" />
             <StackPanel Grid.Column="2" Spacing="2">
-              <Button Padding="6,2" MinWidth="22" Command="{Binding CloseCommand}">
+              <Button Padding="6,2" MinWidth="22" Command="{Binding CloseCommand}"
+                      AutomationProperties.Name="{x:Static res:Strings.CloseButton}">
                 <PathIcon Data="{x:Static views:AppIcons.Close}" Width="9" Height="9" />
               </Button>
               <PathIcon Data="{x:Static views:AppIcons.Pin}" Width="10" Height="10"
