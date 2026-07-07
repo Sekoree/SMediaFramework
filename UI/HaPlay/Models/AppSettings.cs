@@ -36,6 +36,12 @@ public sealed class AppSettings
     /// tight pre-§8.6 spacing (the default), <see cref="AppDensityMode.Normal"/> opens it up.</summary>
     public AppDensityMode Density { get; set; } = AppDensityMode.Compact;
 
+    /// <summary>Base control theme (overall chrome look). <see cref="AppBaseTheme.Classic"/> is the in-repo
+    /// Windows-Classic skin (light only); <see cref="AppBaseTheme.Simple"/> and <see cref="AppBaseTheme.Fluent"/>
+    /// are Avalonia's built-in themes and honour the <see cref="Theme"/> light/dark variant. Saved as
+    /// "classic"/"simple"/"fluent".</summary>
+    public AppBaseTheme BaseTheme { get; set; } = AppBaseTheme.Classic;
+
     /// <summary>
     /// When true, live NDI (and similar) video keeps native UYVY into local SDL outputs instead of
     /// converting to BGRA32 first. Requires correct full-range metadata on frames.
@@ -184,6 +190,17 @@ public enum AppDensityMode
 {
     Compact,
     Normal,
+}
+
+/// <summary>Base control theme (the overall chrome look). <see cref="Classic"/> is light-only; <see cref="Simple"/>
+/// and <see cref="Fluent"/> are variant-aware (they honour <see cref="AppThemeMode"/>) and <see cref="Fluent"/>
+/// additionally supports <see cref="AppDensityMode"/>.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<AppBaseTheme>))]
+public enum AppBaseTheme
+{
+    Classic,
+    Simple,
+    Fluent,
 }
 
 

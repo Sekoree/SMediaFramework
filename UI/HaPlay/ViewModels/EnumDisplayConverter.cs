@@ -63,6 +63,9 @@ public sealed class EnumDisplayConverter : IValueConverter
             CueMIDICommandType.ActiveSensing => "Active sensing",
             CueMIDICommandType.Reset => "Reset",
 
+            AppBaseTheme.Classic => "Classic",
+            AppBaseTheme.Simple => "Simple",
+            AppBaseTheme.Fluent => "Fluent",
             AppThemeMode.System => "Follow system",
             AppThemeMode.Light => "Light",
             AppThemeMode.Dark => "Dark",

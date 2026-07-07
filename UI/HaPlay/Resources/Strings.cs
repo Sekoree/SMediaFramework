@@ -215,6 +215,11 @@ public static class Strings
     public static string RecentProjectsEmptyHint => Get(nameof(RecentProjectsEmptyHint));
     public static string DisplayHeader => Get(nameof(DisplayHeader));
     public static string DisplaySettingsHint => Get(nameof(DisplaySettingsHint));
+    public static string StyleLabel => Get(nameof(StyleLabel));
+    public static string StyleTooltip => Get(nameof(StyleTooltip));
+    public static string AppearanceRestartHint => Get(nameof(AppearanceRestartHint));
+    public static string RestartNowButton => Get(nameof(RestartNowButton));
+    public static string RestartLaterButton => Get(nameof(RestartLaterButton));
     public static string ThemeLabel => Get(nameof(ThemeLabel));
     public static string DensityLabel => Get(nameof(DensityLabel));
 

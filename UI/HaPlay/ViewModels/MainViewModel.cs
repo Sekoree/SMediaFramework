@@ -101,19 +101,21 @@ public partial class MainViewModel : ViewModelBase
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
-        // Theme/density (§8.6) — load saved values and apply them immediately. The OnXChanged hooks
-        // would re-save on first set; seed via backing fields so we don't fire that pointlessly.
+        // Appearance (§8.6) — load saved values and apply them immediately. The OnXChanged hooks would
+        // re-save on first set; seed via backing fields so we don't fire that pointlessly.
+        _baseTheme = _appSettings.BaseTheme;
         _theme = _appSettings.Theme;
         _density = _appSettings.Density;
-        // UI-01: the in-repo Classic theme has no dark variant (Dark yields a light window with a few
-        // white-on-white islands) and density is a hard no-op (App.axaml replaced FluentTheme). Until real
-        // dark + density resources exist, keep the controls hidden (see ShowAppearanceSettings) and do NOT
-        // apply a persisted/hand-edited non-default theme at startup — that only produces the broken state.
-        if (ShowAppearanceSettings)
-        {
-            AppearanceController.ApplyTheme(_theme);
-            AppearanceController.ApplyDensity(_density);
-        }
+        // Snapshot what we compose this launch; a later change to any of these is "pending" until the next
+        // restart (see AppearanceChangePending). All appearance settings are apply-at-startup only.
+        _startupBaseTheme = _baseTheme;
+        _startupTheme = _theme;
+        _startupDensity = _density;
+        // Base theme first (it decides whether the variant/density even apply), then variant + density.
+        // ApplyTheme pins Light for Classic; ApplyDensity is a no-op unless Fluent is active.
+        AppearanceController.ApplyBaseTheme(_baseTheme);
+        AppearanceController.ApplyTheme(_theme);
+        AppearanceController.ApplyDensity(_density);
         if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
             Playback.PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = _appSettings.PreferLiveUyvyPassthrough;
         var lastWorkspaceId = WorkspaceItem.MigrateLegacyId(_appSettings.LastSelectedWorkspace);
@@ -452,38 +454,101 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Phase E (§8.6): Theme & Density -------------------------------------------------------
 
-    /// <summary>UI-01: gates the Project workspace appearance controls. False while the Classic theme has
-    /// no working dark variant and density is a no-op, so the app never presents a setting that does
-    /// nothing (density) or produces a broken half-dark window (theme). Flip to <c>true</c> once the
-    /// Classic theme ships real dark + density resources, and the section reappears with no other change.</summary>
-    public bool ShowAppearanceSettings => false;
+    /// <summary>Gates the Project workspace appearance controls. Now that Simple/Fluent ship real dark +
+    /// density resources (the Classic-only limitation UI-01 called out), the section is shown. All three
+    /// settings (style / variant / density) are composed at startup; changing any surfaces a restart prompt
+    /// (<see cref="ShowAppearanceRestartPrompt"/>). The variant + density controls disable themselves for base
+    /// themes that don't support them (see <see cref="IsVariantSelectable"/> / <see cref="IsDensitySelectable"/>).</summary>
+    public bool ShowAppearanceSettings => true;
 
+    public IReadOnlyList<AppBaseTheme> BaseThemeChoices { get; } = Enum.GetValues<AppBaseTheme>();
     public IReadOnlyList<AppThemeMode> ThemeChoices { get; } = Enum.GetValues<AppThemeMode>();
     public IReadOnlyList<AppDensityMode> DensityChoices { get; } = Enum.GetValues<AppDensityMode>();
 
-    /// <summary>Phase E (§8.6) — chrome theme. Setting this both persists the choice and applies it
-    /// live to <see cref="Application.RequestedThemeVariant"/> so the UI repaints without restart.</summary>
+    /// <summary>Base control theme (§8.6). ALL appearance settings apply at startup only: a live control-theme
+    /// swap isn't reliable in Avalonia (realized controls keep their old templates, and re-styling mid-event
+    /// can corrupt the tree), and the variant/density are grouped with it so the whole panel follows one
+    /// consistent "change → restart to apply" model. Setting persists the choice; a change surfaces the
+    /// restart prompt (see <see cref="ShowAppearanceRestartPrompt"/>).</summary>
+    [ObservableProperty]
+    private AppBaseTheme _baseTheme;
+
+    /// <summary>Phase E (§8.6) — chrome light/dark variant. Persisted; composed at the next startup.</summary>
     [ObservableProperty]
     private AppThemeMode _theme;
 
-    /// <summary>Phase E (§8.6) — Fluent density. Setting this both persists and applies the change to
-    /// the live <see cref="Avalonia.Themes.Fluent.FluentTheme.DensityStyle"/>.</summary>
+    /// <summary>Phase E (§8.6) — Fluent density. Persisted; composed at the next startup.</summary>
     [ObservableProperty]
     private AppDensityMode _density;
+
+    // The appearance actually painting the running window, captured at launch. A saved value that differs
+    // from its snapshot is pending a restart.
+    private AppBaseTheme _startupBaseTheme;
+    private AppThemeMode _startupTheme;
+    private AppDensityMode _startupDensity;
+    private bool _appearancePromptDismissed;
+
+    /// <summary>True when any appearance setting (style / variant / density) differs from what's running, so a
+    /// restart is needed to compose it.</summary>
+    public bool AppearanceChangePending =>
+        BaseTheme != _startupBaseTheme || Theme != _startupTheme || Density != _startupDensity;
+
+    /// <summary>Drives the "restart now / later" prompt: shown while a change is pending and the user hasn't
+    /// chosen "Later" for it yet.</summary>
+    public bool ShowAppearanceRestartPrompt => AppearanceChangePending && !_appearancePromptDismissed;
+
+    /// <summary>The light/dark variant only applies to variant-aware base themes (Simple/Fluent); Classic
+    /// is light-only, so its selector disables.</summary>
+    public bool IsVariantSelectable => BaseTheme != AppBaseTheme.Classic;
+
+    /// <summary>Density is a Fluent-only axis; the selector disables for Classic/Simple.</summary>
+    public bool IsDensitySelectable => BaseTheme == AppBaseTheme.Fluent;
+
+    partial void OnBaseThemeChanged(AppBaseTheme value)
+    {
+        _appSettings.BaseTheme = value;
+        _appSettings.Save();
+        // The variant/density selectors gate on the newly-selected base theme so the user can pre-pick them
+        // for the pending style.
+        OnPropertyChanged(nameof(IsVariantSelectable));
+        OnPropertyChanged(nameof(IsDensitySelectable));
+        MarkAppearanceChanged();
+    }
 
     partial void OnThemeChanged(AppThemeMode value)
     {
         _appSettings.Theme = value;
         _appSettings.Save();
-        AppearanceController.ApplyTheme(value);
+        MarkAppearanceChanged();
     }
 
     partial void OnDensityChanged(AppDensityMode value)
     {
         _appSettings.Density = value;
         _appSettings.Save();
-        AppearanceController.ApplyDensity(value);
+        MarkAppearanceChanged();
     }
+
+    // Re-surface the restart prompt on every appearance change (even if a prior change was dismissed) and
+    // refresh the pending state.
+    private void MarkAppearanceChanged()
+    {
+        _appearancePromptDismissed = false;
+        OnPropertyChanged(nameof(AppearanceChangePending));
+        OnPropertyChanged(nameof(ShowAppearanceRestartPrompt));
+    }
+
+    /// <summary>"Later" — keep the running appearance; the saved choice applies on the next launch.</summary>
+    [RelayCommand]
+    private void DismissAppearanceRestart()
+    {
+        _appearancePromptDismissed = true;
+        OnPropertyChanged(nameof(ShowAppearanceRestartPrompt));
+    }
+
+    /// <summary>"Restart now" — relaunch so the saved appearance is composed fresh at startup.</summary>
+    [RelayCommand]
+    private void RestartApp() => AppRestart.Restart();
 
     // ----- Player tabs --------------------------------------------------------------------------
     // The full player list remains the project/remote/source of truth. The tab collection excludes

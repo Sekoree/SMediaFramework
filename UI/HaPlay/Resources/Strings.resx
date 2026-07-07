@@ -164,7 +164,22 @@
     <value>Display</value>
   </data>
   <data name="DisplaySettingsHint" xml:space="preserve">
-    <value>Theme and density apply to this machine and persist in app-settings.json — they are not saved in the project.</value>
+    <value>Style, theme and density apply to this machine and persist in app-settings.json — they are not saved in the project.</value>
+  </data>
+  <data name="StyleLabel" xml:space="preserve">
+    <value>Style</value>
+  </data>
+  <data name="StyleTooltip" xml:space="preserve">
+    <value>Overall control look. Classic is the Windows-classic skin (light only); Simple and Fluent are modern themes that also support dark mode. Appearance changes take effect after restarting the app.</value>
+  </data>
+  <data name="AppearanceRestartHint" xml:space="preserve">
+    <value>Appearance changes apply after a restart. Restart now, or keep the current look and apply on the next launch?</value>
+  </data>
+  <data name="RestartNowButton" xml:space="preserve">
+    <value>Restart now</value>
+  </data>
+  <data name="RestartLaterButton" xml:space="preserve">
+    <value>Later</value>
   </data>
   <data name="ThemeLabel" xml:space="preserve">
     <value>Theme</value>

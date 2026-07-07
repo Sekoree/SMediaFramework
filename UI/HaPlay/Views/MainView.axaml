@@ -310,19 +310,35 @@
 
           <StackPanel Grid.Column="1" Spacing="10">
             <!-- §8.6 Display preferences — per-machine, not part of the project file.
-                 UI-01: hidden until the Classic theme has real dark + density resources (density is a
-                 no-op today and Dark renders a broken half-dark window). Toggle via ShowAppearanceSettings. -->
+                 Style = base control theme (Classic / Simple / Fluent). The Theme (light/dark) and Density
+                 controls disable for base themes that don't support them: Classic is light-only, and only
+                 Fluent has a density axis. -->
             <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
                     IsVisible="{Binding ShowAppearanceSettings}">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.DisplaySettingsHint}" />
-                <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto" Margin="0,4,0,0">
-                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
-                  <ComboBox Grid.Column="1"
+                <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto,Auto" Margin="0,4,0,0">
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.StyleLabel}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Row="0" Grid.Column="1"
+                            ItemsSource="{Binding BaseThemeChoices}"
+                            SelectedItem="{Binding BaseTheme}"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="{x:Static res:Strings.StyleTooltip}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Grid.Row="0" Grid.Column="3" Text="{x:Static res:Strings.ThemeLabel}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Row="0" Grid.Column="4"
                             ItemsSource="{Binding ThemeChoices}"
                             SelectedItem="{Binding Theme}"
+                            IsEnabled="{Binding IsVariantSelectable}"
                             HorizontalAlignment="Stretch">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
@@ -330,11 +346,13 @@
                       </DataTemplate>
                     </ComboBox.ItemTemplate>
                   </ComboBox>
-                  <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
-                  <ComboBox Grid.Column="4"
+                  <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.DensityLabel}"
+                             VerticalAlignment="Center" Margin="0,6,0,0" />
+                  <ComboBox Grid.Row="1" Grid.Column="1"
                             ItemsSource="{Binding DensityChoices}"
                             SelectedItem="{Binding Density}"
-                            HorizontalAlignment="Stretch">
+                            IsEnabled="{Binding IsDensitySelectable}"
+                            HorizontalAlignment="Stretch" Margin="0,6,0,0">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -342,6 +360,22 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                 </Grid>
+                <!-- Appearance changes are composed at startup only (a live control-theme swap isn't reliable
+                     in Avalonia), so when a setting differs from what's running, ask whether to restart now
+                     or later (Later keeps the current look; the choice applies on the next launch). -->
+                <Border IsVisible="{Binding ShowAppearanceRestartPrompt}" Margin="0,4,0,0"
+                        Background="{StaticResource ChipNeutral}" CornerRadius="0" Padding="8,6">
+                  <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                    <PathIcon Grid.Column="0" Data="{x:Static views:AppIcons.Info}" Width="13" Height="13"
+                              VerticalAlignment="Center" Foreground="{StaticResource AccentWarn}" />
+                    <TextBlock Grid.Column="1" Text="{x:Static res:Strings.AppearanceRestartHint}" FontSize="12"
+                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Classes="Std Go" Content="{x:Static res:Strings.RestartNowButton}"
+                            Command="{Binding RestartAppCommand}" />
+                    <Button Grid.Column="3" Classes="Std" Content="{x:Static res:Strings.RestartLaterButton}"
+                            Command="{Binding DismissAppearanceRestartCommand}" />
+                  </Grid>
+                </Border>
               </StackPanel>
             </Border>
 

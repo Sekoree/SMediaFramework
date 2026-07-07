@@ -1,0 +1,10 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:simple="using:Avalonia.Themes.Simple"
+        x:Class="HaPlay.Themes.SimpleThemeBundle">
+  <!-- Avalonia's built-in Simple theme (a flat, light middle-ground between Classic and Fluent) with the
+       package TreeDataGrid + ColorPicker themes. Variant-aware: honours the light/dark RequestedThemeVariant. -->
+  <simple:SimpleTheme />
+  <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml" />
+  <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Simple/Simple.xaml" />
+</Styles>

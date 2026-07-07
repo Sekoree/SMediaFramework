@@ -1,0 +1,24 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:classic="using:Classic.Avalonia.Theme"
+        xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
+        x:Class="HaPlay.Themes.ClassicThemeBundle">
+  <!-- The Windows-Classic look (in-repo Avalonia-12 port, External/Classic.Avalonia) bundled with its
+       bespoke TreeDataGrid + ColorPicker themes. Composed in XAML so the StyleIncludes stay compile-time
+       (trim/AOT-safe); AppearanceController constructs this type to swap Styles[0]. FontAliasing off: the
+       theme's authentic Win95 aliased text is hard to read on modern displays. -->
+  <classic:ClassicTheme FontAliasing="False" />
+  <StyleInclude Source="avares://HaPlay/Styles/ClassicTreeDataGrid.axaml" />
+  <StyleInclude Source="avares://Classic.Avalonia.Theme.ColorPicker/Classic.axaml" />
+
+  <!-- Classic-only AppIcons foreground: paint PathIcons with the Classic Win32 text colour, flipping to
+       HighlightText inside a selected row so they stay readable on the Highlight-blue band. This is scoped
+       to Classic on purpose — the Simple/Fluent bundles omit it so their PathIcons inherit the theme's
+       variant-aware foreground (and stay visible on dark backgrounds). -->
+  <Style Selector="PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlTextBrushKey}}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.HighlightTextBrushKey}}" />
+  </Style>
+</Styles>
