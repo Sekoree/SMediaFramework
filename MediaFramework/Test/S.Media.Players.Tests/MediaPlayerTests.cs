@@ -127,7 +127,10 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         // load, some players would produce no audio within the soak window. We assert every player stays
         // scheduled and record the thread cost, so a "consolidate the scheduler" decision can be made on
         // evidence rather than speculation (the finding: the per-clip model keeps every clip scheduled here).
-        const int players = 24;
+        // Scale the count with core count: the representative max is 24, but a constrained CI runner (2 cores,
+        // heavily contended) would otherwise be oversubscribed into a multi-minute stall / blame-hang. Kept at
+        // ≥2× cores so the per-clip model is still exercised under real oversubscription — which is the point.
+        var players = Math.Clamp(Environment.ProcessorCount * 2, 4, 24);
         var startThreads = Process.GetCurrentProcess().Threads.Count;
 
         var running = new List<(MediaPlayer Player, CollectingBackend Backend)>();

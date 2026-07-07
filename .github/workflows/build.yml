@@ -42,9 +42,13 @@ jobs:
 
       # The subtitle stack (libass + a font), the GL/A-V smokes, and the HaPlay launch gate need native libs
       # the runners don't ship. libportaudio2 lets the app's audio module register (no devices needed).
+      # libass-dev (not just libass9): LibAssLib binds [LibraryImport("ass")], so the loader probes the
+      # UNVERSIONED libass.so, but libass9 ships only libass.so.9 — the -dev package adds the libass.so linker
+      # symlink. (The artifact job ships its own libass.so next to the app; this is the equivalent for the
+      # system-libass smoke here.)
       - name: Install libass + smoke prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
+        run: sudo apt-get install -y libass9 libass-dev fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
       # FFmpeg.AutoGen 8.1.0 loads the VERSIONED soname (libavformat.so.62 = FFmpeg 8.x). Ubuntu's apt ffmpeg
       # is 6.1 (libavformat.so.60), so the managed decoders can't dlopen it and every avformat_* call throws
