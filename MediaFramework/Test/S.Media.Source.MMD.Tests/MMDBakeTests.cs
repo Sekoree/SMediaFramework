@@ -124,7 +124,7 @@ public sealed class MMDBakeTests
     }
 
     [Fact]
-    public void BakeCache_EvictsCompletedBakes_AndSurvivesCallerCancellation()
+    public async Task BakeCache_EvictsCompletedBakes_AndSurvivesCallerCancellation()
     {
         // MMD-01: a caller cancelling its wait must not poison the shared bake, and completed bakes must
         // not linger forever in the in-flight table (so their results stay collectable).
@@ -137,10 +137,10 @@ public sealed class MMDBakeTests
             using var cts = new CancellationTokenSource();
             cts.Cancel();
             var cancelled = MMDPhysicsBakeCache.BakeAsync("m.pmx", "v.vmd", model, motion, cancellation: cts.Token);
-            Assert.Throws<TaskCanceledException>(() => cancelled.GetAwaiter().GetResult());
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
 
             // Retry with no cancellation still yields a valid bake (the shared work was never poisoned).
-            var baked = MMDPhysicsBakeCache.BakeAsync("m.pmx", "v.vmd", model, motion).GetAwaiter().GetResult();
+            var baked = await MMDPhysicsBakeCache.BakeAsync("m.pmx", "v.vmd", model, motion);
             Assert.NotNull(baked);
             Assert.True(baked!.DrivesBone(1));
 
@@ -156,7 +156,7 @@ public sealed class MMDBakeTests
     }
 
     [Fact]
-    public void BakeCache_DeletesCorruptCache_AndRebakes()
+    public async Task BakeCache_DeletesCorruptCache_AndRebakes()
     {
         // MMD-02: an unreadable/incompatible cache file is deleted and rebaked, not returned or duplicated.
         var (model, motion) = PendulumScene();
@@ -165,14 +165,14 @@ public sealed class MMDBakeTests
         MMDPhysicsBakeCache.CacheDirectory = directory;
         try
         {
-            var baked = MMDPhysicsBakeCache.BakeAsync("m.pmx", "v.vmd", model, motion).GetAwaiter().GetResult();
+            var baked = await MMDPhysicsBakeCache.BakeAsync("m.pmx", "v.vmd", model, motion);
             Assert.NotNull(baked);
             var file = Assert.Single(Directory.GetFiles(directory, "*.mmdbake"));
             File.WriteAllText(file, "not a valid bake");
 
             var (ready, pending) = MMDPhysicsBakeCache.LoadOrStart("m.pmx", "v.vmd", model, motion);
             Assert.Null(ready); // corrupt cache is not offered as ready
-            var rebaked = pending.GetAwaiter().GetResult();
+            var rebaked = await pending;
             Assert.NotNull(rebaked);
             Assert.True(rebaked!.DrivesBone(1));
             Assert.Single(Directory.GetFiles(directory, "*.mmdbake")); // replaced atomically, not duplicated
@@ -193,7 +193,7 @@ public sealed class MMDBakeTests
     }
 
     [Fact]
-    public void BakeCache_WritesOnce_ThenLoadsInstantly()
+    public async Task BakeCache_WritesOnce_ThenLoadsInstantly()
     {
         var (model, motion) = PendulumScene();
         var directory = Path.Combine(Path.GetTempPath(), "mmd-bake-test-" + Guid.NewGuid().ToString("N"));
@@ -204,7 +204,7 @@ public sealed class MMDBakeTests
             // Paths only key the cache file name — they need not exist.
             var (ready, pending) = MMDPhysicsBakeCache.LoadOrStart("model.pmx", "motion.vmd", model, motion);
             Assert.Null(ready);
-            var baked = pending.GetAwaiter().GetResult();
+            var baked = await pending;
             Assert.NotNull(baked);
             Assert.Single(Directory.GetFiles(directory, "*.mmdbake"));
 

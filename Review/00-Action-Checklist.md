@@ -19,9 +19,9 @@ docs + coverage.
 - [ ] **CTRL-01** — Replace the unbounded control-event `Channel` with a bounded one; coalesce continuous controls (fader/encoder/meter), preserve lifecycle/button edges, expose dropped/coalesced counters; never block native MIDI/UDP receive callbacks. Add flood tests with a slow runtime. *(Control; 06)*
 - [ ] **MMD-01** — Store only in-flight bakes; evict in a `finally` only if the entry still refers to the completing task; treat cancelled work as retryable; separate shared bake lifetime from per-caller waiting (`sharedTask.WaitAsync(callerToken)`); clean stale `.partial` on failure. Add success-eviction, cancel-then-retry, concurrent-join, result-collectability tests. *(MMD; 05)*
 - [ ] **ABI-01** — Reconcile `s_media_player.h` with `NativeApi`: implement real error mapping (`MFP_ERR_NOT_FOUND`) and real state reporting (idle/playing/paused/ended/error), and either an audio-capable `mfp_session_create` or a corrected header. Add a C conformance test for every documented return/state. *(Interop; 07)*
-- [ ] **ABI-02** — Add per-session reference-counted call leases + a closing state (or require+enforce caller serialization); make `mfp_shutdown` reject/defer until active calls drain. Add concurrent go/query/destroy/shutdown stress from C. *(Interop; 07)*
+- [x] **ABI-02** — Add per-session reference-counted call leases + a closing state (or require+enforce caller serialization); make `mfp_shutdown` reject/defer until active calls drain. Add concurrent go/query/destroy/shutdown stress from C. *(Interop; 07; verified 2026-07-07)*
 - [ ] **API-01 / UX-09** — Stop shipping the token in URLs/clipboard: default docs to header-auth `POST`, mask the token with explicit reveal/copy/regenerate, require HTTPS (embedded cert/reverse proxy) or short-lived scoped tokens for LAN, and store the secret in OS credential storage when available (warn on file fallback). *(HaPlay remote + UX; 08/09)*
-- [ ] **REL-01** — Define required/optional native manifests per RID; fail artifact creation when required libs are absent; load-probe them from the publish dir and run the published app + backend enumeration against that exact directory. *(CI/release; 10)*
+- [x] **REL-01** — Define required/optional native manifests per RID; fail artifact creation when required libs are absent; load-probe them from the publish dir and run the published app + backend enumeration against that exact directory. *(CI/release; 10; gates added 2026-07-07)*
 
 ---
 
@@ -63,11 +63,11 @@ docs + coverage.
 - [ ] **PLUG-02** — Define host serialization or per-adapter operation leases; test dispose during blocked submit/read/render with a deliberately slow plugin. *(Interop; 07)*
 
 ### HaPlay application
-- [ ] **API-02** — Status/read endpoints GET, mutations POST only; return `405` + `Allow`; consider idempotency/request IDs. *(HaPlay; 08)*
-- [ ] **API-03** — Add a bounded concurrency gate, per-request timeout/shutdown token, header/query size limits, and in-flight tracking; `Stop` prevents new dispatch and awaits handlers with a deadline. *(HaPlay; 08)*
+- [x] **API-02** — Status/read endpoints GET, mutations POST only; return `405` + `Allow`; consider idempotency/request IDs. *(HaPlay; 08; verified 2026-07-07)*
+- [x] **API-03** — Add a bounded concurrency gate, per-request timeout/shutdown token, header/query size limits, and in-flight tracking; `Stop` prevents new dispatch and awaits handlers with a deadline. *(HaPlay; 08; verified 2026-07-07)*
 - [ ] **UI-01** — Remove/disable theme + density until the Classic theme has real dark + density resources (density is a hard no-op; dark yields white-on-white in variant-aware controls). Add a headless test asserting a measurable resource/control property. *(HaPlay; 08)*
-- [ ] **SET-01** — Save settings via the existing atomic temp-and-move (`ProjectIO`), keep one backup, log/recover corrupt files, coalesce frequent window-placement writes. *(HaPlay; 08)*
-- [ ] **LOG-01** — Use `Channel.CreateBounded<string>` (SingleReader, DropOldest), track dropped lines, batch writes/flush on a short interval, force-flush only on warn/error/shutdown, bound message length, lower the default capacity. *(HaPlay; 08)*
+- [x] **SET-01** — Save settings via the existing atomic temp-and-move (`ProjectIO`), keep one backup, log/recover corrupt files, coalesce frequent window-placement writes. *(HaPlay; 08; corrupt-primary recovery regression verified 2026-07-07)*
+- [x] **LOG-01** — Use `Channel.CreateBounded<string>` (SingleReader, DropOldest), track dropped lines, batch writes/flush on a short interval, force-flush only on warn/error/shutdown, bound message length, lower the default capacity. *(HaPlay; 08; defaults corrected 2026-07-07)*
 - [ ] **APP-02** — Extract owned services with explicit lifetimes (remote-API host, endpoint-health monitor, project session, workspace registry); keep timers/native lifecycle/persistence out of the view model. *(HaPlay; 08)*
 
 ### HaPlay UX / accessibility
@@ -99,18 +99,18 @@ docs + coverage.
 - [ ] **GPU-01** — Publish one ownership/threading table for CPU frames, GL textures, DMABUF/D3D handles, compositor surfaces, and presenters. *(GPU; 03)*
 - [ ] **NDI-02** — Add wakeup rate, buffered duration, dropped frames, reconnect count, and shutdown latency to diagnostics + soak asserts. *(NDI; 03)*
 - [ ] **SESSION-03** — Replace the migration-phase comments in `ShowDocument.cs` with current behavioral/threading/ownership guarantees. *(Session; 04)*
-- [ ] **YT-03** — Add configurable max cache size/age, LRU cleanup after successful prepare, and protection for in-flight assets. *(YouTube; 05)*
+- [x] **YT-03** — Add configurable max cache size/age, LRU cleanup after successful prepare, and protection for in-flight assets. *(YouTube; 05; cross-request asset race verified 2026-07-07)*
 - [ ] **CTRL-04** — Document projects/scripts as trusted code; show script sources/capabilities before first activation for downloaded projects; add a "disable control scripts on open" preference. *(Control; 06)*
 - [ ] **MIDI-01** — Add opt-in Windows/Linux device-loop tests using virtual MIDI; surface PortMidi version/capability in diagnostics. *(MIDI; 06)*
 - [ ] **AOT-01** — Pin and document the accepted Mond `IL2026`; add a runtime test of the affected error/stack path in the published AOT smoke; revisit on Mond upgrades. *(AOT; 06)*
 - [ ] **APP-01** — Disable the endpoint-health timer when zero endpoints; restart it on collection changes; suppress success logs for empty/unchanged sweeps at normal trace. *(HaPlay; 08)*
-- [ ] **APP-03** — Profile initialization (module probing, PortAudio acquire/release churn); defer non-essential work off the first-frame path (startup self-reports >1 s). *(HaPlay; 08)*
+- [x] **APP-03** — Profile initialization (module probing, PortAudio acquire/release churn); defer non-essential work off the first-frame path (startup self-reports >1 s). *(HaPlay; 08; hidden workspaces deferred, 776 ms measured 2026-07-07)*
 - [ ] **UX-05** — Define semantic color tokens (primary action, selected, live, held, warning, error/panic, healthy, disabled, secondary text); use spacing/section headers before more borders; measure contrast; reserve saturated colors for operational state. *(UX; 09)*
 - [ ] **UX-06** — Add a HaPlay icon family at platform sizes + a consistent wordmark/name; fix stale `HaPlayer` naming. *(UX; 09)*
 - [ ] **UX-07** — Route all user-facing strings through one resource system (errors, tooltips, empty states, dialog titles, enum names, shortcut descriptions); add a lint rule for raw `Text`/`Content`/`Header`/`Title` literals. *(UX; 09)*
 - [ ] **DOCS-02** — Decide the distribution model (source/project-ref, NuGet, or single host SDK); add only the appropriate packaging metadata + API-compat checks; avoid dozens of accidental packages. *(Docs; 10)*
-- [ ] **BUILD-01** — Treat first-party compiler/analyzer warnings as errors (narrow documented suppressions); capture expected AOT warning IDs/counts so new ones fail CI. *(Build; 10)*
-- [ ] **BUILD-03** — Baseline expected warning IDs/counts from a **clean** build (not incremental) and fail CI on drift (incremental builds hid the MMD `CA2014`s). *(Build; 10)*
+- [x] **BUILD-01** — Treat first-party compiler/analyzer warnings as errors (narrow documented suppressions); capture expected AOT warning IDs/counts so new ones fail CI. *(Build; 10; enforced repo-wide 2026-07-07)*
+- [x] **BUILD-03** — Baseline expected warning IDs/counts from a **clean** build (not incremental) and fail CI on drift (incremental builds hid the MMD `CA2014`s). *(Build; 10; clean baseline: zero build warnings, one documented AOT IL2026)*
 - [ ] **REPO-01** — Delete the orphaned `UI/HaPlay.{App,Controls,Core}` directories (only `bin/obj`, not in the solution). *(Repo; 10)*
 
 ---
@@ -126,8 +126,8 @@ docs + coverage.
 - [ ] Appearance settings cause observable, tested changes — or are not shown.
 
 ### CI / release quality gates (10)
-- [ ] Required-native manifest + load probe for each uploaded RID.
-- [ ] Zero unexpected build/AOT warnings (from a clean build).
+- [x] Required-native manifest + load probe for each uploaded RID. *(CI gates added 2026-07-07.)*
+- [x] Zero unexpected build/AOT warnings (from a clean build). *(Locally verified 2026-07-07; Mond IL2026 remains the documented exception.)*
 - [ ] Full unit + architecture suite on Linux and Windows.
 - [ ] Gating Linux software-GL HaPlay launch, subtitle render, and C ABI conformance.
 - [ ] Windows published-app launch + PortAudio/libass load probes.

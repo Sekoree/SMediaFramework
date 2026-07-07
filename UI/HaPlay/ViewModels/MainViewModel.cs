@@ -39,6 +39,7 @@ public partial class MainViewModel : ViewModelBase
     // The cue workspace's ShowSession runtime, its output leases, reloads, and progress polls all live on the
     // coordinator (extracted from this VM — review Part-5 #3); this VM only constructs and forwards to it.
     private readonly CueShowSessionCoordinator _cueShow;
+    private int _shutdownCleanupStarted;
     private bool _midiInitialized;
     private readonly EndpointHealthMonitor _endpointHealth;
 
@@ -161,7 +162,14 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Best-effort shutdown teardown (called by the app lifetime): tears down the cue workspace's
     /// ShowSession + its output leases via the coordinator. Players are reclaimed by process-exit, as before.</summary>
-    public void ShutdownCleanup() => _cueShow.ShutdownCleanup();
+    public void ShutdownCleanup()
+    {
+        if (Interlocked.Exchange(ref _shutdownCleanupStarted, 1) != 0)
+            return;
+        _endpointHealth.Dispose();
+        _remoteApi.Dispose();
+        _cueShow.ShutdownCleanup();
+    }
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
 
@@ -381,6 +389,15 @@ public partial class MainViewModel : ViewModelBase
     public bool IsControlWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Control;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
 
+    // Construct the three largest hidden views on first visit, not during the first-frame path. Once loaded,
+    // retain their content so editor state and pop-out hosts survive subsequent workspace switches (PERF-01).
+    private bool _cueWorkspaceLoaded;
+    private bool _soundboardWorkspaceLoaded;
+    private bool _controlWorkspaceLoaded;
+    public CuePlayerViewModel? LoadedCueWorkspace => _cueWorkspaceLoaded ? CuePlayer : null;
+    public SoundboardWorkspaceViewModel? LoadedSoundboardWorkspace => _soundboardWorkspaceLoaded ? Soundboard : null;
+    public ControlWorkspaceViewModel? LoadedControlWorkspace => _controlWorkspaceLoaded ? Control : null;
+
     partial void OnSidebarCollapsedChanged(bool value)
     {
         _appSettings.SidebarCollapsed = value;
@@ -389,6 +406,21 @@ public partial class MainViewModel : ViewModelBase
 
     partial void OnSelectedWorkspaceChanged(WorkspaceItem value)
     {
+        if (value == WorkspaceItem.Cues && !_cueWorkspaceLoaded)
+        {
+            _cueWorkspaceLoaded = true;
+            OnPropertyChanged(nameof(LoadedCueWorkspace));
+        }
+        else if (value == WorkspaceItem.Soundboard && !_soundboardWorkspaceLoaded)
+        {
+            _soundboardWorkspaceLoaded = true;
+            OnPropertyChanged(nameof(LoadedSoundboardWorkspace));
+        }
+        else if (value == WorkspaceItem.Control && !_controlWorkspaceLoaded)
+        {
+            _controlWorkspaceLoaded = true;
+            OnPropertyChanged(nameof(LoadedControlWorkspace));
+        }
         _appSettings.LastSelectedWorkspace = value.Id;
         _appSettings.Save();
         if (value == WorkspaceItem.Project)

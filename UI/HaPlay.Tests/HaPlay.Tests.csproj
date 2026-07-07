@@ -6,6 +6,10 @@
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+        <!-- These tests intentionally exercise reflection-based compatibility JSON overloads to prove legacy
+             wire shapes. The shipped app uses source-generated contexts; trim/AOT warnings here do not describe
+             production code and are narrowly baselined so every other clean-build warning remains visible. -->
+        <NoWarn>$(NoWarn);IL2026;IL3050</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>

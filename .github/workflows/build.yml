@@ -166,6 +166,7 @@ jobs:
         env:
           HAPLAY_SMOKE: '1'
           LIBGL_ALWAYS_SOFTWARE: 1
+          HAPLAY_SETTINGS_PATH: ${{ runner.temp }}/haplay-linux-settings.json
         run: xvfb-run -a ./haplay-publish/HaPlayer --media-log-level information
 
       # Windows runners have a service desktop; the launch there is unproven — run it best-effort until it
@@ -176,6 +177,7 @@ jobs:
         timeout-minutes: 5
         env:
           HAPLAY_SMOKE: '1'
+          HAPLAY_SETTINGS_PATH: ${{ runner.temp }}/haplay-windows-settings.json
         run: ./haplay-publish/HaPlayer.exe --media-log-level information
 
   # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -209,7 +211,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang zlib1g-dev patchelf
+          sudo apt-get install -y clang zlib1g-dev patchelf python3 xvfb libgl1 libgl1-mesa-dri fonts-dejavu-core
 
       # ─── Linux natives: apt (portaudio/portmidi/libass), compiled miniaudio, DistroAV NDI, BtbN FFmpeg ───
       # apt libs go into the artifact so it's portable; their ubiquitous deps (freetype/fontconfig/alsa)
@@ -395,6 +397,41 @@ jobs:
       - name: Validate required natives (REL-01)
         shell: bash
         run: bash scripts/check-native-manifest.sh ${{ matrix.rid }} haplay-publish
+
+      - name: Load-probe required natives (REL-01)
+        shell: bash
+        run: bash scripts/load-probe-native-manifest.sh ${{ matrix.rid }} haplay-publish
+
+      # Run the exact directory uploaded below, after native staging + load probes. The app reports backend
+      # enumeration during startup and HAPLAY_SMOKE exits only after the first rendered frame and normal teardown.
+      - name: Launch uploaded Linux app + enumerate backends (REL-01/REL-02)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          HAPLAY_SMOKE: '1'
+          LIBGL_ALWAYS_SOFTWARE: 1
+          LD_LIBRARY_PATH: ${{ github.workspace }}/haplay-publish
+          HAPLAY_SETTINGS_PATH: ${{ runner.temp }}/haplay-linux-settings.json
+        run: |
+          set -o pipefail
+          out="$(timeout 60s xvfb-run -a ./haplay-publish/HaPlayer --media-log-level information 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q "MediaRuntime ready" || { echo "backend enumeration was not reached"; exit 1; }
+          echo "$out" | grep -q "HAPLAY_SMOKE: first frame rendered" || { echo "first-frame smoke was not reached"; exit 1; }
+
+      - name: Launch uploaded Windows app + enumerate backends (REL-01/REL-02)
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          HAPLAY_SMOKE: '1'
+          HAPLAY_SETTINGS_PATH: ${{ runner.temp }}/haplay-windows-settings.json
+        run: |
+          $output = & .\haplay-publish\HaPlayer.exe --media-log-level information 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) { throw "HaPlayer exited $LASTEXITCODE" }
+          if ($output -notmatch 'MediaRuntime ready') { throw 'backend enumeration was not reached' }
+          if ($output -notmatch 'HAPLAY_SMOKE: first frame rendered') { throw 'first-frame smoke was not reached' }
 
       - name: Upload HaPlay.Desktop artifact
         uses: actions/upload-artifact@v4

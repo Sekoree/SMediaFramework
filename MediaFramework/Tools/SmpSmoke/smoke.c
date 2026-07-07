@@ -18,6 +18,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 static const char* EMPTY_SHOW =
     "{\"Version\":1,\"Cues\":[],\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
@@ -80,6 +81,82 @@ static int run_concurrency_check(void) {
     }
 
     mfp_session_destroy(s); /* leases already drained (all readers joined) */
+    return 0;
+}
+
+/* ABI-02: destroy must actually race calls that are still issuing leases. Workers accept the point at which
+ * destroy removes the handle (INVALID_HANDLE), but no other failure and no crash/use-after-free is legal. */
+typedef struct { mfp_session s; atomic_int* entered; atomic_int* stop; int rc; } destroy_arg;
+
+static void* destroy_worker(void* p) {
+    destroy_arg* a = (destroy_arg*)p;
+    a->rc = 0;
+    atomic_fetch_add(a->entered, 1);
+    while (!atomic_load(a->stop)) {
+        int state = mfp_session_state(a->s, NULL);
+        if (state < 0 && state != MFP_ERR_INVALID_HANDLE) { a->rc = 1; return NULL; }
+        if (state == MFP_ERR_INVALID_HANDLE) return NULL;
+    }
+    return NULL;
+}
+
+static int run_destroy_race_check(void) {
+    mfp_session s = mfp_session_create();
+    CHECK(s != NULL, "destroy-race: create");
+    CHECK(mfp_session_load_show(s, EMPTY_SHOW) == MFP_OK, "destroy-race: load");
+
+    atomic_int entered = 0;
+    atomic_int stop = 0;
+    pthread_t th[CC_THREADS];
+    destroy_arg args[CC_THREADS];
+    for (int i = 0; i < CC_THREADS; i++) {
+        args[i] = (destroy_arg){ s, &entered, &stop, -1 };
+        CHECK(pthread_create(&th[i], NULL, destroy_worker, &args[i]) == 0, "destroy-race: spawn");
+    }
+    while (atomic_load(&entered) != CC_THREADS) { }
+    mfp_session_destroy(s); /* races active/next query leases and must drain safely */
+    atomic_store(&stop, 1);
+    for (int i = 0; i < CC_THREADS; i++) {
+        pthread_join(th[i], NULL);
+        CHECK(args[i].rc == 0, "destroy-race: worker saw an unexpected result");
+    }
+    return 0;
+}
+
+/* ABI-02: shutdown closes the runtime generation atomically with its handle snapshot. Calls already leased
+ * drain; subsequent calls report NOT_INITIALIZED, and no creator/query can publish work behind the snapshot. */
+static void* shutdown_worker(void* p) {
+    destroy_arg* a = (destroy_arg*)p;
+    a->rc = 0;
+    atomic_fetch_add(a->entered, 1);
+    while (!atomic_load(a->stop)) {
+        int state = mfp_session_state(a->s, NULL);
+        if (state < 0 && state != MFP_ERR_NOT_INITIALIZED) { a->rc = 1; return NULL; }
+        if (state == MFP_ERR_NOT_INITIALIZED) return NULL;
+    }
+    return NULL;
+}
+
+static int run_shutdown_race_check(void) {
+    mfp_session s = mfp_session_create();
+    CHECK(s != NULL, "shutdown-race: create");
+    CHECK(mfp_session_load_show(s, EMPTY_SHOW) == MFP_OK, "shutdown-race: load");
+
+    atomic_int entered = 0;
+    atomic_int stop = 0;
+    pthread_t th[CC_THREADS];
+    destroy_arg args[CC_THREADS];
+    for (int i = 0; i < CC_THREADS; i++) {
+        args[i] = (destroy_arg){ s, &entered, &stop, -1 };
+        CHECK(pthread_create(&th[i], NULL, shutdown_worker, &args[i]) == 0, "shutdown-race: spawn");
+    }
+    while (atomic_load(&entered) != CC_THREADS) { }
+    mfp_shutdown();
+    atomic_store(&stop, 1);
+    for (int i = 0; i < CC_THREADS; i++) {
+        pthread_join(th[i], NULL);
+        CHECK(args[i].rc == 0, "shutdown-race: worker saw an unexpected result");
+    }
     return 0;
 }
 
@@ -152,10 +229,22 @@ int main(int argc, char** argv) {
     /* ABI-03 conformance extensions — run while the runtime is still initialized. */
     if (run_error_contract_checks() != 0) return 1;
     if (run_concurrency_check() != 0) return 1;
+    if (run_destroy_race_check() != 0) return 1;
 
-    mfp_shutdown();
+    /* Invalid-argument paths must release their call lease too. This used to make destroy wait 30 seconds. */
+    {
+        mfp_session bad_arg = mfp_session_create();
+        CHECK(bad_arg != NULL, "bad-arg lease: create");
+        CHECK(mfp_session_cue_id(bad_arg, 0, NULL, 0) == MFP_ERR_INVALID_ARG,
+              "bad-arg lease: null output buffer rejected");
+        mfp_session_destroy(bad_arg);
+    }
+
+    if (run_shutdown_race_check() != 0) return 1;
     /* After shutdown the runtime refuses handles but does not crash, and destroy stays valid (no-op). */
-    CHECK(mfp_session_state(s, NULL) < 0, "post-shutdown call rejected");
+    CHECK(mfp_session_state(s, NULL) == MFP_ERR_NOT_INITIALIZED,
+          "post-shutdown call reports NOT_INITIALIZED");
+    CHECK(mfp_session_create() == NULL, "post-shutdown create rejected");
     mfp_session_destroy(s);
 
     /* ABI-03: the runtime survives repeated init/shutdown cycles (no one-shot global state left behind). */

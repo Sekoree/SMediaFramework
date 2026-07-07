@@ -12,6 +12,8 @@ namespace HaPlay.Models;
 /// </summary>
 public sealed class AppSettings
 {
+    private static readonly Lock FileGate = new();
+    internal static string? FilePathOverride { get; set; }
     public bool SidebarCollapsed { get; set; }
 
     /// <summary>Workspace selected on last shutdown — restored on next launch.</summary>
@@ -62,7 +64,21 @@ public sealed class AppSettings
     {
         get
         {
+            if (FilePathOverride is { Length: > 0 } overridden)
+                return overridden;
+            if (Environment.GetEnvironmentVariable("HAPLAY_SETTINGS_PATH") is { Length: > 0 } environmentPath)
+                return Path.GetFullPath(environmentPath);
             var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            // NativeAOT can return an empty special-folder path in minimal/service environments. Falling
+            // through to Path.Combine("", ...) writes settings into the process working directory (and can
+            // contaminate a release staging tree), so retain a user-scoped fallback.
+            if (string.IsNullOrWhiteSpace(local))
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                local = string.IsNullOrWhiteSpace(home)
+                    ? Path.Combine(Path.GetTempPath(), "HaPlay-user")
+                    : Path.Combine(home, ".local", "share");
+            }
             return Path.Combine(local, "HaPlay", "app-settings.json");
         }
     }
@@ -71,21 +87,24 @@ public sealed class AppSettings
     /// (SET-01). A missing file is a clean first-run (no log); an unreadable file is logged.</summary>
     public static AppSettings Load()
     {
-        var path = FilePath;
-        if (TryLoadFrom(path, out var primary))
-            return primary;
-
-        var primaryExisted = File.Exists(path);
-        if (TryLoadFrom(path + ".bak", out var backup))
+        lock (FileGate)
         {
-            if (primaryExisted)
-                MediaDiagnostics.LogWarning("AppSettings: primary settings file was unreadable; recovered from backup.");
-            return backup;
-        }
+            var path = FilePath;
+            if (TryLoadFrom(path, out var primary))
+                return primary;
 
-        if (primaryExisted)
-            MediaDiagnostics.LogWarning("AppSettings: settings file was unreadable and no usable backup exists; using defaults.");
-        return new AppSettings();
+            var primaryExisted = File.Exists(path);
+            if (TryLoadFrom(path + ".bak", out var backup))
+            {
+                if (primaryExisted)
+                    MediaDiagnostics.LogWarning("AppSettings: primary settings file was unreadable; recovered from backup.");
+                return backup;
+            }
+
+            if (primaryExisted)
+                MediaDiagnostics.LogWarning("AppSettings: settings file was unreadable and no usable backup exists; using defaults.");
+            return new AppSettings();
+        }
     }
 
     private static bool TryLoadFrom(string path, [NotNullWhen(true)] out AppSettings? settings)
@@ -109,41 +128,45 @@ public sealed class AppSettings
     /// previous good file so a partial/corrupt write is recoverable (SET-01). Never throws.</summary>
     public void Save()
     {
-        var path = FilePath;
-        string? temp = null;
-        try
+        lock (FileGate)
         {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
-
-            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            var path = FilePath;
+            string? temp = null;
+            try
             {
-                JsonSerializer.Serialize(stream, this, AppSettingsJsonContext.Default.AppSettings);
-                stream.Flush(flushToDisk: true);
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir))
+                    Directory.CreateDirectory(dir);
+
+                temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    JsonSerializer.Serialize(stream, this, AppSettingsJsonContext.Default.AppSettings);
+                    stream.Flush(flushToDisk: true);
+                }
+
+                // Keep one backup of the last KNOWN-GOOD primary. Never overwrite a valid backup with a corrupt
+                // primary recovered from that backup; if the final move then failed, both copies would be lost.
+                if (TryLoadFrom(path, out _))
+                {
+                    try { File.Copy(path, path + ".bak", overwrite: true); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* backup is best-effort */ }
+                }
+
+                File.Move(temp, path, overwrite: true);
+                temp = null;
             }
-
-            // Keep one backup of the last good file before overwriting it.
-            if (File.Exists(path))
+            catch (Exception ex)
             {
-                try { File.Copy(path, path + ".bak", overwrite: true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* backup is best-effort */ }
+                MediaDiagnostics.LogWarning($"AppSettings.Save failed ({ex.GetType().Name}: {ex.Message}); previous settings retained.");
             }
-
-            File.Move(temp, path, overwrite: true);
-            temp = null;
-        }
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogWarning($"AppSettings.Save failed ({ex.GetType().Name}: {ex.Message}); previous settings retained.");
-        }
-        finally
-        {
-            if (temp is not null)
+            finally
             {
-                try { File.Delete(temp); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
+                if (temp is not null)
+                {
+                    try { File.Delete(temp); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
+                }
             }
         }
     }

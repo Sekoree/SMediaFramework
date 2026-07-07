@@ -13,8 +13,7 @@ namespace HaPlay.Remote;
 /// (no web-framework dependency — the app publishes NativeAOT). Binds loopback by default; LAN binding is
 /// an explicit operator choice. The access token is <strong>optional</strong>: this control surface targets
 /// closed-LAN automation (e.g. Bitfocus Companion), so when no token is configured every request is allowed;
-/// set a token to require it (compared in constant time). GET and POST are both accepted so simple HTTP
-/// action clients work without a body.
+/// set a token to require it (compared in constant time). Status is read with GET; commands require POST.
 /// </summary>
 public sealed class RestApiServer : IDisposable
 {
@@ -35,6 +34,7 @@ public sealed class RestApiServer : IDisposable
 
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
+    private Task? _acceptLoop;
 
     /// <summary>Human-facing base URL (LAN address when available) — what Copy-API-URL uses.</summary>
     public string? BaseUrl { get; private set; }
@@ -88,15 +88,20 @@ public sealed class RestApiServer : IDisposable
         _listener = listener;
         _cts = new CancellationTokenSource();
         BaseUrl = $"http://{ResolveAdvertisedHost(bindAllInterfaces && StatusNote is null)}:{port}";
-        _ = AcceptLoopAsync(listener, dispatcher, accessToken, _cts.Token);
+        _acceptLoop = AcceptLoopAsync(listener, dispatcher, accessToken, _cts.Token);
         Trace.LogInformation("RestApiServer: listening on port {Port} (advertised {BaseUrl}, lan={Lan})", port, BaseUrl, bindAllInterfaces && StatusNote is null);
         return true;
     }
 
     public void Stop()
     {
+        var cts = _cts;
+        var acceptLoop = _acceptLoop;
+        _cts = null;
+        _acceptLoop = null;
+
         // Prevent new dispatch first (the accept loop checks the token), then stop the listener.
-        try { _cts?.Cancel(); } catch { /* best effort */ }
+        try { cts?.Cancel(); } catch { /* best effort */ }
         if (_listener is { } listener)
         {
             _listener = null;
@@ -104,21 +109,67 @@ public sealed class RestApiServer : IDisposable
             try { listener.Close(); } catch { /* best effort */ }
         }
 
-        // API-03: await in-flight handlers with a deadline so shutdown neither hangs on a slow client nor
-        // tears state out from under a live request. Handlers return promptly (they kick commands off
-        // without awaiting playback), so this is normally instant.
-        Task[] pending;
-        lock (_inflightGate)
-            pending = [.. _inflight];
-        if (pending.Length > 0)
+        // API-03: drain asynchronously. Stop is called by UI-thread settings hooks; synchronously waiting here
+        // deadlocks with a handler queued to Dispatcher.UIThread. Cancellation prevents any not-yet-dispatched
+        // command from running, while the background drain keeps the old CTS alive until handlers leave.
+        if (cts is not null)
+            _ = DrainStoppedGenerationAsync(cts, acceptLoop);
+        BaseUrl = null;
+    }
+
+    private async Task DrainStoppedGenerationAsync(CancellationTokenSource cts, Task? acceptLoop)
+    {
+        Task[] pending = [];
+        try
         {
-            try { Task.WaitAll(pending, StopDrainTimeout); }
-            catch { /* best effort — individual handlers log their own failures */ }
+            // Wait for the producer to stop before taking the final handler snapshot. Otherwise it could
+            // publish a task just after Stop captured _inflight, and the old generation's CTS could be
+            // disposed while that handler was still linking its request token.
+            if (acceptLoop is not null)
+                await acceptLoop.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Trace.LogDebug(ex, "RestApiServer: accept loop completed with an error during stop");
         }
 
-        _cts?.Dispose();
-        _cts = null;
-        BaseUrl = null;
+        // No handler can be added by this generation after its accept loop exits, so this snapshot is final.
+        lock (_inflightGate)
+            pending = [.. _inflight];
+        if (pending.Length == 0)
+        {
+            cts.Dispose();
+            return;
+        }
+
+        var allHandlers = Task.WhenAll(pending);
+        try
+        {
+            await allHandlers.WaitAsync(StopDrainTimeout).ConfigureAwait(false);
+            cts.Dispose();
+        }
+        catch (TimeoutException)
+        {
+            Trace.LogWarning("RestApiServer: {Count} handler task(s) did not drain within {Timeout}s", pending.Length, StopDrainTimeout.TotalSeconds);
+            _ = DisposeCtsAfterHandlersAsync(cts, allHandlers);
+        }
+        catch (OperationCanceledException)
+        {
+            cts.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.LogDebug(ex, "RestApiServer: stopped generation completed with a handler error");
+            cts.Dispose();
+        }
+    }
+
+    private static async Task DisposeCtsAfterHandlersAsync(CancellationTokenSource cts, Task handlers)
+    {
+        try { await handlers.ConfigureAwait(false); }
+        catch { /* individual handlers already log their failures */ }
+        finally { cts.Dispose(); }
     }
 
     public void Dispose() => Stop();
@@ -236,7 +287,7 @@ public sealed class RestApiServer : IDisposable
             {
                 statusCode = 204;
                 response.StatusCode = statusCode;
-                response.Headers["Allow"] = "GET, POST, OPTIONS";
+                response.Headers["Allow"] = RemoteApiDispatcher.AllowedMethodsFor(path);
                 response.Close();
                 return;
             }
@@ -266,10 +317,12 @@ public sealed class RestApiServer : IDisposable
             authorized = true;
 
             // Bound a hung dispatch by the per-request deadline (API-03).
-            var result = await dispatcher.ExecuteAsync(method, path, query)
+            var result = await dispatcher.ExecuteAsync(method, path, query, requestToken)
                 .WaitAsync(requestToken).ConfigureAwait(false);
 
             statusCode = result.Status;
+            if (result.Allow is { } allow)
+                response.Headers["Allow"] = allow;
             await WriteResultAsync(response, result).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestToken.IsCancellationRequested)

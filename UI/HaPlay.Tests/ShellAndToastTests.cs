@@ -5,7 +5,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>UI rewrite P1 (plan §1): merged 5-workspace shell + the toast overlay queue.</summary>
+/// <summary>UI rewrite P1 (plan §1): workspace shell + the toast overlay queue.</summary>
 public sealed class ShellAndToastTests
 {
     private static void DispatchUi(Action action) =>
@@ -14,16 +14,52 @@ public sealed class ShellAndToastTests
             .Dispatch(action, CancellationToken.None);
 
     [Fact]
-    public void Workspaces_AreTheMergedFiveEntrySet()
+    public void Workspaces_ContainAllSixEntries()
     {
         DispatchUi(static () =>
         {
             var vm = new MainViewModel();
 
             Assert.Equal(
-                [WorkspaceItem.Players, WorkspaceItem.Cues, WorkspaceItem.Control, WorkspaceItem.Io, WorkspaceItem.Project],
+                [WorkspaceItem.Players, WorkspaceItem.Cues, WorkspaceItem.Soundboard, WorkspaceItem.Control, WorkspaceItem.Io, WorkspaceItem.Project],
                 vm.Workspaces);
         });
+    }
+
+    [Fact]
+    public void HeavyWorkspaceViews_AreExposedOnlyAfterFirstVisit_AndThenRetained()
+    {
+        var dir = Directory.CreateTempSubdirectory("haplay-workspace-").FullName;
+        AppSettings.FilePathOverride = Path.Combine(dir, "app-settings.json");
+        try
+        {
+            DispatchUi(static () =>
+            {
+                var vm = new MainViewModel();
+                Assert.Same(WorkspaceItem.Players, vm.SelectedWorkspace);
+                Assert.Null(vm.LoadedCueWorkspace);
+                Assert.Null(vm.LoadedSoundboardWorkspace);
+                Assert.Null(vm.LoadedControlWorkspace);
+
+                vm.SelectedWorkspace = WorkspaceItem.Cues;
+                Assert.Same(vm.CuePlayer, vm.LoadedCueWorkspace);
+                vm.SelectedWorkspace = WorkspaceItem.Soundboard;
+                Assert.Same(vm.Soundboard, vm.LoadedSoundboardWorkspace);
+                vm.SelectedWorkspace = WorkspaceItem.Control;
+                Assert.Same(vm.Control, vm.LoadedControlWorkspace);
+
+                vm.SelectedWorkspace = WorkspaceItem.Players;
+                Assert.Same(vm.CuePlayer, vm.LoadedCueWorkspace);
+                Assert.Same(vm.Soundboard, vm.LoadedSoundboardWorkspace);
+                Assert.Same(vm.Control, vm.LoadedControlWorkspace);
+                vm.ShutdownCleanup();
+            });
+        }
+        finally
+        {
+            AppSettings.FilePathOverride = null;
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
     }
 
     [Fact]

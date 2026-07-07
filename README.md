@@ -148,7 +148,7 @@ dotnet publish UI/HaPlay.Desktop -c Release -r linux-x64   # or win-x64
 - **Remote API:** an optional HTTP control surface (Bitfocus Companion, stream decks, …). **Off by default;
   binds loopback only** unless LAN is explicitly enabled. The access **token is optional** — set one to
   require authentication (compared in constant time); with no token the API is open on whatever it's bound to
-  (intended for a closed show LAN). GET and POST are both accepted. See the Project workspace and
+  (intended for a closed show LAN). Use GET for status and POST for commands. See the Project workspace and
   `UI/HaPlay/Remote/`.
 - **Control scripts are trusted code.** A project's Control system can carry Mond scripts that run arbitrary
   logic (MIDI/OSC glue) when the control system is **armed**. For safety a project always opens **disarmed**

@@ -104,7 +104,7 @@ public sealed class YouTubeCaptionConverterTests
     {
         var result = YoutubeExplodeGateway.WithCaptionFormat(url, "json3");
         Assert.Contains(expectedFragment, result);
-        Assert.Single(result.Split('&').Where(p => p.StartsWith("fmt=")));
+        Assert.Single(result.Split('&'), p => p.StartsWith("fmt="));
     }
 
     [Fact]

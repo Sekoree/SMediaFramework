@@ -167,6 +167,30 @@ public sealed class YouTubeModuleTests : IDisposable
     }
 
     [Fact]
+    public async Task Prepare_DifferentRequestsResolvingToSameAsset_SerializeOneAtomicRemux()
+    {
+        // "best" and this explicit pair resolve to the same final cache key but have different pre-resolution
+        // coalescing keys. They must share the asset-path lease rather than write the same .partial concurrently.
+        var gateway = new FakeGateway { DownloadDelay = TimeSpan.FromMilliseconds(100) };
+        var remuxCalls = 0;
+        var preparer = new YouTubePreparer(gateway, _dir, (v, a, output, ct) =>
+        {
+            Interlocked.Increment(ref remuxCalls);
+            Thread.Sleep(100);
+            FakeRemux(v, a, output, ct);
+        });
+
+        var best = preparer.PrepareAsync("dQw4w9WgXcQ", YouTubeStreamSelection.Best);
+        var explicitPair = preparer.PrepareAsync(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en"));
+        var results = await Task.WhenAll(best, explicitPair);
+
+        Assert.Equal(results[0].AssetPath, results[1].AssetPath);
+        Assert.Equal(1, remuxCalls);
+        Assert.Empty(Directory.GetFiles(_dir, "*.partial"));
+    }
+
+    [Fact]
     public async Task Prepare_OneCallerCancels_OthersStillComplete_SharedRunSurvives()
     {
         // YT-02: cancelling one caller's wait must not abort the shared prepare other callers joined.

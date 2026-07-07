@@ -5,7 +5,7 @@ using HaPlay.ViewModels;
 namespace HaPlay.Remote;
 
 /// <summary>HTTP-status-shaped outcome of one remote command.</summary>
-public readonly record struct RemoteApiResult(int Status, string Body)
+public readonly record struct RemoteApiResult(int Status, string Body, string? Allow = null)
 {
     // JsonEncodedText (not JsonSerializer) — the app publishes NativeAOT with source-gen-only
     // serialization, and these tiny payloads don't justify a context type.
@@ -14,6 +14,9 @@ public readonly record struct RemoteApiResult(int Status, string Body)
 
     public static RemoteApiResult Fail(int status, string error) =>
         new(status, $"{{\"ok\":false,\"error\":\"{JsonEncodedText.Encode(error)}\"}}");
+
+    public static RemoteApiResult MethodNotAllowed(string allow) =>
+        new(405, $"{{\"ok\":false,\"error\":\"Use {JsonEncodedText.Encode(allow)}.\"}}", allow);
 }
 
 /// <summary>
@@ -22,7 +25,7 @@ public readonly record struct RemoteApiResult(int Status, string Body)
 /// target and *kicks off* the command without awaiting playback — transports can block for seconds
 /// on prefill, and a remote controller needs the request to return immediately.
 ///
-/// URL scheme (all indices 1-based, matching the UI labels; GET and POST both accepted):
+/// URL scheme (all indices 1-based, matching the UI labels; status is GET, mutations are POST):
 ///   /api/v1/status
 ///   /api/v1/cues/go|pause|resume|stop|panic
 ///   /api/v1/players/{player}/play|pause|toggle|stop|next|prev
@@ -55,11 +58,9 @@ public sealed class RemoteApiDispatcher
     public async Task<RemoteApiResult> ExecuteAsync(
         string method,
         string path,
-        IReadOnlyDictionary<string, string>? query = null)
+        IReadOnlyDictionary<string, string>? query = null,
+        CancellationToken cancellationToken = default)
     {
-        if (method is not ("GET" or "POST"))
-            return RemoteApiResult.Fail(405, "Use GET or POST.");
-
         var segments = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         var index = 0;
         if (index < segments.Length && segments[index].Equals("api", StringComparison.OrdinalIgnoreCase))
@@ -73,10 +74,35 @@ public sealed class RemoteApiDispatcher
         var rest = segments[(index + 1)..];
         query ??= new Dictionary<string, string>();
 
+        var allow = domain == "status" ? "GET" : "POST";
+        if (!string.Equals(method, allow, StringComparison.OrdinalIgnoreCase))
+            return RemoteApiResult.MethodNotAllowed(allow);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
         // VM access has UI-thread affinity; tests already run on the headless UI thread.
         if (Dispatcher.UIThread.CheckAccess())
             return Handle(domain, rest, query);
-        return await Dispatcher.UIThread.InvokeAsync(() => Handle(domain, rest, query));
+        return await Dispatcher.UIThread.InvokeAsync(
+            () => Handle(domain, rest, query),
+            DispatcherPriority.Normal,
+            cancellationToken);
+    }
+
+    /// <summary>Value for HTTP <c>Allow</c>: the one legal application method plus OPTIONS.</summary>
+    public static string AllowedMethodsFor(string path)
+    {
+        var segments = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var index = 0;
+        if (index < segments.Length && segments[index].Equals("api", StringComparison.OrdinalIgnoreCase))
+            index++;
+        if (index < segments.Length && segments[index].Equals("v1", StringComparison.OrdinalIgnoreCase))
+            index++;
+        var domain = index < segments.Length ? segments[index] : null;
+        // Only /api/v1/status is read-only; all command domains are mutations.
+        return string.Equals(domain, "status", StringComparison.OrdinalIgnoreCase)
+            ? "GET, OPTIONS"
+            : "POST, OPTIONS";
     }
 
     private RemoteApiResult Handle(string domain, string[] rest, IReadOnlyDictionary<string, string> query) =>

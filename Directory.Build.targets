@@ -3,17 +3,11 @@
   <!-- Intentionally minimal. The repo is self-contained; per-module native deployment (PortAudio, PortMidi,
        SDL3, FFmpeg, NDI, libass, …) is added in the phase that introduces the native dependency. -->
 
-  <!-- BUILD-01: treat first-party compiler/analyzer/trim/AOT warnings as ERRORS on the production library
-       surface, so a new warning fails the build instead of blending into the tail. Scope:
-         • Production libraries only — IsAotCompatible is true (test projects opt out with false) and the
-           project is not an executable (Exe tools/app opt out via OutputType).
-         • A project may still override by setting TreatWarningsAsErrors explicitly, and narrow, documented
-           per-warning exceptions go in a project's own <NoWarn>.
-       This lives in .targets (not .props) so the condition sees the project's own final IsAotCompatible /
-       OutputType (which .props evaluates before the project body could override them). We force the value
-       (the SDK has already defaulted TreatWarningsAsErrors to 'false' by now); a production library that
-       genuinely must opt out sets <SkipWarningsAsErrors>true</SkipWarningsAsErrors>. -->
-  <PropertyGroup Condition="'$(IsAotCompatible)' == 'true' and '$(OutputType)' != 'Exe' and '$(SkipWarningsAsErrors)' != 'true'">
+  <!-- BUILD-01/BUILD-03: every repo project — production, app, tool, and test — must compile warning-free.
+       Keeping this in .targets overrides the SDK's late default. A narrow accepted warning remains visible by
+       listing its ID in that project's WarningsNotAsErrors; blanket suppression is not the baseline policy.
+       A project that genuinely cannot participate may document and set SkipWarningsAsErrors=true. -->
+  <PropertyGroup Condition="'$(SkipWarningsAsErrors)' != 'true'">
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 

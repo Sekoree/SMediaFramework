@@ -36,6 +36,12 @@ public sealed class YouTubePreparer
     private readonly object _inFlightGate = new();
     private readonly Dictionary<string, PrepareEntry> _inFlight = new(StringComparer.Ordinal);
 
+    // Different request identities can resolve to the same concrete asset (for example "best" and an explicit
+    // descriptor pair). Serialize those runs by final asset path and keep every active asset protected from LRU
+    // cleanup. Ref-counting lets the keyed semaphore disappear once its last holder/waiter leaves.
+    private readonly object _assetGate = new();
+    private readonly Dictionary<string, AssetLeaseEntry> _activeAssets = new(StringComparer.Ordinal);
+
     /// <summary>Default cache root: <c>~/.cache/mfplayer/youtube</c> (or the platform equivalent).</summary>
     public static string DefaultCacheRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "mfplayer", "youtube-cache");
@@ -173,6 +179,50 @@ public sealed class YouTubePreparer
         public int Refs;
     }
 
+    private sealed class AssetLeaseEntry
+    {
+        public readonly SemaphoreSlim Semaphore = new(1, 1);
+        public int Refs;
+    }
+
+    private async Task<AssetLeaseEntry> AcquireAssetLeaseAsync(string assetPath, CancellationToken cancellationToken)
+    {
+        AssetLeaseEntry entry;
+        lock (_assetGate)
+        {
+            if (!_activeAssets.TryGetValue(assetPath, out entry!))
+                _activeAssets[assetPath] = entry = new AssetLeaseEntry();
+            entry.Refs++;
+        }
+
+        try
+        {
+            await entry.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return entry;
+        }
+        catch
+        {
+            ReleaseAssetReference(assetPath, entry, acquired: false);
+            throw;
+        }
+    }
+
+    private void ReleaseAssetReference(string assetPath, AssetLeaseEntry entry, bool acquired)
+    {
+        if (acquired)
+            entry.Semaphore.Release();
+        lock (_assetGate)
+        {
+            if (--entry.Refs == 0
+                && _activeAssets.TryGetValue(assetPath, out var current)
+                && ReferenceEquals(current, entry))
+            {
+                _activeAssets.Remove(assetPath);
+                entry.Semaphore.Dispose();
+            }
+        }
+    }
+
     /// <summary>YT-03: bound the committed-asset cache. Evicts committed <c>.mkv</c> assets (and their
     /// <c>.ass</c> subtitle sidecars) that are older than <see cref="_maxCacheAge"/> or, oldest-first, over
     /// <see cref="_maxCacheBytes"/>. Only ever touches final committed assets — never <c>.partial</c> temps or
@@ -190,8 +240,12 @@ public sealed class YouTubePreparer
                 return;
 
             var keep = Path.GetFullPath(keepAssetPath);
+            HashSet<string> protectedAssets;
+            lock (_assetGate)
+                protectedAssets = _activeAssets.Keys.Select(Path.GetFullPath).ToHashSet(StringComparer.Ordinal);
             var assets = dir.GetFiles("*.mkv")
-                .Where(f => !string.Equals(f.FullName, keep, StringComparison.Ordinal))
+                .Where(f => !string.Equals(f.FullName, keep, StringComparison.Ordinal)
+                            && !protectedAssets.Contains(Path.GetFullPath(f.FullName)))
                 .OrderBy(f => f.LastWriteTimeUtc) // LRU: oldest first
                 .ToList();
 
@@ -274,70 +328,78 @@ public sealed class YouTubePreparer
             ? Path.Combine(_cacheRoot, $"{key}.{lang}.ass")
             : null;
 
-        if (!File.Exists(assetPath))
+        var assetLease = await AcquireAssetLeaseAsync(assetPath, cancellationToken).ConfigureAwait(false);
+        try
         {
-            // Per-stream caches (keyed by each stream's own descriptor) so changing ONE stream selection
-            // reuses the other — swapping audio keeps the cached video and vice-versa, instead of
-            // re-downloading both. They persist for that reuse (like the .mkv assets); only the remux is temp.
-            var videoCache = videoDescriptor is null ? null : StreamCachePath(videoId, videoDescriptor, ".v");
-            var audioCache = audioDescriptor is null ? null : StreamCachePath(videoId, audioDescriptor, ".a");
-            var assetTemp = assetPath + ".partial";
-            try
+            if (!File.Exists(assetPath))
             {
-                if (videoCache is not null && !File.Exists(videoCache))
+                // Per-stream caches (keyed by each stream's own descriptor) so changing ONE stream selection
+                // reuses the other — swapping audio keeps the cached video and vice-versa, instead of
+                // re-downloading both. They persist for that reuse (like the .mkv assets); only the remux is temp.
+                var videoCache = videoDescriptor is null ? null : StreamCachePath(videoId, videoDescriptor, ".v");
+                var audioCache = audioDescriptor is null ? null : StreamCachePath(videoId, audioDescriptor, ".a");
+                var assetTemp = $"{assetPath}.{Guid.NewGuid():N}.partial";
+                try
                 {
-                    progress?.Report(new(YouTubePreparePhase.DownloadingVideo, 0));
-                    await DownloadToCacheAsync(
-                        videoDescriptor!, videoCache,
-                        Wrap(progress, YouTubePreparePhase.DownloadingVideo)).ConfigureAwait(false);
-                }
+                    if (videoCache is not null && !File.Exists(videoCache))
+                    {
+                        progress?.Report(new(YouTubePreparePhase.DownloadingVideo, 0));
+                        await DownloadToCacheAsync(
+                            videoDescriptor!, videoCache,
+                            Wrap(progress, YouTubePreparePhase.DownloadingVideo)).ConfigureAwait(false);
+                    }
 
-                if (audioCache is not null && !File.Exists(audioCache))
+                    if (audioCache is not null && !File.Exists(audioCache))
+                    {
+                        progress?.Report(new(YouTubePreparePhase.DownloadingAudio, 0));
+                        await DownloadToCacheAsync(
+                            audioDescriptor!, audioCache,
+                            Wrap(progress, YouTubePreparePhase.DownloadingAudio)).ConfigureAwait(false);
+                    }
+
+                    progress?.Report(new(YouTubePreparePhase.Remuxing, 0));
+                    await Task.Run(
+                        () => _remux(videoCache, audioCache, assetTemp, cancellationToken),
+                        cancellationToken).ConfigureAwait(false);
+
+                    File.Move(assetTemp, assetPath, overwrite: true); // atomic commit — readers only ever see complete assets
+                }
+                finally
                 {
-                    progress?.Report(new(YouTubePreparePhase.DownloadingAudio, 0));
-                    await DownloadToCacheAsync(
-                        audioDescriptor!, audioCache,
-                        Wrap(progress, YouTubePreparePhase.DownloadingAudio)).ConfigureAwait(false);
+                    TryDelete(assetTemp);
+                    // videoCache / audioCache are intentionally KEPT for reuse across stream-selection changes.
                 }
-
-                progress?.Report(new(YouTubePreparePhase.Remuxing, 0));
-                await Task.Run(
-                    () => _remux(videoCache, audioCache, assetTemp, cancellationToken),
-                    cancellationToken).ConfigureAwait(false);
-
-                File.Move(assetTemp, assetPath, overwrite: true); // atomic commit — readers only ever see complete assets
             }
-            finally
+
+            if (subtitlePath is not null && !File.Exists(subtitlePath))
             {
-                TryDelete(assetTemp);
-                // videoCache / audioCache are intentionally KEPT for reuse across stream-selection changes.
+                var subTemp = $"{subtitlePath}.{Guid.NewGuid():N}.partial";
+                try
+                {
+                    if (await _gateway.TryDownloadCaptionsAssAsync(
+                            videoId, selection.SubtitleLanguage!, subTemp, cancellationToken).ConfigureAwait(false))
+                        File.Move(subTemp, subtitlePath, overwrite: true);
+                    else
+                        subtitlePath = null; // requested language not offered — asset still plays
+                }
+                finally
+                {
+                    TryDelete(subTemp);
+                }
             }
+
+            progress?.Report(new(YouTubePreparePhase.Ready, 1));
+            TryCleanupCache(assetPath); // YT-03: LRU/age eviction, protecting every active prepare.
+            var resolved = new YouTubeStreamSelection(videoDescriptor, audioDescriptor, selection.SubtitleLanguage)
+            {
+                IncludeVideo = selection.IncludeVideo,
+            };
+            return new YouTubePreparedMedia(assetPath, subtitlePath, manifest, resolved);
         }
-
-        if (subtitlePath is not null && !File.Exists(subtitlePath))
+        finally
         {
-            var subTemp = subtitlePath + ".partial";
-            try
-            {
-                if (await _gateway.TryDownloadCaptionsAssAsync(
-                        videoId, selection.SubtitleLanguage!, subTemp, cancellationToken).ConfigureAwait(false))
-                    File.Move(subTemp, subtitlePath, overwrite: true);
-                else
-                    subtitlePath = null; // requested language not offered — asset still plays
-            }
-            finally
-            {
-                TryDelete(subTemp);
-            }
+            ReleaseAssetReference(assetPath, assetLease, acquired: true);
         }
-
-        progress?.Report(new(YouTubePreparePhase.Ready, 1));
-        TryCleanupCache(assetPath); // YT-03: LRU/age eviction, protecting the asset just prepared.
-        var resolved = new YouTubeStreamSelection(videoDescriptor, audioDescriptor, selection.SubtitleLanguage)
-        {
-            IncludeVideo = selection.IncludeVideo,
-        };
-        return new YouTubePreparedMedia(assetPath, subtitlePath, manifest, resolved);
 
         // Download one stream into its content-addressed cache atomically: to a unique temp, then rename into
         // place. A concurrent prepare that reuses the same stream either finds the finished cache file (and

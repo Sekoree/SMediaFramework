@@ -80,6 +80,11 @@ public sealed class EndpointHealthMonitor : IDisposable
         {
             timing?.SetOutcome($"reason={reason} cancelled");
         }
+        catch (Exception ex)
+        {
+            timing?.SetOutcome($"reason={reason} failed={ex.GetType().Name}");
+            _log.LogWarning(ex, "EndpointHealthMonitor: {Reason} health sweep failed", reason);
+        }
         finally
         {
             // Keep the latest CTS for the next run to cancel; only dispose this one if it was already replaced.

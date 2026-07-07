@@ -10,6 +10,9 @@
              tears down (Pa_Terminate + host dispose) under the HAPLAY_SMOKE gate. dotnet run stays JIT;
              only `dotnet publish` pays the AOT compile. -->
         <PublishAot>true</PublishAot>
+        <!-- Same single accepted warning as AotSmoke: Mond uses StackFrame.GetMethod only to enrich script
+             error text. Keep it visible during publish while repo-wide warnings-as-errors rejects every other ID. -->
+        <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026</WarningsNotAsErrors>
         <!-- The exe assembly can't be "HaPlay" (the UI library owns that name; avares://HaPlay/... resource
              URIs target it) and the project-name default "HaPlay.Desktop" makes file managers mistake the
              binary for an XDG ".Desktop" entry. Ship a plain, distinct binary name instead. A case-only

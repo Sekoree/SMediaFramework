@@ -1,4 +1,5 @@
 using Avalonia.Headless;
+using System.Diagnostics;
 using HaPlay.Models;
 using HaPlay.Remote;
 using HaPlay.ViewModels;
@@ -41,6 +42,11 @@ public sealed class RemoteApiDispatcherTests
             Assert.Equal(404, Execute(dispatcher, "/api/v1/nope").Status);
             Assert.Equal(404, Execute(dispatcher, "/api/v1/cues/launch").Status);
             Assert.Equal(405, Execute(dispatcher, "/api/v1/cues/go", method: "DELETE").Status);
+            var getMutation = Execute(dispatcher, "/api/v1/cues/go", method: "GET");
+            Assert.Equal(405, getMutation.Status);
+            Assert.Equal("POST", getMutation.Allow);
+            Assert.Equal("GET, OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/status/detail"));
+            Assert.Equal("POST, OPTIONS", RemoteApiDispatcher.AllowedMethodsFor("/api/v1/cues/go"));
         });
     }
 
@@ -208,7 +214,8 @@ public sealed class RemoteApiDispatcherTests
     public async Task HttpServer_RoundTrips_StatusCommandAndNotFound()
     {
         var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly);
-        var (unauthorizedCode, statusCode, statusBody, tapCode, notFoundCode) = await session.Dispatch(async () =>
+        var (unauthorizedCode, statusCode, statusBody, tapCode, notFoundCode, getMutationCode, getMutationAllow) =
+            await session.Dispatch(async () =>
         {
             var cues = new CuePlayerViewModel();
             var soundboard = new SoundboardWorkspaceViewModel();
@@ -230,8 +237,12 @@ public sealed class RemoteApiDispatcherTests
             using var bearer = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/soundboards/1/1/tap");
             bearer.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             var tap = await http.SendAsync(bearer);
-            var notFound = await http.GetAsync($"{baseUrl}/api/v1/bogus?key={token}");
-            return ((int)unauthorized.StatusCode, (int)status.StatusCode, body, (int)tap.StatusCode, (int)notFound.StatusCode);
+            using var notFoundRequest = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/bogus?key={token}");
+            var notFound = await http.SendAsync(notFoundRequest);
+            var getMutation = await http.GetAsync($"{baseUrl}/api/v1/soundboards/1/1/tap?key={token}");
+            return ((int)unauthorized.StatusCode, (int)status.StatusCode, body, (int)tap.StatusCode,
+                (int)notFound.StatusCode, (int)getMutation.StatusCode,
+                getMutation.Content.Headers.Allow.SingleOrDefault());
         }, CancellationToken.None);
 
         Assert.Equal(401, unauthorizedCode);
@@ -239,6 +250,8 @@ public sealed class RemoteApiDispatcherTests
         Assert.Contains("\"ok\":true", statusBody);
         Assert.Equal(200, tapCode);
         Assert.Equal(404, notFoundCode);
+        Assert.Equal(405, getMutationCode);
+        Assert.Equal("POST", getMutationAllow);
     }
 
     [Fact]
@@ -272,6 +285,41 @@ public sealed class RemoteApiDispatcherTests
         Assert.Equal(200, noTokenStatus);
         Assert.Equal(401, tokenNoKeyStatus);
         Assert.Equal(200, tokenWithKeyStatus);
+    }
+
+    [Fact]
+    public async Task HttpServer_Stop_DoesNotBlockUiThreadWhenDispatchIsQueued()
+    {
+        var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly);
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        Task<HttpResponseMessage>? request = null;
+
+        var elapsed = await session.Dispatch(() =>
+        {
+            var dispatcher = new RemoteApiDispatcher(
+                new CuePlayerViewModel(), () => [], new SoundboardWorkspaceViewModel(), null);
+            using var server = new RestApiServer();
+            var port = GetFreePort();
+            Assert.True(server.Start(port, dispatcher, accessToken: null));
+
+            // Keep the UI thread occupied long enough for the listener to queue its UI dispatch, then stop
+            // from that same UI thread. A synchronous handler drain waits on itself here (the old 2 s stall).
+            request = http.PostAsync($"{server.BaseUrl}/api/v1/cues/stop", content: null);
+            Thread.Sleep(100);
+            var started = Stopwatch.GetTimestamp();
+            server.Stop();
+            return Stopwatch.GetElapsedTime(started);
+        }, CancellationToken.None);
+
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(500), $"Stop blocked the UI thread for {elapsed.TotalMilliseconds:0} ms");
+        try
+        {
+            using var response = await request!.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or TimeoutException)
+        {
+            // Cancellation/connection close is the expected outcome; the assertion is that Stop returns promptly.
+        }
     }
 
     [Fact]

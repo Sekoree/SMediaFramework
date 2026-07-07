@@ -243,7 +243,15 @@
           </Button>
         </StackPanel>
         <ContentControl x:Name="CuesPopoutHost">
-          <views:CuePlayerView DataContext="{Binding CuePlayer}" />
+          <!-- The outer host must contain a Control for PopoutRegion to reparent. The inner ContentControl
+               keeps the heavy view deferred until LoadedCueWorkspace becomes non-null. -->
+          <ContentControl Content="{Binding LoadedCueWorkspace}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:CuePlayerViewModel">
+                <views:CuePlayerView />
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
         </ContentControl>
       </DockPanel>
 
@@ -261,12 +269,24 @@
           </Button>
         </StackPanel>
         <ContentControl x:Name="SoundboardPopoutHost">
-          <views:SoundboardView DataContext="{Binding Soundboard}" />
+          <ContentControl Content="{Binding LoadedSoundboardWorkspace}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:SoundboardWorkspaceViewModel">
+                <views:SoundboardView />
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
         </ContentControl>
       </DockPanel>
 
-      <views:ControlWorkspaceView DataContext="{Binding Control}"
-          IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsControlWorkspaceSelected}" />
+      <ContentControl Content="{Binding LoadedControlWorkspace}"
+                      IsVisible="{Binding IsControlWorkspaceSelected}">
+        <ContentControl.ContentTemplate>
+          <DataTemplate x:DataType="vm:ControlWorkspaceViewModel">
+            <views:ControlWorkspaceView />
+          </DataTemplate>
+        </ContentControl.ContentTemplate>
+      </ContentControl>
 
       <!-- Scrolls when the window is too short for the display / remote-api / media-cache sections
            (the cache rows at the bottom used to land out of bounds on a small window). -->

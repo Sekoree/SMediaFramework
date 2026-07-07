@@ -14,7 +14,7 @@ namespace S.Media.Interop;
 /// <see cref="ShowSession"/>, AOT-published as <c>s_media_player.so</c>/<c>.dll</c>. Each export is sync over the
 /// session's async dispatcher (block on the returned task — the dispatcher runs on its own thread, so no deadlock).
 /// Nothing throws across the boundary: failures set a thread-local last error (see <see cref="mfp_last_error"/>)
-/// and return a negative status / null handle. Handles are <see cref="GCHandle"/>s to a <see cref="SessionBox"/>.
+/// and return a negative status / null handle. Handles are opaque monotonic tokens resolved through a guarded table.
 /// </summary>
 internal static unsafe class NativeApi
 {
@@ -33,7 +33,8 @@ internal static unsafe class NativeApi
     private const int MfpStateError = 4;
 
     /// <summary>Bound on how long <c>mfp_session_destroy</c>/<c>mfp_shutdown</c> wait for in-flight calls on a
-    /// session to drain before giving up and leaking (rather than disposing under a live call — ABI-02).</summary>
+    /// session to drain before returning. A timed-out teardown is completed in the background after the final
+    /// lease leaves, rather than disposing under a live call — ABI-02.</summary>
     private static readonly TimeSpan CallDrainTimeout = TimeSpan.FromSeconds(30);
 
     private static volatile bool s_initialized;
@@ -63,6 +64,7 @@ internal static unsafe class NativeApi
         public int ActiveCalls;     // guarded by s_handleGate
         public bool Closing;        // guarded by s_handleGate
         public readonly ManualResetEventSlim Idle = new(initialState: true);
+        public int DisposeStarted;
     }
 
     // ----------------------------------------------------------------- global lifecycle ------------
@@ -70,7 +72,8 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_initialize")]
     private static int Initialize()
     {
-        s_initialized = true; // FFmpeg/PortAudio init lazily on first use; this just gates the handle calls.
+        lock (s_handleGate)
+            s_initialized = true; // FFmpeg/PortAudio init lazily on first use; this just gates the handle calls.
         ClearLastError();
         return MfpOk;
     }
@@ -86,6 +89,10 @@ internal static unsafe class NativeApi
             SessionBox[] live;
             lock (s_handleGate)
             {
+                // Close this runtime generation before taking the session snapshot. SessionCreate re-checks
+                // this flag while registering, so a create that began before shutdown cannot publish a new,
+                // untracked handle after the snapshot (ABI-02).
+                s_initialized = false;
                 live = s_handles.Values.ToArray();
                 foreach (var b in live)
                     b.Closing = true; // reject new leases before draining (ABI-02)
@@ -95,7 +102,6 @@ internal static unsafe class NativeApi
             // Defer teardown until each session's in-flight calls drain (or the bound expires).
             foreach (var box in live)
                 DrainAndDispose(box);
-            s_initialized = false;
             FreeLastErrorNative();
         }
         catch { /* no-throw boundary across the ABI */ }
@@ -142,8 +148,17 @@ internal static unsafe class NativeApi
             var session = new ShowSession(host.Registry, audioBackend: null);
 
             var box = new SessionBox { Session = session, Host = host };
+            if (!TryRegisterSession(box, out var handle))
+            {
+                // Shutdown won while the relatively expensive host/session construction was in progress.
+                // The box was never published, so tear it down locally rather than leaking it.
+                DisposeBox(box);
+                SetLastError("runtime shut down while mfp_session_create was in progress.");
+                return 0;
+            }
+
             ClearLastError();
-            return RegisterSession(box);
+            return handle;
         }
         catch (Exception ex)
         {
@@ -164,8 +179,8 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_load_show")]
     private static int SessionLoadShow(nint session, byte* showJson)
     {
-        if (!TryResolve(session, out var box))
-            return MfpErrInvalidHandle;
+        if (!TryResolve(session, out var box, out var resolveError))
+            return resolveError;
         try
         {
             var json = Utf8(showJson);
@@ -194,13 +209,16 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_fire_cue")]
     private static int SessionFireCue(nint session, byte* cueId)
     {
-        if (!TryResolve(session, out var box))
-            return MfpErrInvalidHandle;
+        if (!TryResolve(session, out var box, out var resolveError))
+            return resolveError;
         try
         {
             var id = Utf8(cueId);
             if (string.IsNullOrEmpty(id))
+            {
+                SetLastError("cue id must not be null or empty.");
                 return MfpErrInvalidArg;
+            }
 
             // ABI-01: an unknown cue id is MFP_ERR_NOT_FOUND (the header's documented code), not a generic error.
             var cues = box.Session.GetCueDefinitionsAsync().GetAwaiter().GetResult();
@@ -240,15 +258,15 @@ internal static unsafe class NativeApi
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_position_ticks")]
     private static long SessionPositionTicks(nint session, byte* groupId) =>
-        Snapshot(session, groupId, static s => s.ClipPosition.Ticks, MfpErrInvalidHandle);
+        Snapshot(session, groupId, static s => s.ClipPosition.Ticks);
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_duration_ticks")]
     private static long SessionDurationTicks(nint session, byte* groupId) =>
-        Snapshot(session, groupId, static s => s.ClipDuration.Ticks, MfpErrInvalidHandle);
+        Snapshot(session, groupId, static s => s.ClipDuration.Ticks);
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_state")]
     private static int SessionState(nint session, byte* groupId) =>
-        (int)Snapshot(session, groupId, static s => (long)MapState(s), MfpErrInvalidHandle);
+        (int)Snapshot(session, groupId, static s => (long)MapState(s));
 
     /// <summary>ABI-01: derive the transport state from the snapshot. A group holding a clip is PLAYING when
     /// its clock advances, else PAUSED (paused / frozen / held). No clip held ⇒ IDLE. ENDED and ERROR are
@@ -262,8 +280,8 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_cue_count")]
     private static int SessionCueCount(nint session)
     {
-        if (!TryResolve(session, out var box))
-            return MfpErrInvalidHandle;
+        if (!TryResolve(session, out var box, out var resolveError))
+            return resolveError;
         try
         {
             var count = box.Session.GetCueDefinitionsAsync().GetAwaiter().GetResult().Count;
@@ -284,12 +302,16 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_cue_id")]
     private static int SessionCueId(nint session, int index, byte* outBuf, int outCapacity)
     {
-        if (!TryResolve(session, out var box))
-            return MfpErrInvalidHandle;
-        if (outBuf == null || outCapacity <= 0)
-            return MfpErrInvalidArg;
+        if (!TryResolve(session, out var box, out var resolveError))
+            return resolveError;
         try
         {
+            if (outBuf == null || outCapacity <= 0)
+            {
+                SetLastError("output buffer must be non-null with a positive capacity.");
+                return MfpErrInvalidArg;
+            }
+
             var cues = box.Session.GetCueDefinitionsAsync().GetAwaiter().GetResult();
             if (index < 0 || index >= cues.Count)
             {
@@ -323,8 +345,8 @@ internal static unsafe class NativeApi
 
     private static int Run(nint session, byte* groupId, Action<ShowSession, string?> action)
     {
-        if (!TryResolve(session, out var box))
-            return MfpErrInvalidHandle;
+        if (!TryResolve(session, out var box, out var resolveError))
+            return resolveError;
         try
         {
             var g = Utf8(groupId);
@@ -351,10 +373,10 @@ internal static unsafe class NativeApi
         }
     }
 
-    private static long Snapshot(nint session, byte* groupId, Func<TransportSnapshot, long> pick, long onBadHandle)
+    private static long Snapshot(nint session, byte* groupId, Func<TransportSnapshot, long> pick)
     {
-        if (!TryResolve(session, out var box))
-            return onBadHandle;
+        if (!TryResolve(session, out var box, out var resolveError))
+            return resolveError;
         try
         {
             var g = Utf8(groupId);
@@ -388,13 +410,19 @@ internal static unsafe class NativeApi
         }
     }
 
-    private static nint RegisterSession(SessionBox box)
+    private static bool TryRegisterSession(SessionBox box, out nint handle)
     {
         lock (s_handleGate)
         {
-            var handle = ++s_nextHandle; // monotonic, never reused → a freed token can never alias a live one
+            if (!s_initialized)
+            {
+                handle = 0;
+                return false;
+            }
+
+            handle = ++s_nextHandle; // monotonic, never reused → a freed token can never alias a live one
             s_handles[handle] = box;
-            return handle;
+            return true;
         }
     }
 
@@ -403,25 +431,31 @@ internal static unsafe class NativeApi
     /// finally, so a concurrent destroy/shutdown waits for the call to drain instead of disposing under it.
     /// Never dereferences the token as a pointer, so a stale/garbage/double-freed/closing handle is rejected
     /// safely instead of throwing across the unmanaged boundary (NXT-08).</summary>
-    private static bool TryResolve(nint session, [NotNullWhen(true)] out SessionBox? box)
+    private static bool TryResolve(
+        nint session,
+        [NotNullWhen(true)] out SessionBox? box,
+        out int failureCode)
     {
         box = null;
-        if (!s_initialized)
-        {
-            SetLastError("mfp_initialize() has not been called.");
-            return false;
-        }
-        if (session == 0)
-        {
-            SetLastError("null session handle.");
-            return false;
-        }
         lock (s_handleGate)
         {
+            if (!s_initialized)
+            {
+                failureCode = MfpErrNotInitialized;
+                SetLastError("mfp_initialize() has not been called, or mfp_shutdown() is in progress.");
+                return false;
+            }
+            if (session == 0)
+            {
+                failureCode = MfpErrInvalidHandle;
+                SetLastError("null session handle.");
+                return false;
+            }
             if (s_handles.TryGetValue(session, out box) && !box.Closing)
             {
                 if (box.ActiveCalls++ == 0)
                     box.Idle.Reset();
+                failureCode = MfpOk;
                 return true;
             }
 
@@ -429,6 +463,7 @@ internal static unsafe class NativeApi
         }
 
         SetLastError("invalid, stale, or closing session handle.");
+        failureCode = MfpErrInvalidHandle;
         return false;
     }
 
@@ -446,8 +481,8 @@ internal static unsafe class NativeApi
     }
 
     /// <summary>Marks a resolved box closing + removes it from the table, waits for in-flight calls to drain
-    /// (bounded), then disposes it. On drain timeout the session is leaked rather than disposed under a live
-    /// call — a wedged call must not cause use-after-dispose across the ABI (ABI-02).</summary>
+    /// (bounded), then disposes it. On drain timeout teardown continues in the background after the last call
+    /// leaves — a wedged call must not cause use-after-dispose across the ABI (ABI-02).</summary>
     private static void CloseAndDispose(nint session)
     {
         SessionBox? box;
@@ -466,15 +501,30 @@ internal static unsafe class NativeApi
     {
         if (!box.Idle.Wait(CallDrainTimeout))
         {
-            // A call did not return within the drain bound — leak rather than dispose under it.
-            SetLastError("session had in-flight calls that did not drain within the timeout; leaked to avoid use-after-dispose.");
+            // Return to the native caller at the documented bound, but retain the box until the final lease
+            // exits and then finish teardown. This avoids both use-after-dispose and a permanent native leak.
+            SetLastError("session had in-flight calls that did not drain within the timeout; cleanup is deferred.");
+            _ = Task.Run(() =>
+            {
+                box.Idle.Wait();
+                DisposeBox(box);
+            });
             return;
         }
 
+        DisposeBox(box);
+    }
+
+    private static void DisposeBox(SessionBox box)
+    {
+        if (Interlocked.Exchange(ref box.DisposeStarted, 1) != 0)
+            return;
         try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         catch { /* teardown best-effort */ }
-        box.Host.Dispose(); // release the session's PortAudio/NDI runtime holds (NXT-05)
-        box.Idle.Dispose();
+        try { box.Host.Dispose(); } // release the session's PortAudio/NDI runtime holds (NXT-05)
+        catch { /* teardown best-effort */ }
+        try { box.Idle.Dispose(); }
+        catch { /* teardown best-effort */ }
     }
 
     private static string Utf8(byte* p) => p == null ? string.Empty : Marshal.PtrToStringUTF8((nint)p) ?? string.Empty;

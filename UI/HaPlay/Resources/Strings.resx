@@ -2714,7 +2714,7 @@
     <value>(disabled)</value>
   </data>
   <data name="RemoteApiHint" xml:space="preserve">
-    <value>HTTP control for show controllers (e.g. Bitfocus Companion). GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL. The access token is optional — set one to require authentication, then send it as the "X-HaPlay-Api-Key" header (copied URLs never contain the token).</value>
+    <value>HTTP control for show controllers (e.g. Bitfocus Companion). GET reads status; commands use POST. All indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL. The access token is optional — set one to require authentication, then send it as the "X-HaPlay-Api-Key" header (copied URLs never contain the token).</value>
   </data>
   <data name="RemoteApiGenerateTokenLabel" xml:space="preserve">
     <value>Generate token</value>
