@@ -33,6 +33,11 @@ public sealed partial class ScriptEditorWindowViewModel : ObservableObject
 
     public bool HasSelectedScript => true;
 
+    /// <summary>Drives this window's "unsaved changes" bar. Gated on the pinned row actually being the
+    /// workspace selection so a backgrounded editor never shows another script's dirty state (it re-pins on
+    /// activation, which restores the correct value).</summary>
+    public bool IsSelectedScriptDirty => IsPinnedSelected && Workspace.IsSelectedScriptDirty;
+
     /// <summary>Re-selects the pinned script in the workspace (called on window activation and before
     /// edits) so the selection-scoped machinery — buffer, save, learn, diagnostics — targets it.</summary>
     public void PinSelection()
@@ -71,6 +76,7 @@ public sealed partial class ScriptEditorWindowViewModel : ObservableObject
     public System.Windows.Input.ICommand ConfirmLearnCommand => Workspace.ConfirmLearnCommand;
     public System.Windows.Input.ICommand CancelLearnCommand => Workspace.CancelLearnCommand;
     public System.Windows.Input.ICommand SaveSelectedScriptCommand => Workspace.SaveSelectedScriptCommand;
+    public System.Windows.Input.ICommand DiscardSelectedScriptChangesCommand => Workspace.DiscardSelectedScriptChangesCommand;
 
     public void Detach() => Workspace.PropertyChanged -= OnWorkspacePropertyChanged;
 
@@ -84,6 +90,9 @@ public sealed partial class ScriptEditorWindowViewModel : ObservableObject
                     _textCache = Workspace.SelectedScriptText;
                     OnPropertyChanged(nameof(SelectedScriptText));
                 }
+                break;
+            case nameof(ControlWorkspaceViewModel.IsSelectedScriptDirty):
+                OnPropertyChanged(nameof(IsSelectedScriptDirty));
                 break;
             case nameof(ControlWorkspaceViewModel.ScriptEditorStatus):
             case nameof(ControlWorkspaceViewModel.LearnButtonText):

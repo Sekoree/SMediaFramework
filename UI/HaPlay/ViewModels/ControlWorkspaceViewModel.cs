@@ -33,6 +33,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private readonly DispatcherTimer _refreshTimer;
     private ControlSystemConfig _config = new();
     private string? _projectRoot;
+    private string? _scratchRoot;
     private string? _configFilePath;
     private ControlMonitorBuffer? _monitorBuffer;
     private ControlSystemRuntimeSession? _session;
@@ -48,13 +49,6 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     internal Func<ControlMIDIPortCatalog?> MIDICatalogProvider { get; set; } = EnumerateMIDIPorts;
 
     internal Func<IReadOnlyList<ControlMIDIResolutionRequest>, Task<IReadOnlyDictionary<ControlMIDIResolutionKey, ControlMIDIPortInfo>?>> MIDIResolutionPrompt { get; set; } = DefaultPromptAsync;
-
-    /// <summary>
-    /// Ensures the project has been saved to disk (scripts are stored next to the project file, so there's
-    /// no project root until then). Returns true once the project has a location. Wired by the main shell;
-    /// when unset, script saving simply reports that the project must be saved.
-    /// </summary>
-    internal Func<Task<bool>>? EnsureProjectSavedAsync { get; set; }
 
     internal Func<Task<string?>> ProfileImportPathPrompt { get; set; } = DefaultProfileImportPathPromptAsync;
 
@@ -74,6 +68,31 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildProfileWarnings();
         RebuildProfileRows();
         MonitorEntries.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoMonitorEntries));
+
+        // Docking layout for the four Control panes (Surfaces / Scripts / Monitor / Tools) — see
+        // ControlDockFactory. The DockControl in ControlWorkspaceView binds to DockLayout.
+        BuildDockLayout();
+    }
+
+    /// <summary>The Dock.Avalonia layout the Control workspace's <c>DockControl</c> renders. Lets the operator
+    /// split / float / re-dock the Surfaces, Scripts, Monitor, and Tools panes. Rebuilt by
+    /// <see cref="ResetDockLayoutCommand"/> to bring back a pane that was closed or floated away.</summary>
+    [ObservableProperty]
+    private Dock.Model.Controls.IRootDock _dockLayout = null!;
+
+    /// <summary>Restores the default docking arrangement (all four panes, tabbed) — the way back after a pane
+    /// is accidentally closed or dragged into a floating window.</summary>
+    [RelayCommand]
+    private void ResetDockLayout() => BuildDockLayout();
+
+    private void BuildDockLayout()
+    {
+        // Close any floating panes from the previous layout first, so Reset doesn't leave orphaned windows.
+        DockLayout?.ExitWindows?.Execute(null);
+        var factory = new ControlDock.ControlDockFactory(this);
+        var layout = factory.CreateLayout();
+        factory.InitLayout(layout);
+        DockLayout = layout;
     }
 
     public ObservableCollection<ControlMonitorEntryViewModel> MonitorEntries { get; } = new();
@@ -215,6 +234,17 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private string _exportedFunctionsSummary = "(no exports)";
 
+    // The selected script's on-disk (or last-saved) text. The editor buffer is <see cref="SelectedScriptText"/>;
+    // when the two differ the script has unsaved edits — see <see cref="IsSelectedScriptDirty"/>.
+    private string _savedScriptBaseline = string.Empty;
+
+    /// <summary>True when the editor buffer differs from what's on disk for the selected script — drives the
+    /// script editor's "unsaved changes" bar. Set the baseline via <see cref="LoadSelectedScriptText"/> (load)
+    /// and after a successful save.</summary>
+    public bool IsSelectedScriptDirty =>
+        SelectedScriptRow is not null
+        && !string.Equals(SelectedScriptText, _savedScriptBaseline, StringComparison.Ordinal);
+
     partial void OnFilterTextChanged(string value) => _filterDirty = true;
 
     partial void OnErrorsOnlyChanged(bool value) => _filterDirty = true;
@@ -233,6 +263,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         ToggleLearnCommand.NotifyCanExecuteChanged();
         ConfirmLearnCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(HasSelectedScript));
+        OnPropertyChanged(nameof(IsSelectedScriptDirty));
     }
 
     public bool HasSelectedScript => SelectedScriptRow is not null;
@@ -264,8 +295,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public bool CanRequestSelectedX32Command => SelectedX32CommandRow?.CanRequest == true;
 
-    partial void OnSelectedScriptTextChanged(string value) =>
+    partial void OnSelectedScriptTextChanged(string value)
+    {
         RefreshScriptAnalysis(SelectedScriptRow);
+        OnPropertyChanged(nameof(IsSelectedScriptDirty));
+    }
+
+    /// <summary>Reverts the selected script's editor buffer to what's on disk (drops unsaved edits).</summary>
+    [RelayCommand]
+    private void DiscardSelectedScriptChanges() => LoadSelectedScriptText(SelectedScriptRow);
 
     public int DeviceCount => _config.Devices.Count;
 
@@ -308,12 +346,79 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         NotifyArmState();
     }
 
-    /// <summary>Sets the directory that project-relative script files resolve against (the project folder).</summary>
+    /// <summary>Sets the directory that project-relative script files resolve against (the project folder).
+    /// When a project gains a home on disk for the first time, any scripts the operator authored while the
+    /// project was unsaved (kept under the scratch cache — see <see cref="EffectiveScriptRoot"/>) are migrated
+    /// into the project so they're saved alongside it.</summary>
     public void SetProjectRoot(string? projectRoot)
     {
+        var gainedRealRoot = string.IsNullOrWhiteSpace(_projectRoot) && !string.IsNullOrWhiteSpace(projectRoot);
         _projectRoot = projectRoot;
+        if (gainedRealRoot)
+            MigrateScratchScriptsInto(projectRoot!);
         LoadSelectedScriptText(SelectedScriptRow);
         SaveSelectedScriptCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(HasUnsavedScratchScripts));
+    }
+
+    /// <summary>Where script files are read/written. Falls back to a per-session scratch cache directory while
+    /// the project has no home on disk, so scripts are fully editable before the first project save (rather
+    /// than dead-ending on "save the project first"). Migrated into the project by <see cref="SetProjectRoot"/>.</summary>
+    internal string EffectiveScriptRoot =>
+        string.IsNullOrWhiteSpace(_projectRoot) ? EnsureScratchRoot() : _projectRoot!;
+
+    /// <summary>True while scripts live only in the scratch cache (the project has never been saved). Used by
+    /// the shell to prompt "save your work?" before the app closes.</summary>
+    public bool HasUnsavedScratchScripts =>
+        string.IsNullOrWhiteSpace(_projectRoot) && _config.Scripts.Count > 0;
+
+    private string EnsureScratchRoot()
+    {
+        if (_scratchRoot is not null)
+            return _scratchRoot;
+
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(local))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            local = string.IsNullOrWhiteSpace(home)
+                ? Path.Combine(Path.GetTempPath(), "HaPlay-user")
+                : Path.Combine(home, ".local", "share");
+        }
+
+        // Per-instance folder so two unsaved sessions never fight over the same script paths.
+        _scratchRoot = Path.Combine(local, "HaPlay", "unsaved-scripts", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_scratchRoot);
+        return _scratchRoot;
+    }
+
+    private void MigrateScratchScriptsInto(string projectRoot)
+    {
+        if (_scratchRoot is null || !Directory.Exists(_scratchRoot))
+            return;
+
+        try
+        {
+            foreach (var source in Directory.EnumerateFiles(_scratchRoot, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(_scratchRoot, source);
+                var destination = Path.Combine(projectRoot, relative);
+                // Don't clobber a file the project already carries (e.g. re-saving into an existing project).
+                if (File.Exists(destination))
+                    continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination);
+            }
+
+            Directory.Delete(_scratchRoot, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ScriptEditorStatus = $"Some unsaved scripts could not be moved into the project: {ex.Message}";
+            return;
+        }
+
+        _scratchRoot = null;
     }
 
     public ControlSystemConfig BuildSnapshot() => _config with { IsArmed = false };
@@ -535,32 +640,20 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     }
 
     [RelayCommand(CanExecute = nameof(CanSaveSelectedScript))]
-    private async Task SaveSelectedScriptAsync()
+    private void SaveSelectedScript()
     {
         if (SelectedScriptRow is null)
             return;
 
-        // Capture the editor text up front: saving the project sets the project root, which reloads the
-        // selected script from disk (empty for a not-yet-written file) and would otherwise clobber what
-        // the user just typed before we get a chance to write it.
         var contents = SelectedScriptText;
 
-        // Scripts live next to the project file, so an unsaved project has no place to write them.
-        // Offer to save the project first instead of silently failing.
-        if (string.IsNullOrWhiteSpace(_projectRoot))
-        {
-            var saved = EnsureProjectSavedAsync is not null && await EnsureProjectSavedAsync().ConfigureAwait(true);
-            if (!saved || string.IsNullOrWhiteSpace(_projectRoot))
-            {
-                ScriptEditorStatus = "Save the project first to store scripts.";
-                return;
-            }
-        }
-
+        // Scripts write to the project folder, or to the scratch cache while the project is unsaved (they
+        // migrate into the project on its first save — see SetProjectRoot). Either way the operator can
+        // author scripts immediately instead of dead-ending on "save the project first".
         var path = ResolveScriptPath(SelectedScriptRow.Script.ScriptPath);
         if (path is null)
         {
-            ScriptEditorStatus = "Script path is not available for this project.";
+            ScriptEditorStatus = "Script path is not available.";
             return;
         }
 
@@ -568,8 +661,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, contents);
-            SelectedScriptText = contents; // restore, in case ensuring the project root reloaded an empty file
-            ScriptEditorStatus = $"Saved {SelectedScriptRow.Script.ScriptPath}.";
+            _savedScriptBaseline = contents; // buffer now matches disk → no longer dirty
+            OnPropertyChanged(nameof(IsSelectedScriptDirty));
+            OnPropertyChanged(nameof(HasUnsavedScratchScripts));
+            ScriptEditorStatus = string.IsNullOrWhiteSpace(_projectRoot)
+                ? $"Saved {SelectedScriptRow.Script.ScriptPath} to the scratch cache — save the project to keep it."
+                : $"Saved {SelectedScriptRow.Script.ScriptPath}.";
             RefreshScriptAnalysis(SelectedScriptRow);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -2053,18 +2150,24 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     private void LoadSelectedScriptText(ControlScriptRowViewModel? row)
     {
+        // _savedScriptBaseline mirrors whatever the buffer is loaded to, so IsSelectedScriptDirty starts false
+        // after a (re)load and only flips once the user edits. Set it BEFORE assigning the buffer so the
+        // SelectedScriptText change handler sees the fresh baseline.
         if (row is null)
         {
+            _savedScriptBaseline = string.Empty;
             SelectedScriptText = string.Empty;
             ScriptEditorStatus = "No script selected.";
             ExportedFunctionsSummary = "(no exports)";
             ScriptDiagnostics.Clear();
+            OnPropertyChanged(nameof(IsSelectedScriptDirty));
             return;
         }
 
         var path = ResolveScriptPath(row.Script.ScriptPath);
         if (path is null)
         {
+            _savedScriptBaseline = string.Empty;
             SelectedScriptText = string.Empty;
             ScriptEditorStatus = string.IsNullOrWhiteSpace(row.Script.ScriptPath)
                 ? "Script has no file path."
@@ -2073,20 +2176,26 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             ScriptDiagnostics.Clear();
             if (string.IsNullOrWhiteSpace(row.Script.ScriptPath))
                 ScriptDiagnostics.Add(new ControlScriptDiagnosticRowViewModel("Compile", "Script path is required.", isError: true));
+            OnPropertyChanged(nameof(IsSelectedScriptDirty));
             return;
         }
 
         if (!File.Exists(path))
         {
+            _savedScriptBaseline = string.Empty;
             SelectedScriptText = string.Empty;
             ScriptEditorStatus = $"New file: {row.Script.ScriptPath}.";
             RefreshScriptAnalysis(row);
+            OnPropertyChanged(nameof(IsSelectedScriptDirty));
             return;
         }
 
-        SelectedScriptText = File.ReadAllText(path);
+        var text = File.ReadAllText(path);
+        _savedScriptBaseline = text;
+        SelectedScriptText = text;
         ScriptEditorStatus = row.Script.ScriptPath;
         RefreshScriptAnalysis(row);
+        OnPropertyChanged(nameof(IsSelectedScriptDirty));
     }
 
     private void RefreshScriptAnalysis(ControlScriptRowViewModel? row)
@@ -2144,10 +2253,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     private string? ResolveScriptPath(string scriptPath)
     {
-        if (string.IsNullOrWhiteSpace(_projectRoot) || string.IsNullOrWhiteSpace(scriptPath))
+        if (string.IsNullOrWhiteSpace(scriptPath))
             return null;
 
-        var root = Path.GetFullPath(_projectRoot);
+        // EffectiveScriptRoot is the project folder, or the scratch cache while the project is unsaved.
+        var root = Path.GetFullPath(EffectiveScriptRoot);
         var path = Path.GetFullPath(Path.Combine(root, scriptPath));
         var relative = Path.GetRelativePath(root, path);
         return relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? null : path;
@@ -2415,8 +2525,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     }
 
     private IControlScriptSourceProvider CreateSourceProvider() =>
-        !string.IsNullOrWhiteSpace(_projectRoot) && Directory.Exists(_projectRoot)
-            ? new FileSystemControlScriptSourceProvider(_projectRoot)
+        // Resolve helper scripts (imports) against the project folder, or the scratch cache while unsaved,
+        // so a script's `require` of a sibling file works before the project has ever been saved.
+        Directory.Exists(EffectiveScriptRoot)
+            ? new FileSystemControlScriptSourceProvider(EffectiveScriptRoot)
             : new InMemoryControlScriptSourceProvider(new Dictionary<string, string>());
 
     [RelayCommand]

@@ -14,6 +14,8 @@
     <DataTemplate DataType="vm:MediaPlayerViewModel">
       <views:MediaPlayerView />
     </DataTemplate>
+    <!-- The Control workspace dock panes are mapped to their views in code (App.RegisterDockPaneTemplates) —
+         see the comment there for why they can't be compiled-binding XAML templates. -->
   </Application.DataTemplates>
 
   <Application.Resources>
@@ -25,6 +27,19 @@
              don't define these keys. Harmlessly duplicates the values the Classic bundle also brings. -->
         <ResourceInclude Source="avares://Classic.Avalonia.Theme/Colors/Colors.axaml"/>
       </ResourceDictionary.MergedDictionaries>
+      <!-- Script editor (AvaloniaEdit) surface colours — variant-aware so the editor follows light/dark
+           instead of staying a bright white box under the Simple/Fluent dark variant. Classic is pinned
+           Light, so it always gets the light values; Simple/Fluent honour the chosen variant. -->
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+          <SolidColorBrush x:Key="ScriptEditorBackgroundBrush" Color="#FFFFFFFF" />
+          <SolidColorBrush x:Key="ScriptEditorForegroundBrush" Color="#FF1A1A1A" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="ScriptEditorBackgroundBrush" Color="#FF1E1E1E" />
+          <SolidColorBrush x:Key="ScriptEditorForegroundBrush" Color="#FFD4D4D4" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
   </Application.Resources>
 

@@ -1,0 +1,50 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Fluent-palette keys that Fluent-authored control themes bundled into the app expect, but the Simple and
+       Classic base themes don't define. Merged into SimpleThemeBundle and ClassicThemeBundle (NOT the Fluent
+       bundle, which gets these from FluentTheme). Living inside the swappable Styles[0] bundle is deliberate:
+       Styles.TryGetResource walks styles in REVERSE (last wins), so anything merged app-wide would shadow
+       FluentTheme's own values (e.g. the OS SystemAccentColor) under Fluent. Scoping to the non-Fluent bundles
+       means these are simply absent when Fluent is active.
+
+       Consumers (all resolve these keys when their control is realised — a StaticResource ref throws hard if
+       the key is missing, which is what crashed the app):
+         • TreeDataGrid Fluent theme (both non-Fluent bundles bundle it): SystemListLowColor, SystemBaseHighColor,
+           SystemBaseMediumLowColor, SystemAccentColor.  [StaticResource — hard]
+         • AvaloniaEdit Fluent theme (app-wide, used by the script editor's TextEditor):
+             ControlContentThemeFontSize            → SearchPanelFontSize        [StaticResource — hard]
+             ToolTip{Background,Foreground,BorderBrush,BorderThemeThickness} → CompletionToolTip*  [StaticResource — hard]
+             SystemChromeMediumColor, SystemBaseLowColor, SystemAccentColor → search panel / selection [DynamicResource — soft]
+       Values mirror Fluent's BaseColorsPalette / BaseResources / FluentControlResources (Default = light, Dark). -->
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Default">
+      <!-- TreeDataGrid Fluent theme -->
+      <Color x:Key="SystemListLowColor">#19000000</Color>
+      <Color x:Key="SystemBaseHighColor">#FF000000</Color>
+      <Color x:Key="SystemBaseMediumLowColor">#66000000</Color>
+      <!-- AvaloniaEdit Fluent theme -->
+      <x:Double x:Key="ControlContentThemeFontSize">14</x:Double>
+      <Thickness x:Key="ToolTipBorderThemeThickness">1</Thickness>
+      <Color x:Key="SystemChromeMediumColor">#FFE6E6E6</Color>
+      <Color x:Key="SystemBaseLowColor">#33000000</Color>
+      <SolidColorBrush x:Key="ToolTipBackground" Color="#FFF2F2F2" />
+      <SolidColorBrush x:Key="ToolTipForeground" Color="#FF000000" />
+      <SolidColorBrush x:Key="ToolTipBorderBrush" Color="#000000" Opacity="0.14" />
+      <!-- Shared by both -->
+      <Color x:Key="SystemAccentColor">#FF0078D7</Color>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Dark">
+      <Color x:Key="SystemListLowColor">#19FFFFFF</Color>
+      <Color x:Key="SystemBaseHighColor">#FFFFFFFF</Color>
+      <Color x:Key="SystemBaseMediumLowColor">#66FFFFFF</Color>
+      <x:Double x:Key="ControlContentThemeFontSize">14</x:Double>
+      <Thickness x:Key="ToolTipBorderThemeThickness">1</Thickness>
+      <Color x:Key="SystemChromeMediumColor">#FF1F1F1F</Color>
+      <Color x:Key="SystemBaseLowColor">#33FFFFFF</Color>
+      <SolidColorBrush x:Key="ToolTipBackground" Color="#FF2B2B2B" />
+      <SolidColorBrush x:Key="ToolTipForeground" Color="#FFFFFFFF" />
+      <SolidColorBrush x:Key="ToolTipBorderBrush" Color="#000000" Opacity="0.36" />
+      <Color x:Key="SystemAccentColor">#FF0078D7</Color>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

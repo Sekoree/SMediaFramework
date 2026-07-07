@@ -1673,7 +1673,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         };
         buttons.Children.Add(cancel);
         buttons.Children.Add(rewire);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
 
         var message = new TextBlock
         {

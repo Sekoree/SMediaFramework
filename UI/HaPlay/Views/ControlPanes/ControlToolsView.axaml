@@ -1,0 +1,70 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:res="using:HaPlay.Resources"
+             x:Class="HaPlay.Views.ControlPanes.ControlToolsView"
+             x:DataType="vm:ControlWorkspaceViewModel">
+  <!-- Tools dock tab (extracted for Dock.Avalonia): X32 command/cache browser + manual test sends. -->
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="0,8,0,0" Spacing="10">
+
+      <Border Classes="Card">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="SectionText" Text="X32 command/cache browser" />
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+            <TextBox Grid.Column="0" Text="{Binding X32CommandFilterText}" PlaceholderText="Filter device, group, address, cache" />
+            <Button Grid.Column="1" Content="Use as test" Classes="Dense" Command="{Binding UseSelectedX32CommandForTestSendCommand}" />
+            <Button Grid.Column="2" Content="Request" Classes="Dense" Command="{Binding RequestSelectedX32CommandCommand}" />
+          </Grid>
+          <Grid ColumnDefinitions="120,110,180,*,90,80,130" ColumnSpacing="8" Opacity="0.65" Margin="0,2,0,2">
+            <TextBlock Grid.Column="0" Text="Device" />
+            <TextBlock Grid.Column="1" Text="Group" />
+            <TextBlock Grid.Column="2" Text="Command" />
+            <TextBlock Grid.Column="3" Text="Address" />
+            <TextBlock Grid.Column="4" Text="Value" />
+            <TextBlock Grid.Column="5" Text="Access" />
+            <TextBlock Grid.Column="6" Text="Cache" />
+          </Grid>
+          <ListBox ItemsSource="{Binding X32CommandRows}"
+                   SelectedItem="{Binding SelectedX32CommandRow}"
+                   MaxHeight="320"
+                   Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:ControlX32CommandRowViewModel">
+                <Grid ColumnDefinitions="120,110,180,*,90,80,130" ColumnSpacing="8" Margin="0,2">
+                  <TextBlock Grid.Column="0" Text="{Binding DeviceName}" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="1" Text="{Binding Group}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="2" Text="{Binding CommandName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="3" Text="{Binding Address}" FontFamily="Cascadia Code, Consolas, monospace" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="4" Text="{Binding ValueKind}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="5" Text="{Binding Access}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="6" Text="{Binding CacheValue}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="Card">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="SectionText" Text="{x:Static res:Strings.ControlManualSendsTitle}" />
+          <Grid ColumnDefinitions="Auto,140,Auto,80,Auto,*" ColumnSpacing="6">
+            <TextBlock Grid.Column="0" Text="Host" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Text="{Binding TestOSCHost}" />
+            <TextBlock Grid.Column="2" Text="Port" VerticalAlignment="Center" />
+            <TextBox Grid.Column="3" Text="{Binding TestOSCPort}" />
+            <TextBlock Grid.Column="4" Text="Address" VerticalAlignment="Center" />
+            <TextBox Grid.Column="5" Text="{Binding TestOSCAddress}" />
+          </Grid>
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+            <TextBlock Grid.Column="0" Text="Args" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Text="{Binding TestOSCArgs}" PlaceholderText="comma-separated, e.g. 0.5, 1, true, name" />
+            <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOSCCommand}" />
+            <Button Grid.Column="3" Content="Run all manual triggers" Command="{Binding RunManualScriptsCommand}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

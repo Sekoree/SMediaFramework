@@ -374,7 +374,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         };
         buttons.Children.Add(cancel);
         buttons.Children.Add(ok);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
 
         var message = new TextBlock
         {
@@ -976,7 +976,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         buttons.Children.Add(cancel);
         buttons.Children.Add(reconnect);
         buttons.Children.Add(continueLive);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
 
         var message = new TextBlock
         {

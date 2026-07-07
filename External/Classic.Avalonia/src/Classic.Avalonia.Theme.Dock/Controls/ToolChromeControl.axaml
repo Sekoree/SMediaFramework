@@ -1,0 +1,217 @@
+﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:converters="using:Dock.Avalonia.Converters"
+                    xmlns:controls="using:Dock.Model.Controls"
+                    xmlns:commonControls="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia">
+  <Design.PreviewWith>
+    <ToolChromeControl Width="300" Height="400" />
+  </Design.PreviewWith>
+
+  <MenuFlyout x:Key="ToolChromeControlContextMenu"
+               x:DataType="controls:IToolDock" x:CompileBindings="True">
+    <MenuItem Header="_Float"
+              Command="{Binding Owner.Factory.FloatDockable}"
+              CommandParameter="{Binding ActiveDockable}"
+              IsVisible="{Binding ActiveDockable.CanFloat, FallbackValue=False}"/>
+    <MenuItem Header="_Dock"
+              Command="{Binding Owner.Factory.PinDockable}"
+              CommandParameter="{Binding ActiveDockable}"
+              IsEnabled="{Binding ActiveDockable.OriginalOwner, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}"
+              IsVisible="{Binding ActiveDockable.CanPin, FallbackValue=False}"/>
+    <MenuItem Header="_Auto Hide"
+              Command="{Binding Owner.Factory.PinDockable}"
+              CommandParameter="{Binding ActiveDockable}"
+              IsEnabled="{Binding ActiveDockable.OriginalOwner, Converter={x:Static ObjectConverters.IsNull}, FallbackValue=False}">
+      <MenuItem.IsVisible>
+        <MultiBinding Converter="{x:Static BoolConverters.And}">
+          <Binding Path="ActiveDockable.CanPin" FallbackValue="{x:False}" />
+          <Binding Path="$parent[ToolChromeControl].IsFloating" Converter="{x:Static BoolConverters.Not}" />
+        </MultiBinding>
+      </MenuItem.IsVisible>
+    </MenuItem>
+    <MenuItem Header="_Close"
+              Command="{Binding Owner.Factory.CloseDockable}"
+              CommandParameter="{Binding ActiveDockable}"
+              IsVisible="{Binding ActiveDockable.CanClose, FallbackValue=False}"/>
+  </MenuFlyout>
+
+  <ControlTheme x:Key="ChromeButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}" >
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="1" />
+    <Setter Property="Width" Value="13" />
+    <Setter Property="Height" Value="13" />
+  </ControlTheme>
+
+  <ControlTheme x:Key="{x:Type ToolChromeControl}" TargetType="ToolChromeControl" x:DataType="controls:IToolDock">
+
+    <Setter Property="Background" Value="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="IsPinned" Value="{CompiledBinding ActiveDockable.OriginalOwner, FallbackValue=False, Converter={x:Static ObjectConverters.IsNotNull}}" x:DataType="controls:IToolDock" />
+    <Setter Property="IsMaximized" Value="{CompiledBinding $parent[HostWindow].WindowState, FallbackValue=False, Converter={x:Static IsMaximizedConverter.Instance}}" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid RowDefinitions="Auto,1,*" x:DataType="controls:IToolDock" x:CompileBindings="True" Background="{TemplateBinding Background}">
+          <ContentPresenter x:Name="PART_ContentPresenter"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Content="{TemplateBinding Content}"
+                            Padding="{TemplateBinding Padding}"
+                            Grid.Row="2" />
+          <Border x:Name="PART_Border"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  VerticalAlignment="Top"
+                  ContextFlyout="{DynamicResource ToolChromeControlContextMenu}"
+                  Grid.Row="{Binding GripMode, Converter={x:Static converters:GripModeConverters.GridRowAutoHideConverter}}">
+            <Grid x:Name="PART_Grip">
+              <DockPanel LastChildFill="True" Margin="0 0">
+                <Panel DockPanel.Dock="Left">
+                  <TextBlock x:Name="PART_Title"
+                             Padding="2,0,0,0"
+                             Text="{Binding ActiveDockable.Title, FallbackValue=TITLE}" />
+                </Panel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                  <Button x:Name="PART_MenuButton"
+                          Theme="{StaticResource ChromeButton}"
+                          Flyout="{StaticResource ToolChromeControlContextMenu}">
+                      <Path x:Name="PART_MenuPath" Width="6" Height="3" />
+                  </Button>
+                  <Button x:Name="PART_PinButton"
+                          Command="{Binding Owner.Factory.PinDockable}"
+                          CommandParameter="{Binding ActiveDockable}"
+                          Theme="{StaticResource ChromeButton}">
+                    <Button.IsVisible>
+                      <MultiBinding Converter="{x:Static BoolConverters.And}">
+                        <Binding Path="ActiveDockable.CanPin" FallbackValue="{x:False}" />
+                        <TemplateBinding Property="IsFloating" Converter="{x:Static BoolConverters.Not}" />
+                      </MultiBinding>
+                    </Button.IsVisible>
+                      <Path x:Name="PART_PinPath" Width="6" Height="9" />
+                  </Button>
+                  <Button x:Name="PART_MaximizeRestoreButton"
+                          IsVisible="{TemplateBinding IsFloating}"
+                          Theme="{StaticResource ChromeButton}">
+                      <Path x:Name="PART_MaximizeRestorePath" />
+                  </Button>
+                  <Button x:Name="PART_CloseButton"
+                          Command="{Binding Owner.Factory.CloseDockable}"
+                          CommandParameter="{Binding ActiveDockable}"
+                          IsVisible="{Binding ActiveDockable.CanClose, FallbackValue=False}"
+                          Theme="{StaticResource ChromeButton}">
+                    <Path x:Name="PART_ClosePath" Width="8" Height="7" Margin="-1,-2,0,0" />
+                  </Button>
+                </StackPanel>
+                <Grid x:Name="PART_Grid" />
+              </DockPanel>
+            </Grid>
+          </Border>
+          <Panel x:Name="PART_Panel"
+                 Background="{TemplateBinding BorderBrush}"
+                 Height="1"
+                 VerticalAlignment="Top"
+                 Grid.Row="{Binding GripMode, Converter={x:Static converters:GripModeConverters.GridRowAutoHideConverter}}" />
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^/template/ Border#PART_Border">
+      <Setter Property="BorderThickness" Value="1 1 1 0" />
+      <Setter Property="IsVisible"
+              Value="{Binding GripMode, Converter={x:Static converters:GripModeConverters.IsVisibleVisibleConverter}}" />
+    </Style>
+
+    <Style Selector="^:pointerover /template/ Border#PART_Border">
+      <Setter Property="IsVisible"
+              Value="{Binding GripMode, Converter={x:Static converters:GripModeConverters.IsVisibleAutoHideOrVisibleConverter}}" />
+    </Style>
+
+    <Style Selector="^:floating /template/ Border#PART_Border">
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+
+    <Style Selector="^/template/ Panel#PART_Panel">
+      <Setter Property="IsVisible"
+              Value="{Binding GripMode, Converter={x:Static converters:GripModeConverters.IsVisibleAutoHideOrHiddenConverter}}" />
+    </Style>
+
+    <Style Selector="^:pointerover /template/ Panel#PART_Panel">
+      <Setter Property="IsVisible"
+              Value="{Binding GripMode, Converter={x:Static converters:GripModeConverters.IsVisibleVisibleOrHiddenConverter}}" />
+    </Style>
+
+    <Style Selector="^:floating:pointerover /template/ Panel#PART_Panel">
+      <Setter Property="Height" Value="0" />
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+
+    <Style Selector="^/template/ TextBlock#PART_Title">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="TextAlignment" Value="Left" />
+      <Setter Property="VerticalAlignment" Value="Stretch" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
+    </Style>
+
+    <Style Selector="^:active /template/ TextBlock#PART_Title">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static commonControls:SystemColors.ActiveCaptionTextBrushKey}}" />
+    </Style>
+
+    <Style Selector="^/template/ Grid#PART_Grip">
+      <Setter Property="Background" Value="{DynamicResource {x:Static commonControls:SystemColors.InactiveCaptionBrushKey}}" />
+    </Style>
+
+    <Style Selector="^/template/ Grid#PART_Grip">
+      <Setter Property="(DockProperties.IsDragArea)" Value="True" />
+    </Style>
+
+    <Style Selector="^:floating /template/ Grid#PART_Grip">
+      <Setter Property="(DockProperties.IsDragArea)" Value="{Binding $parent[HostWindow].ToolChromeControlsWholeWindow, Mode=OneWay, Converter={x:Static BoolConverters.Not}}" />
+    </Style>
+
+    <Style Selector="^:active /template/ Grid#PART_Grip">
+      <Setter Property="Background" Value="{DynamicResource {x:Static commonControls:SystemColors.ActiveCaptionBrushKey}}" />
+    </Style>
+
+    <Style Selector="^/template/ Grid#PART_Grid">
+      <Setter Property="Height" Value="5" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0 0 2 0" />
+    </Style>
+
+    <Style Selector="^/template/ Path">
+      <Setter Property="Stretch" Value="UniformToFill" />
+      <Setter Property="Fill" Value="{DynamicResource {x:Static commonControls:SystemColors.WindowTextBrushKey}}" />
+    </Style>
+
+    <Style Selector="^/template/ Path#PART_ClosePath">
+      <Setter Property="Data"
+              Value="m 0 0 L 2 0 L 2 1 L 3 1 L 3 2 L 5 2 L 5 1 L 6 1 L 6 0 L 8 0 L 8 1 L 7 1 L 7 2 L 6 2 L 6 3 L 5 3 L 5 4 L 6 4 L 6 5 L 7 5 L 7 6 L 8 6 L 8 7 L 6 7 L 6 6 L 5 6 L 5 5 L 3 5 L 3 6 L 2 6 L 2 7 L 0 7 L 0 6 L 1 6 L 1 5 L 2 5 L 2 4 L 3 4 L 3 3 L 2 3 L 2 2 L 1 2 L 1 1 L 0 1 z" />
+    </Style>
+
+    <Style Selector="^/template/ Path#PART_MaximizeRestorePath">
+      <Setter Property="Data" Value="M0,0L0,9 9,9 9,0 0,0 0,3 8,3 8,8 1,8 1,3 0,3z" />
+    </Style>
+
+    <Style Selector="^/template/ Path#PART_PinPath">
+      <Setter Property="Data" Value="M 1 0 L 1 5 L 0 5 L 0 6 L 3 6 L 3 9 L 4 9 L 4 6 L 7 6 L 7 5 L 6 5 L 6 0 L 1 0 L 1 1 L 4 1 L 4 5 L 2 5 L 2 1 L 1 1 z" />
+    </Style>
+
+    <Style Selector="^/template/ Path#PART_MenuPath">
+      <Setter Property="Data" Value="M 0 0 L 0 1 L 1 1 L 1 2 L 2 2 L 2 3 L 4 3 L 4 2 L 5 2 L 5 1 L 6 1 L 6 0 z" />
+    </Style>
+
+    <Style Selector="^:pinned /template/ Path#PART_PinPath">
+      <Setter Property="Data" Value="m1119 0 0 218.834 1121.5042 0 177.2397 0 46.8138 0 0 673.827 0 416.57 0 32.417-1345.5577 0 0 230.153-224.0546 0 0-672.133-894.3935 0 0-225.764 894.3935 0 0-673.904zm1121.4996 444.598-1121.4996 0 0 448.063 1121.4996 0 0-448.063z" />
+    </Style>
+
+    <Style Selector="^:maximized /template/ Path#PART_MaximizeRestorePath">
+      <Setter Property="Data" Value="M0,10L0,3 3,3 3,0 10,0 10,2 4,2 4,3 7,3 7,6 6,6 6,5 1,5 1,10z M1,10L7,10 7,7 10,7 10,2 9,2 9,6 6,6 6,9 1,9z" />
+    </Style>
+  </ControlTheme>
+
+</ResourceDictionary>

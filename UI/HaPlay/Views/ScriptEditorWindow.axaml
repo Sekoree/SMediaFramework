@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="using:HaPlay.Views"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        xmlns:res="using:HaPlay.Resources"
         xmlns:vm="using:HaPlay.ViewModels"
         x:Class="HaPlay.Views.ScriptEditorWindow"
         x:DataType="vm:ScriptEditorWindowViewModel"
@@ -23,6 +24,23 @@
 
       <!-- Header + metadata -->
       <StackPanel Grid.Row="0" Spacing="8">
+        <!-- Unsaved-changes bar: the code editor writes into an in-memory buffer; this makes it obvious
+             the script isn't on disk yet and offers Save / Discard right where the user is looking. -->
+        <Border IsVisible="{Binding IsSelectedScriptDirty}"
+                Background="#22D7A300" BorderBrush="#55D7A300" BorderThickness="1" CornerRadius="0"
+                Padding="10,6">
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+            <PathIcon Grid.Column="0" Data="{x:Static views:AppIcons.Warning}" Width="13" Height="13"
+                      VerticalAlignment="Center" Foreground="#D7A300" />
+            <TextBlock Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap"
+                       Text="{x:Static res:Strings.ScriptEditorUnsavedBanner}" />
+            <Button Grid.Column="2" Content="{x:Static res:Strings.SaveButton}"
+                    Command="{Binding SaveSelectedScriptCommand}" />
+            <Button Grid.Column="3" Content="{x:Static res:Strings.ScriptEditorDiscardButton}"
+                    ToolTip.Tip="{x:Static res:Strings.ScriptEditorDiscardTooltip}"
+                    Command="{Binding DiscardSelectedScriptChangesCommand}" />
+          </Grid>
+        </Border>
         <StackPanel Spacing="1">
           <TextBlock Text="{Binding SelectedScriptRow.DisplayName}" FontSize="18" FontWeight="SemiBold" />
           <TextBlock Text="{Binding ScriptEditorStatus}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
@@ -78,14 +96,15 @@
 
       <!-- Code editor -->
       <Border Grid.Row="1" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
-        <!-- Light editor surface — the dark pane was a Fluent-era holdover that clashed with the
-             Classic theme (and its light text bled into a light-on-light mess under the Light variant). -->
+        <!-- Variant-aware editor surface (ScriptEditor*Brush, App.axaml): light under Classic (pinned Light)
+             and the Simple/Fluent light variant, dark under their dark variant. The syntax highlighting
+             swaps to a dark-friendly palette to match — see ApplyMondSyntaxHighlighting. -->
         <ae:TextEditor x:Name="ScriptEditor"
                        ShowLineNumbers="True"
                        FontFamily="Cascadia Code, Consolas, monospace"
                        FontSize="13"
-                       Background="White"
-                       Foreground="#1A1A1A" />
+                       Background="{DynamicResource ScriptEditorBackgroundBrush}"
+                       Foreground="{DynamicResource ScriptEditorForegroundBrush}" />
       </Border>
 
       <!-- Triggers / Learn / Diagnostics -->

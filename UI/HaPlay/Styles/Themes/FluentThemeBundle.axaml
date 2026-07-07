@@ -6,4 +6,6 @@
   <FluentTheme />
   <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml" />
   <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
+  <!-- Dock.Avalonia docking chrome (Control workspace), matched to the Fluent base theme. -->
+  <StyleInclude Source="avares://Dock.Avalonia.Themes.Fluent/DockFluentTheme.axaml" />
 </Styles>

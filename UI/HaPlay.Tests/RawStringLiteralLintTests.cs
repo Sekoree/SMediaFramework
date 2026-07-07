@@ -14,9 +14,11 @@ namespace HaPlay.Tests;
 /// </summary>
 public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
 {
-    // Tracked debt of hardcoded user-facing literals still in the Views (concentrated in ControlWorkspaceView,
-    // CuePlayerView, ScriptEditorWindow). RATCHET ONLY DOWNWARD — never raise this to accommodate a new literal.
-    private const int Baseline = 168;
+    // Tracked debt of hardcoded user-facing literals across ALL Views (scanned recursively — top-level views,
+    // Dialogs/, and the ControlPanes/ dock panes). RATCHET ONLY DOWNWARD — never raise this to accommodate a
+    // new literal. (Jumped from 166 to 264 when the scan went recursive: the previous top-level-only glob was
+    // blind to Dialogs/ and to the ControlPanes/ views the Control workspace tabs were extracted into.)
+    private const int Baseline = 264;
 
     private static readonly Regex Attr = new(
         @"\b(Text|Content|Header|Title|ToolTip\.Tip|Watermark)\s*=\s*""([^""]*)""", RegexOptions.Compiled);
@@ -27,7 +29,7 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
     {
         var viewsDir = Path.Combine(RepoRoot(), "UI", "HaPlay", "Views");
         var offenders = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(viewsDir, "*.axaml"))
+        foreach (var file in Directory.EnumerateFiles(viewsDir, "*.axaml", SearchOption.AllDirectories))
         {
             var text = File.ReadAllText(file);
             foreach (Match m in Attr.Matches(text))

@@ -103,6 +103,49 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task IsSelectedScriptDirty_TracksEditorBufferVersusDisk()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haplay-script-dirty-" + Guid.NewGuid().ToString("N"));
+        var scriptPath = Path.Combine(root, "Scripts", "control.mnd");
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+        await File.WriteAllTextAsync(scriptPath, "export fun run() { return 1; }");
+
+        try
+        {
+            await using var vm = new ControlWorkspaceViewModel();
+            vm.SetProjectRoot(root);
+            vm.LoadConfig(new ControlSystemConfig
+            {
+                Scripts = [new ControlScriptConfig { Name = "Control", ScriptPath = "Scripts/control.mnd" }],
+            });
+
+            // Freshly loaded from disk → not dirty.
+            Assert.False(vm.IsSelectedScriptDirty);
+
+            // Edit the buffer → dirty.
+            vm.SelectedScriptText = "export fun run() { return 2; }";
+            Assert.True(vm.IsSelectedScriptDirty);
+
+            // Save → clean again, and disk reflects the edit.
+            vm.SaveSelectedScriptCommand.Execute(null);
+            Assert.False(vm.IsSelectedScriptDirty);
+            Assert.Contains("return 2", await File.ReadAllTextAsync(scriptPath));
+
+            // Edit then discard → reverts to disk and clears dirty.
+            vm.SelectedScriptText = "export fun run() { return 3; }";
+            Assert.True(vm.IsSelectedScriptDirty);
+            vm.DiscardSelectedScriptChangesCommand.Execute(null);
+            Assert.False(vm.IsSelectedScriptDirty);
+            Assert.Contains("return 2", vm.SelectedScriptText);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ScriptAnalysis_ReportsMissingTriggerExportsFromUnsavedEditorText()
     {
         var root = Path.Combine(Path.GetTempPath(), "haplay-script-diagnostics-" + Guid.NewGuid().ToString("N"));
@@ -270,9 +313,9 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
-    public async Task SaveSelectedScript_WithUnsavedProject_PromptsToSaveThenWritesFile()
+    public async Task SaveSelectedScript_WithUnsavedProject_WritesToScratch_ThenMigratesOnProjectSave()
     {
-        var root = Path.Combine(Path.GetTempPath(), "haplay-save-prompt-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "haplay-scratch-migrate-" + Guid.NewGuid().ToString("N"));
         try
         {
             await using var vm = new ControlWorkspaceViewModel();
@@ -280,17 +323,18 @@ public sealed class ControlWorkspaceViewModelTests
             vm.AddScriptCommand.Execute(null);
             vm.SelectedScriptText = "export fun run() { return 1; }";
 
-            var prompted = false;
-            vm.EnsureProjectSavedAsync = () =>
-            {
-                prompted = true;
-                vm.SetProjectRoot(root); // simulate the user completing the Save-As flow
-                return Task.FromResult(true);
-            };
+            // Saves immediately to the scratch cache — no "save the project first" dead-end, no prompt.
+            vm.SaveSelectedScriptCommand.Execute(null);
+            Assert.False(vm.IsSelectedScriptDirty);
+            Assert.True(vm.HasUnsavedScratchScripts);
+            Assert.Contains("scratch", vm.ScriptEditorStatus, StringComparison.OrdinalIgnoreCase);
 
-            await vm.SaveSelectedScriptCommand.ExecuteAsync(null);
+            // Saving the project for the first time (SetProjectRoot gets the folder) migrates the scratch
+            // scripts into it, so they persist alongside the project.
+            Directory.CreateDirectory(root);
+            vm.SetProjectRoot(root);
 
-            Assert.True(prompted);
+            Assert.False(vm.HasUnsavedScratchScripts);
             var path = Path.Combine(root, vm.SelectedScriptRow!.Script.ScriptPath);
             Assert.True(File.Exists(path));
             Assert.Contains("return 1", await File.ReadAllTextAsync(path));
@@ -300,20 +344,6 @@ public sealed class ControlWorkspaceViewModelTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
-    }
-
-    [Fact]
-    public async Task SaveSelectedScript_WhenProjectSaveDeclined_ReportsStatusAndDoesNotThrow()
-    {
-        await using var vm = new ControlWorkspaceViewModel();
-        vm.LoadConfig(new ControlSystemConfig());
-        vm.AddScriptCommand.Execute(null);
-        vm.SelectedScriptText = "export fun run() { return 1; }";
-        vm.EnsureProjectSavedAsync = () => Task.FromResult(false); // user cancels the project Save dialog
-
-        await vm.SaveSelectedScriptCommand.ExecuteAsync(null);
-
-        Assert.Contains("Save the project first", vm.ScriptEditorStatus);
     }
 
     [Fact]

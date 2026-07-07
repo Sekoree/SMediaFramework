@@ -1,0 +1,21 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        x:Class="HaPlay.Views.Dialogs.UnsavedScriptsDialog"
+        Title="{x:Static res:Strings.UnsavedScriptsDialogTitle}"
+        Width="460" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner" MinWidth="400">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.UnsavedScriptsDontSaveButton}" Click="DiscardClick" />
+      <Button Content="{x:Static res:Strings.UnsavedScriptsSaveButton}" Click="SaveClick" IsDefault="True" />
+    </StackPanel>
+    <StackPanel Spacing="8">
+      <TextBlock Text="{x:Static res:Strings.UnsavedScriptsHeader}"
+                 FontWeight="SemiBold" TextWrapping="Wrap" />
+      <TextBlock Opacity="0.75" TextWrapping="Wrap"
+                 Text="{x:Static res:Strings.UnsavedScriptsBody}" />
+    </StackPanel>
+  </DockPanel>
+</Window>

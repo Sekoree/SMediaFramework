@@ -2539,9 +2539,6 @@
   <data name="PopoutButtonTooltip" xml:space="preserve">
     <value>Pop out into a separate window</value>
   </data>
-  <data name="PopoutTabButtonTooltip" xml:space="preserve">
-    <value>Pop out the selected tab into a separate window</value>
-  </data>
   <data name="PopoutPlaceholderFormat" xml:space="preserve">
     <value>{0} is open in a separate window.</value>
   </data>
@@ -2550,9 +2547,6 @@
   </data>
   <data name="PopoutRestoreButton" xml:space="preserve">
     <value>Restore here</value>
-  </data>
-  <data name="PopoutControlTabTitleFormat" xml:space="preserve">
-    <value>Control — {0}</value>
   </data>
   <data name="MappingButtonLabel" xml:space="preserve">
     <value>Mapping…</value>
@@ -3063,5 +3057,35 @@
   </data>
   <data name="YouTubeDownloadDetailWithSpeedFormat" xml:space="preserve">
     <value>{0} / {1} · {2}/s</value>
+  </data>
+  <data name="ScriptEditorUnsavedBanner" xml:space="preserve">
+    <value>Unsaved changes — this script hasn't been written to disk yet.</value>
+  </data>
+  <data name="ScriptEditorDiscardButton" xml:space="preserve">
+    <value>Discard</value>
+  </data>
+  <data name="ScriptEditorDiscardTooltip" xml:space="preserve">
+    <value>Revert to the version on disk</value>
+  </data>
+  <data name="UnsavedScriptsDialogTitle" xml:space="preserve">
+    <value>Unsaved scripts</value>
+  </data>
+  <data name="UnsavedScriptsHeader" xml:space="preserve">
+    <value>You have scripts that only exist in the temporary cache.</value>
+  </data>
+  <data name="UnsavedScriptsBody" xml:space="preserve">
+    <value>They were created before this project was saved. Save the project now to keep them alongside it, or discard them and close.</value>
+  </data>
+  <data name="UnsavedScriptsSaveButton" xml:space="preserve">
+    <value>Save project…</value>
+  </data>
+  <data name="UnsavedScriptsDontSaveButton" xml:space="preserve">
+    <value>Don't save</value>
+  </data>
+  <data name="ControlResetLayoutButton" xml:space="preserve">
+    <value>Reset layout</value>
+  </data>
+  <data name="ControlResetLayoutTooltip" xml:space="preserve">
+    <value>Restore the default docking layout — brings back any pane that was closed or floated out</value>
   </data>
 </root>

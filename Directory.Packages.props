@@ -17,6 +17,10 @@
     <PackageVersion Include="Avalonia.Skia" Version="12.0.5" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.5" />
     <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
+    <PackageVersion Include="Dock.Avalonia" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Avalonia.Themes.Fluent" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Avalonia.Themes.Simple" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Model.Mvvm" Version="12.0.0.2" />
     <PackageVersion Include="TreeDataGrid.Avalonia" Version="12.0.0" />
     <PackageVersion Include="Xaml.Behaviors.Avalonia" Version="12.0.5" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />

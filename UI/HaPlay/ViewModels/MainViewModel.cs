@@ -54,10 +54,7 @@ public partial class MainViewModel : ViewModelBase
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor", slowWarningMs: 1000);
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
-        Control = new ControlWorkspaceViewModel
-        {
-            EnsureProjectSavedAsync = EnsureProjectSavedForScriptsAsync,
-        };
+        Control = new ControlWorkspaceViewModel();
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
         Players.CollectionChanged += (_, _) => OnPlayersChangedForPlayerTabs();
@@ -397,6 +394,10 @@ public partial class MainViewModel : ViewModelBase
     public CuePlayerViewModel? LoadedCueWorkspace => _cueWorkspaceLoaded ? CuePlayer : null;
     public SoundboardWorkspaceViewModel? LoadedSoundboardWorkspace => _soundboardWorkspaceLoaded ? Soundboard : null;
     public ControlWorkspaceViewModel? LoadedControlWorkspace => _controlWorkspaceLoaded ? Control : null;
+
+    /// <summary>True when the operator has authored control scripts but never saved the project — they live
+    /// only in the scratch cache and would be lost on close. Drives the on-close "save your work?" prompt.</summary>
+    public bool HasUnsavedScratchScripts => LoadedControlWorkspace?.HasUnsavedScratchScripts == true;
 
     partial void OnSidebarCollapsedChanged(bool value)
     {

@@ -16,11 +16,9 @@ public static class Strings
 
     public static string PopoutButtonLabel => Get(nameof(PopoutButtonLabel));
     public static string PopoutButtonTooltip => Get(nameof(PopoutButtonTooltip));
-    public static string PopoutTabButtonTooltip => Get(nameof(PopoutTabButtonTooltip));
     public static string PopoutPlaceholderFormat => Get(nameof(PopoutPlaceholderFormat));
     public static string PopoutBringToFrontButton => Get(nameof(PopoutBringToFrontButton));
     public static string PopoutRestoreButton => Get(nameof(PopoutRestoreButton));
-    public static string PopoutControlTabTitleFormat => Get(nameof(PopoutControlTabTitleFormat));
     public static string SoundboardBoardDefaultOutputLabel => Get(nameof(SoundboardBoardDefaultOutputLabel));
     public static string SoundboardDefaultBoardNameFormat => Get(nameof(SoundboardDefaultBoardNameFormat));
     public static string SoundboardAddBoardButton => Get(nameof(SoundboardAddBoardButton));
@@ -1027,4 +1025,14 @@ public static class Strings
     public static string CacheRefreshButton => Get(nameof(CacheRefreshButton));
     public static string YouTubeDownloadDetailFormat => Get(nameof(YouTubeDownloadDetailFormat));
     public static string YouTubeDownloadDetailWithSpeedFormat => Get(nameof(YouTubeDownloadDetailWithSpeedFormat));
+    public static string ScriptEditorUnsavedBanner => Get(nameof(ScriptEditorUnsavedBanner));
+    public static string ScriptEditorDiscardButton => Get(nameof(ScriptEditorDiscardButton));
+    public static string ScriptEditorDiscardTooltip => Get(nameof(ScriptEditorDiscardTooltip));
+    public static string UnsavedScriptsDialogTitle => Get(nameof(UnsavedScriptsDialogTitle));
+    public static string UnsavedScriptsHeader => Get(nameof(UnsavedScriptsHeader));
+    public static string UnsavedScriptsBody => Get(nameof(UnsavedScriptsBody));
+    public static string UnsavedScriptsSaveButton => Get(nameof(UnsavedScriptsSaveButton));
+    public static string UnsavedScriptsDontSaveButton => Get(nameof(UnsavedScriptsDontSaveButton));
+    public static string ControlResetLayoutButton => Get(nameof(ControlResetLayoutButton));
+    public static string ControlResetLayoutTooltip => Get(nameof(ControlResetLayoutTooltip));
 }

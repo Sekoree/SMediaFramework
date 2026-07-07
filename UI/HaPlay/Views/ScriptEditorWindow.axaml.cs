@@ -38,7 +38,12 @@ public partial class ScriptEditorWindow : Window
     {
         try
         {
-            using var stream = AssetLoader.Open(new Uri("avares://HaPlay/Assets/Mond.xshd"));
+            // Dark variant gets a brighter palette (the light xshd's dark-blue keywords are unreadable on the
+            // dark editor surface). The variant is fixed per session — variant changes prompt a restart — so
+            // reading it once at window open is enough.
+            var dark = Avalonia.Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark;
+            var asset = dark ? "Mond.Dark.xshd" : "Mond.xshd";
+            using var stream = AssetLoader.Open(new Uri($"avares://HaPlay/Assets/{asset}"));
             using var reader = XmlReader.Create(stream);
             ScriptEditor.SyntaxHighlighting = HighlightingLoader.Load(reader, HighlightingManager.Instance);
         }

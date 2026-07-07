@@ -21,6 +21,10 @@
         <PackageReference Include="Avalonia.Fonts.Inter"/>
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == ''" />
         <PackageReference Include="CommunityToolkit.Mvvm"/>
+        <PackageReference Include="Dock.Avalonia" />
+        <PackageReference Include="Dock.Avalonia.Themes.Fluent" />
+        <PackageReference Include="Dock.Avalonia.Themes.Simple" />
+        <PackageReference Include="Dock.Model.Mvvm" />
         <PackageReference Include="StbImageSharp" />
         <PackageReference Include="TreeDataGrid.Avalonia" />
         <PackageReference Include="Xaml.Behaviors.Avalonia" />
@@ -38,6 +42,8 @@
         <!-- Windows-Classic visual theme (Avalonia-12 port lives in-repo, see External/Classic.Avalonia). -->
         <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme\Classic.Avalonia.Theme.csproj" />
         <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme.ColorPicker\Classic.Avalonia.Theme.ColorPicker.csproj" />
+        <!-- Classic skin for the Dock.Avalonia docking controls (Control workspace). -->
+        <ProjectReference Include="..\..\External\Classic.Avalonia\src\Classic.Avalonia.Theme.Dock\Classic.Avalonia.Theme.Dock.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Time\S.Media.Time.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Routing\S.Media.Routing.csproj" />
