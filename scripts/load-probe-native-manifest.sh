@@ -26,8 +26,12 @@ while IFS= read -r line; do
 
     echo "REL-01 load-probe: $(basename "$file")"
     if [[ "$rid" == win-* ]]; then
-        pwsh -NoProfile -NonInteractive -Command '
-          $path = $args[0]
+        # Pass the path via env, NOT as a trailing arg: after `-Command '<string>'` extra tokens are treated as
+        # part of the command, so $args[0] was $null and Load("") failed with E_INVALIDARG. Convert to a native
+        # Windows path (cygpath) too — the Git-Bash "/d/a/..." form is not a valid path for LoadLibrary, which
+        # also needs the real directory so the DLL's siblings (its transitive deps) resolve.
+        MFP_PROBE_PATH="$(cygpath -w "$file")" pwsh -NoProfile -NonInteractive -Command '
+          $path = $env:MFP_PROBE_PATH
           try {
             $handle = [System.Runtime.InteropServices.NativeLibrary]::Load($path)
             [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
@@ -35,7 +39,7 @@ while IFS= read -r line; do
             Write-Error "NativeLibrary.Load failed for ${path}: $($_.Exception.Message)"
             exit 1
           }
-        ' "$file"
+        '
     else
         LD_LIBRARY_PATH="$dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" python3 - "$file" <<'PY'
 import ctypes
