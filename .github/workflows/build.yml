@@ -104,18 +104,35 @@ jobs:
       # is stuck. The next step uploads both on failure. Analyse locally with `dotnet-dump analyze <file>.dmp`
       # → `clrstack -all` / `pstacks`. Dumps are produced only on a hang (rare) and uploaded only on failure,
       # so green runs pay nothing.
+      # These shared runners intermittently run ~30-57x slow, and NO fixed timeout survives an unbounded
+      # slowdown — a single run has blown the 90s→300s connection handshake, the 4-min blame-hang, and 500ms
+      # timing asserts all at once. So retry the whole invocation: the slowness fluctuates within a job (a 12s
+      # assembly took ~11 min here while others took ~1s), so a fresh testhost spawn in a calmer window usually
+      # passes, and a crashed/hung testhost is gone on the retry. This does NOT hide regressions — the per-test
+      # hardening stays, VSTEST_CONNECTION_TIMEOUT + blame-hang still apply per attempt, and the hang dump still
+      # uploads if EVERY attempt fails (steps.tests.outcome). attempts is small (a bad instance would just double
+      # the wall-clock); bump it if flakes persist.
       - name: Tests (arch rules + Core/Time/Routing)
         id: tests
+        shell: bash
         env:
-          # Overloaded shared runners (a normally-12s assembly has taken ~7 min on these Windows instances) can
-          # blow vstest's default 90s testhost-connection handshake — "failed to connect to testhost after 90
-          # seconds ... machine slowness". Raise it (seconds) so a slow testhost *startup* isn't mistaken for a
-          # failure. This is startup-only; the 4-min blame-hang still catches a genuinely wedged test.
-          VSTEST_CONNECTION_TIMEOUT: '300'
-        run: >
-          dotnet test MFPlayer.sln -c Release --no-build
-          --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type full
-          -- RunConfiguration.MaxCpuCount=1
+          VSTEST_CONNECTION_TIMEOUT: '300'   # raise the testhost-connection handshake for slow startups (seconds)
+        run: |
+          run_tests() {
+            dotnet test MFPlayer.sln -c Release --no-build \
+              --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type full \
+              -- RunConfiguration.MaxCpuCount=1
+          }
+          attempts=2
+          for i in $(seq 1 "$attempts"); do
+            echo "::group::dotnet test (attempt $i/$attempts)"
+            if run_tests; then echo "::endgroup::"; exit 0; fi
+            echo "::endgroup::"
+            echo "dotnet test attempt $i failed"
+            if [ "$i" -lt "$attempts" ]; then echo "retrying after transient/load failure…"; sleep 20; fi
+          done
+          echo "dotnet test failed after $attempts attempts"
+          exit 1
 
       # Preserve the blame Sequence_*.xml + hang dump when the test step fails, so the hanging test and its
       # stacks survive the runner being torn down. Scoped to a tests failure so unrelated failures don't upload.
