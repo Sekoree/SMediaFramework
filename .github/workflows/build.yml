@@ -94,11 +94,29 @@ jobs:
       # assemblies CPU-starve the timing-sensitive Session/Core clock tests on a 2-4 core runner (the
       # SetAllPausedAsync resume-lag + MediaClock rate flakes). Serializing gives each assembly uncontended
       # cores — the cross-assembly extension of the in-assembly DisableTestParallelization already in place.
+      # --blame-hang-dump-type full: on a hang, capture a FULL process dump (managed thread stacks) of the
+      # wedged testhost, not just the Sequence_*.xml. HaPlay.Tests disables parallelization, so the "test
+      # running when the crash occurred" the blame reports IS the test that hung — the dump then shows WHERE it
+      # is stuck. The next step uploads both on failure. Analyse locally with `dotnet-dump analyze <file>.dmp`
+      # → `clrstack -all` / `pstacks`. Dumps are produced only on a hang (rare) and uploaded only on failure,
+      # so green runs pay nothing.
       - name: Tests (arch rules + Core/Time/Routing)
+        id: tests
         run: >
           dotnet test MFPlayer.sln -c Release --no-build
-          --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type none
+          --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type full
           -- RunConfiguration.MaxCpuCount=1
+
+      # Preserve the blame Sequence_*.xml + hang dump when the test step fails, so the hanging test and its
+      # stacks survive the runner being torn down. Scoped to a tests failure so unrelated failures don't upload.
+      - name: Upload test hang diagnostics
+        if: ${{ failure() && steps.tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostics-${{ matrix.rid }}
+          path: '**/TestResults/**'
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: AOT-publish smoke
         run: >

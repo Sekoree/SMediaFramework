@@ -311,7 +311,11 @@ public sealed class RemoteApiDispatcherTests
             return Stopwatch.GetElapsedTime(started);
         }, CancellationToken.None);
 
-        Assert.True(elapsed < TimeSpan.FromMilliseconds(500), $"Stop blocked the UI thread for {elapsed.TotalMilliseconds:0} ms");
+        // Regression guard: the pre-fix bug blocked the UI thread ~2 s (a synchronous handler drain waiting on
+        // itself). The fixed path returns near-instantly, so the bound only needs to sit below that 2 s stall.
+        // 1500 ms tolerates GC/scheduling jitter on an overloaded shared CI runner (a real 679 ms sample was
+        // seen when a normally-12 s assembly took ~7 min) while still catching the regression.
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(1500), $"Stop blocked the UI thread for {elapsed.TotalMilliseconds:0} ms");
         try
         {
             using var response = await request!.WaitAsync(TimeSpan.FromSeconds(3));
