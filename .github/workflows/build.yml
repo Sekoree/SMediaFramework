@@ -125,11 +125,13 @@ jobs:
       # smoke asserts visible pixels. Now gating — the earlier missing-library failures (2026-07-02) were the
       # FFmpeg 6.1-vs-8.1 soname mismatch, fixed by the "Stage FFmpeg 8.1" step above (avcodec-62 on
       # LD_LIBRARY_PATH); libass + fonts-dejavu-core provide the renderer and a substitute font.
+      # The fixture is the small committed TestAssets/*.ass — NOT the untracked Reference/TestSubs corpus, which
+      # is git-excluded and so absent on the runner (that path gave avformat_open_input ENOENT).
       - name: Subtitle decode smoke [gating]
         if: runner.os == 'Linux'
         run: >
           dotnet run --project MediaFramework/Tools/SubtitleDecodeSmoke/SubtitleDecodeSmoke.csproj
-          -c Release --no-build -- Reference/TestSubs/karaoke-timing.ass
+          -c Release --no-build -- MediaFramework/Tools/SubtitleDecodeSmoke/TestAssets/karaoke-timing.ass
 
       # PRESENT-01: the ONE gating software-GL presentation path. A native plugin GL layer surface is rendered
       # into the compositor canvas FBO on a real (Mesa llvmpipe) GL context under xvfb — proven reliable, so it
