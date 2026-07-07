@@ -12,7 +12,13 @@
         <PublishAot>true</PublishAot>
         <!-- Same single accepted warning as AotSmoke: Mond uses StackFrame.GetMethod only to enrich script
              error text. Keep it visible during publish while repo-wide warnings-as-errors rejects every other ID. -->
-        <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026</WarningsNotAsErrors>
+        <!-- IL2104 (trim) / IL3053 (AOT) are the per-assembly *aggregate* "this assembly was not trim/AOT
+             tested" warnings ILC raises only for third-party, non-trimmable dependencies — here the
+             Dock.Avalonia.* docking packages pulled in by UI/HaPlay (Dock.Avalonia, .Themes.Fluent,
+             .Themes.Simple). We can't annotate someone else's package; upstream Dock isn't AOT-clean yet.
+             Demote only these two aggregates. First-party libs are IsAotCompatible/IsTrimmable, so any real
+             regression there surfaces as a *detailed* IL2xxx/IL3xxx code, which stays fatal (BUILD-03). -->
+        <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026;IL2104;IL3053</WarningsNotAsErrors>
         <!-- The exe assembly can't be "HaPlay" (the UI library owns that name; avares://HaPlay/... resource
              URIs target it) and the project-name default "HaPlay.Desktop" makes file managers mistake the
              binary for an XDG ".Desktop" entry. Ship a plain, distinct binary name instead. A case-only
