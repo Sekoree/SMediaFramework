@@ -46,6 +46,21 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
+      # FFmpeg.AutoGen 8.1.0 loads the VERSIONED soname (libavformat.so.62 = FFmpeg 8.x). Ubuntu's apt ffmpeg
+      # is 6.1 (libavformat.so.60), so the managed decoders can't dlopen it and every avformat_* call throws
+      # NotSupportedException. The artifact job already bundles BtbN's FFmpeg 8.1 shared build; stage the same
+      # avcodec-62 here so the FFmpeg-backed smokes run against a matching runtime. apt ffmpeg (6.1) stays only
+      # for the `ffmpeg` CLI that generates the test tone below; the versioned soname means the two never clash,
+      # and appending (not prepending) keeps the app's other system natives (libass/portaudio/…) taking priority.
+      - name: Stage FFmpeg 8.1 (avcodec-62) for the FFmpeg smokes
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
+          FFDIR="$PWD/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib"
+          test -e "$FFDIR/libavformat.so.62"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$FFDIR" >> "$GITHUB_ENV"
+
       # MMD physics runs on real Bullet 3.25 via the mmd_bullet C shim (vendored in External/bullet3).
       # Build it BEFORE `dotnet build` on BOTH OSes, so S.Media.Source.MMD's csproj can stage the shared
       # library (libmmd_bullet.so / mmd_bullet.dll) into every consumer's bin — otherwise the P/Invoke in
@@ -106,12 +121,12 @@ jobs:
         if: runner.os == 'Linux'
         run: dotnet run --project MediaFramework/Tools/AbiSmoke/AbiSmoke.csproj -c Release --no-build
 
-      # Best-effort until the runner's native deps (portaudio/portmidi/FFmpeg builds) are pinned — the first
-      # gating attempt (2026-07-02) hit missing-library exceptions on the runner; deferred by the operator.
-      # Both pass locally with these exact args; promote to gating once the runner deps are sorted.
-      - name: Subtitle decode smoke
+      # The unified text-subtitle path: FFmpeg decodes the .ass to ASS events, libass renders them, and the
+      # smoke asserts visible pixels. Now gating — the earlier missing-library failures (2026-07-02) were the
+      # FFmpeg 6.1-vs-8.1 soname mismatch, fixed by the "Stage FFmpeg 8.1" step above (avcodec-62 on
+      # LD_LIBRARY_PATH); libass + fonts-dejavu-core provide the renderer and a substitute font.
+      - name: Subtitle decode smoke [gating]
         if: runner.os == 'Linux'
-        continue-on-error: true
         run: >
           dotnet run --project MediaFramework/Tools/SubtitleDecodeSmoke/SubtitleDecodeSmoke.csproj
           -c Release --no-build -- Reference/TestSubs/karaoke-timing.ass
