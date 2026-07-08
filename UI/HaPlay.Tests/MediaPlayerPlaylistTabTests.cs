@@ -82,4 +82,26 @@ public sealed class MediaPlayerPlaylistTabTests
             Assert.Single(source.Items); // original untouched
         });
     }
+
+    [Fact]
+    public void RemovePlaylistTabItem_RefusesTheActivePlayingSet()
+    {
+        DispatchUi(() =>
+        {
+            var vm = CreatePlayer();
+            vm.AddPlaylistTabCommand.Execute(null);
+            var playing = vm.PlaylistTabs[0];
+            var item = new FilePlaylistItem("/m/playing.mp4");
+            playing.Items.Add(item);
+            typeof(MediaPlayerViewModel)
+                .GetField("_activePlaybackTab", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(vm, playing);
+            vm.CurrentPlayingItem = item;
+
+            vm.RemovePlaylistTabItemCommand.Execute(playing);
+
+            Assert.Contains(playing, vm.PlaylistTabs);
+            Assert.Contains("Stop playback", vm.StatusMessage);
+        });
+    }
 }

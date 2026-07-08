@@ -46,6 +46,14 @@ public sealed record HaPlayProject
 
     public ControlSystemConfig ControlSystem { get; init; } = new();
 
+    /// <summary>
+    /// Per-project session-restore setting (default off). When on, HaPlay writes edits through to this
+    /// project's file on the crash-recovery cadence (true autosave); when off, only a crash-recovery
+    /// duplicate is kept in the cache and the file is written solely by an explicit Save. Additive/optional —
+    /// old files (no field) load as <see langword="false"/>, which is why the schema version is not bumped.
+    /// </summary>
+    public bool AutoSaveEnabled { get; init; }
+
     /// <summary>Constant for callers that want to write SchemaVersion explicitly.</summary>
     public const int CurrentSchemaVersion = 3;
 }

@@ -1,0 +1,46 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:dialogs="using:HaPlay.Views.Dialogs"
+        xmlns:services="using:HaPlay.Services"
+        x:Class="HaPlay.Views.Dialogs.RecoverSessionDialog"
+        x:DataType="dialogs:RecoverSessionDialog"
+        Title="{x:Static res:Strings.RecoverSessionDialogTitle}"
+        Width="480" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner" MinWidth="420">
+  <DockPanel Margin="16">
+    <!-- Saved project: offer to restore into the original file or as a copy that leaves it untouched. -->
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="8" Margin="0,16,0,0" IsVisible="{Binding HasSavedProject}">
+      <Button Content="{x:Static res:Strings.RecoverSessionNotNowButton}" Click="OnNotNowClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.RecoverSessionDiscardButton}" Click="OnDiscardClick" />
+      <Button Content="{x:Static res:Strings.RecoverSessionRestoreAsCopyButton}" Click="OnRestoreAsCopyClick" />
+      <Button Content="{x:Static res:Strings.RecoverSessionRestoreIntoOriginalButton}" Click="OnRestoreIntoOriginalClick" IsDefault="True" />
+    </StackPanel>
+
+    <!-- Untitled project: a copy is the only possibility (there is no original file). -->
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="8" Margin="0,16,0,0" IsVisible="{Binding IsUntitled}">
+      <Button Content="{x:Static res:Strings.RecoverSessionNotNowButton}" Click="OnNotNowClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.RecoverSessionDiscardButton}" Click="OnDiscardClick" />
+      <Button Content="{x:Static res:Strings.RecoverSessionRestoreButton}" Click="OnRestoreAsCopyClick" IsDefault="True" />
+    </StackPanel>
+
+    <StackPanel Spacing="8">
+      <TextBlock Text="{x:Static res:Strings.RecoverSessionHeader}" FontWeight="SemiBold" TextWrapping="Wrap" />
+      <TextBlock Text="{x:Static res:Strings.RecoverSessionsListHeader}" Opacity="0.75" />
+      <ListBox ItemsSource="{Binding Sessions}" SelectedItem="{Binding SelectedSession, Mode=TwoWay}"
+               MaxHeight="220" MinHeight="72">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="services:RecoverableSession">
+            <StackPanel Margin="4,3" Spacing="2">
+              <TextBlock Text="{Binding DisplayTitle}" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding DisplayDetails}" FontSize="11" Opacity="0.7" />
+            </StackPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <TextBlock Opacity="0.75" TextWrapping="Wrap" Text="{Binding Body}" />
+    </StackPanel>
+  </DockPanel>
+</Window>

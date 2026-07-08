@@ -12,7 +12,9 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using S.Control;
+using HaPlay.Models;
 using HaPlay.Resources;
+using HaPlay.Services;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using OSCLib;
@@ -26,6 +28,8 @@ namespace HaPlay.ViewModels;
 /// </summary>
 public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 {
+    private static readonly StringComparison PathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
     private const int MaxRenderedEntries = 1000;
     private const string AllFilter = "All";
     private const string DefaultX32ProfileId = "behringer.x32.osc";
@@ -245,6 +249,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         SelectedScriptRow is not null
         && !string.Equals(SelectedScriptText, _savedScriptBaseline, StringComparison.Ordinal);
 
+    /// <summary>Saves the current editor overlay when needed. Used by the shell's Save All workflow.</summary>
+    internal bool TrySaveDirtyScriptBuffer()
+    {
+        if (!IsSelectedScriptDirty)
+            return true;
+        SaveSelectedScript();
+        return !IsSelectedScriptDirty;
+    }
+
     partial void OnFilterTextChanged(string value) => _filterDirty = true;
 
     partial void OnErrorsOnlyChanged(bool value) => _filterDirty = true;
@@ -372,22 +385,96 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public bool HasUnsavedScratchScripts =>
         string.IsNullOrWhiteSpace(_projectRoot) && _config.Scripts.Count > 0;
 
+    /// <summary>The scratch directory whose script files session-recovery should mirror, or <see langword="null"/>
+    /// when the project is saved (its scripts live on disk beside the project and need no crash copy). Only
+    /// returns a path when there are unsaved scripts, so it never materializes an empty scratch root just to be
+    /// polled.</summary>
+    internal string? UnsavedScriptsRoot =>
+        HasUnsavedScratchScripts ? EffectiveScriptRoot : null;
+
+    /// <summary>Re-materializes recovered scratch scripts (from a crashed untitled session) into a fresh scratch
+    /// root, so a following <see cref="LoadConfig"/> resolves the project's script references against files that
+    /// exist. Best-effort; call before applying the recovered control config.</summary>
+    internal bool RestoreScratchScriptsFrom(string scriptsDir)
+    {
+        if (string.IsNullOrWhiteSpace(scriptsDir) || !Directory.Exists(scriptsDir))
+            return false;
+
+        try
+        {
+            // Untitled project ⇒ scripts belong in the scratch cache. Force a fresh root so the recovered files
+            // don't collide with anything this launch already created.
+            _projectRoot = null;
+            _scratchRoot = null;
+            var root = EnsureScratchRoot();
+            foreach (var source in Directory.EnumerateFiles(scriptsDir, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(scriptsDir, source);
+                var destination = Path.Combine(root, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination, overwrite: true);
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ScriptEditorStatus = $"Some recovered scripts could not be restored: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>Captures every configured script plus the selected editor overlay. A saved project can then be
+    /// restored as a self-contained copy, and text that had not reached disk is not lost.</summary>
+    internal IReadOnlyList<RecoveryScriptFile> BuildRecoveryScriptFiles()
+    {
+        if (_config.Scripts.Count == 0)
+            return [];
+
+        var root = Path.GetFullPath(EffectiveScriptRoot);
+        var files = new Dictionary<string, RecoveryScriptFile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var script in _config.Scripts)
+        {
+            var path = ResolveScriptPath(script.ScriptPath);
+            if (path is null)
+                continue;
+            var relative = Path.GetRelativePath(root, path);
+            var isDirty = IsSelectedScriptDirty && SelectedScriptRow?.Script.Id == script.Id;
+            if (!isDirty && !File.Exists(path))
+                continue;
+            var contents = isDirty ? SelectedScriptText : File.ReadAllText(path);
+            files[relative] = new RecoveryScriptFile(relative, contents, isDirty);
+        }
+        return files.Values.OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>Re-applies a recovered editor overlay without writing through to the original script file.</summary>
+    internal bool RestoreDirtyScriptBufferFrom(string scriptsDir, IReadOnlyList<string> dirtyScriptPaths)
+    {
+        var dirtyPath = dirtyScriptPaths.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(dirtyPath))
+            return true;
+        var row = ScriptRows.FirstOrDefault(candidate =>
+            string.Equals(candidate.Script.ScriptPath, dirtyPath, StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+            return false;
+
+        var recoveredPath = Path.GetFullPath(Path.Combine(scriptsDir, dirtyPath));
+        var scriptsRoot = Path.GetFullPath(scriptsDir) + Path.DirectorySeparatorChar;
+        if (!recoveredPath.StartsWith(scriptsRoot, PathComparison) || !File.Exists(recoveredPath))
+            return false;
+
+        SelectedScriptRow = row; // loads the on-disk baseline first
+        SelectedScriptText = File.ReadAllText(recoveredPath); // overlay remains dirty until Save All
+        return true;
+    }
+
     private string EnsureScratchRoot()
     {
         if (_scratchRoot is not null)
             return _scratchRoot;
 
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(local))
-        {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            local = string.IsNullOrWhiteSpace(home)
-                ? Path.Combine(Path.GetTempPath(), "HaPlay-user")
-                : Path.Combine(home, ".local", "share");
-        }
-
         // Per-instance folder so two unsaved sessions never fight over the same script paths.
-        _scratchRoot = Path.Combine(local, "HaPlay", "unsaved-scripts", Guid.NewGuid().ToString("N"));
+        _scratchRoot = Path.Combine(HaPlayStoragePaths.LocalAppRoot, "unsaved-scripts", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_scratchRoot);
         return _scratchRoot;
     }

@@ -13,6 +13,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using HaPlay.Services;
 using S.Control;
 using OSCLib;
 using PMLib;
@@ -24,14 +25,24 @@ namespace HaPlay.ViewModels;
 
 public partial class MainViewModel
 {
+    internal Func<Task<Views.Dialogs.UnsavedChangesChoice?>>? UnsavedChangesPromptOverride { get; set; }
+
     [RelayCommand]
-    private void NewProject()
+    private async Task NewProjectAsync()
     {
-        // Reset to a single empty player + no outputs. Don't prompt for unsaved changes yet — Phase B
-        // ships the basic flow; "are you sure?" can land in B.5 with the dialog convention pass.
+        if (!await ConfirmCanReplaceProjectAsync().ConfigureAwait(true))
+            return;
+        NewProjectCore();
+    }
+
+    private void NewProjectCore()
+    {
         ApplyProjectSnapshot(new HaPlayProject());
         CurrentProjectPath = null;
         ProjectStatus = null;
+        AutoSaveEnabled = false;
+        _autoSaveSuspendedForRecovery = false;
+        MarkProjectClean();
     }
 
     [RelayCommand]
@@ -79,6 +90,9 @@ public partial class MainViewModel
             return;
         }
 
+        if (project.SavedSections is null && !await ConfirmCanReplaceProjectAsync().ConfigureAwait(true))
+            return;
+
         // Capture the existing project's output display names BEFORE we replace them, so we can detect
         // routes that reference outputs the new project doesn't have.
         var requestedRoutes = project.Players
@@ -101,8 +115,12 @@ public partial class MainViewModel
         }
         else
         {
+            _autoSaveSuspendedForRecovery = false;
             CurrentProjectPath = path;
             PushRecentProject(path);
+            // As-loaded from file is the clean baseline; any edit after this (including a rebind below) makes the
+            // project dirty and will prompt to save on close.
+            MarkProjectClean();
         }
 
         if (missing.Count > 0)
@@ -126,6 +144,51 @@ public partial class MainViewModel
         if (outputStartErrors.Count > 0)
             statusParts.Add(Strings.Format(nameof(Strings.ProjectOutputRuntimesStartFailedFormat), outputStartErrors.Count, string.Join("; ", outputStartErrors)));
         ProjectStatus = string.Join(" ", statusParts);
+    }
+
+    /// <summary>One Save / Discard / Cancel gate for Close, New, Open, Open Recent, and recovery replacement.</summary>
+    public async Task<bool> ConfirmCanReplaceProjectAsync(bool closing = false)
+    {
+        NotifyDirtyStateChanged();
+        if (!HasUnsavedChanges)
+            return true;
+
+        // Auto-save is trusted only after this exact content hash has been verified on disk. Dirty editor text
+        // deliberately bypasses auto-save because it requires an explicit script-file decision.
+        if (AutoSaveEnabled && HasOpenProject && !_autoSaveSuspendedForRecovery && !Control.IsSelectedScriptDirty)
+        {
+            await _recovery.FlushAutoSaveAsync().ConfigureAwait(true);
+            NotifyDirtyStateChanged();
+            if (!HasUnsavedChanges)
+                return true;
+        }
+
+        Views.Dialogs.UnsavedChangesChoice? choice;
+        if (UnsavedChangesPromptOverride is not null)
+        {
+            choice = await UnsavedChangesPromptOverride().ConfigureAwait(true);
+        }
+        else
+        {
+            var owner = TryGetOwnerWindow();
+            if (owner is null)
+                return false;
+            choice = await new Views.Dialogs.UnsavedChangesDialog()
+                .ShowDialog<Views.Dialogs.UnsavedChangesChoice?>(owner);
+        }
+        switch (choice)
+        {
+            case Views.Dialogs.UnsavedChangesChoice.Save:
+                await SaveProjectCommand.ExecuteAsync(null);
+                NotifyDirtyStateChanged();
+                return !HasUnsavedChanges;
+            case Views.Dialogs.UnsavedChangesChoice.Discard:
+                if (closing)
+                    _discardUnsavedOnShutdown = true;
+                return true;
+            default:
+                return false;
+        }
     }
 
     [RelayCommand]
@@ -204,32 +267,68 @@ public partial class MainViewModel
     {
         try
         {
+            if (!Control.TrySaveDirtyScriptBuffer())
+            {
+                ProjectStatus = Strings.Format(nameof(Strings.ProjectSaveFailedFormat), "the script editor buffer could not be saved");
+                return;
+            }
+
             var snapshot = BuildProjectSnapshot();
-            await ProjectIO.SaveAsync(snapshot, path);
+            var persisted = await PersistProjectForRecoveryAsync(snapshot, path, CancellationToken.None);
+            if (!persisted.Succeeded)
+            {
+                if (persisted.WasSuperseded)
+                    ProjectStatus = Strings.Format(nameof(Strings.ProjectSaveFailedFormat), "a newer save replaced this request");
+                else
+                    ProjectStatus = Strings.Format(nameof(Strings.ProjectSaveFailedFormat),
+                        persisted.Error?.Message ?? "unknown persistence error");
+                return;
+            }
             CurrentProjectPath = path;
             PushRecentProject(path);
-
-            // D10: every full save also publishes the framework ShowDocument per cue list, so the
-            // saved show runs headless / via the C ABI without HaPlay. Best-effort — a sidecar
-            // problem is reported but never fails the save.
-            var sidecarErrors = new List<string>();
-            var sidecars = await ShowDocumentSidecar.WriteAllAsync(snapshot, path, sidecarErrors);
+            _autoSaveSuspendedForRecovery = false;
+            AutoSaveStatusIsError = persisted.Published.Errors.Count > 0;
+            AutoSaveStatusText = persisted.Published.Errors.Count > 0
+                ? Strings.Format(nameof(Strings.AutoSaveStatusFailedFormat), string.Join("; ", persisted.Published.Errors))
+                : AutoSaveEnabled
+                    ? Strings.Format(nameof(Strings.AutoSaveStatusSavedFormat), DateTimeOffset.Now.ToString("t"))
+                    : Strings.AutoSaveStatusRecoveryOnly;
+            MarkProjectClean();
 
             var statusParts = new List<string>
             {
                 Strings.Format(nameof(Strings.ProjectSavedStatusFormat), Path.GetFileName(path)),
             };
-            if (sidecars.Count > 0)
-                statusParts.Add(Strings.Format(nameof(Strings.ProjectShowSidecarsSavedFormat), sidecars.Count));
-            if (sidecarErrors.Count > 0)
+            if (persisted.Published.SidecarPaths.Count > 0)
+                statusParts.Add(Strings.Format(nameof(Strings.ProjectShowSidecarsSavedFormat), persisted.Published.SidecarPaths.Count));
+            if (persisted.Published.Errors.Count > 0)
                 statusParts.Add(Strings.Format(nameof(Strings.ProjectShowSidecarFailedFormat),
-                    sidecarErrors.Count, string.Join("; ", sidecarErrors)));
+                    persisted.Published.Errors.Count, string.Join("; ", persisted.Published.Errors)));
             ProjectStatus = string.Join(" ", statusParts);
         }
         catch (Exception ex)
         {
             ProjectStatus = Strings.Format(nameof(Strings.ProjectSaveFailedFormat), ex.Message);
         }
+    }
+
+    /// <summary>The single persistence pipeline used by explicit Save and recovery auto-save. Project JSON and
+    /// framework sidecars are ordered together by <see cref="ProjectPersistenceCoordinator"/>.</summary>
+    private Task<ProjectPersistenceResult> PersistProjectForRecoveryAsync(
+        HaPlayProject snapshot,
+        string path,
+        CancellationToken cancellationToken) =>
+        _projectPersistence.PersistAsync(snapshot, path, PublishShowSidecarsAsync, cancellationToken);
+
+    private static async Task<ProjectPublishResult> PublishShowSidecarsAsync(
+        HaPlayProject snapshot,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var errors = new List<string>();
+        var sidecars = await ShowDocumentSidecar.WriteAllAsync(snapshot, path, errors).ConfigureAwait(false);
+        return new ProjectPublishResult(sidecars, errors);
     }
 
     private async Task<IStorageFolder?> TryGetStartLocationAsync(Window owner)

@@ -1585,6 +1585,84 @@
   <data name="ProjectSavedStatusFormat" xml:space="preserve">
     <value>Saved '{0}'.</value>
   </data>
+  <data name="ProjectAutoSaveLabel" xml:space="preserve">
+    <value>Auto-save this project to its file</value>
+  </data>
+  <data name="ProjectAutoSaveHint" xml:space="preserve">
+    <value>Writes changes to the project file automatically. When off, changes are still kept in a crash-recovery copy so an unclean exit can be restored.</value>
+  </data>
+  <data name="ProjectAutoSaveHintUnsaved" xml:space="preserve">
+    <value>Save the project once to enable auto-save.</value>
+  </data>
+  <data name="AutoSaveStatusSaving" xml:space="preserve">
+    <value>Saving recovery snapshot…</value>
+  </data>
+  <data name="AutoSaveStatusSavedFormat" xml:space="preserve">
+    <value>Auto-saved at {0}</value>
+  </data>
+  <data name="AutoSaveStatusRecoveryOnly" xml:space="preserve">
+    <value>Crash recovery is active.</value>
+  </data>
+  <data name="AutoSaveStatusSuspended" xml:space="preserve">
+    <value>Auto-save is paused for recovered content until you save explicitly.</value>
+  </data>
+  <data name="AutoSaveStatusFailedFormat" xml:space="preserve">
+    <value>Auto-save failed: {0}</value>
+  </data>
+  <data name="AutoSaveRetryButton" xml:space="preserve">
+    <value>Retry</value>
+  </data>
+  <data name="OpenRecoveryFolderButton" xml:space="preserve">
+    <value>Open recovery folder</value>
+  </data>
+  <data name="UnknownError" xml:space="preserve">
+    <value>Unknown error</value>
+  </data>
+  <data name="RecoverSessionUntitledLabel" xml:space="preserve">
+    <value>an untitled project</value>
+  </data>
+  <data name="RecoverSessionDialogTitle" xml:space="preserve">
+    <value>Recover unsaved session</value>
+  </data>
+  <data name="RecoverSessionHeader" xml:space="preserve">
+    <value>HaPlay didn't shut down cleanly last time.</value>
+  </data>
+  <data name="RecoverSessionsListHeader" xml:space="preserve">
+    <value>Select a session to recover:</value>
+  </data>
+  <data name="RecoveryUnknownVersion" xml:space="preserve">
+    <value>unknown version</value>
+  </data>
+  <data name="RecoveryOriginalMissing" xml:space="preserve">
+    <value>original missing</value>
+  </data>
+  <data name="RecoverSessionBodyFormat" xml:space="preserve">
+    <value>There are unsaved changes from “{0}”, last captured {1}. Would you like to restore them?</value>
+  </data>
+  <data name="RecoverSessionRestoreIntoOriginalButton" xml:space="preserve">
+    <value>Restore into original</value>
+  </data>
+  <data name="RecoverSessionRestoreAsCopyButton" xml:space="preserve">
+    <value>Restore as a copy</value>
+  </data>
+  <data name="RecoverSessionRestoreButton" xml:space="preserve">
+    <value>Restore</value>
+  </data>
+  <data name="RecoverSessionDiscardButton" xml:space="preserve">
+    <value>Discard</value>
+  </data>
+  <data name="RecoverSessionNotNowButton" xml:space="preserve">
+    <value>Not now</value>
+  </data>
+  <data name="RecoveredIntoOriginalStatusFormat" xml:space="preserve">
+    <value>Recovered unsaved changes into '{0}'. Save to overwrite the file.</value>
+  </data>
+  <data name="RecoveredAsCopyStatus" xml:space="preserve">
+    <value>Recovered unsaved changes as a new copy. Use Save As to keep them.</value>
+  </data>
+  <data name="RecoveryFailedFormat" xml:space="preserve">
+    <value>Could not restore the recovered session: {0}</value>
+  </data>
   <data name="ProjectShowSidecarsSavedFormat" xml:space="preserve">
     <value>{0} show document(s) exported.</value>
   </data>
@@ -3070,19 +3148,19 @@
   <data name="ScriptEditorDiscardTooltip" xml:space="preserve">
     <value>Revert to the version on disk</value>
   </data>
-  <data name="UnsavedScriptsDialogTitle" xml:space="preserve">
-    <value>Unsaved scripts</value>
+  <data name="UnsavedChangesDialogTitle" xml:space="preserve">
+    <value>Unsaved changes</value>
   </data>
-  <data name="UnsavedScriptsHeader" xml:space="preserve">
-    <value>You have scripts that only exist in the temporary cache.</value>
+  <data name="UnsavedChangesHeader" xml:space="preserve">
+    <value>You have unsaved changes.</value>
   </data>
-  <data name="UnsavedScriptsBody" xml:space="preserve">
-    <value>They were created before this project was saved. Save the project now to keep them alongside it, or discard them and close.</value>
+  <data name="UnsavedChangesBody" xml:space="preserve">
+    <value>Do you want to save your changes before closing? If you don't save, they'll be lost.</value>
   </data>
-  <data name="UnsavedScriptsSaveButton" xml:space="preserve">
-    <value>Save project…</value>
+  <data name="UnsavedChangesSaveButton" xml:space="preserve">
+    <value>Save…</value>
   </data>
-  <data name="UnsavedScriptsDontSaveButton" xml:space="preserve">
+  <data name="UnsavedChangesDontSaveButton" xml:space="preserve">
     <value>Don't save</value>
   </data>
   <data name="ControlResetLayoutButton" xml:space="preserve">

@@ -56,9 +56,9 @@ public partial class App : Application
             };
             // At shutdown, tear down the ShowSession cue re-back first, then dispose the media host so the
             // modules' native runtime holds are released deterministically (NXT-05 — sessions that borrow the
-            // registry must go first; the host is the last thing out). Wired to BOTH lifetime events: a forced
-            // Shutdown() skips ShutdownRequested but still raises Exit — the teardown is idempotent, so the
-            // normal path (request → exit) just runs it once with a no-op second call.
+            // registry must go first; the host is the last thing out). Teardown belongs on Exit: doing it during
+            // ShutdownRequested can dispose recovery/media state before MainWindow.Closing has a chance to cancel
+            // shutdown for unsaved work. Forced Shutdown() still raises Exit.
             var toreDown = 0;
             void Teardown()
             {
@@ -68,7 +68,6 @@ public partial class App : Application
                 MediaRuntime.Shutdown();
             }
 
-            desktop.ShutdownRequested += (_, _) => Teardown();
             desktop.Exit += (_, _) => Teardown();
 
             WireSmokeSelfExit(desktop);

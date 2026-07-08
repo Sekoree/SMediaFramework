@@ -19,6 +19,25 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public void RoundTrip_AutoSaveEnabled_PreservesFlag()
+    {
+        var project = new HaPlayProject { AutoSaveEnabled = true };
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+        Assert.True(roundTripped.AutoSaveEnabled);
+        // Additive field must not have bumped the schema — old builds still open the file.
+        Assert.Equal(3, roundTripped.SchemaVersion);
+    }
+
+    [Fact]
+    public void Deserialize_LegacyFileWithoutAutoSaveField_DefaultsToFalse()
+    {
+        // A pre-feature project file (schema 3, no autoSaveEnabled property) must still load.
+        var legacy = """{"schemaVersion":3}""";
+        var project = ProjectIO.Deserialize(legacy);
+        Assert.False(project.AutoSaveEnabled);
+    }
+
+    [Fact]
     public async Task SaveAsync_WhenCancelled_PreservesExistingProjectFile()
     {
         var dir = Path.Combine(Path.GetTempPath(), "haplay-atomic-save-tests", Guid.NewGuid().ToString("N"));

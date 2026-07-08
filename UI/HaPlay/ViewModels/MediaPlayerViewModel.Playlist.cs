@@ -85,6 +85,11 @@ public partial class MediaPlayerViewModel
     {
         if (SelectedPlaylistTab is null || PlaylistTabs.Count <= 1)
             return;
+        if (IsPlayingFromTab(SelectedPlaylistTab))
+        {
+            StatusMessage = "Stop playback before removing the active Set.";
+            return;
+        }
         var idx = PlaylistTabs.IndexOf(SelectedPlaylistTab);
         if (idx < 0)
             return;
@@ -103,6 +108,11 @@ public partial class MediaPlayerViewModel
     {
         if (tab is null || PlaylistTabs.Count <= 1)
             return;
+        if (IsPlayingFromTab(tab))
+        {
+            StatusMessage = "Stop playback before removing the active Set.";
+            return;
+        }
         var idx = PlaylistTabs.IndexOf(tab);
         if (idx < 0)
             return;
@@ -112,6 +122,9 @@ public partial class MediaPlayerViewModel
             SelectedPlaylistTab = PlaylistTabs[Math.Clamp(idx, 0, PlaylistTabs.Count - 1)];
         RemovePlaylistTabCommand.NotifyCanExecuteChanged();
     }
+
+    private bool IsPlayingFromTab(PlaylistTabViewModel tab) =>
+        CurrentPlayingItem is not null && ReferenceEquals(_activePlaybackTab, tab);
 
     /// <summary>Duplicates a Set (right-click context menu): a deep copy of its items (each with a fresh id so
     /// selection/now-playing tracking stays independent) and its per-Set flags, inserted right after the

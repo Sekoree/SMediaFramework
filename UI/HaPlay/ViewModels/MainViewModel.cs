@@ -13,6 +13,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HaPlay.Models;
 using HaPlay.Playback;
 using HaPlay.Resources;
 using HaPlay.Services;
@@ -42,6 +43,13 @@ public partial class MainViewModel : ViewModelBase
     private int _shutdownCleanupStarted;
     private bool _midiInitialized;
     private readonly EndpointHealthMonitor _endpointHealth;
+
+    /// <summary>Crash-recovery autosave (§ session restore): captures the full project to the cache on a cadence
+    /// and, on a clean shutdown, deletes its session folder so nothing is offered for restore.</summary>
+    private readonly SessionRecoveryService _recovery;
+    private readonly ProjectPersistenceCoordinator _projectPersistence = new();
+    private bool _discardUnsavedOnShutdown;
+    private bool _autoSaveSuspendedForRecovery;
 
     // Pre-roll refresh is suggested in bursts (standby moves, property edits). Collapse those to a
     // latest-request-wins refresh: a new request cancels the in-flight one's token, and the serial
@@ -130,6 +138,25 @@ public partial class MainViewModel : ViewModelBase
         // (e.g. Bitfocus Companion). A token is only required when the operator sets one.
         _restApiAccessToken = _appSettings.RestApiAccessToken ?? string.Empty;
         RestartRestApi();
+
+        // Session restore: start capturing to the cache. The startup scan for a crashed session runs later, once
+        // the window is up (MainWindow.OnOpened → CheckForRecoverableSessionAsync), so it can show a dialog.
+        _recovery = new SessionRecoveryService(
+            buildSnapshot: BuildProjectSnapshot,
+            currentProjectPath: () => CurrentProjectPath,
+            autoSaveEnabled: () => AutoSaveEnabled && !_autoSaveSuspendedForRecovery,
+            recoveryScripts: Control.BuildRecoveryScriptFiles,
+            haPlayVersion: HaPlayVersionString,
+            untitledTitle: Strings.RecoverSessionUntitledLabel,
+            persistProject: PersistProjectForRecoveryAsync,
+            isProjectPersisted: _projectPersistence.IsPersisted);
+        _recovery.StatusChanged += OnRecoveryStatusChanged;
+        if (Environment.GetEnvironmentVariable("HAPLAY_DISABLE_RECOVERY_TIMER") is not ("1" or "true"))
+            _recovery.Start();
+
+        // Baseline for the unsaved-changes check: a freshly-launched, untouched project is "clean".
+        MarkProjectClean();
+
         timing?.SetOutcome($"players={Players.Count} outputs={OutputManagement.Outputs.Count} endpoints={ActionEndpoints.Count} restApi={RestApiEnabled}");
     }
 
@@ -163,6 +190,11 @@ public partial class MainViewModel : ViewModelBase
     {
         if (Interlocked.Exchange(ref _shutdownCleanupStarted, 1) != 0)
             return;
+        // Finalize recovery first, while the view-model graph is still intact: it flushes a final auto-save (when
+        // enabled) and removes this session's recovery folder so a clean exit is not mistaken for a crash.
+        _recovery.FinalizeCleanShutdown(
+            discardChanges: _discardUnsavedOnShutdown,
+            retainRecovery: !_discardUnsavedOnShutdown && HasUnsavedChanges);
         _endpointHealth.Dispose();
         _remoteApi.Dispose();
         _cueShow.ShutdownCleanup();
@@ -1295,6 +1327,11 @@ public partial class MainViewModel : ViewModelBase
     /// no I/O. Phase B will wire this through a File → Save menu; for now tests and programmatic callers
     /// can round-trip via <see cref="ProjectIO"/>.
     /// </summary>
+    /// <summary>Best-effort app-version stamp shared by project snapshots and recovery session metadata.</summary>
+    private static string? HaPlayVersionString =>
+        typeof(MainViewModel).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString();
+
     public HaPlayProject BuildProjectSnapshot() => BuildProjectSnapshot(sections: null);
 
     /// <summary>
@@ -1314,10 +1351,10 @@ public partial class MainViewModel : ViewModelBase
         return new HaPlayProject
         {
             SchemaVersion = HaPlayProject.CurrentSchemaVersion,
-            HaPlayVersion = typeof(MainViewModel).Assembly
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-                ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
+            HaPlayVersion = HaPlayVersionString,
             SavedSections = sections is null ? null : ProjectSections.Normalize(sections),
+            // Per-project session-restore setting travels with the document (not gated by a section).
+            AutoSaveEnabled = AutoSaveEnabled,
             Outputs = outputs,
             Players = Has(ProjectSections.Players) ? Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList() : [],
             ActionEndpoints = ActionEndpoints
@@ -1346,6 +1383,10 @@ public partial class MainViewModel : ViewModelBase
         // sections; everything else in the live show is left untouched, so partial project files
         // double as section imports. null = full project, original replace-everything semantics.
         var sections = project.SavedSections;
+        // The per-project auto-save flag is document-level, not a section — only a full project load adopts it;
+        // a partial section import leaves the current show's setting untouched.
+        if (sections is null)
+            AutoSaveEnabled = project.AutoSaveEnabled;
         bool Has(string leaf) => ProjectSections.Includes(sections, leaf);
         var hasAudioOut = Has(ProjectSections.OutputsAudio);
         var hasVideoOut = Has(ProjectSections.OutputsVideo);
@@ -1421,26 +1462,96 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ProjectTitle))]
     [NotifyPropertyChangedFor(nameof(HasOpenProject))]
+    [NotifyPropertyChangedFor(nameof(AutoSaveUnavailable))]
     private string? _currentProjectPath;
 
     // Project-relative control scripts resolve against the project folder; keep the Control workspace's
     // script root in sync with the open project file.
-    partial void OnCurrentProjectPathChanged(string? value) =>
+    partial void OnCurrentProjectPathChanged(string? value)
+    {
         Control.SetProjectRoot(string.IsNullOrEmpty(value) ? null : Path.GetDirectoryName(value));
+        NotifyDirtyStateChanged();
+    }
 
     /// <summary>Status banner text for the title bar (e.g. "Loaded. Missing outputs: …").</summary>
     [ObservableProperty]
     private string? _projectStatus;
+
+    /// <summary>Per-project session-restore setting (persisted in <see cref="HaPlayProject.AutoSaveEnabled"/>).
+    /// When on and the project has a file, the session-recovery loop writes edits through to that file on its
+    /// cadence; when off, only a crash-recovery duplicate is kept in the cache. Write-through needs a file, so
+    /// the toggle is only actionable once <see cref="HasOpenProject"/> is true.</summary>
+    [ObservableProperty]
+    private bool _autoSaveEnabled;
+
+    partial void OnAutoSaveEnabledChanged(bool value)
+    {
+        _ = value;
+        NotifyDirtyStateChanged();
+    }
+
+    [ObservableProperty]
+    private string _autoSaveStatusText = Strings.AutoSaveStatusRecoveryOnly;
+
+    [ObservableProperty]
+    private bool _autoSaveStatusIsError;
 
     public ObservableCollection<string> RecentProjects { get; } = new();
     public bool HasNoRecentProjects => RecentProjects.Count == 0;
 
     public bool HasOpenProject => !string.IsNullOrEmpty(CurrentProjectPath);
 
+    /// <summary>True when the project has no file yet, so per-project auto-save (write-through) can't apply.
+    /// Drives the "save the project once" hint next to the auto-save toggle.</summary>
+    public bool AutoSaveUnavailable => !HasOpenProject;
+
+    /// <summary>Content hash of the project as of the last New / Open / Save — the "clean" baseline the
+    /// unsaved-changes check compares against. There's no central dirty flag, so this hash IS the flag.</summary>
+    private string _savedProjectHash = string.Empty;
+
+    /// <summary>Records the current project state as the clean baseline (call after New / Open / Save).</summary>
+    private void MarkProjectClean()
+    {
+        _savedProjectHash = ProjectHash.Of(BuildProjectSnapshot());
+        NotifyDirtyStateChanged();
+    }
+
+    private void MarkProjectDirty()
+    {
+        _savedProjectHash = string.Empty;
+        NotifyDirtyStateChanged();
+    }
+
+    /// <summary>True when the live project differs from the last-saved baseline. Recomputed on demand (it builds
+    /// a snapshot), so evaluate it at decision points like close — do not bind it in a hot UI path.</summary>
+    public bool IsProjectDirty
+    {
+        get
+        {
+            var currentHash = ProjectHash.Of(BuildProjectSnapshot());
+            return !string.Equals(_savedProjectHash, currentHash, StringComparison.Ordinal)
+                   && !_projectPersistence.IsPersisted(CurrentProjectPath, currentHash);
+        }
+    }
+
+    /// <summary>Whether closing now would lose work: the document is dirty (or control scripts live only in the
+    /// scratch cache) AND auto-save isn't going to flush it. When auto-save is on for a project that has a file,
+    /// the clean-shutdown flush persists the changes, so no prompt is needed.</summary>
+    public bool HasUnsavedChanges =>
+        IsProjectDirty || HasUnsavedScratchScripts || Control.IsSelectedScriptDirty;
+
+    private void NotifyDirtyStateChanged()
+    {
+        OnPropertyChanged(nameof(IsProjectDirty));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
+        OnPropertyChanged(nameof(ProjectTitle));
+    }
+
     public string ProjectTitle =>
-        string.IsNullOrEmpty(CurrentProjectPath)
+        (string.IsNullOrEmpty(CurrentProjectPath)
             ? Strings.ProjectTitleUntitled
-            : Strings.Format(nameof(Strings.ProjectTitleFormat), Path.GetFileNameWithoutExtension(CurrentProjectPath));
+            : Strings.Format(nameof(Strings.ProjectTitleFormat), Path.GetFileNameWithoutExtension(CurrentProjectPath)))
+        + (IsProjectDirty || Control.IsSelectedScriptDirty ? " *" : string.Empty);
 
     /// <summary>Default location for project files (§7.3 — ~/Documents/HaPlay Projects/).</summary>
     public static string DefaultProjectsFolder
@@ -1538,13 +1649,7 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Stored alongside the user's profile so it survives reinstalls of the app.</summary>
     private static string RecentProjectsFilePath
-    {
-        get
-        {
-            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(local, "HaPlay", "recent-projects.json");
-        }
-    }
+        => Path.Combine(HaPlayStoragePaths.LocalAppRoot, "recent-projects.json");
 
     public void LoadRecentProjects()
     {

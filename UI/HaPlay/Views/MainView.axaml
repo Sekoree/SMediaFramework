@@ -307,6 +307,28 @@
           <Button Content="{x:Static res:Strings.SaveButton}" Command="{Binding SaveProjectCommand}" />
           <Button Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,12">
+          <CheckBox Content="{x:Static res:Strings.ProjectAutoSaveLabel}"
+                    IsChecked="{Binding AutoSaveEnabled, Mode=TwoWay}"
+                    IsEnabled="{Binding HasOpenProject}" />
+          <TextBlock Text="{x:Static res:Strings.ProjectAutoSaveHint}"
+                     Opacity="0.6" FontSize="12" TextWrapping="Wrap" Margin="24,0,0,0" />
+          <TextBlock Text="{x:Static res:Strings.ProjectAutoSaveHintUnsaved}"
+                     Opacity="0.6" FontSize="12" TextWrapping="Wrap" Margin="24,0,0,0"
+                     IsVisible="{Binding AutoSaveUnavailable}" />
+          <TextBlock Text="{Binding AutoSaveStatusText}" Opacity="0.7" FontSize="12"
+                     TextWrapping="Wrap" Margin="24,2,0,0"
+                     IsVisible="{Binding !AutoSaveStatusIsError}" />
+          <TextBlock Text="{Binding AutoSaveStatusText}" Foreground="{StaticResource StatusErrorFg}"
+                     FontSize="12" TextWrapping="Wrap" Margin="24,2,0,0"
+                     IsVisible="{Binding AutoSaveStatusIsError}" />
+          <StackPanel Orientation="Horizontal" Spacing="6" Margin="24,2,0,0">
+            <Button Content="{x:Static res:Strings.AutoSaveRetryButton}"
+                    Command="{Binding RetryAutoSaveCommand}" IsVisible="{Binding AutoSaveStatusIsError}" />
+            <Button Content="{x:Static res:Strings.OpenRecoveryFolderButton}"
+                    Command="{Binding OpenRecoveryFolderCommand}" />
+          </StackPanel>
+        </StackPanel>
         <Grid ColumnDefinitions="1.05*,1.8*" ColumnSpacing="10">
           <Border Grid.Column="0" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
             <DockPanel>

@@ -146,6 +146,34 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task BuildRecoveryScriptFiles_IncludesUnsavedEditorOverlay()
+    {
+        var root = Directory.CreateTempSubdirectory("haplay-script-recovery-").FullName;
+        var scriptPath = Path.Combine(root, "Scripts", "control.mnd");
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+        await File.WriteAllTextAsync(scriptPath, "return 1");
+        try
+        {
+            await using var vm = new ControlWorkspaceViewModel();
+            vm.SetProjectRoot(root);
+            vm.LoadConfig(new ControlSystemConfig
+            {
+                Scripts = [new ControlScriptConfig { Name = "Control", ScriptPath = "Scripts/control.mnd" }],
+            });
+            vm.SelectedScriptText = "return 2";
+
+            var recovered = Assert.Single(vm.BuildRecoveryScriptFiles());
+            Assert.True(recovered.IsDirtyBuffer);
+            Assert.Equal("return 2", recovered.Contents);
+            Assert.Equal(Path.Combine("Scripts", "control.mnd"), recovered.RelativePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ScriptAnalysis_ReportsMissingTriggerExportsFromUnsavedEditorText()
     {
         var root = Path.Combine(Path.GetTempPath(), "haplay-script-diagnostics-" + Guid.NewGuid().ToString("N"));

@@ -68,18 +68,7 @@ public sealed class AppSettings
                 return overridden;
             if (Environment.GetEnvironmentVariable("HAPLAY_SETTINGS_PATH") is { Length: > 0 } environmentPath)
                 return Path.GetFullPath(environmentPath);
-            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            // NativeAOT can return an empty special-folder path in minimal/service environments. Falling
-            // through to Path.Combine("", ...) writes settings into the process working directory (and can
-            // contaminate a release staging tree), so retain a user-scoped fallback.
-            if (string.IsNullOrWhiteSpace(local))
-            {
-                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                local = string.IsNullOrWhiteSpace(home)
-                    ? Path.Combine(Path.GetTempPath(), "HaPlay-user")
-                    : Path.Combine(home, ".local", "share");
-            }
-            return Path.Combine(local, "HaPlay", "app-settings.json");
+            return Path.Combine(HaPlayStoragePaths.LocalAppRoot, "app-settings.json");
         }
     }
 

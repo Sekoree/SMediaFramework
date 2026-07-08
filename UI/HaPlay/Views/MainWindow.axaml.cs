@@ -47,6 +47,9 @@ public partial class MainWindow : Window
         if (DataContext is not MainViewModel vm)
             return;
 
+        // Offer to restore a crashed session (best-effort; runs after the window is up so it can show a modal).
+        _ = vm.CheckForRecoverableSessionAsync();
+
         var snap = vm.GetSavedWindowState();
         if (snap is null)
         {
@@ -117,14 +120,14 @@ public partial class MainWindow : Window
         vm.SaveWindowState(BuildSnapshot());
     }
 
-    // Set once the operator has answered the unsaved-scripts prompt with Save/Don't-save, so the second
-    // (programmatic) Close() doesn't re-prompt.
+    // Set once the shared replacement gate has verified Save/auto-save or the operator chose Discard, so the
+    // second (programmatic) Close() doesn't re-enter the gate.
     private bool _forceClose;
 
     /// <summary>Save the *current* window state synchronously — the debounce timer fires after the next
     /// dispatcher pump, which doesn't happen during shutdown. Without the synchronous write on Closing,
-    /// a fresh-from-launch resize and quit would lose the last 400 ms of edits. Also prompts to save scripts
-    /// that only live in the scratch cache (project never saved) before letting the window close.</summary>
+    /// a fresh-from-launch resize and quit would lose the last 400 ms of edits. Also prompts to save a project
+    /// with unsaved changes (or scripts that only live in the scratch cache) before letting the window close.</summary>
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         _saveDebounce?.Stop();
@@ -132,27 +135,17 @@ public partial class MainWindow : Window
             return;
         vm.SaveWindowState(BuildSnapshot());
 
-        if (_forceClose || !vm.HasUnsavedScratchScripts)
+        // HAPLAY_SMOKE self-exits through a clean shutdown; never block that on a modal prompt.
+        var smoke = System.Environment.GetEnvironmentVariable("HAPLAY_SMOKE");
+        if (_forceClose || smoke is "1" or "true")
             return;
 
-        // Hold the close open while we ask; re-close programmatically once the operator has decided.
+        // Hold the close open while the shared project-replacement gate verifies auto-save or asks the operator.
         e.Cancel = true;
-        var choice = await new Dialogs.UnsavedScriptsDialog().ShowDialog<Dialogs.UnsavedScriptsChoice?>(this);
-        switch (choice)
+        if (await vm.ConfirmCanReplaceProjectAsync(closing: true))
         {
-            case Dialogs.UnsavedScriptsChoice.Save:
-                await vm.SaveProjectCommand.ExecuteAsync(null);
-                if (vm.HasUnsavedScratchScripts)
-                    return; // Save-As cancelled or failed — keep the window open rather than lose scripts.
-                _forceClose = true;
-                Close();
-                break;
-            case Dialogs.UnsavedScriptsChoice.Discard:
-                _forceClose = true;
-                Close();
-                break;
-            default:
-                break; // Cancel / dismissed — stay open.
+            _forceClose = true;
+            Close();
         }
     }
 
