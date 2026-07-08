@@ -133,6 +133,22 @@ public partial class MediaPlayerView : UserControl
         }
     }
 
+    /// <summary>Removes the Set a per-tab control belongs to — the rename-mode X button and the right-click
+    /// "Remove" menu item both route here (the Set is the control's DataContext). Code-behind rather than a
+    /// command binding because the context menu lives in a popup an ancestor binding can't cross.</summary>
+    private void OnPlaylistTabRemoveClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: PlaylistTabViewModel tab } && DataContext is MediaPlayerViewModel vm)
+            vm.RemovePlaylistTabItemCommand.Execute(tab);
+    }
+
+    /// <summary>Duplicates the right-clicked Set (its "Duplicate" menu item's DataContext).</summary>
+    private void OnPlaylistTabDuplicateClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: PlaylistTabViewModel tab } && DataContext is MediaPlayerViewModel vm)
+            vm.DuplicatePlaylistTabCommand.Execute(tab);
+    }
+
     /// <summary>Opens the HOLD idle-image dialog for this player (was a cramped flyout).</summary>
     private void OnHoldImageSetupClick(object? sender, RoutedEventArgs e)
     {

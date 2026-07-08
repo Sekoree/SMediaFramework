@@ -1226,13 +1226,16 @@
     <value>Double-click a row to load + play. Single-click selects so Play loads that file.</value>
   </data>
   <data name="AddPlaylistTabButton" xml:space="preserve">
-    <value>+</value>
+    <value>+ Set</value>
   </data>
   <data name="AddPlaylistTabTooltip" xml:space="preserve">
-    <value>Add playlist tab.</value>
+    <value>Add a Set (playlist tab).</value>
   </data>
-  <data name="RemoveTabButton" xml:space="preserve">
-    <value>Remove tab</value>
+  <data name="DuplicateTabMenuItem" xml:space="preserve">
+    <value>Duplicate</value>
+  </data>
+  <data name="RemovePlaylistTabTooltip" xml:space="preserve">
+    <value>Remove this Set</value>
   </data>
   <data name="PlaylistSectionTitle" xml:space="preserve">
     <value>Playlist</value>
@@ -3090,5 +3093,20 @@
   </data>
   <data name="MenuExitHeader" xml:space="preserve">
     <value>_Exit</value>
+  </data>
+  <data name="VideoFitLabel" xml:space="preserve">
+    <value>Fit</value>
+  </data>
+  <data name="VideoFitHint" xml:space="preserve">
+    <value>How this display fits the video: Letterbox keeps the whole frame (black bars); Cover fills the screen and crops the edges; Stretch fills and may distort. Only affects this local output — NDI outputs always send the full letterboxed frame.</value>
+  </data>
+  <data name="PlayerTintTooltip" xml:space="preserve">
+    <value>Deck color — tints this player so you can tell decks apart</value>
+  </data>
+  <data name="PlayerTintHeader" xml:space="preserve">
+    <value>Deck color</value>
+  </data>
+  <data name="PlayerTintCustomLabel" xml:space="preserve">
+    <value>Custom</value>
   </data>
 </root>

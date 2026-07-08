@@ -32,6 +32,30 @@ public sealed class EditDialogViewModelTests
     }
 
     [Fact]
+    public void LocalVideo_VideoFit_RoundTripsThroughLoadAndCommit()
+    {
+        var vm = new AddLocalVideoOutputDialogViewModel();
+        vm.Screens.Add(new ScreenListItem { Index = 0, Label = "Primary" });
+        vm.SelectedScreen = vm.Screens[0];
+
+        // Default is Letterbox before any load (the common case for a fresh output).
+        Assert.Equal(LocalVideoFit.Letterbox, vm.SelectedVideoFit);
+
+        vm.LoadFromExisting(new LocalVideoOutputDefinition(
+            Guid.NewGuid(), "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
+            ScreenIndex: 0, WindowWidth: 1920, WindowHeight: 1080, VideoFit: LocalVideoFit.Cover));
+
+        Assert.Equal(LocalVideoFit.Cover, vm.SelectedVideoFit);
+
+        // Operator switches it to Stretch; the committed definition carries the new fit.
+        vm.SelectedVideoFit = LocalVideoFit.Stretch;
+        var committed = vm.TryCommit();
+
+        Assert.NotNull(committed);
+        Assert.Equal(LocalVideoFit.Stretch, committed!.VideoFit);
+    }
+
+    [Fact]
     public void LocalVideo_TryCommit_PreservesIdAndCloneOfId()
     {
         var vm = new AddLocalVideoOutputDialogViewModel();

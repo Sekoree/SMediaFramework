@@ -95,6 +95,58 @@ public partial class MediaPlayerViewModel
 
     private bool CanRemovePlaylistTab() => PlaylistTabs.Count > 1;
 
+    /// <summary>Removes a SPECIFIC Set (the rename-mode X + the right-click context menu), as opposed to
+    /// <see cref="RemovePlaylistTabCommand"/> which removes the selected Set. Never removes the last Set.
+    /// Re-selects a neighbour only when the removed Set was the selected one.</summary>
+    [RelayCommand]
+    private void RemovePlaylistTabItem(PlaylistTabViewModel? tab)
+    {
+        if (tab is null || PlaylistTabs.Count <= 1)
+            return;
+        var idx = PlaylistTabs.IndexOf(tab);
+        if (idx < 0)
+            return;
+        var wasSelected = ReferenceEquals(SelectedPlaylistTab, tab);
+        PlaylistTabs.RemoveAt(idx);
+        if (wasSelected)
+            SelectedPlaylistTab = PlaylistTabs[Math.Clamp(idx, 0, PlaylistTabs.Count - 1)];
+        RemovePlaylistTabCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Duplicates a Set (right-click context menu): a deep copy of its items (each with a fresh id so
+    /// selection/now-playing tracking stays independent) and its per-Set flags, inserted right after the
+    /// original and selected.</summary>
+    [RelayCommand]
+    private void DuplicatePlaylistTab(PlaylistTabViewModel? tab)
+    {
+        if (tab is null)
+            return;
+        var copy = new PlaylistTabViewModel(BuildDuplicateTabName(tab.Name))
+        {
+            IsLooping = tab.IsLooping,
+            AutoAdvance = tab.AutoAdvance,
+            Shuffle = tab.Shuffle,
+            RepeatAll = tab.RepeatAll,
+        };
+        foreach (var item in tab.Items)
+            copy.Items.Add(item with { Id = Guid.NewGuid() });
+
+        var idx = PlaylistTabs.IndexOf(tab);
+        if (idx >= 0)
+            PlaylistTabs.Insert(idx + 1, copy);
+        else
+            PlaylistTabs.Add(copy);
+        SelectedPlaylistTab = copy;
+        RemovePlaylistTabCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Pure: "Set 1" → "Set 1 copy".</summary>
+    internal static string BuildDuplicateTabName(string? name)
+    {
+        var baseName = string.IsNullOrWhiteSpace(name) ? "Set" : name.Trim();
+        return $"{baseName} copy";
+    }
+
     [RelayCommand]
     private async Task SavePlaylistTabAsync()
     {

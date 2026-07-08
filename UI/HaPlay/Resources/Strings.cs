@@ -568,6 +568,8 @@ public static class Strings
     public static string AddPlaylistTabButton => Get(nameof(AddPlaylistTabButton));
     public static string AddPlaylistTabTooltip => Get(nameof(AddPlaylistTabTooltip));
     public static string RemoveTabButton => Get(nameof(RemoveTabButton));
+    public static string DuplicateTabMenuItem => Get(nameof(DuplicateTabMenuItem));
+    public static string RemovePlaylistTabTooltip => Get(nameof(RemovePlaylistTabTooltip));
     public static string PlaylistSectionTitle => Get(nameof(PlaylistSectionTitle));
     public static string MoveUpButton => Get(nameof(MoveUpButton));
     public static string MoveUpTooltip => Get(nameof(MoveUpTooltip));
@@ -1036,4 +1038,9 @@ public static class Strings
     public static string UnsavedScriptsDontSaveButton => Get(nameof(UnsavedScriptsDontSaveButton));
     public static string ControlResetLayoutButton => Get(nameof(ControlResetLayoutButton));
     public static string ControlResetLayoutTooltip => Get(nameof(ControlResetLayoutTooltip));
+    public static string VideoFitLabel => Get(nameof(VideoFitLabel));
+    public static string VideoFitHint => Get(nameof(VideoFitHint));
+    public static string PlayerTintTooltip => Get(nameof(PlayerTintTooltip));
+    public static string PlayerTintHeader => Get(nameof(PlayerTintHeader));
+    public static string PlayerTintCustomLabel => Get(nameof(PlayerTintCustomLabel));
 }

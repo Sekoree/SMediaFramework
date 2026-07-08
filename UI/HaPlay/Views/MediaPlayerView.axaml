@@ -7,6 +7,7 @@
              xmlns:models="using:HaPlay.Models"
              xmlns:res="using:HaPlay.Resources"
              xmlns:controls="using:HaPlay.Views.Controls"
+             xmlns:mpp="using:HaPlay.Views.MediaPlayerPanels"
              xmlns:theme="clr-namespace:Classic.Avalonia.Theme;assembly=Classic.Avalonia.Theme"
              xmlns:common="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
              mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="720"
@@ -124,6 +125,7 @@
          docked rows overlapping (the set strip used to glitch down into the playlist). -->
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <DockPanel LastChildFill="True" MinHeight="580"
+               Background="{Binding TintBrush}"
                Height="{Binding $parent[ScrollViewer].Viewport.Height}">
 
         <!-- ============ Now-playing / transport deck header (pinned) ============ -->
@@ -160,6 +162,8 @@
                                ToolTip.Tip="{Binding CurrentMediaDisplay}" />
 
                     <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+                        <!-- Deck color: tints this player so decks are easy to tell apart. -->
+                        <mpp:MediaPlayerTintPicker VerticalAlignment="Center" />
                         <!-- Multi-output aggregate: worst-case health dot + routed-output count, with a
                              per-output health flyout. Read-only status view — full routing edits live in
                              the pinned routing group box + editor (the flyout links straight to it). -->
@@ -479,15 +483,12 @@
                         </Button.Flyout>
                     </Button>
 
-                    <StackPanel Orientation="Horizontal" Spacing="4">
-                        <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="32"
-                                VerticalAlignment="Center"
-                                Command="{Binding AddPlaylistTabCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
-                        <Button Content="{x:Static res:Strings.RemoveTabButton}" MinWidth="32"
-                                VerticalAlignment="Center"
-                                Command="{Binding RemovePlaylistTabCommand}" />
-                    </StackPanel>
+                    <!-- Add-Set only. Per-Set removal lives on each tab (the X in rename mode + the
+                         right-click Remove/Duplicate menu), so no standalone remove button. -->
+                    <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="48"
+                            HorizontalContentAlignment="Center" VerticalAlignment="Center"
+                            Command="{Binding AddPlaylistTabCommand}"
+                            ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
                 </DockPanel>
 
                 <!-- Set tabs sit DIRECTLY on the playlist pane (ZIndex above it) so the selected
@@ -523,6 +524,18 @@
                                              making set tabs impossible to switch. -->
                                         <Panel Background="Transparent"
                                                DoubleTapped="OnPlaylistTabDoubleTapped">
+                                            <!-- Right-click a Set: duplicate or remove it. Code-behind rather
+                                                 than a command (the menu is in a popup an ancestor binding
+                                                 can't cross). -->
+                                            <Panel.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="{x:Static res:Strings.DuplicateTabMenuItem}"
+                                                              Click="OnPlaylistTabDuplicateClick" />
+                                                    <Separator />
+                                                    <MenuItem Header="{x:Static res:Strings.RemoveButton}"
+                                                              Click="OnPlaylistTabRemoveClick" />
+                                                </ContextMenu>
+                                            </Panel.ContextMenu>
                                             <StackPanel Orientation="Horizontal" Spacing="4"
                                                         IsVisible="{Binding !IsRenaming}">
                                                 <!-- Marks the Set the player is currently playing from. -->
@@ -532,11 +545,20 @@
                                                 <TextBlock Text="{Binding Name}" MinWidth="60"
                                                            VerticalAlignment="Center" Padding="2,0" />
                                             </StackPanel>
-                                            <TextBox Text="{Binding Name, Mode=TwoWay}"
-                                                     MinWidth="64"
-                                                     IsVisible="{Binding IsRenaming}"
-                                                     LostFocus="OnPlaylistTabRenameLostFocus"
-                                                     KeyDown="OnPlaylistTabRenameKeyDown" />
+                                            <StackPanel Orientation="Horizontal" Spacing="2"
+                                                        IsVisible="{Binding IsRenaming}">
+                                                <TextBox Text="{Binding Name, Mode=TwoWay}"
+                                                         MinWidth="64" VerticalAlignment="Center"
+                                                         LostFocus="OnPlaylistTabRenameLostFocus"
+                                                         KeyDown="OnPlaylistTabRenameKeyDown" />
+                                                <!-- Focusable=False so clicking it doesn't blur the TextBox
+                                                     (which would exit rename and hide this button first). -->
+                                                <Button Focusable="False" Padding="4,0" VerticalAlignment="Center"
+                                                        Click="OnPlaylistTabRemoveClick"
+                                                        ToolTip.Tip="{x:Static res:Strings.RemovePlaylistTabTooltip}">
+                                                    <PathIcon Data="{x:Static views:AppIcons.Close}" Width="8" Height="8" />
+                                                </Button>
+                                            </StackPanel>
                                         </Panel>
                                     </DataTemplate>
                                 </TabControl.ItemTemplate>

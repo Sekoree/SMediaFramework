@@ -64,12 +64,18 @@ public partial class MediaPlayerViewModel
         // live inputs map to their option-carrying ndi:/padev: descriptor URIs.
         string mediaPath;
         bool hasVideo;
+        // The source's native raster/rate (0 = unknown). Only a probed file exposes it up front; live inputs
+        // (NDI/capture) and YouTube keep it 0 and the canvas falls back to the driven output resolution.
+        int srcWidth = 0, srcHeight = 0, srcFpsNum = 0, srcFpsDen = 0;
         switch (item)
         {
             case FilePlaylistItem file:
                 mediaPath = file.Path;
                 var probe = await CueMediaProbe.TryProbeAsync(file.Path).ConfigureAwait(true);
                 hasVideo = probe?.HasVideo == true;
+                if (probe is { HasVideo: true } vp)
+                    (srcWidth, srcHeight, srcFpsNum, srcFpsDen) =
+                        (vp.SourceVideoWidth, vp.SourceVideoHeight, vp.SourceFrameRateNum, vp.SourceFrameRateDen);
                 break;
             case NDIInputPlaylistItem ndi when RuntimeModules.IsNDIAvailable:
                 mediaPath = BuildNDIInputUri(ndi);
@@ -152,6 +158,7 @@ public partial class MediaPlayerViewModel
             // doing it before LoadDocument keeps the video factory a pure lookup during the (synchronous) load.
             IReadOnlyList<ShowClipAudioRoute> audioRoutes = [];
             var canvas = (Width: 1920, Height: 1080);
+            var canvasFps = (Num: 30, Den: 1);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
@@ -172,9 +179,15 @@ public partial class MediaPlayerViewModel
                         if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
                             resolutions.Add((rw, rh));
                     }
-                    // Composite at the driven outputs' resolution (largest, for best quality) rather than a fixed
-                    // 1080p — otherwise 4K content on a 4K line is needlessly downscaled through the canvas.
-                    canvas = ResolveDeckCanvasSize(resolutions);
+                    // Media-player sizing: the compositor is AUTOSIZED to the source (AsSource) — or to the chosen
+                    // fixed preset — and the OUTPUT letterboxes into each display. This replaces the old
+                    // "canvas = largest output resolution + Cover fit", which cropped differing-aspect media to
+                    // cover the screen. A live input with no known raster still falls back to the driven outputs.
+                    var resolved = ResolveDeckCanvas(
+                        OutputPreset, SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight(),
+                        srcWidth, srcHeight, srcFpsNum, srcFpsDen, resolutions);
+                    canvas = (resolved.Width, resolved.Height);
+                    canvasFps = (resolved.FpsNum, resolved.FpsDen);
                 }
                 _playerVideoOutputs = new Dictionary<string, List<(Guid, IVideoOutput)>>(StringComparer.Ordinal)
                 {
@@ -213,7 +226,11 @@ public partial class MediaPlayerViewModel
                     loop: IsLooping && AutoAdvancePlaylist,
                     // The operator's audio-track choice from the Properties dialog (null = automatic). File items
                     // only; live/YouTube sources have no container multi-track selection here.
-                    audioStreamIndex: (item as FilePlaylistItem)?.AudioTrackIndex)).ConfigureAwait(true);
+                    audioStreamIndex: (item as FilePlaylistItem)?.AudioTrackIndex,
+                    // The compositor runs at the source (or preset) rate, not a hardcoded 30 — so 50/60 fps
+                    // content is composited frame-for-frame instead of being decimated to 30.
+                    canvasFrameRateNum: canvasFps.Num,
+                    canvasFrameRateDen: canvasFps.Den)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
@@ -507,6 +524,54 @@ public partial class MediaPlayerViewModel
             if (rw > 0 && rh > 0 && (long)rw * rh > (long)w * h)
                 (w, h) = (rw, rh);
         return w > 0 && h > 0 ? (w, h) : (1920, 1080);
+    }
+
+    /// <summary>Pure: the deck's composition-canvas raster (size + rate). The compositor is sized like a media
+    /// player — <em>autosized to the media</em> — not like a cue's fixed program raster:
+    /// <list type="bullet">
+    /// <item><see cref="PlayerOutputPreset.AsSource"/> (default) → the source's own resolution/rate, so the media
+    /// fills the canvas 1:1 and each OUTPUT letterboxes it into its physical display (the fix for differing-aspect
+    /// media covering the screen).</item>
+    /// <item>a fixed preset (1080p60 / 720p60 / Custom) → that preset's raster, into which the clip placement
+    /// letterboxes the source.</item>
+    /// </list>
+    /// Falls back to the largest driven output resolution (then 1080p) when the source resolution is unknown —
+    /// a live NDI/capture input, or a probe miss — since there is no media raster to match yet.</summary>
+    internal static (int Width, int Height, int FpsNum, int FpsDen) ResolveDeckCanvas(
+        PlayerOutputPreset preset,
+        int customWidth,
+        int customHeight,
+        int sourceWidth,
+        int sourceHeight,
+        int sourceFpsNum,
+        int sourceFpsDen,
+        IEnumerable<(int Width, int Height)> outputResolutions)
+    {
+        var sourceRate = sourceFpsNum > 0 && sourceFpsDen > 0
+            ? new Rational(sourceFpsNum, sourceFpsDen)
+            : default;
+
+        // Fixed preset: the canvas is the preset raster; the clip placement letterboxes the source into it.
+        if (preset != PlayerOutputPreset.AsSource
+            && OutputPresetFormats.TryResolve(preset, sourceRate, out var target, customWidth, customHeight))
+        {
+            return (target.Width, target.Height, target.FrameRate.Numerator, target.FrameRate.Denominator);
+        }
+
+        // AsSource with a known media raster: match it exactly (compositor == source; output letterboxes).
+        if (sourceWidth > 0 && sourceHeight > 0)
+        {
+            return sourceRate.Numerator > 0
+                ? (sourceWidth, sourceHeight, sourceRate.Numerator, sourceRate.Denominator)
+                : (sourceWidth, sourceHeight, 30, 1);
+        }
+
+        // Unknown source raster (live input / probe miss): fall back to the driven outputs, keeping the source
+        // rate when we happen to know it.
+        var (w, h) = ResolveDeckCanvasSize(outputResolutions);
+        return sourceRate.Numerator > 0
+            ? (w, h, sourceRate.Numerator, sourceRate.Denominator)
+            : (w, h, 30, 1);
     }
 
     /// <summary>Pure: an out←src channel map (index = output channel, value = source channel, -1 = silence) from a

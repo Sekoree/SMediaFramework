@@ -43,6 +43,10 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
 
     public VideoSurfaceMode[] SurfaceModes { get; } = Enum.GetValues<VideoSurfaceMode>();
 
+    /// <summary>Display-side fit choices (letterbox default). Applies to this local output only — NDI is
+    /// unaffected. Shown via <see cref="EnumDisplayConverter"/>.</summary>
+    public LocalVideoFit[] VideoFits { get; } = Enum.GetValues<LocalVideoFit>();
+
     [ObservableProperty] private string _displayName = Strings.ProgramOutputDefaultName;
     [ObservableProperty] private string? _validationMessage;
 
@@ -78,6 +82,9 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
 
     [ObservableProperty] private int _windowWidth = 1280;
     [ObservableProperty] private int _windowHeight = 720;
+
+    /// <summary>How this display fits the canvas (letterbox default). Display-side only; NDI is unaffected.</summary>
+    [ObservableProperty] private LocalVideoFit _selectedVideoFit = LocalVideoFit.Letterbox;
 
     /// <summary>§3.4 clone-of selection. <c>None</c> means this output is independent (not a clone).</summary>
     [ObservableProperty] private CloneParentChoice _selectedCloneParent = CloneParentChoice.None;
@@ -138,6 +145,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
         WindowHeight = existing.WindowHeight ?? 720;
         BackgroundImagePath = existing.BackgroundImagePath;
         AlwaysOnTop = existing.AlwaysOnTop;
+        SelectedVideoFit = existing.VideoFit;
 
         // Map CloneOfId onto the dropdown choice. Falls back to None when the parent is no longer in
         // the dropdown (e.g. it was removed since the project was saved).
@@ -197,6 +205,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
             SurfaceMode == VideoSurfaceMode.Windowed ? WindowHeight : null,
             CloneOfId: SelectedCloneParent.Definition?.Id,
             BackgroundImagePath: string.IsNullOrWhiteSpace(BackgroundImagePath) ? null : BackgroundImagePath.Trim(),
-            AlwaysOnTop: AlwaysOnTop);
+            AlwaysOnTop: AlwaysOnTop,
+            VideoFit: SelectedVideoFit);
     }
 }

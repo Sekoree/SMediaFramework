@@ -58,6 +58,18 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
 
+        <TextBlock Text="{x:Static res:Strings.VideoFitLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding VideoFits}" SelectedItem="{Binding SelectedVideoFit}"
+                  HorizontalAlignment="Stretch">
+          <ComboBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding Converter={x:Static rootvm:EnumDisplayConverter.Instance}}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBlock Text="{x:Static res:Strings.VideoFitHint}"
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+
         <TextBlock Text="{x:Static res:Strings.WindowWidthHeightWindowedLabel}" FontWeight="SemiBold" />
         <Grid ColumnDefinitions="*,8,*" IsEnabled="{Binding WindowMetricsEnabled}">
           <NumericUpDown FormatString="0" Grid.Column="0" Minimum="320" Maximum="7680" Value="{Binding WindowWidth}" />

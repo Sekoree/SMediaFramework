@@ -31,6 +31,21 @@ public enum NDIOutputStreamMode
     AudioOnly,
 }
 
+/// <summary>How a LOCAL video output fits the composited canvas into its window/screen. This is a display-side
+/// choice only: it maps to the SDL/Avalonia output's viewport fit and never changes what the compositor
+/// produces, so NDI (and any other) outputs continue to carry the full letterboxed canvas untouched.</summary>
+public enum LocalVideoFit
+{
+    /// <summary>Preserve aspect; letterbox/pillarbox the canvas into the display (default). No content is lost.</summary>
+    Letterbox,
+
+    /// <summary>Preserve aspect but fill the whole display, cropping the overflowing edges.</summary>
+    Cover,
+
+    /// <summary>Fill the whole display, ignoring aspect ratio (may distort the image).</summary>
+    Stretch,
+}
+
 /// <summary>User-defined output entry (playback wiring consumes this later).</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(PortAudioOutputDefinition), typeDiscriminator: "portAudio")]
@@ -104,7 +119,11 @@ public sealed record LocalVideoOutputDefinition(
     string? BackgroundImagePath = null,
     // Keep the output window above other windows. Honoured by the Avalonia (in-app preview) engine;
     // the SDL standalone-window engine ignores it (no always-on-top hook exposed by the framework).
-    bool AlwaysOnTop = false) : OutputDefinition(Id, DisplayName)
+    bool AlwaysOnTop = false,
+    // How this display fits the composited canvas (letterbox by default). Display-side only — the compositor
+    // and NDI outputs are unaffected. Absent in pre-fit project files (deserializes as Letterbox, the prior
+    // hardcoded behaviour), so no schema migration is needed.
+    LocalVideoFit VideoFit = LocalVideoFit.Letterbox) : OutputDefinition(Id, DisplayName)
 {
     [JsonIgnore]
     public override ManagedOutputKind Kind =>

@@ -39,6 +39,10 @@ public sealed record MediaPlayerConfig
 
     public bool MasterMuted { get; init; }
 
+    /// <summary>Per-deck panel tint as packed ARGB (null = no tint). Applied as a low-alpha wash to all of the
+    /// deck's dockable panels so they stay identifiable when split/floated apart.</summary>
+    public uint? TintArgb { get; init; }
+
     public PlayerOutputPreset OutputPreset { get; init; } = PlayerOutputPreset.AsSource;
 
     public PlayerTransitionMode TransitionMode { get; init; } = PlayerTransitionMode.Cut;

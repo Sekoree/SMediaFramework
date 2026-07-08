@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
+using Avalonia.Styling;
 
 namespace HaPlay.Views.Controls;
 
@@ -21,6 +23,12 @@ public sealed class WaveformControl : Control
         AffectsRender<WaveformControl>(PeaksProperty, RevisionProperty);
     }
 
+    public WaveformControl()
+    {
+        // The bar colour flips with the theme, so re-render when the resolved variant changes (theme toggle).
+        ActualThemeVariantChanged += (_, _) => InvalidateVisual();
+    }
+
     public float[]? Peaks
     {
         get => GetValue(PeaksProperty);
@@ -33,9 +41,11 @@ public sealed class WaveformControl : Control
         set => SetValue(RevisionProperty, value);
     }
 
-    // Translucent dark — the waveform draws directly on the Classic theme's light-gray chrome
-    // (the old solid white came from the dark-Fluent era and was invisible there).
-    private static readonly IBrush BarBrush = new SolidColorBrush(Color.Parse("#66000000"));
+    // The waveform draws directly on the scrubber chrome, so it must contrast with the theme background:
+    // translucent dark on light themes, translucent light on dark themes. A single hardcoded colour is
+    // invisible on one or the other (the bars used to vanish entirely on dark themes).
+    private static readonly IBrush LightThemeBars = new ImmutableSolidColorBrush(Color.Parse("#66000000"));
+    private static readonly IBrush DarkThemeBars = new ImmutableSolidColorBrush(Color.Parse("#B3FFFFFF"));
 
     public override void Render(DrawingContext ctx)
     {
@@ -49,6 +59,7 @@ public sealed class WaveformControl : Control
         var h = Bounds.Height;
         if (w <= 0 || h <= 0) return;
 
+        var barBrush = ActualThemeVariant == ThemeVariant.Dark ? DarkThemeBars : LightThemeBars;
         var n = peaks.Length;
         var barW = w / n;
         if (barW < 0.5) barW = 0.5;
@@ -62,7 +73,7 @@ public sealed class WaveformControl : Control
             var barH = peak * mid;
             var x = i * w / n;
             var rect = new Rect(x, mid - barH, barW, barH * 2);
-            ctx.DrawRectangle(BarBrush, null, rect);
+            ctx.DrawRectangle(barBrush, null, rect);
         }
     }
 }

@@ -90,6 +90,18 @@ internal static class PreviewVideoFrames
     }
 }
 
+internal static class LocalVideoFitMap
+{
+    /// <summary>Maps the persisted, display-side <see cref="LocalVideoFit"/> onto the framework viewport fit
+    /// the SDL/Avalonia GL output applies when scaling the canvas into the window.</summary>
+    public static S.Media.Gpu.VideoViewportFit ToViewportFit(LocalVideoFit fit) => fit switch
+    {
+        LocalVideoFit.Cover => S.Media.Gpu.VideoViewportFit.Cover,
+        LocalVideoFit.Stretch => S.Media.Gpu.VideoViewportFit.Stretch,
+        _ => S.Media.Gpu.VideoViewportFit.Contain, // Letterbox
+    };
+}
+
 internal static class LocalVideoWindowPlacement
 {
     public static (int Width, int Height) InitialWindowPixelSize(LocalVideoOutputDefinition d)
@@ -164,9 +176,9 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             var (iw, ih) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
             var output = new SDL3GLVideoOutput(_definition.DisplayName, iw, ih)
             {
-                // Local previews should preserve the source's aspect ratio (letterbox / pillarbox)
-                // instead of stretching to fill the window.
-                ViewportFit = S.Media.Gpu.VideoViewportFit.Contain,
+                // Display-side fit chosen per output (letterbox by default): how the canvas is scaled into the
+                // window. The compositor (and any NDI output) is unaffected — it always carries the full canvas.
+                ViewportFit = LocalVideoFitMap.ToViewportFit(_definition.VideoFit),
             };
             output.CloseRequested += OnSDLCloseRequested;
             output.Resized += OnSDLResized;
@@ -229,6 +241,9 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             var output = _sink;
             if (output is null)
                 return;
+            // The viewport fit is a render-time property (independent of the frame stream), so a fit change
+            // applies immediately — even while a session is driving frames into the window.
+            output.ViewportFit = LocalVideoFitMap.ToViewportFit(newDefinition.VideoFit);
             ApplySDLWindowPlacement(
                 output,
                 newDefinition,
@@ -406,8 +421,8 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             var (w, h) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
             win.Width = w;
             win.Height = h;
-            // Preserve aspect ratio for the embedded Avalonia GL control too.
-            win.Video.ViewportFit = S.Media.Gpu.VideoViewportFit.Contain;
+            // Display-side fit chosen per output (letterbox by default) for the embedded Avalonia GL control.
+            win.Video.ViewportFit = LocalVideoFitMap.ToViewportFit(_definition.VideoFit);
             LocalVideoWindowPlacement.Apply(win, _definition, _screenReference, null);
             var format = PreviewVideoFrames.PreviewFormat(w, h);
             win.Video.Configure(format);
@@ -467,6 +482,8 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             if (_window is null)
                 return;
             _window.Topmost = newDefinition.AlwaysOnTop;
+            // Render-time property → applies immediately, including while a session drives frames.
+            _window.Video.ViewportFit = LocalVideoFitMap.ToViewportFit(newDefinition.VideoFit);
             LocalVideoWindowPlacement.Apply(_window, newDefinition, _screenReference, null);
             // Reflect a background-image change immediately while idle; during playback the session owns
             // the frame stream, so leave it alone.

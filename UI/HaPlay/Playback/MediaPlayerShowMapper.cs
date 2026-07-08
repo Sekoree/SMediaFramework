@@ -21,9 +21,19 @@ public static class MediaPlayerShowMapper
     /// <summary>The player canvas composition id (present only when the source has video).</summary>
     public const string PlayerCompositionId = "player-canvas";
 
+    /// <summary>The deck's default clip fit: the media is <em>letterboxed</em> (Contain) onto its canvas so a
+    /// differing-aspect source is bar-boxed rather than cropped. With an <c>AsSource</c> canvas (canvas == the
+    /// media's own resolution) this is a no-op — the OUTPUT stage letterboxes into each physical display — but it
+    /// makes a fixed-preset canvas (1080p/720p/Custom) letterbox the source instead of covering it.</summary>
+    public const string DefaultVideoFit = "Letterbox";
+
     /// <summary>Builds the 1-cue show for a player source. <paramref name="hasVideo"/> gates the composition
     /// (audio-only sources skip it); <paramref name="audioRoutes"/> sends the audio to the player's output
-    /// line(s) and devices (empty ⇒ NO audio output — the deck never opens a default device).</summary>
+    /// line(s) and devices (empty ⇒ NO audio output — the deck never opens a default device). The
+    /// <paramref name="canvasWidth"/>/<paramref name="canvasHeight"/>/<paramref name="canvasFrameRateNum"/>/
+    /// <paramref name="canvasFrameRateDen"/> size the composition canvas (the deck resolves these from the source
+    /// resolution/rate for <c>AsSource</c>, else from the chosen output preset); <paramref name="videoFit"/> is
+    /// how the source sits on that canvas (<see cref="DefaultVideoFit"/> = letterbox, "Cover" = fill+crop).</summary>
     public static ShowDocument ToShowDocument(
         string mediaPath,
         bool hasVideo,
@@ -32,7 +42,10 @@ public static class MediaPlayerShowMapper
         int canvasHeight = 1080,
         IReadOnlyList<CueSubtitleSelection>? subtitles = null,
         bool loop = false,
-        int? audioStreamIndex = null)
+        int? audioStreamIndex = null,
+        int canvasFrameRateNum = 30,
+        int canvasFrameRateDen = 1,
+        string videoFit = DefaultVideoFit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
 
@@ -60,10 +73,16 @@ public static class MediaPlayerShowMapper
                     // Deck "Loop" toggle at open time — the framework restarts the clip seamlessly at EOF.
                     // A loop toggled ON mid-play is honored by the deck's end-of-track poll instead (replay).
                     Loop = loop,
+                    // Full-canvas placement whose ONLY departure from the framework default (Cover) is the fit:
+                    // the deck letterboxes rather than crops. Null would fall back to Cover (the reported bug).
+                    Placement = hasVideo ? new ShowVideoPlacement(Fit: videoFit) : null,
                 },
             ],
             Compositions = hasVideo
-                ? [new ShowComposition(PlayerCompositionId, "Player", canvasWidth, canvasHeight, 30, 1)]
+                ? [new ShowComposition(
+                    PlayerCompositionId, "Player", canvasWidth, canvasHeight,
+                    canvasFrameRateNum > 0 ? canvasFrameRateNum : 30,
+                    canvasFrameRateDen > 0 ? canvasFrameRateDen : 1)]
                 : [],
         };
     }

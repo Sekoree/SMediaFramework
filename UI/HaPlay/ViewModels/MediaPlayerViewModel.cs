@@ -277,6 +277,43 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Dispatcher.UIThread.Post(() => SyncIdleSlate(), DispatcherPriority.Loaded);
     }
 
+    /// <summary>Per-deck tint (null = none) — a subtle color-code so you can tell decks apart. The view washes
+    /// its background with <see cref="TintBrush"/> and offers the swatch picker. Persisted in the player config.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TintBrush))]
+    [NotifyPropertyChangedFor(nameof(TintAccentBrush))]
+    [NotifyPropertyChangedFor(nameof(HasTint))]
+    [NotifyPropertyChangedFor(nameof(TintColorValue))]
+    private Avalonia.Media.Color? _tintColor;
+
+    /// <summary>True when a tint is set.</summary>
+    public bool HasTint => TintColor is not null;
+
+    /// <summary>Low-alpha wash for the deck background — a hint of color, not a solid block. Transparent when unset.</summary>
+    public Avalonia.Media.IBrush TintBrush => TintColor is { } c
+        ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(0x24, c.R, c.G, c.B))
+        : Avalonia.Media.Brushes.Transparent;
+
+    /// <summary>Full-strength tint for the swatch dot, so the chosen code-color stays legible.</summary>
+    public Avalonia.Media.IBrush TintAccentBrush => TintColor is { } c
+        ? new Avalonia.Media.SolidColorBrush(c)
+        : Avalonia.Media.Brushes.Transparent;
+
+    /// <summary>Non-null view of <see cref="TintColor"/> for the custom <c>ColorPicker</c> (whose Color is not
+    /// nullable). Reads the current tint (gray when unset); writing it sets the tint.</summary>
+    public Avalonia.Media.Color TintColorValue
+    {
+        get => TintColor ?? Avalonia.Media.Colors.SlateGray;
+        set => TintColor = value;
+    }
+
+    /// <summary>The quick-pick tint swatches (plus a ColorPicker for custom) shown in the deck's tint menu.</summary>
+    public IReadOnlyList<Models.PlayerTintSwatch> TintSwatches => Models.PlayerTintPalette.Swatches;
+
+    /// <summary>Sets (or, with null, clears) the deck tint — bound by the swatch buttons.</summary>
+    [RelayCommand]
+    private void SetTint(Avalonia.Media.Color? color) => TintColor = color;
+
     public async Task DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
@@ -2068,6 +2105,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         HoldFallbackVideo = HoldFallbackVideo,
         MasterVolumeDb = MasterVolumeDb,
         MasterMuted = MasterMuted,
+        TintArgb = TintColor?.ToUInt32(),
         OutputPreset = OutputPreset,
         TransitionMode = TransitionMode,
         TransitionDurationMs = TransitionDurationMs,
@@ -2169,6 +2207,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         HoldFallbackVideo = config.HoldFallbackVideo;
         MasterVolumeDb = config.MasterVolumeDb;
         MasterMuted = config.MasterMuted;
+        TintColor = config.TintArgb is { } argb ? Avalonia.Media.Color.FromUInt32(argb) : null;
         OutputPreset = config.OutputPreset;
         TransitionMode = config.TransitionMode;
         TransitionDurationMs = config.TransitionDurationMs <= 0 ? 500 : config.TransitionDurationMs;

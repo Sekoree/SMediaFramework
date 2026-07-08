@@ -1,0 +1,54 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:models="using:HaPlay.Models"
+             xmlns:res="using:HaPlay.Resources"
+             x:Class="HaPlay.Views.MediaPlayerPanels.MediaPlayerTintPicker"
+             x:DataType="vm:MediaPlayerViewModel">
+  <!-- A deck-tint swatch: sets the color-code shared by ALL of this deck's panels (they bind their background
+       to the deck VM's TintBrush). Embedded in every panel so the tint is reachable "from any panel". -->
+  <Button Padding="4,3" VerticalAlignment="Center"
+          ToolTip.Tip="{x:Static res:Strings.PlayerTintTooltip}"
+          AutomationProperties.Name="{x:Static res:Strings.PlayerTintTooltip}">
+    <!-- Trigger shows the current tint as a filled dot (an empty ring when none). -->
+    <Border Width="14" Height="14" CornerRadius="7"
+            Background="{Binding TintAccentBrush}"
+            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" />
+    <Button.Flyout>
+      <Flyout Placement="Bottom">
+        <StackPanel Spacing="8" Margin="4" MinWidth="188">
+          <TextBlock Text="{x:Static res:Strings.PlayerTintHeader}" FontWeight="SemiBold" FontSize="12" />
+          <ItemsControl ItemsSource="{Binding TintSwatches}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="models:PlayerTintSwatch">
+                <Button Margin="2" Padding="3"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Command="{Binding $parent[ItemsControl].((vm:MediaPlayerViewModel)DataContext).SetTintCommand}"
+                        CommandParameter="{Binding Color}"
+                        ToolTip.Tip="{Binding Name}">
+                  <!-- Explicit size so the color always shows: the Classic button template doesn't stretch its
+                       content, so a size-less Border collapsed to nothing (colors looked invisible). -->
+                  <Panel Width="20" Height="20">
+                    <Border Background="{Binding Brush}" CornerRadius="3"
+                            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" />
+                    <!-- "None" cell shows an empty-set glyph instead of a color. -->
+                    <TextBlock Text="&#x2205;" IsVisible="{Binding IsNone}" Opacity="0.55"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  </Panel>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Separator />
+          <TextBlock Text="{x:Static res:Strings.PlayerTintCustomLabel}" FontSize="12" Opacity="0.75" />
+          <ColorPicker Color="{Binding TintColorValue, Mode=TwoWay}" HorizontalAlignment="Left" />
+        </StackPanel>
+      </Flyout>
+    </Button.Flyout>
+  </Button>
+</UserControl>
