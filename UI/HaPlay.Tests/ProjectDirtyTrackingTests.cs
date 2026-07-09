@@ -15,6 +15,30 @@ public sealed class ProjectDirtyTrackingTests
             .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
             .Dispatch(action, CancellationToken.None);
 
+    // These tests write a project via the atomic save (temp → flush → File.Move) and then delete the temp
+    // root. On Windows a just-written/renamed file can be held for a few ms by a filter driver (Defender
+    // real-time scan, Search indexer, lazy close), so a recursive delete intermittently throws
+    // "the process cannot access the file '.show.haplayproj.<guid>.tmp' because it is being used by another
+    // process" even though the save itself completed — the 2026-07-09 win-x64 flake. The save is correct; the
+    // teardown just has to tolerate the transient handle. Retry briefly (the scan clears in well under a
+    // second), then give up — a leftover dir under %TEMP% is harmless and the OS reaps it. The rest of the
+    // suite already swallows this with a bare try/catch; this variant also actually deletes once it can.
+    private static void DeleteTempDirectoryBestEffort(string path)
+    {
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(50); // let the transient Windows handle clear, then retry
+            }
+        }
+    }
+
     [Fact]
     public void FreshProject_IsClean()
     {
@@ -100,7 +124,7 @@ public sealed class ProjectDirtyTrackingTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteTempDirectoryBestEffort(root);
         }
     }
 
@@ -161,7 +185,7 @@ public sealed class ProjectDirtyTrackingTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteTempDirectoryBestEffort(root);
         }
     }
 }
