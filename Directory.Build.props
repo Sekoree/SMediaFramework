@@ -1,5 +1,8 @@
 <Project>
 
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Version.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)Directory.Version.props')" />
+
   <!-- Repo-root common build settings for MFPlayer (the v2 rewrite, promoted from next/ to the root
        2026-07-04; the old parallel tree, including its ./Next/ design docs, was removed).
        Directory.Build.targets is intentionally minimal. -->

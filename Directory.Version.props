@@ -1,0 +1,60 @@
+<Project>
+  <!-- Updated by scripts/set-version.sh. Root first-party projects import this through Directory.Build.props;
+       External/ projects use their own props and are not stamped by this file. -->
+
+  <PropertyGroup Label="MFPlayer Version">
+    <MFPlayerVersion>1.1.0</MFPlayerVersion>
+    <MFPlayerAssemblyVersion>1.1.0.0</MFPlayerAssemblyVersion>
+
+    <Version>$(MFPlayerVersion)</Version>
+    <PackageVersion>$(MFPlayerVersion)</PackageVersion>
+    <AssemblyVersion>$(MFPlayerAssemblyVersion)</AssemblyVersion>
+    <FileVersion>$(MFPlayerAssemblyVersion)</FileVersion>
+    <InformationalVersion>$(MFPlayerVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Native Binding Versions">
+    <MFPlayerPMLibNativeVersion>2.0.7</MFPlayerPMLibNativeVersion>
+    <MFPlayerPALibNativeVersion>19.7.0</MFPlayerPALibNativeVersion>
+    <MFPlayerMALibNativeVersion>0.11.25</MFPlayerMALibNativeVersion>
+    <MFPlayerNDILibNativeVersion>6.3.2.0</MFPlayerNDILibNativeVersion>
+    <MFPlayerLibAssLibNativeVersion>0.17.5</MFPlayerLibAssLibNativeVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'PMLib'">
+    <MFPlayerNativeBindingName>PortMidi</MFPlayerNativeBindingName>
+    <MFPlayerNativeBindingVersion>$(MFPlayerPMLibNativeVersion)</MFPlayerNativeBindingVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'PALib'">
+    <MFPlayerNativeBindingName>PortAudio</MFPlayerNativeBindingName>
+    <MFPlayerNativeBindingVersion>$(MFPlayerPALibNativeVersion)</MFPlayerNativeBindingVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'MALib'">
+    <MFPlayerNativeBindingName>miniaudio</MFPlayerNativeBindingName>
+    <MFPlayerNativeBindingVersion>$(MFPlayerMALibNativeVersion)</MFPlayerNativeBindingVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'NDILib'">
+    <MFPlayerNativeBindingName>NDI</MFPlayerNativeBindingName>
+    <MFPlayerNativeBindingVersion>$(MFPlayerNDILibNativeVersion)</MFPlayerNativeBindingVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'LibAssLib'">
+    <MFPlayerNativeBindingName>libass</MFPlayerNativeBindingName>
+    <MFPlayerNativeBindingVersion>$(MFPlayerLibAssLibNativeVersion)</MFPlayerNativeBindingVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MFPlayerNativeBindingVersion)' != ''">
+    <InformationalVersion>$(MFPlayerVersion).$(MFPlayerNativeBindingVersion)</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(MFPlayerNativeBindingVersion)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NativeBinding</_Parameter1>
+      <_Parameter2>$(MFPlayerNativeBindingName)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NativeBindingVersion</_Parameter1>
+      <_Parameter2>$(MFPlayerNativeBindingVersion)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>
