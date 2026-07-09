@@ -49,6 +49,26 @@
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == ''" />
         <PackageReference Include="Microsoft.Extensions.Logging" />
         <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+        <!-- SDL3 platform native runtimes are app-owned deployment assets. The framework libraries keep only
+             the SDL3-CS binding reference so packaged libraries do not bring native runtimes transitively. -->
+        <PackageReference Include="SDL3-CS.Linux" />
+        <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <!-- FFmpeg 8.x native runtime (avcodec-62/avformat-62/...) bundled as a NuGet native-asset package.
+         It ships win-x64 only; Linux/macOS use system/CI-provided FFmpeg. Keep this at the final app level
+         so framework packages do not carry GPL native runtime dependencies. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+        <PackageReference Include="FFmpeg.GPL" />
+    </ItemGroup>
+
+    <!-- RID-less Windows build (IDE Debug/run): the platform native package only places SDL3.dll through
+         runtimes/<rid>/native RID resolution; copy it next to the app for the no-RID Windows case. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(PkgSDL3-CS_Windows)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>SDL3.dll</Link>
+        </None>
     </ItemGroup>
 
     <ItemGroup>

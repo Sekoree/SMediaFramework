@@ -107,7 +107,7 @@
         <Style Selector="UserControl.compact Button.hide-compact">
             <Setter Property="IsVisible" Value="False" />
         </Style>
-        <Style Selector="UserControl.compact controls|LevelMeterControl.hide-compact">
+        <Style Selector="UserControl.compact StackPanel.transport-jump">
             <Setter Property="IsVisible" Value="False" />
         </Style>
         <Style Selector="UserControl.compact Slider.vol">
@@ -306,27 +306,39 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Jump-to-position: type a timecode (mm:ss / hh:mm:ss, optional .ms) and press Enter to seek.
-                     Input is restricted to digits, ':' and '.' in code-behind; a malformed value is ignored. -->
-                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
-                            Margin="0,4,0,0" IsVisible="{Binding IsTransportSeekable}">
-                    <TextBlock Text="{x:Static res:Strings.JumpToLabel}" VerticalAlignment="Center"
-                               Foreground="{StaticResource TextSecondary}" FontSize="12" />
-                    <TextBox Name="JumpBox" Width="100" MaxLength="12"
-                             PlaceholderText="{x:Static res:Strings.JumpToWatermark}"
-                             FontFamily="Consolas,monospace" VerticalContentAlignment="Center"
-                             IsEnabled="{Binding IsMediaLoaded}"
-                             KeyDown="OnJumpBoxKeyDown" TextInput="OnJumpBoxTextInput"
-                             ToolTip.Tip="{x:Static res:Strings.JumpToTooltip}" />
-                </StackPanel>
-
                 <!-- P5 transport (touch tier). Prev · Play · HOLD · Next are the panic-path controls;
                      HOLD sits next to Play so pushing the idle image is one thumb-move from Pause
                      (▾ opens the image picker). Stop is isolated on the far right and tinted (Danger)
-                     so it can't be fat-fingered in place of Pause. Mute/volume live in the row below. -->
-                <DockPanel LastChildFill="True">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6"
-                                VerticalAlignment="Center">
+                     so it can't be fat-fingered in place of Pause. -->
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                    <!-- Jump-to-position: type a timecode (mm:ss / hh:mm:ss, optional .ms) and press Enter
+                         to seek. Input is restricted to digits, ':' and '.' in code-behind; a malformed value
+                         is ignored. -->
+                    <StackPanel Grid.Column="0" Classes="transport-jump"
+                                Orientation="Horizontal" Spacing="6"
+                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                IsVisible="{Binding IsTransportSeekable}">
+                        <TextBlock Text="{x:Static res:Strings.JumpToLabel}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextSecondary}" FontSize="12" />
+                        <TextBox Name="JumpBox" Width="100" MaxLength="12"
+                                 PlaceholderText="{x:Static res:Strings.JumpToWatermark}"
+                                 FontFamily="Consolas,monospace" VerticalContentAlignment="Center"
+                                 IsEnabled="{Binding IsMediaLoaded}"
+                                 KeyDown="OnJumpBoxKeyDown" TextInput="OnJumpBoxTextInput"
+                                 ToolTip.Tip="{x:Static res:Strings.JumpToTooltip}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <ToggleButton Classes="Std" Content="{x:Static res:Strings.MuteToggleLabel}"
+                                      IsChecked="{Binding MasterMuted}"
+                                      ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
+                        <Slider Name="VolumeSlider" Classes="vol" Width="140" Minimum="-60" Maximum="12"
+                                Value="{Binding MasterVolumeDb, Mode=TwoWay}"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
+                        <TextBlock Classes="time hide-compact" Width="52" VerticalAlignment="Center"
+                                   Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
                         <!-- Options flyout: loop / auto-advance / shuffle / repeat-all + active badge. -->
                         <Button Classes="Std" Padding="10,6"
                                 ToolTip.Tip="{x:Static res:Strings.PlaybackOptionsTooltip}">
@@ -368,7 +380,7 @@
                         </Button>
                     </StackPanel>
 
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
                         <Button Classes="Touch"
                                 Command="{Binding PreviousTrackCommand}"
@@ -404,23 +416,7 @@
                             <PathIcon Data="{x:Static views:AppIcons.Next}" Width="14" Height="14" />
                         </Button>
                     </StackPanel>
-                </DockPanel>
-
-                <!-- Volume row (Std tier): mute / slider / dB / meter. -->
-                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
-                    <ToggleButton Classes="Std" Content="{x:Static res:Strings.MuteToggleLabel}"
-                                  IsChecked="{Binding MasterMuted}"
-                                  ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
-                    <Slider Name="VolumeSlider" Classes="vol" Width="140" Minimum="-60" Maximum="12"
-                            Value="{Binding MasterVolumeDb, Mode=TwoWay}"
-                            VerticalAlignment="Center"
-                            ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
-                    <TextBlock Classes="time hide-compact" Width="52" VerticalAlignment="Center"
-                               Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
-                    <controls:LevelMeterControl Classes="hide-compact" Width="56" Height="10"
-                                                VerticalAlignment="Center"
-                                                Level="{Binding PeakLevelNormalized}" />
-                </StackPanel>
+                </Grid>
             </StackPanel>
         </Border>
 
@@ -439,12 +435,13 @@
         </HeaderedContentControl>
 
         <!-- ============ Playlist (fills remaining height, classic group box) ============ -->
-        <HeaderedContentControl Header="{x:Static res:Strings.PlaylistGroupHeader}" Margin="0,6,0,0">
-            <DockPanel LastChildFill="True">
+        <HeaderedContentControl Header="{x:Static res:Strings.PlaylistGroupHeader}" Margin="0,6,0,0"
+                                MinHeight="240">
+            <Grid RowDefinitions="Auto,Auto,*,Auto">
 
                 <!-- Tabs row + consolidated "+ Add" menu, with the selection actions (remove /
                      properties) as VISIBLE buttons — the context menu still offers them too. -->
-                <DockPanel DockPanel.Dock="Top" LastChildFill="True" Margin="0,0,0,8">
+                <DockPanel Grid.Row="0" LastChildFill="True" Margin="0,0,0,8">
                     <Button DockPanel.Dock="Right" Padding="8,4" Margin="4,0,0,0"
                             Command="{Binding RemoveFromPlaylistCommand}"
                             ToolTip.Tip="{x:Static res:Strings.PlaylistContextRemove}">
@@ -486,93 +483,88 @@
                     <!-- Add-Set only. Per-Set removal lives on each tab (the X in rename mode + the
                          right-click Remove/Duplicate menu), so no standalone remove button. -->
                     <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" Width="60"
+                            HorizontalAlignment="Left"
                             HorizontalContentAlignment="Center" VerticalAlignment="Center"
                             Command="{Binding AddPlaylistTabCommand}"
                             ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
                 </DockPanel>
 
-                <!-- Set tabs sit DIRECTLY on the playlist pane (ZIndex above it) so the selected
-                     notebook tab visually merges with the list below — a free-floating strip on flat
-                     gray showed almost no tab chrome. Padding absorbs the selected tab's pop-forward
-                     negative margin so the bevel isn't clipped at the strip bounds. -->
-                <ScrollViewer DockPanel.Dock="Top" ZIndex="1" Margin="4,0,0,0"
+                <!-- Set tabs sit in a fixed row above the playlist pane. Keeping the strip and list in
+                     explicit Grid rows prevents the selected tab chrome from being arranged inside the
+                     ListBox when the player is height-constrained. -->
+                <ScrollViewer Grid.Row="1" ZIndex="1" Margin="4,0,0,0"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled">
-                            <!-- Header-only TabControl: the template renders JUST the tab headers (real
-                                 TabItems with the theme's classic chrome — same look as the player tabs);
-                                 the playlist ListBox below acts as the "pane" the selected tab merges into. -->
-                            <TabControl ItemsSource="{Binding PlaylistTabs}"
-                                        SelectedItem="{Binding SelectedPlaylistTab}"
-                                        Padding="3,3,3,0"
-                                        ItemContainerTheme="{StaticResource PlaylistSetTabItemTheme}">
-                                <TabControl.Template>
-                                    <ControlTemplate>
-                                        <ItemsPresenter Name="PART_ItemsPresenter"
-                                                        Margin="{TemplateBinding Padding}"
-                                                        ItemsPanel="{TemplateBinding ItemsPanel}" />
-                                    </ControlTemplate>
-                                </TabControl.Template>
-                                <TabControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal" Spacing="2" />
-                                    </ItemsPanelTemplate>
-                                </TabControl.ItemsPanel>
-                                <TabControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:PlaylistTabViewModel">
-                                        <!-- Label by default (clicks select the tab); double-click swaps in
-                                             the rename box. The old always-editable TextBox ate every click,
-                                             making set tabs impossible to switch. -->
-                                        <Panel Background="Transparent"
-                                               DoubleTapped="OnPlaylistTabDoubleTapped">
-                                            <!-- Right-click a Set: duplicate or remove it. Code-behind rather
-                                                 than a command (the menu is in a popup an ancestor binding
-                                                 can't cross). -->
-                                            <Panel.ContextMenu>
-                                                <ContextMenu>
-                                                    <MenuItem Header="{x:Static res:Strings.DuplicateTabMenuItem}"
-                                                              Click="OnPlaylistTabDuplicateClick" />
-                                                    <Separator />
-                                                    <MenuItem Header="{x:Static res:Strings.RemoveButton}"
-                                                              Click="OnPlaylistTabRemoveClick" />
-                                                </ContextMenu>
-                                            </Panel.ContextMenu>
-                                            <StackPanel Orientation="Horizontal" Spacing="4"
-                                                        IsVisible="{Binding !IsRenaming}">
-                                                <!-- Marks the Set the player is currently playing from. -->
-                                                <TextBlock Text="&#x25B6;" FontSize="9" VerticalAlignment="Center"
-                                                           Foreground="{StaticResource StateHealthy}"
-                                                           IsVisible="{Binding IsPlaying}" />
-                                                <TextBlock Text="{Binding Name}" MinWidth="60"
-                                                           VerticalAlignment="Center" Padding="2,0" />
-                                            </StackPanel>
-                                            <StackPanel Orientation="Horizontal" Spacing="2"
-                                                        IsVisible="{Binding IsRenaming}">
-                                                <TextBox Text="{Binding Name, Mode=TwoWay}"
-                                                         MinWidth="64" VerticalAlignment="Center"
-                                                         LostFocus="OnPlaylistTabRenameLostFocus"
-                                                         KeyDown="OnPlaylistTabRenameKeyDown" />
-                                                <!-- Focusable=False so clicking it doesn't blur the TextBox
-                                                     (which would exit rename and hide this button first). -->
-                                                <Button Focusable="False" Padding="4,0" VerticalAlignment="Center"
-                                                        Click="OnPlaylistTabRemoveClick"
-                                                        ToolTip.Tip="{x:Static res:Strings.RemovePlaylistTabTooltip}">
-                                                    <PathIcon Data="{x:Static views:AppIcons.Close}" Width="8" Height="8" />
-                                                </Button>
-                                            </StackPanel>
-                                        </Panel>
-                                    </DataTemplate>
-                                </TabControl.ItemTemplate>
-                            </TabControl>
+                    <!-- Header-only TabControl: the template renders JUST the tab headers (real
+                         TabItems with the theme's classic chrome — same look as the player tabs);
+                         the playlist ListBox below acts as the "pane" the selected tab merges into. -->
+                    <TabControl ItemsSource="{Binding PlaylistTabs}"
+                                SelectedItem="{Binding SelectedPlaylistTab}"
+                                Padding="3,3,3,0"
+                                ItemContainerTheme="{StaticResource PlaylistSetTabItemTheme}">
+                        <TabControl.Template>
+                            <ControlTemplate>
+                                <ItemsPresenter Name="PART_ItemsPresenter"
+                                                Margin="{TemplateBinding Padding}"
+                                                ItemsPanel="{TemplateBinding ItemsPanel}" />
+                            </ControlTemplate>
+                        </TabControl.Template>
+                        <TabControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="2" />
+                            </ItemsPanelTemplate>
+                        </TabControl.ItemsPanel>
+                        <TabControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PlaylistTabViewModel">
+                                <!-- Label by default (clicks select the tab); double-click swaps in
+                                     the rename box. The old always-editable TextBox ate every click,
+                                     making set tabs impossible to switch. -->
+                                <Panel Background="Transparent"
+                                       DoubleTapped="OnPlaylistTabDoubleTapped">
+                                    <!-- Right-click a Set: duplicate or remove it. Code-behind rather
+                                         than a command (the menu is in a popup an ancestor binding
+                                         can't cross). -->
+                                    <Panel.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="{x:Static res:Strings.DuplicateTabMenuItem}"
+                                                      Click="OnPlaylistTabDuplicateClick" />
+                                            <Separator />
+                                            <MenuItem Header="{x:Static res:Strings.RemoveButton}"
+                                                      Click="OnPlaylistTabRemoveClick" />
+                                        </ContextMenu>
+                                    </Panel.ContextMenu>
+                                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                                IsVisible="{Binding !IsRenaming}">
+                                        <!-- Marks the Set the player is currently playing from. -->
+                                        <TextBlock Text="&#x25B6;" FontSize="9" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource StateHealthy}"
+                                                   IsVisible="{Binding IsPlaying}" />
+                                        <TextBlock Text="{Binding Name}" MinWidth="60"
+                                                   VerticalAlignment="Center" Padding="2,0" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="2"
+                                                IsVisible="{Binding IsRenaming}">
+                                        <TextBox Text="{Binding Name, Mode=TwoWay}"
+                                                 MinWidth="64" VerticalAlignment="Center"
+                                                 LostFocus="OnPlaylistTabRenameLostFocus"
+                                                 KeyDown="OnPlaylistTabRenameKeyDown" />
+                                        <!-- Focusable=False so clicking it doesn't blur the TextBox
+                                             (which would exit rename and hide this button first). -->
+                                        <Button Focusable="False" Padding="4,0" VerticalAlignment="Center"
+                                                Click="OnPlaylistTabRemoveClick"
+                                                ToolTip.Tip="{x:Static res:Strings.RemovePlaylistTabTooltip}">
+                                            <PathIcon Data="{x:Static views:AppIcons.Close}" Width="8" Height="8" />
+                                        </Button>
+                                    </StackPanel>
+                                </Panel>
+                            </DataTemplate>
+                        </TabControl.ItemTemplate>
+                    </TabControl>
                 </ScrollViewer>
-
-                <!-- Reorder hint (hidden when compact). -->
-                <TextBlock DockPanel.Dock="Bottom" Classes="hide-compact"
-                           Opacity="0.4" FontSize="11" Margin="2,6,0,0"
-                           Text="{x:Static res:Strings.PlaylistDragReorderHint}" />
 
                 <!-- Drag-to-reorder via Xaml.Behaviors (ListBox.draggable from the package styles).
                      External OS file drops are handled in code-behind. -->
-                <ListBox Name="PlaylistListBox" Classes="draggable" MinHeight="160" Margin="0,-1,0,0"
+                <ListBox Grid.Row="2" Name="PlaylistListBox" Classes="draggable" MinHeight="160"
                          ItemsSource="{Binding PlaylistItems}"
                          SelectedItem="{Binding SelectedPlaylistItem, Mode=TwoWay}"
                          DoubleTapped="OnPlaylistItemDoubleTapped"
@@ -624,7 +616,12 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-            </DockPanel>
+
+                <!-- Reorder hint (hidden when compact). -->
+                <TextBlock Grid.Row="3" Classes="hide-compact"
+                           Opacity="0.4" FontSize="11" Margin="2,6,0,0"
+                           Text="{x:Static res:Strings.PlaylistDragReorderHint}" />
+            </Grid>
         </HeaderedContentControl>
     </DockPanel>
     </ScrollViewer>
