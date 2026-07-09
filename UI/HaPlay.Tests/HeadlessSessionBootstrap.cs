@@ -30,6 +30,17 @@ public sealed class HeadlessSessionFramework : XunitTestFramework
     public HeadlessSessionFramework(IMessageSink messageSink)
         : base(messageSink)
     {
+        // Every MainViewModel a test constructs starts a SessionRecoveryService DispatcherTimer (2 s) and never
+        // stops it — the tests don't tear the VM down. Across an assembly run dozens of these accumulate on the
+        // ONE shared headless dispatcher, each tick building a project snapshot on the UI thread and firing a
+        // Task.Run disk write. That background flood (a) saturates the dispatcher, so UI-thread-dispatch tests
+        // wedge until the 4-minute blame-hang kills the host, and (b) churns the disk, so the best-effort
+        // File.Copy in AppSettings.Save intermittently loses a share-violation race and silently skips the
+        // backup (2026-07-09 win-x64: host hang + AppSettings "Actual: null"). Disable the auto-timer here — it
+        // runs before any test, and the recovery LOGIC stays covered by SessionRecoveryTests, which drive
+        // CaptureAsync directly on their own service instance rather than through this timer.
+        Environment.SetEnvironmentVariable("HAPLAY_DISABLE_RECOVERY_TIMER", "1");
+
         HeadlessUnitTestSession.GetOrStartForAssembly(typeof(HeadlessSessionFramework).Assembly)
             .Dispatch(static () => { }, CancellationToken.None)
             .GetAwaiter().GetResult();

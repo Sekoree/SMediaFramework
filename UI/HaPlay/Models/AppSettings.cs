@@ -134,13 +134,8 @@ public sealed class AppSettings
                     stream.Flush(flushToDisk: true);
                 }
 
-                // Keep one backup of the last KNOWN-GOOD primary. Never overwrite a valid backup with a corrupt
-                // primary recovered from that backup; if the final move then failed, both copies would be lost.
-                if (TryLoadFrom(path, out _))
-                {
-                    try { File.Copy(path, path + ".bak", overwrite: true); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* backup is best-effort */ }
-                }
+                // Refresh the one-deep backup of the last KNOWN-GOOD primary before replacing it.
+                RefreshBackup(path);
 
                 File.Move(temp, path, overwrite: true);
                 temp = null;
@@ -156,6 +151,45 @@ public sealed class AppSettings
                     try { File.Delete(temp); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
                 }
+            }
+        }
+    }
+
+    /// <summary>Copies the current primary to <c>&lt;path&gt;.bak</c> so a later corrupt primary can be
+    /// recovered (SET-01). Never overwrites the backup with a corrupt primary (a JSON parse failure means the
+    /// existing backup is the last good copy — leave it), and never throws. Retries a transient share violation:
+    /// on Windows an AV/indexer scan briefly locks the just-written primary, and a SILENTLY-skipped backup would
+    /// let the next corrupt-primary load fall through to defaults instead of the backup (the 2026-07-09 win-x64
+    /// "Actual: null" flake).</summary>
+    private static void RefreshBackup(string path)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                // Read the primary ourselves so a transient LOCK (retry) is distinguishable from CORRUPTION
+                // (leave the good backup) — TryLoadFrom collapses both into "false".
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    if (JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.AppSettings) is null)
+                        return; // structurally empty — not a good primary; keep the existing backup
+                }
+                File.Copy(path, path + ".bak", overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return; // no primary yet (first save) — nothing to back up; don't retry
+            }
+            catch (JsonException)
+            {
+                return; // corrupt primary — do NOT clobber the last good backup
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == 4)
+                    return; // give up — the backup is best-effort and Save must never throw
+                Thread.Sleep(10 * (attempt + 1)); // let the transient AV/indexer lock clear, then retry
             }
         }
     }
