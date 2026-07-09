@@ -36,9 +36,9 @@
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.1.0" />
     <PackageVersion Include="FFmpeg.GPL" Version="20260601.1.0" />
     <!-- Present / GPU (Phase 2/3) -->
-    <PackageVersion Include="SDL3-CS" Version="3.4.10.5" />
-    <PackageVersion Include="SDL3-CS.Linux" Version="3.4.10.5" />
-    <PackageVersion Include="SDL3-CS.Windows" Version="3.4.10.5" />
+    <PackageVersion Include="SDL3-CS" Version="3.4.12.6" />
+    <PackageVersion Include="SDL3-CS.Linux" Version="3.4.12.6" />
+    <PackageVersion Include="SDL3-CS.Windows" Version="3.4.12.6" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />

@@ -325,8 +325,20 @@ jobs:
           # `autobuild-*` release URL (and verify its SHA-256) for reproducibility. The exact shipped .so hashes
           # are captured in the artifact SBOM regardless, so a build is at least auditable after the fact.
           curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
-          cp -vL ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib/lib*.so.* natives-stage/ 2>/dev/null || true
-          for f in natives-stage/libav*.so.* natives-stage/libsw*.so.*; do [ -e "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" || true; done
+          # BtbN ships a symlink chain per library: libavcodec.so -> libavcodec.so.62 -> libavcodec.so.62.6.100
+          # (the real ~30 MB binary). The old `cp -L lib*.so.*` dereferenced BOTH the .so.62 symlink AND the
+          # .so.62.6.100 real file, writing the same binary TWICE — ≈70 MB of pure duplication across the 8
+          # FFmpeg libs, the bulk of the artifact bloat. Copy ONCE per library instead: `find -type f` selects
+          # only the real files (skipping the symlinks), and each is staged under its SONAME (libavformat.so.62 —
+          # the exact name FFmpeg.AutoGen 8.1 dlopen()s). Inter-library DT_NEEDED entries also reference the
+          # SONAME, so the dropped fully-versioned twin was never loaded by anything.
+          ffsrc="ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib"
+          find "$ffsrc" -maxdepth 1 -type f -name 'lib*.so.*' | while read -r real; do
+            soname="$(patchelf --print-soname "$real" 2>/dev/null || true)"
+            [ -n "$soname" ] || soname="$(basename "$real")"
+            cp -vL "$real" "natives-stage/$soname"
+          done
+          for f in natives-stage/libav*.so.* natives-stage/libsw*.so.* natives-stage/libpostproc.so.*; do [ -e "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" || true; done
 
           # MMD physics: real Bullet 3.25 via the mmd_bullet shim (vendored in External/bullet3).
           MediaFramework/Native/mmd_bullet/build.sh natives-stage
@@ -437,6 +449,34 @@ jobs:
           dotnet publish UI/HaPlay.Desktop/HaPlay.Desktop.csproj
           -c Release -r ${{ matrix.rid }} -o haplay-publish
 
+      # NativeAOT emits standalone debug symbols that are NOT used at runtime but dominate the artifact size:
+      # on linux-x64 HaPlayer.dbg is ~158 MB (2.5x the 63 MB executable), plus ~2.5 MB of managed *.pdb (unused
+      # by AOT — no JIT). Shipping them would put >150 MB of dead weight in every download, duplicated across all
+      # three Linux tiers. MOVE them out of the app bundle into ./debug-symbols, which is uploaded as its own
+      # per-build artifact (HaPlay.Desktop-<rid>-debug-symbols) — the app downloads stay lean while the symbols
+      # remain retrievable, matched to the exact build, for symbolicating an AOT crash report.
+      - name: Collect + strip debug symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          before=$(du -sh haplay-publish | cut -f1)
+          mkdir -p debug-symbols
+          find haplay-publish -maxdepth 1 -type f \( -name '*.pdb' -o -name '*.dbg' \) -exec mv -t debug-symbols {} +
+          echo "publish size: $before -> $(du -sh haplay-publish | cut -f1) (symbols moved to ./debug-symbols)"
+          echo "--- debug-symbols ---"; ls -la debug-symbols
+
+      # The SDL3-CS.Linux NuGet ships THREE identical 4.6 MB files — libSDL3.so, libSDL3.so.0, libSDL3.so.0.4.12
+      # (real copies, not symlinks) — and the publish keeps all three, ~9 MB of duplication. SDL3-CS P/Invokes the
+      # bare name "SDL3" with no custom resolver, so .NET's default Unix probe resolves libSDL3.so; nothing in the
+      # bundle DT_NEEDEDs the versioned sonames (SDL3 is a leaf loaded by managed code). Keep libSDL3.so, drop the
+      # two versioned twins. (Windows ships a single SDL3.dll — no equivalent duplication there.)
+      - name: Deduplicate SDL3 native (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -fv haplay-publish/libSDL3.so.0 haplay-publish/libSDL3.so.0.4.12
+
       # Drop the staged natives next to the exe — the DllImport resolvers probe the app directory first.
       - name: Bundle natives into the publish
         shell: bash
@@ -444,6 +484,80 @@ jobs:
           if [ -d natives-stage ]; then cp -v natives-stage/* haplay-publish/ 2>/dev/null || true; fi
           echo "--- native libs in the artifact ---"
           ls haplay-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
+
+      # ── Linux dependency tiers ──────────────────────────────────────────────────────────────────────────
+      # One AOT publish + one native stage yields THREE bundles that trade portability for size. `haplay-publish`
+      # is already the FULL tier (every native the app can load); derive the two reduced tiers from it here.
+      #   full    — everything: Skia+HarfBuzz, SDL3, FFmpeg, PortAudio/PortMidi/miniaudio, libass, NDI, Bullet
+      #             shim. Runs on any host; the REL-01/REL-02 validate + load-probe + launch gates below only
+      #             ever exercise THIS bundle (the reduced tiers deliberately omit "required" natives).
+      #   core    — only the render essentials that distros can't practically supply — libSkiaSharp.so and
+      #             libHarfBuzzSharp.so are SkiaSharp-specific builds, not the upstream 'skia'/'harfbuzz'
+      #             packages — plus the Bullet shim. Every other native is loaded from the host if present.
+      #   minimal — only libmmd_bullet.so, the one native with no upstream package at all. EVERYTHING else,
+      #             including libSkiaSharp/libHarfBuzzSharp, must be provided by the host (see DEPENDENCIES.txt).
+      # Tiers are carved by an ALLOW-LIST (keep_only): copy the full bundle, then delete every native .so whose
+      # basename is not in the tier's keep-set — so a native later added to `full` can never silently leak into
+      # a reduced tier. cp -a preserves the exe's +x bit and file modes.
+      - name: Build Linux dependency tiers (full / core / minimal)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keep_only() {   # keep_only <dir> <basename>...  — drop native libs in <dir> not named in the keep-set
+            local dir="$1"; shift
+            local keep=" $* "
+            find "$dir" -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' \) -printf '%f\n' | while read -r b; do
+              case "$keep" in *" $b "*) : ;; *) rm -f "$dir/$b" ;; esac
+            done
+          }
+
+          rm -rf bundle-core bundle-minimal
+          cp -a haplay-publish bundle-core
+          keep_only bundle-core libSkiaSharp.so libHarfBuzzSharp.so libmmd_bullet.so
+          cp -a haplay-publish bundle-minimal
+          keep_only bundle-minimal libmmd_bullet.so
+
+          # A note for the reduced tiers spelling out exactly which natives the host must supply.
+          # (printf, not a heredoc: inside a YAML `run:` block every line is indented, and a heredoc terminator
+          #  can't sit flush-left, so it would never close.)
+          common_deps() {
+            printf '%s\n' \
+              "System natives loaded if present (a missing one just disables that feature):" \
+              "  libSDL3.so                            SDL3 present backend        (distro pkg: sdl3 / libsdl3)" \
+              "  libavcodec.so.62 + the other libav*   FFmpeg 8.x, avcodec-62 ABI  (distro FFmpeg must be 8.x)" \
+              "  libportaudio.so.2                     PortAudio host              (distro pkg: libportaudio2)" \
+              "  libportmidi.so.2                      PortMidi, 2.x ABI           (many distros ship only legacy 0.x)" \
+              "  libminiaudio.so                       miniaudio                   (single-header — rarely packaged)" \
+              "  libass.so / libass.so.9               libass subtitle renderer    (distro pkg: libass9)" \
+              "  libndi.so.6                           NDI runtime                 (proprietary — not packaged)"
+          }
+          {
+            echo "HaPlay.Desktop — linux-x64 CORE bundle"
+            echo "Bundled here: libSkiaSharp.so, libHarfBuzzSharp.so, libmmd_bullet.so."
+            echo "libSkiaSharp/libHarfBuzzSharp are SkiaSharp-specific builds (NOT the distro skia/harfbuzz), so"
+            echo "they are bundled; libmmd_bullet.so has no upstream package. Everything below comes from the host."
+            echo
+            common_deps
+          } > bundle-core/DEPENDENCIES.txt
+          {
+            echo "HaPlay.Desktop — linux-x64 MINIMAL bundle"
+            echo "Bundled here: libmmd_bullet.so ONLY (the one native with no upstream package)."
+            echo
+            echo "REQUIRED from the host (the app will NOT render without these):"
+            echo "  libSkiaSharp.so      SkiaSharp render backend  (SkiaSharp-specific build — a stock distro"
+            echo "  libHarfBuzzSharp.so  HarfBuzz text shaping      usually can NOT supply these; wire them up"
+            echo "                                                  yourself, e.g. from the core/full bundle)"
+            echo
+            common_deps
+          } > bundle-minimal/DEPENDENCIES.txt
+
+          # Provenance for the reduced tiers too (advisory; the full tier's SBOM is written by the next step).
+          bash scripts/generate-native-sbom.sh ${{ matrix.rid }} bundle-core    > /dev/null || true
+          bash scripts/generate-native-sbom.sh ${{ matrix.rid }} bundle-minimal > /dev/null || true
+
+          echo "--- core tier ---";    ls bundle-core
+          echo "--- minimal tier ---"; ls bundle-minimal
 
       # BUILD-02: record a provenance / SBOM manifest of the bundled natives (project, pinned version, source
       # URL, license, and the SHA-256 of the exact shipped file) into the artifact, so every release carries an
@@ -495,10 +609,51 @@ jobs:
           if ($output -notmatch 'MediaRuntime ready') { throw 'backend enumeration was not reached' }
           if ($output -notmatch 'HAPLAY_SMOKE: first frame rendered') { throw 'first-frame smoke was not reached' }
 
-      - name: Upload HaPlay.Desktop artifact
+      # Linux uploads the three dependency tiers; the full bundle is the one the gates above validated.
+      - name: Upload HaPlay.Desktop artifact (linux full)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaPlay.Desktop-${{ matrix.rid }}-full
+          path: haplay-publish
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload HaPlay.Desktop artifact (linux core)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaPlay.Desktop-${{ matrix.rid }}-core
+          path: bundle-core
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload HaPlay.Desktop artifact (linux minimal)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaPlay.Desktop-${{ matrix.rid }}-minimal
+          path: bundle-minimal
+          if-no-files-found: error
+          retention-days: 14
+
+      # Windows stays a single (full) artifact — no distro-package story, and its NuGet natives don't duplicate.
+      - name: Upload HaPlay.Desktop artifact (windows)
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: HaPlay.Desktop-${{ matrix.rid }}
           path: haplay-publish
           if-no-files-found: error
+          retention-days: 14
+
+      # The debug symbols moved out of the app bundle above — one per RID, matched to this build. Kept for the
+      # same window as the app artifacts so a retained build always has retrievable symbols. `warn` (not `error`)
+      # because symbols are advisory: a build with none should not fail over it.
+      - name: Upload debug symbols artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaPlay.Desktop-${{ matrix.rid }}-debug-symbols
+          path: debug-symbols
+          if-no-files-found: warn
           retention-days: 14
