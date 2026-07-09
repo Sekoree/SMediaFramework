@@ -485,7 +485,7 @@
 
                     <!-- Add-Set only. Per-Set removal lives on each tab (the X in rename mode + the
                          right-click Remove/Duplicate menu), so no standalone remove button. -->
-                    <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="48"
+                    <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" Width="60"
                             HorizontalContentAlignment="Center" VerticalAlignment="Center"
                             Command="{Binding AddPlaylistTabCommand}"
                             ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
