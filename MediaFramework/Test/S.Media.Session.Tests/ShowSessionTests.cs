@@ -1544,7 +1544,9 @@ public sealed class ShowSessionTests
     {
         // NXT-04/06: pause parity with StopAllAsync. The single-group SetPausedAsync only touches one group, so a
         // multi-group cue show would keep the others running on pause — SetAllPausedAsync freezes them together.
-        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        // A LONG-lived fake: this test observes running state across several pause/resume waits, and natural
+        // EOF legitimately flips the player to not-running on slow shared runners.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
         await session.LoadDocumentAsync(TwoGroupAudioCues());
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue1")); // group A
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue2")); // group B
