@@ -285,6 +285,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p natives-stage
+          # GitHub's codeload/raw endpoints intermittently answer these native-source downloads with HTTP 429
+          # (rate limit). With `set -e` and no retry, a single 429 aborts the whole artifact job (seen 2026-07-09,
+          # right after the PortMidi build). Retry transient failures: curl's --retry already covers 408/429/5xx,
+          # and --retry-all-errors extends it to connection-level hiccups. Downloads that feed `tar` go to a FILE
+          # first (not a pipe), so a retried attempt can't concatenate a partial body into the archive.
+          RETRY="--retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30"
           # PortAudio + libass come from apt (ABI-stable at these sonames). PortMidi does NOT: Ubuntu's
           # libportmidi0 is the legacy "release 217" (libportmidi.so.0), which predates the modern PortMidi 2.x
           # ABI the binding targets (Pm_CreateVirtual* etc.) and the resolver only probes .so.2/.so — so it is
@@ -299,14 +305,16 @@ jobs:
           [ -f natives-stage/libass.so.9 ] && cp -vL natives-stage/libass.so.9 natives-stage/libass.so
 
           # PortMidi 2.0.7 from source -> libportmidi.so.2 (matches the resolver's first candidate + the 2.x ABI).
-          curl -fsSL https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz | tar xz
+          curl -fsSL $RETRY -o portmidi.tar.gz https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz
+          tar xzf portmidi.tar.gz
           cmake -S portmidi-2.0.7 -B pm-build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_JAVA_NATIVE_INTERFACE=OFF
           cmake --build pm-build --config Release
           pm="$(find pm-build \( -name 'libportmidi.so' -o -name 'libportmidi.so.*' \) -type f | head -1)"
           if [ -n "$pm" ]; then cp -vL "$pm" natives-stage/libportmidi.so.2; else echo "WARN: portmidi build produced no .so"; fi
 
           # miniaudio 0.11.25 — single-header, compiled to a vanilla shared lib (MALib mirrors 0.11.25).
-          curl -fsSL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz | tar xz
+          curl -fsSL $RETRY -o miniaudio.tar.gz https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz
+          tar xzf miniaudio.tar.gz
           printf '#define MINIAUDIO_IMPLEMENTATION\n#include "miniaudio.h"\n' > ma_impl.c
           gcc -O2 -shared -fPIC -I miniaudio-0.11.25 -o natives-stage/libminiaudio.so ma_impl.c -lpthread -lm -ldl
 
@@ -314,9 +322,12 @@ jobs:
           # BUILD-02 (partial): this fetches from `master` — NOT immutable. Pin to a specific DistroAV commit
           # (and SHA-256 the helper) for a fully reproducible supply chain. The shipped lib's version + hash are
           # recorded in the artifact SBOM (generate-native-sbom.sh) regardless.
-          curl -fsSL https://raw.githubusercontent.com/DistroAV/DistroAV/master/CI/libndi-get.sh -o libndi-get.sh
+          curl -fsSL $RETRY https://raw.githubusercontent.com/DistroAV/DistroAV/master/CI/libndi-get.sh -o libndi-get.sh
           chmod +x libndi-get.sh
-          sudo ./libndi-get.sh install
+          # NDI is OPTIONAL (not in the REL-01 required manifest — licensing). The helper does its own CDN
+          # download, which can also 429; under `set -e` that would abort the whole job for a non-required native.
+          # Make it best-effort so a flaky NDI fetch degrades to "NDI absent" instead of failing the release.
+          sudo ./libndi-get.sh install || echo "WARN: DistroAV NDI install failed (optional native — continuing)"
           p="$(find /usr /usr/local -name 'libndi.so.6' 2>/dev/null | head -1)"
           if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: libndi.so.6 not found"; fi
 
@@ -324,7 +335,8 @@ jobs:
           # BUILD-02 (partial): the `latest` release tag is a rolling ref — NOT immutable. Pin to a dated BtbN
           # `autobuild-*` release URL (and verify its SHA-256) for reproducibility. The exact shipped .so hashes
           # are captured in the artifact SBOM regardless, so a build is at least auditable after the fact.
-          curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
+          curl -fsSL $RETRY -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz
+          tar xJf ffmpeg.tar.xz
           # BtbN ships a symlink chain per library: libavcodec.so -> libavcodec.so.62 -> libavcodec.so.62.6.100
           # (the real ~30 MB binary). The old `cp -L lib*.so.*` dereferenced BOTH the .so.62 symlink AND the
           # .so.62.6.100 real file, writing the same binary TWICE — ≈70 MB of pure duplication across the 8
@@ -351,9 +363,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p natives-stage
+          # Same GitHub 429 hardening as the Linux stage: retry transient failures, download tarballs to a file
+          # (not a pipe) so a retried attempt can't corrupt the archive. This step is gating (not continue-on-error).
+          RETRY="--retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30"
 
           # miniaudio 0.11.25 -> miniaudio.dll (MA_DLL exports ma_* by name).
-          curl -fsSL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz | tar xz
+          curl -fsSL $RETRY -o miniaudio.tar.gz https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz
+          tar xzf miniaudio.tar.gz
           mkdir -p ma-proj && cd ma-proj
           printf '#include "miniaudio.h"\n' > impl.c
           cat > CMakeLists.txt <<'EOF'
@@ -368,7 +384,8 @@ jobs:
           cd ..
 
           # PortMidi 2.0.7 -> portmidi.dll
-          curl -fsSL https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz | tar xz
+          curl -fsSL $RETRY -o portmidi.tar.gz https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz
+          tar xzf portmidi.tar.gz
           cmake -S portmidi-2.0.7 -B pm-build -A x64 -DBUILD_SHARED_LIBS=ON
           cmake --build pm-build --config Release
           cp -v "$(find pm-build -name 'portmidi.dll' | head -1)" natives-stage/
@@ -379,6 +396,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail   # NOT -e: ASIO acquisition is best-effort and must not abort the PortAudio build.
+          RETRY="--retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30"   # GitHub 429 hardening
           # ASIO is an optional PortAudio host API needing Steinberg's SDK (not redistributable). Fetch it
           # best-effort and VERIFY it's actually a ZIP (PK magic) before use — Steinberg's endpoints have
           # served an HTML consent/redirect page with a 200 to the CI runner (not extractable). If ASIO is
@@ -396,7 +414,8 @@ jobs:
             fi
           fi
           echo "PortAudio ASIO flags: ${PA_ASIO[*]}"
-          curl -fsSL https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz | tar xz
+          curl -fsSL $RETRY -o portaudio.tar.gz https://github.com/PortAudio/portaudio/archive/refs/tags/v19.7.0.tar.gz
+          tar xzf portaudio.tar.gz
           # PortAudio 19.7.0 declares cmake_minimum_required < 3.5, which CMake 4.x removed support for
           # (-DCMAKE_POLICY_VERSION_MINIMUM=3.5 restores it). Options are PA_BUILD_SHARED / PA_BUILD_STATIC.
           cmake -S portaudio-19.7.0 -B pa-build -A x64 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
