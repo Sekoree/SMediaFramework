@@ -296,13 +296,15 @@ jobs:
           # ABI the binding targets (Pm_CreateVirtual* etc.) and the resolver only probes .so.2/.so — so it is
           # built from source below instead. libasound2-dev is PortMidi's Linux (ALSA) build dep.
           sudo apt-get install -y cmake libasound2-dev libportaudio2 libass9
-          for so in libportaudio.so.2 libass.so.9; do
-            p="$(find /usr/lib /lib -name "$so" 2>/dev/null | head -1)"
-            if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: $so not found"; fi
-          done
-          # LibAssLib P/Invokes the bare name "ass" with no custom resolver, so the loader only finds an
-          # unversioned libass.so — stage the versioned lib under that name too.
-          [ -f natives-stage/libass.so.9 ] && cp -vL natives-stage/libass.so.9 natives-stage/libass.so
+          # PortAudio ships under its SONAME (libportaudio.so.2). libass is different: LibAssLib P/Invokes the
+          # BARE name "ass" (LibAssNative.cs), which .NET resolves to an unversioned libass.so — so stage the
+          # system libass.so.9 under THAT single name only. Previously we shipped BOTH libass.so and libass.so.9
+          # (identical 227 KB files) — an exact-content duplicate. Nothing in the bundle DT_NEEDEDs the .so.9
+          # soname (libass is a leaf loaded by managed P/Invoke), so ship just libass.so and drop the twin.
+          pa="$(find /usr/lib /lib -name 'libportaudio.so.2' 2>/dev/null | head -1)"
+          if [ -n "$pa" ]; then cp -vL "$pa" natives-stage/; else echo "WARN: libportaudio.so.2 not found"; fi
+          la="$(find /usr/lib /lib -name 'libass.so.9' 2>/dev/null | head -1)"
+          if [ -n "$la" ]; then cp -vL "$la" natives-stage/libass.so; else echo "WARN: libass.so.9 not found"; fi
 
           # PortMidi 2.0.7 from source -> libportmidi.so.2 (matches the resolver's first candidate + the 2.x ABI).
           curl -fsSL $RETRY -o portmidi.tar.gz https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz
