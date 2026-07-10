@@ -7,7 +7,7 @@ public sealed record X32MeterBlob(int Header0, int Header1, IReadOnlyList<float>
 
 /// <summary>
 /// Parses the X32 / M32 binary meter blob formats. This is the one genuinely irreducible piece of X32-specific
-/// C#: deserializing a packed little-endian byte payload at meter rate — not expressible (or fast enough) as a
+/// C#: deserializing a packed little-endian byte payload at meter rate - not expressible (or fast enough) as a
 /// Mond profile helper. It is reached only through the registered <see cref="X32MeterBlobDecoder"/> capability,
 /// which a profile opts into by name (<c>Behaviors.MeterBlobDecoder = "x32"</c>); the output address is taken from
 /// the OSC argument preceding the blob in the same message, so no protocol state is required.

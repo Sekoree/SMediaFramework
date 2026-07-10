@@ -20,7 +20,7 @@ public static class NDIOutputExtensions
         var ms = (uint)maxWaitMs;
         var n = ndi.GetReceiverConnectionCount(ms);
         if (n < 1)
-            logStdErr?.Invoke($"[ndi] no receiver within {ms} ms — continuing (Monitor may still connect).");
+            logStdErr?.Invoke($"[ndi] no receiver within {ms} ms - continuing (Monitor may still connect).");
         else
             logStdOut?.Invoke($"[ndi] {n} receiver(s) connected (wait up to {ms} ms).");
     }

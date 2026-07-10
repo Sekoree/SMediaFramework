@@ -13,12 +13,12 @@ public enum MiniAudioDeviceType
 }
 
 /// <summary>
-/// Direct P/Invoke binding for <b>vanilla miniaudio</b> (<c>ma_*</c>) — the analogue of <c>PALib</c> for
+/// Direct P/Invoke binding for <b>vanilla miniaudio</b> (<c>ma_*</c>) - the analogue of <c>PALib</c> for
 /// PortAudio. There is NO custom C wrapper: it binds the upstream <c>libminiaudio</c> ABI and does the
 /// device-config plumbing in managed code. Because miniaudio is header-only and exposes no FFI size/offset
 /// accessors for its opaque handles (only <c>ma_context_sizeof</c>), the layouts below are hand-mirrored from
 /// miniaudio 0.11.25's headers and the opaque <c>ma_device</c> is over-allocated. <b>Layout-sensitive: a
-/// field/offset/size error corrupts memory at runtime — verify on real audio hardware after any miniaudio
+/// field/offset/size error corrupts memory at runtime - verify on real audio hardware after any miniaudio
 /// version bump.</b>
 /// </summary>
 public static unsafe partial class MiniAudioNative

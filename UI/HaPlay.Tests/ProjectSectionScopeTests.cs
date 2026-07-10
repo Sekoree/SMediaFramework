@@ -5,7 +5,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Save/load rework (2026-06-10): partial project files via <see cref="ProjectSections"/> —
+/// <summary>Save/load rework (2026-06-10): partial project files via <see cref="ProjectSections"/> -
 /// scoped snapshot building and merge-on-apply semantics.</summary>
 public sealed class ProjectSectionScopeTests
 {

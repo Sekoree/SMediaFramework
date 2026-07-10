@@ -85,7 +85,7 @@ public sealed record VideoPlacementSpec(
     double CropRight = 0,
     double CropBottom = 0,
     // Clockwise rotation (degrees) of the placed layer about its destination-rect centre. The rotated
-    // image overflows its axis-aligned dest rect, as expected — unlike the unrotated fit which trims to
+    // image overflows its axis-aligned dest rect, as expected - unlike the unrotated fit which trims to
     // the rect for clean split-screen. Default 0 keeps existing placements pixel-identical.
     double RotationDegrees = 0,
     // Optional media-layer mapping/video FX. The mapping is resolved in source-video space, then placed
@@ -333,7 +333,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
     /// each <see cref="IArmedClip.Start"/> includes that clip's prefill/buffer wait, so group members
     /// begin staggered by their predecessors' start costs. Hosts that need tighter cross-clip alignment
     /// should wire their audio paused, start all transports, and unpause collectively (the pattern
-    /// HaPlay's cue engine uses) — pausing is a host-source concern this engine cannot impose.
+    /// HaPlay's cue engine uses) - pausing is a host-source concern this engine cannot impose.
     /// </summary>
     public async Task<IReadOnlyList<IArmedClip>> StartGroupAsync(
         IReadOnlyList<ClipSpec> specs,
@@ -461,7 +461,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         lock (_gate)
         {
             // A prepare finishing after DisposeAsync's ClearPreparedAsync must not park a live
-            // decoder in the (already drained) map — that would leak it until process exit.
+            // decoder in the (already drained) map - that would leak it until process exit.
             if (_disposed)
             {
                 engineDisposed = true;

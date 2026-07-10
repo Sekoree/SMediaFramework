@@ -3,7 +3,7 @@ using S.Media.Core.Video;
 
 namespace S.Media.Players;
 
-/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.Open(string)"/> builders — no output libraries.</summary>
+/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.Open(string)"/> builders - no output libraries.</summary>
 public readonly record struct MediaPlayerOpenOptions(
     bool TryHardwareAcceleration = true,
     bool RetainDmabufForGl = false,
@@ -93,7 +93,7 @@ public readonly record struct MediaPlayerOpenOptions(
     }
 
     /// <summary>Maps the GL-handle-retention + stream flags onto the registry's video open options
-    /// (P3 — Players opens through <c>IMediaRegistry</c>, not a concrete decoder).</summary>
+    /// (P3 - Players opens through <c>IMediaRegistry</c>, not a concrete decoder).</summary>
     public VideoSourceOpenOptions ToVideoSourceOpenOptions() =>
         new()
         {

@@ -14,7 +14,7 @@ public sealed class ScreenListItem
 
 public sealed class CloneParentChoice
 {
-    /// <summary>The "None — not a clone" sentinel. Its <see cref="Definition"/> is null.</summary>
+    /// <summary>The "None - not a clone" sentinel. Its <see cref="Definition"/> is null.</summary>
     public static readonly CloneParentChoice None = new(null, Strings.NoneIndependentOutputLabel);
 
     public CloneParentChoice(LocalVideoOutputDefinition? definition, string label)
@@ -43,7 +43,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
 
     public VideoSurfaceMode[] SurfaceModes { get; } = Enum.GetValues<VideoSurfaceMode>();
 
-    /// <summary>Display-side fit choices (letterbox default). Applies to this local output only — NDI is
+    /// <summary>Display-side fit choices (letterbox default). Applies to this local output only - NDI is
     /// unaffected. Shown via <see cref="EnumDisplayConverter"/>.</summary>
     public LocalVideoFit[] VideoFits { get; } = Enum.GetValues<LocalVideoFit>();
 
@@ -89,7 +89,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     /// <summary>§3.4 clone-of selection. <c>None</c> means this output is independent (not a clone).</summary>
     [ObservableProperty] private CloneParentChoice _selectedCloneParent = CloneParentChoice.None;
 
-    /// <summary>True when editing — the Engine combobox is disabled because switching engines in place
+    /// <summary>True when editing - the Engine combobox is disabled because switching engines in place
     /// is rejected by <see cref="OutputManagementViewModel.ReconfigureLineAsync"/> (remove + re-add only).</summary>
     public bool IsEditing => _existingId is not null;
     public bool EngineLockedByEdit => IsEditing;
@@ -115,7 +115,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
             Screens.Add(new ScreenListItem
             {
                 Index = i,
-                Label = $"#{i} — {b.Width:0}×{b.Height:0} @ ({b.X:0}, {b.Y:0})",
+                Label = $"#{i} - {b.Width:0}×{b.Height:0} @ ({b.X:0}, {b.Y:0})",
             });
         }
 

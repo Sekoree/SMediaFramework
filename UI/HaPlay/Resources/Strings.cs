@@ -521,7 +521,7 @@ public static class Strings
     public static string StopPreviewWindowMenuHeader => Get(nameof(StopPreviewWindowMenuHeader));
     public static string FullscreenPreviewMenuHeader => Get(nameof(FullscreenPreviewMenuHeader));
     public static string WindowedPreviewMenuHeader => Get(nameof(WindowedPreviewMenuHeader));
-    public static string EmDash => Get(nameof(EmDash));
+    public static string Dash => Get(nameof(Dash));
     public static string OutputThroughputTooltip => Get(nameof(OutputThroughputTooltip));
     public static string EditButton => Get(nameof(EditButton));
     public static string OutputHealthyTooltip => Get(nameof(OutputHealthyTooltip));

@@ -37,11 +37,11 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// </summary>
     public Func<ActionCueNode, CancellationToken, Task<string?>>? ActionCueExecutor { get; set; }
 
-    /// <summary>Host-provided stop callback — Stop / Panic forwards to this so the playback
+    /// <summary>Host-provided stop callback - Stop / Panic forwards to this so the playback
     /// engine can tear down its session. Optional; null in tests.</summary>
     public Func<Task>? StopPlaybackCallback { get; set; }
 
-    /// <summary>Host-provided pause callback — Pause/Resume forwards to this so the playback
+    /// <summary>Host-provided pause callback - Pause/Resume forwards to this so the playback
     /// engine freezes active media instead of only deferring pending cue delays.</summary>
     public Func<bool, Task>? SetPlaybackPausedCallback { get; set; }
 
@@ -82,7 +82,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         PreviewAudioDevices.Clear();
         PreviewAudioDevices.Add(new PreviewAudioDeviceOption(null, Strings.Format(nameof(Strings.DefaultDeviceLabel))));
-        // Runs in the MainViewModel ctor — on a machine without the portaudio native library the
+        // Runs in the MainViewModel ctor - on a machine without the portaudio native library the
         // enumeration throws DllNotFoundException and takes the whole process down before the first
         // frame. MediaRuntime already degrades to other backends; the preview picker must too.
         if (RuntimeModules.IsPortAudioAvailable)
@@ -182,7 +182,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>Wire the cue player to the shared output registry. Audio routes and video output
-    /// bindings pick lines from this list directly — no per-cue-list device config.</summary>
+    /// bindings pick lines from this list directly - no per-cue-list device config.</summary>
     // Video output lines we've hooked for window-resize → PlacementCanvasAspect refresh (see
     // WatchVideoOutputLinesForResize). Held so the handlers can be detached before a rebucket.
     private readonly List<OutputLineViewModel> _resizeWatchedOutputLines = new();
@@ -291,7 +291,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>All cue nodes the operator currently has highlighted in the tree (multi-select).
     /// The drawer still shows fields from the singular <see cref="SelectedCueNode"/>, but
-    /// "+ Route" / "+ Placement" fan their action out across every media cue in this list — so
+    /// "+ Route" / "+ Placement" fan their action out across every media cue in this list - so
     /// the operator can stage a route on 11 audio cues in one click.</summary>
     private readonly List<CueNodeViewModel> _selectedCueNodes = new();
 
@@ -360,7 +360,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Bag of output lines the operator has created in the shared
     /// <c>OutputManagementView</c>. <see cref="MainViewModel"/> populates this via
-    /// <see cref="SetAvailableOutputs"/>. Updates are live — adding/removing in OutputManagement
+    /// <see cref="SetAvailableOutputs"/>. Updates are live - adding/removing in OutputManagement
     /// flows through to the cue player's dropdowns immediately.</summary>
     public ObservableCollection<OutputLineViewModel> AvailableOutputs { get; private set; } = new();
 
@@ -426,7 +426,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     public bool HasSelectedCue => SelectedCueNode is not null;
 
     /// <summary>Video tab visibility: media cue AND the source actually has a video stream
-    /// (decodable — covers regular video files and audio files with attached picture cover art).</summary>
+    /// (decodable - covers regular video files and audio files with attached picture cover art).</summary>
     public bool HasSelectedMediaCueWithVideo =>
         SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceHasVideo;
 
@@ -437,7 +437,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedCueNode is { Kind: CueNodeKind.Media } media
         && (media.SourceHasAudio || media.AudioRoutes.Count > 0);
 
-    /// <summary>Operator hint banner — true when the only "video" the source offers is an
+    /// <summary>Operator hint banner - true when the only "video" the source offers is an
     /// attached picture (e.g. MP3 album art). The Video tab still works (the still frame can be
     /// placed into a composition for a now-playing slate) but it's worth flagging.</summary>
     public bool HasSelectedMediaCueWithAttachedPictureOnly =>
@@ -455,7 +455,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// that "+ Route" / "+ Placement" applies to all of them, not just the primary.</summary>
     public int SelectedCueCount => _selectedCueNodes.Count;
 
-    /// <summary>True iff <see cref="SelectedCueCount"/> > 1. Bound as the banner visibility flag —
+    /// <summary>True iff <see cref="SelectedCueCount"/> > 1. Bound as the banner visibility flag -
     /// Avalonia's <c>ObjectConverters</c> doesn't ship a <c>GreaterThan</c>, so we expose a
     /// dedicated boolean rather than wire a per-view converter.</summary>
     public bool IsMultiSelected => _selectedCueNodes.Count > 1;
@@ -463,8 +463,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     public string SelectedCueDrawerTitle => SelectedCueNode is null
         ? Strings.SelectACueDrawerHint
         : string.IsNullOrWhiteSpace(SelectedCueNode.Number)
-            ? $"{SelectedCueNode.Label} — {SelectedCueNode.KindLabel}"
-            : $"{SelectedCueNode.Number} {SelectedCueNode.Label} — {SelectedCueNode.KindLabel}";
+            ? $"{SelectedCueNode.Label} - {SelectedCueNode.KindLabel}"
+            : $"{SelectedCueNode.Number} {SelectedCueNode.Label} - {SelectedCueNode.KindLabel}";
     public IReadOnlyList<CueActionKind> ActionKinds { get; } = Enum.GetValues<CueActionKind>();
 
     public string SelectedActionEndpointSummary
@@ -500,7 +500,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                   ? string.Empty
                   : Strings.Format(nameof(Strings.CueTransportNextFormat), CueDisplay(StandbyCueNode)));
 
-    /// <summary>Fill for the transport-state chip — same palette as the media deck's state pill:
+    /// <summary>Fill for the transport-state chip - same palette as the media deck's state pill:
     /// green running, amber paused or standby-armed (ready), translucent gray idle.</summary>
     public Avalonia.Media.ISolidColorBrush TransportStateColor =>
         CurrentCueNode is null
@@ -511,7 +511,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#F9A825"))
                 : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#2E7D32"));
 
-    /// <summary>UX-10: true when the selected list has no cues (or none selected) — drives the empty-state
+    /// <summary>UX-10: true when the selected list has no cues (or none selected) - drives the empty-state
     /// call-to-action over the cue tree instead of a blank grid.</summary>
     public bool HasNoCues => SelectedCueList is null || SelectedCueList.Nodes.Count == 0;
 
@@ -660,7 +660,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         // A text/style edit replaces the TextPlaylistItem source; if that cue is playing, re-render its frame in
         // place so the change shows immediately (the deferred document rebuild otherwise only lands on the next
-        // fire — see MainViewModel's reload deferral, which keeps the running cue from being torn down mid-edit).
+        // fire - see MainViewModel's reload deferral, which keeps the running cue from being torn down mid-edit).
         if (e.PropertyName is nameof(CueNodeViewModel.MediaSourceItem))
             PushActiveTextUpdate();
     }
@@ -711,7 +711,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private void OnWatchedRouteOrPlacementPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        // LineRef is a resolved UI reference, not part of the cue's cache key — ignore it so a mere
+        // LineRef is a resolved UI reference, not part of the cue's cache key - ignore it so a mere
         // output-line resolution doesn't churn pre-roll.
         if (e.PropertyName is nameof(CueAudioRouteViewModel.SourceChannel)
             or nameof(CueAudioRouteViewModel.OutputLineId)
@@ -773,7 +773,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         // Not running yet: the edited placement lives only in the cue model, and the backing ShowSession
         // document a GO fires from is NOT rebuilt on placement edits (only structural changes reload it).
-        // Flag it stale so the next fire reloads with the current placement — otherwise the cue fires with
+        // Flag it stale so the next fire reloads with the current placement - otherwise the cue fires with
         // the placement captured at the last reload and the new geometry only takes hold once the operator
         // nudges it again (which then takes the live path below). A running cue is updated live instead.
         if (!_activeCueIds.Contains(cue.Id))
@@ -878,7 +878,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         // its standby pre-roll warm after gain/channel/opacity/offset tweaks. Debounced downstream.
         WatchSelectedCueForPreRoll(value);
 
-        // Cues loaded from disk have no probed track list yet — fill the audio-track picker lazily
+        // Cues loaded from disk have no probed track list yet - fill the audio-track picker lazily
         // on first selection (stream-table probe only, no decoder build).
         if (value is { Kind: CueNodeKind.Media })
             _ = EnsureAudioTrackChoicesAsync(value);
@@ -977,7 +977,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool _suppressStandbyPreRollRefresh;
 
-    /// <summary>The fireable cue order starting at standby (or list start) — the window each
+    /// <summary>The fireable cue order starting at standby (or list start) - the window each
     /// pre-roll query pulls its targets from. Callers apply a per-source-type filter, so a
     /// non-matching cue (e.g. an NDI cue while scanning for files) is skipped without changing
     /// the file-media target set.</summary>
@@ -1086,12 +1086,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Set of cue ids the playback engine reports as currently active. Maintained via
     /// <see cref="OnCueStarted"/> / <see cref="OnCueEnded"/> from the host (MainViewModel wires
     /// these to the engine's events). Used by <see cref="RefreshRowStatuses"/> so every active
-    /// cue lights up — the singular <see cref="CurrentCueNode"/> only tracks the last-started
+    /// cue lights up - the singular <see cref="CurrentCueNode"/> only tracks the last-started
     /// one for AutoFollow / transport-state purposes.</summary>
     private readonly HashSet<Guid> _activeCueIds = new();
 
     /// <summary>True while any cue is currently playing (fired via <see cref="OnCueStarted"/>, not yet
-    /// <see cref="OnCueEnded"/>). The authoritative "is something playing" signal — used to defer the ShowSession
+    /// <see cref="OnCueEnded"/>). The authoritative "is something playing" signal - used to defer the ShowSession
     /// document rebuild on an in-place edit so it never stops a running cue (unlike a clock's <c>IsRunning</c>,
     /// which is unreliable for a video-only held/text clip).</summary>
     public bool HasActiveCues => _activeCueIds.Count > 0;
@@ -1102,7 +1102,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     public ObservableCollection<ActiveCueViewModel> ActiveCues { get; } = new();
 
     /// <summary>
-    /// P4 (plan §3.2) — what the Now Playing panel renders: <see cref="ActiveCueViewModel"/> for
+    /// P4 (plan §3.2) - what the Now Playing panel renders: <see cref="ActiveCueViewModel"/> for
     /// standalone cues, <see cref="ActiveGroupViewModel"/> aggregating active cues that share a
     /// parent group node. <see cref="ActiveCues"/> stays the flat source of truth.
     /// </summary>
@@ -1198,7 +1198,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>Cues that *will* fire once the operator presses Go from the current Standby
-    /// position — used by the Now Playing panel's Upcoming section.</summary>
+    /// position - used by the Now Playing panel's Upcoming section.</summary>
     public ObservableCollection<CueNodeViewModel> UpcomingCues { get; } = new();
 
     /// <summary>Host-provided per-cue stop callback (engine.StopCueAsync). The Now Playing
@@ -1207,7 +1207,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     // ----- UI rewrite P4: Now Playing row seek (with lock) --------------------------------------
 
-    /// <summary>Unlocks dragging/tapping the Now Playing progress bars to seek. Default locked —
+    /// <summary>Unlocks dragging/tapping the Now Playing progress bars to seek. Default locked -
     /// the panel sits next to GO, so accidental seeks during a show must be opt-in (plan §3.2).</summary>
     [ObservableProperty]
     private bool _nowPlayingSeekUnlocked;
@@ -1227,7 +1227,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveCueVideoPlacementCallback { get; set; }
 
     /// <summary>Host callback raised when an <em>idle</em> (not-yet-fired) cue's clip model is edited in a way
-    /// the backing show document captures only at (re)load — e.g. a video placement nudge. The host flags its
+    /// the backing show document captures only at (re)load - e.g. a video placement nudge. The host flags its
     /// document stale so the next GO rebuilds it with the current model, instead of firing stale geometry. A
     /// running cue is updated live via <see cref="UpdateActiveCueVideoPlacementCallback"/> and does not raise this.</summary>
     public Action? CueClipModelStaleCallback { get; set; }
@@ -1240,17 +1240,17 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// place instead of only on the next fire). No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, MediaCueNode, Task>? UpdateActiveCueTextCallback { get; set; }
 
-    /// <summary>Host callback — live-applies an output mapping (warp sections) to a running
+    /// <summary>Host callback - live-applies an output mapping (warp sections) to a running
     /// composition: (compositionId, outputLineId, mapping). No-op when the composition isn't live.</summary>
     public Func<Guid, Guid, CueOutputMapping?, bool>? UpdateOutputMappingCallback { get; set; }
 
-    /// <summary>Host callback — live-applies a composition-level video FX mapping to a running composition.</summary>
+    /// <summary>Host callback - live-applies a composition-level video FX mapping to a running composition.</summary>
     public Func<Guid, CueOutputMapping?, bool>? UpdateCompositionVideoFxCallback { get; set; }
 
-    /// <summary>Host callback — shows/hides the mapping calibration grid for one composition output.</summary>
+    /// <summary>Host callback - shows/hides the mapping calibration grid for one composition output.</summary>
     public Func<Guid, Guid, CueOutputMapping?, bool, bool>? SetCompositionTestPatternCallback { get; set; }
 
-    /// <summary>Engine callback — cue began playing. Marks its row Current and pushes a new
+    /// <summary>Engine callback - cue began playing. Marks its row Current and pushes a new
     /// <see cref="ActiveCueViewModel"/> into <see cref="ActiveCues"/>.</summary>
     public void OnCueStarted(Guid cueId)
     {
@@ -1273,7 +1273,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
     }
 
-    /// <summary>Engine callback — preview stopped. Clears preview state on the VM.</summary>
+    /// <summary>Engine callback - preview stopped. Clears preview state on the VM.</summary>
     public void OnPreviewEnded(Guid cueId)
     {
         _ = cueId;
@@ -1282,7 +1282,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         StatusMessage = Strings.PreviewStoppedStatus;
     }
 
-    /// <summary>Engine callback — cue stopped (natural end, Stop, or Panic). Clears Current
+    /// <summary>Engine callback - cue stopped (natural end, Stop, or Panic). Clears Current
     /// status and removes the matching <see cref="ActiveCueViewModel"/>.</summary>
     public void OnCueEnded(Guid cueId)
     {
@@ -1299,7 +1299,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
     }
 
-    /// <summary>Engine callback — progress sample for one active cue. Updates the row's
+    /// <summary>Engine callback - progress sample for one active cue. Updates the row's
     /// position so the progress bar and "mm:ss / mm:ss" display advance.</summary>
     public void OnCueProgress(CuePlaybackProgress p)
     {
@@ -1395,7 +1395,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
-    /// <summary>Host callback — the set of warmed (standby-ready) cues changed. Snapshot lists the cue ids
+    /// <summary>Host callback - the set of warmed (standby-ready) cues changed. Snapshot lists the cue ids
     /// that are currently warmed. Walks every loaded cue node and sets <c>IsPreRollWarm</c>
     /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).
     /// <para>This method does not marshal threads on its own; the host wiring (MainViewModel)
@@ -1413,7 +1413,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Host callback — richer per-cue standby preparation states changed (Idle/Preparing/
+    /// <summary>Host callback - richer per-cue standby preparation states changed (Idle/Preparing/
     /// Ready/Failed). Cues absent from the snapshot are Idle. Drives the status badge + tooltip and,
     /// via <see cref="CueNodeViewModel.PreRollState"/>, keeps <c>IsPreRollWarm</c> in sync.</summary>
     public void OnPreparedCueStatesChanged(IReadOnlyList<Playback.CuePreparationStatus> states)
@@ -1460,7 +1460,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         for (var i = startIdx; i < ordered.Count; i++)
         {
             var c = ordered[i];
-            // Don't list already-active cues as upcoming — they're in the Active section.
+            // Don't list already-active cues as upcoming - they're in the Active section.
             if (_activeCueIds.Contains(c.Id)) continue;
             UpcomingCues.Add(c);
         }
@@ -1497,7 +1497,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
 
         // Status surfaces as a top-right toast (MainView overlay) instead of the old inline banner,
-        // which pushed the whole cue list down mid-click. Severity is a keyword heuristic — cue
+        // which pushed the whole cue list down mid-click. Severity is a keyword heuristic - cue
         // status strings carry no structured level.
         ToastCenter.Post(ClassifyStatusSeverity(value), value);
 
@@ -1905,7 +1905,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
             var steps = group.ToList();
             // Only the playing pointer follows the fired steps. The SELECTION stays where Go put
-            // it (the next cue that would fire) — yanking it back to the firing cue defeated the
+            // it (the next cue that would fire) - yanking it back to the firing cue defeated the
             // "selection previews the next GO" behavior and moved the operator's editor cursor.
             foreach (var step in steps)
                 CurrentCueNode = step.Cue;

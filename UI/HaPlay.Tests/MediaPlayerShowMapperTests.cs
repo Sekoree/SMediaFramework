@@ -4,7 +4,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Covers <c>MediaPlayerShowMapper.ToShowDocument</c> — the deck→ShowDocument mapping on the
+/// <summary>Covers <c>MediaPlayerShowMapper.ToShowDocument</c> - the deck→ShowDocument mapping on the
 /// ShowSession path: composition canvas sizing and subtitle-track selection. Audio routing is covered by
 /// <see cref="MediaPlayerDeckAudioRoutingTests"/>.</summary>
 public sealed class MediaPlayerShowMapperTests
@@ -82,7 +82,7 @@ public sealed class MediaPlayerShowMapperTests
     [Fact]
     public void ExplicitAudioTrack_FlowsOntoTheClipBinding()
     {
-        // The operator picked container audio stream #3 (a stereo track) in Properties — the deck's clip
+        // The operator picked container audio stream #3 (a stereo track) in Properties - the deck's clip
         // binding must carry it so the shared demux elects that stream instead of the default (5.1) track.
         var doc = MediaPlayerShowMapper.ToShowDocument("/m/movie.mkv", hasVideo: true, audioStreamIndex: 3);
         Assert.Equal(3, Assert.Single(doc.Clips).AudioStreamIndex);

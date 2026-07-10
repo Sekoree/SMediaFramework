@@ -6,9 +6,9 @@ using Xunit;
 namespace S.Media.Compositor.Tests;
 
 /// <summary>
-/// Mid-stream format-change coverage for the composition layer (the convergence's last open framework point —
-/// see haplay_showsession_convergence). A slot fed frames of CHANGING dimensions — i.e. a live source that
-/// switches resolution/aspect mid-stream — must keep compositing onto the fixed canvas without throwing. The
+/// Mid-stream format-change coverage for the composition layer (the convergence's last open framework point -
+/// see haplay_showsession_convergence). A slot fed frames of CHANGING dimensions - i.e. a live source that
+/// switches resolution/aspect mid-stream - must keep compositing onto the fixed canvas without throwing. The
 /// Next compositor handles this by design: slots hold an any-size frame, the CPU blit is dimension-agnostic,
 /// the GL compositor keys layer textures by (Width, Height), and transforms resolve per frame. This test
 /// guards that property (the OLD framework had a composition-layer reconfigure gap; the rewrite closed it).
@@ -43,7 +43,7 @@ public sealed class CompositorLayerFormatChangeTests
         Assert.Equal(canvas.Height, f1.Format.Height);
         f1.Dispose();
 
-        // Mid-stream switch to a different resolution AND aspect ratio — must not throw, still canvas-sized.
+        // Mid-stream switch to a different resolution AND aspect ratio - must not throw, still canvas-sized.
         slot.Output.Configure(new VideoFormat(200, 100, PixelFormat.Bgra32, Fps));
         slot.Output.Submit(Bgra(200, 100));
         Assert.True(source.TryReadNextFrame(out var f2));
@@ -51,7 +51,7 @@ public sealed class CompositorLayerFormatChangeTests
         Assert.Equal(canvas.Height, f2.Format.Height);
         f2.Dispose();
 
-        // Back to the original size — the per-size texture/scratch caches must round-trip cleanly.
+        // Back to the original size - the per-size texture/scratch caches must round-trip cleanly.
         slot.Output.Configure(new VideoFormat(160, 120, PixelFormat.Bgra32, Fps));
         slot.Output.Submit(Bgra(160, 120));
         Assert.True(source.TryReadNextFrame(out var f3));

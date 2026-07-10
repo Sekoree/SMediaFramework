@@ -1,6 +1,6 @@
 namespace HaPlay.Tests;
 
-// Loads built-in device profiles from their shipped JSON (embedded) — the single source of truth now that the
+// Loads built-in device profiles from their shipped JSON (embedded) - the single source of truth now that the
 // hardcoded BuiltInControlDeviceProfileFactory is retired. Tests assert on the same data the runtime loads.
 internal static class TestProfiles
 {

@@ -3,7 +3,7 @@ namespace S.Media.Core.Video;
 /// <summary>What a single coordinated present on an <see cref="ISyncPresentableVideoOutput"/> did.</summary>
 public enum VideoSyncPresentOutcome
 {
-    /// <summary>No unpresented frame was at or before the target — the device kept its last frame on screen.</summary>
+    /// <summary>No unpresented frame was at or before the target - the device kept its last frame on screen.</summary>
     NoChange,
 
     /// <summary>A newer frame was presented to the device (and any older buffered frames were dropped).</summary>
@@ -20,7 +20,7 @@ public enum VideoSyncPresentOutcome
 /// This is the video half of the multi-output genlock work (issues-doc #2, Option&nbsp;B, Phase&nbsp;2b in
 /// <c>Doc/HaPlay-MultiOutput-Sync.md</c>). The audio half disciplines each device's sample rate
 /// (<c>AdaptiveRateAudioOutput</c> driven by <c>OutputSyncGroup</c>); this is the
-/// "synchronized drop/repeat across outputs" the architecture doc lists as not-implemented — the piece
+/// "synchronized drop/repeat across outputs" the architecture doc lists as not-implemented - the piece
 /// that actually makes two outputs present the <em>same pixels on the same tick</em> for a stitched canvas.
 /// </para>
 /// <para>
@@ -36,7 +36,7 @@ public interface ISyncPresentableVideoOutput
 
     /// <summary>
     /// Presentation time of the newest <em>unpresented</em> buffered frame at or before
-    /// <paramref name="target"/> (peek only — no present, no drop). Returns <c>false</c> when the member
+    /// <paramref name="target"/> (peek only - no present, no drop). Returns <c>false</c> when the member
     /// has no unpresented frame due yet, so the scheduler can tell "would advance this tick" from "is
     /// current / starved" and avoid letting other members run ahead.
     /// </summary>

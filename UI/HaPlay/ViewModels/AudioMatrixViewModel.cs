@@ -7,7 +7,7 @@ using HaPlay.Resources;
 namespace HaPlay.ViewModels;
 
 /// <summary>
-/// Phase C (§4.3.4) — runtime model behind one row of the per-output audio matrix. Each instance
+/// Phase C (§4.3.4) - runtime model behind one row of the per-output audio matrix. Each instance
 /// represents one (input channel × output channel) cell, with its own gain (dB) and mute toggle.
 /// Cells fire <see cref="INotifyPropertyChanged"/> so the host view-model can push the change down to
 /// the deck's ShowSession audio-route re-apply without re-snapshotting the entire grid.
@@ -80,7 +80,7 @@ public sealed partial class AudioMatrixInputTrimViewModel : ObservableObject
 }
 
 /// <summary>
-/// Phase C (§4.3.4) — one output device's view of the matrix: a list of (output-channel × input-channel)
+/// Phase C (§4.3.4) - one output device's view of the matrix: a list of (output-channel × input-channel)
 /// cells. Hosted by <see cref="PlayerOutputBinding"/>; mutated as a single ObservableCollection so the
 /// TreeDataGrid can render columns directly off <see cref="InputChannelCount"/> and the host VM can listen
 /// to cell-level PropertyChanged for live route updates.
@@ -96,13 +96,13 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
     [ObservableProperty]
     private int _inputChannelCount;
 
-    /// <summary>Output channel count this matrix was last sized to (typically 2 — the output line's device channel count).</summary>
+    /// <summary>Output channel count this matrix was last sized to (typically 2 - the output line's device channel count).</summary>
     [ObservableProperty]
     private int _outputChannelCount;
 
     public ObservableCollection<AudioMatrixCellViewModel> Cells { get; } = new();
 
-    /// <summary>Phase C — rebuild cells for the new channel count. Preserves cells that map cleanly into the
+    /// <summary>Phase C - rebuild cells for the new channel count. Preserves cells that map cleanly into the
     /// new layout (same input/output index) and defaults the rest. The "identity" default sets diagonal cells
     /// to 0 dB and the rest to silence so a stereo source → stereo output resolves to L→L, R→R.</summary>
     public void Resize(int inputChannels, int outputChannels)
@@ -139,7 +139,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
         OutputChannelCount = outputChannels;
     }
 
-    /// <summary>Phase C — overwrite the matrix from persisted cell configs (or the saved <see cref="AudioRouteMixMode"/>
+    /// <summary>Phase C - overwrite the matrix from persisted cell configs (or the saved <see cref="AudioRouteMixMode"/>
     /// preset when no cells are stored). Preserves channel counts.</summary>
     public void ApplyConfig(IReadOnlyList<AudioMatrixCellConfig> cells)
     {
@@ -155,7 +155,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
         }
     }
 
-    /// <summary>Phase C — overwrite the matrix from a preset mix mode. Useful before the user has touched any
+    /// <summary>Phase C - overwrite the matrix from a preset mix mode. Useful before the user has touched any
     /// cell individually.</summary>
     public void ApplyPreset(AudioRouteMixMode mode)
     {
@@ -253,7 +253,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
     [RelayCommand]
     private void ApplyDownmixPreset(AudioDownmixPreset preset) => ApplyDownmix(preset);
 
-    /// <summary>P5c — current layout as a linear gain matrix (muted/floor cells = 0) for
+    /// <summary>P5c - current layout as a linear gain matrix (muted/floor cells = 0) for
     /// <see cref="S.Media.Core.Audio.AudioMixPreset"/> save.</summary>
     public float[,] ToLinearMatrix()
     {
@@ -267,7 +267,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
         return gains;
     }
 
-    /// <summary>P5c — overwrite the cells from a linear gain matrix (preset load). Cells outside the
+    /// <summary>P5c - overwrite the cells from a linear gain matrix (preset load). Cells outside the
     /// preset's dimensions are muted; zero gains mute; non-zero gains convert to dB.</summary>
     public void ApplyLinearMatrix(float[,] gains)
     {
@@ -288,15 +288,15 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
         }
     }
 
-    /// <summary>Phase C — current cell layout as persistable configs (filtered to changed/audible cells).</summary>
+    /// <summary>Phase C - current cell layout as persistable configs (filtered to changed/audible cells).</summary>
     public IReadOnlyList<AudioMatrixCellConfig> ToPersistableCells() =>
         Cells.Select(c => c.ToConfig()).ToList();
 
-    /// <summary>Phase C — live cells passed to the session (every non-muted, audible cell becomes one router route).</summary>
+    /// <summary>Phase C - live cells passed to the session (every non-muted, audible cell becomes one router route).</summary>
     public IReadOnlyList<AudioMatrixCellConfig> ToRouteCells() =>
         Cells.Where(c => c.IsAudible).Select(c => c.ToConfig()).ToList();
 
-    /// <summary>Phase C — pull the cell at <c>(input, output)</c> if present (null when the matrix isn't sized for those indices).</summary>
+    /// <summary>Phase C - pull the cell at <c>(input, output)</c> if present (null when the matrix isn't sized for those indices).</summary>
     public AudioMatrixCellViewModel? Cell(int input, int output) =>
         Cells.FirstOrDefault(c => c.InputChannel == input && c.OutputChannel == output);
 }
@@ -304,7 +304,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
 public sealed record AudioMatrixOutputSummary(string KindLabel, string Name, string ChannelSummary);
 
 /// <summary>
-/// Phase C (§4.3.4) — one row in the TreeDataGrid: the cells that feed one (device, output-channel) pair.
+/// Phase C (§4.3.4) - one row in the TreeDataGrid: the cells that feed one (device, output-channel) pair.
 /// <see cref="Cells"/> is ordered by input channel index so the view can bind a column per input.
 /// </summary>
 public sealed class AudioMatrixRow

@@ -11,9 +11,9 @@ using S.Media.Time;
 namespace S.Media.Players;
 
 /// <summary>
-/// Plays one media object — a file/URI opened through the media registry (P2 — no globals) or caller-provided
-/// live sources — by wiring a <see cref="VideoRouter"/> (always) plus an optional <see cref="AudioRouter"/> +
-/// <see cref="MediaClock"/> to the source audio. No PortAudio / SDL / NDI here — attach those outputs from the
+/// Plays one media object - a file/URI opened through the media registry (P2 - no globals) or caller-provided
+/// live sources - by wiring a <see cref="VideoRouter"/> (always) plus an optional <see cref="AudioRouter"/> +
+/// <see cref="MediaClock"/> to the source audio. No PortAudio / SDL / NDI here - attach those outputs from the
 /// optional packages via <see cref="AttachVideoOutput"/> / <see cref="AttachAudioOutput"/>.
 /// </summary>
 /// <remarks>
@@ -39,7 +39,7 @@ public sealed class MediaPlayer : IDisposable
     private readonly MediaClock? _liveFreerun;
     private readonly List<IDisposable> _ownedLiveDisposables = [];
     // Companion resources (e.g. a PortAudio host wired via WithPortAudio) the player owns and disposes
-    // on Dispose — disposed AFTER the bundle/live graph so the router has stopped submitting before a
+    // on Dispose - disposed AFTER the bundle/live graph so the router has stopped submitting before a
     // companion closes its hardware output. Keeps the simple "open with audio" path from leaking.
     private readonly List<IDisposable> _ownedCompanions = [];
     private readonly string _videoRouterInputId;
@@ -101,7 +101,7 @@ public sealed class MediaPlayer : IDisposable
 
     public VideoRouter VideoRouter => _liveVideoRouter!;
 
-    /// <summary>Input id returned by <see cref="VideoRouter.AddInput"/> — use with <see cref="VideoRouter.TryAddRoute"/>.</summary>
+    /// <summary>Input id returned by <see cref="VideoRouter.AddInput"/> - use with <see cref="VideoRouter.TryAddRoute"/>.</summary>
     public string VideoRouterInputId => _videoRouterInputId;
 
     /// <summary>
@@ -137,10 +137,10 @@ public sealed class MediaPlayer : IDisposable
     [MemberNotNullWhen(true, nameof(VideoSource))]
     public bool HasVideo => _videoSource is not null;
 
-    /// <summary>True when the video source is live (NDI / capture) — presents Scheduled, re-anchored at Play.</summary>
+    /// <summary>True when the video source is live (NDI / capture) - presents Scheduled, re-anchored at Play.</summary>
     public bool IsLive => _liveVideoSource is not null;
 
-    /// <summary>True when this is a LIVE source whose upstream has DROPPED — its live video or audio source now
+    /// <summary>True when this is a LIVE source whose upstream has DROPPED - its live video or audio source now
     /// reports exhausted. A host uses it to end a live clip whose input disconnected (the GUI's live-source
     /// disconnect handling), distinct from <see cref="IsRunning"/> which a live router can keep true while it
     /// waits for data. False for a file/container source (a finished file ends via normal EOF, not this).</summary>
@@ -256,10 +256,10 @@ public sealed class MediaPlayer : IDisposable
     /// Adds <paramref name="output"/> to <see cref="VideoRouter"/> and routes this player's video
     /// input to it in one call. Returns the registered output id (pass it to
     /// <see cref="VideoRouter.RemoveOutput"/> to detach). On a negotiation failure the output
-    /// registration is rolled back and <see cref="InvalidOperationException"/> is thrown —
+    /// registration is rolled back and <see cref="InvalidOperationException"/> is thrown -
     /// the player keeps presenting on its existing routes either way.
     /// </summary>
-    /// <param name="synchronous">Forwarded to <see cref="VideoRouter.AddOutput"/> — pass
+    /// <param name="synchronous">Forwarded to <see cref="VideoRouter.AddOutput"/> - pass
     /// <see langword="true"/> only for outputs whose <see cref="IVideoOutput.Submit"/> returns promptly.</param>
     public string AttachVideoOutput(IVideoOutput output, string? id = null, bool synchronous = false)
     {
@@ -405,14 +405,14 @@ public sealed class MediaPlayer : IDisposable
         };
     }
 
-    // --- registry-driven open (P2 — opens through IMediaRegistry, no globals) -------------------------
+    // --- registry-driven open (P2 - opens through IMediaRegistry, no globals) -------------------------
 
     /// <summary>The mix sample rate (the audio router's rate), or 0 when there is no audio router.</summary>
     public int SampleRate => _liveAudioRouter?.SampleRate ?? 0;
 
     /// <summary>The master playhead position. Once playback COMPLETED NATURALLY (every routed audio
     /// source exhausted) this clamps to <see cref="Duration"/>: the natural-EOF output flush rewinds the
-    /// hardware clock's epoch, so the raw playhead would read ~0:00 — the "deck shows playing, stuck at
+    /// hardware clock's epoch, so the raw playhead would read ~0:00 - the "deck shows playing, stuck at
     /// the beginning" report (2026-07-03). A restart (seek + play) clears the completion and reads live again.</summary>
     public TimeSpan Position =>
         _liveAudioRouter is { CompletedNaturally: true } && Duration > TimeSpan.Zero
@@ -420,7 +420,7 @@ public sealed class MediaPlayer : IDisposable
             : PlayClock.CurrentPosition;
 
     /// <summary>True while the active playback clock is advancing. Reports false once the audio router
-    /// completed naturally — the clock OBJECT keeps its running flag at EOF, so without this every
+    /// completed naturally - the clock OBJECT keeps its running flag at EOF, so without this every
     /// end-of-media consumer (the deck's auto-advance/loop poll, the session's natural-end and voice
     /// monitors) waited forever on a "running" clip that had already exhausted.</summary>
     public bool IsRunning =>
@@ -428,7 +428,7 @@ public sealed class MediaPlayer : IDisposable
 
     /// <summary>
     /// Opens <paramref name="uri"/> through <paramref name="registry"/>: the highest-confidence decoder
-    /// provides the video and/or audio sources (whichever it can open — audio-only and video-only both
+    /// provides the video and/or audio sources (whichever it can open - audio-only and video-only both
     /// work), wired into the live playback graph. The opened sources are owned by the player.
     /// </summary>
     public static bool TryOpen(
@@ -445,7 +445,7 @@ public sealed class MediaPlayer : IDisposable
         player = null;
         error = null;
 
-        // NXT-02: open audio + video as ONE atomic asset (a single shared demux for a correlated A/V file —
+        // NXT-02: open audio + video as ONE atomic asset (a single shared demux for a correlated A/V file -
         // one open/probe, one buffering/seek state) instead of two independent opens. The result owns the
         // asset; the player adopts it as an owned companion so a single dispose tears the whole thing down.
         var request = new MediaOpenRequest(uri)
@@ -521,7 +521,7 @@ public sealed class MediaPlayer : IDisposable
     }
 
     /// <summary>Re-advertises an attached-picture (album-art) source through <see cref="IAttachedPictureSource"/>
-    /// without owning it — the <see cref="MediaOpenResult"/> owns the underlying track and disposes it (NXT-02).</summary>
+    /// without owning it - the <see cref="MediaOpenResult"/> owns the underlying track and disposes it (NXT-02).</summary>
     private sealed class AttachedPictureVideoSource(IVideoSource inner) : IVideoSource, IAttachedPictureSource
     {
         public bool IsAttachedPicture => true;
@@ -541,7 +541,7 @@ public sealed class MediaPlayer : IDisposable
     /// <c>TryOpen</c>) call this automatically. Hosts that open via the registry-less
     /// <see cref="OpenLive(IAudioSource,IVideoSource)"/> sources path (they own their decoder) but still
     /// want multi-output drift correction must call this explicitly with their registry before adding
-    /// secondary outputs — otherwise <see cref="AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/> throws
+    /// secondary outputs - otherwise <see cref="AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/> throws
     /// (the wrapper was never wired).</para>
     /// </summary>
     public static void WireAdaptiveRateFromRegistry(IMediaRegistry registry, MediaPlayer player)
@@ -560,7 +560,7 @@ public sealed class MediaPlayer : IDisposable
     }
 
     /// <summary>Fluent open: <c>OpenFile(registry, path).WithOptions(...).Build()</c>. The provider is
-    /// selected by the URI scheme (a bare path opens via the default file provider — D2).</summary>
+    /// selected by the URI scheme (a bare path opens via the default file provider - D2).</summary>
     public static MediaPlayerOpenFileBuilder OpenFile(IMediaRegistry registry, string filePathOrUri) =>
         new(registry, filePathOrUri);
 
@@ -663,7 +663,7 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    /// <summary>Opens a local media file path (not a URI string — use <see cref="OpenUri"/> for <c>http:</c> / <c>rtsp:</c>).</summary>
+    /// <summary>Opens a local media file path (not a URI string - use <see cref="OpenUri"/> for <c>http:</c> / <c>rtsp:</c>).</summary>
     internal static bool TryOpenLive(
         IAudioSource? audioSource,
         IVideoSource? videoSource,
@@ -752,10 +752,10 @@ public sealed class MediaPlayer : IDisposable
                 audioSourceId = disposeSourcesOnDispose
                     ? audioRouter.AddOwnedSource(audioSource, autoResample: true)
                     : audioRouter.AddSource(audioSource, autoResample: true);
-                // Route the audio source to a discard sink so it is actually consumed — advancing the
+                // Route the audio source to a discard sink so it is actually consumed - advancing the
                 // master clock and reaching EOF for "play to completion". Sources are only pulled when
                 // routed; a real clocked output (e.g. PortAudio) attached later still becomes the pacing
-                // primary and plays the audio — this sink just drops its copy.
+                // primary and plays the audio - this sink just drops its copy.
                 var routerFormat = new AudioFormat(targetAudioRate, audioSource.Format.Channels);
                 var audioDiscardId = audioRouter.AddOutput(new DiscardingAudioOutput(routerFormat), "_audio_discard");
                 audioRouter.Connect(audioSourceId, audioDiscardId);
@@ -776,7 +776,7 @@ public sealed class MediaPlayer : IDisposable
             // which VideoPlayer's up-front negotiation needs. Wait for that first frame (it is discarded); the
             // player re-anchors the source to the master at Play (Doc 03 §2). The wait is bounded and honours
             // the open's cancellation token (NXT-26): a live receiver's read blocks until a frame arrives, so a
-            // connected-but-silent sender must not hang the open forever — or past a ShowSession STOP.
+            // connected-but-silent sender must not hang the open forever - or past a ShowSession STOP.
             var liveVideo = videoSource as ILiveVideoSource;
             if (liveVideo is not null && !TryWaitLiveFirstFrame(videoSource!, cancellationToken))
                 throw new TimeoutException(
@@ -826,8 +826,8 @@ public sealed class MediaPlayer : IDisposable
                 audioSource,
                 videoSource);
 
-            // Surface the media's duration (file clips) so transport queries — and the outbound C ABI
-            // (mfp_session_duration_ticks) — can report it. Live sources carry no duration, so it stays zero.
+            // Surface the media's duration (file clips) so transport queries - and the outbound C ABI
+            // (mfp_session_duration_ticks) - can report it. Live sources carry no duration, so it stays zero.
             var audioDuration = (audioSource as ISeekableSource)?.Duration ?? TimeSpan.Zero;
             var videoDuration = (videoSource as ISeekableSource)?.Duration ?? TimeSpan.Zero;
             player.Duration = audioDuration > videoDuration ? audioDuration : videoDuration;
@@ -843,7 +843,7 @@ public sealed class MediaPlayer : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // An aborted open propagates as cancellation (NXT-03/NXT-26), matching the registry open path —
+            // An aborted open propagates as cancellation (NXT-03/NXT-26), matching the registry open path -
             // after releasing everything built so far.
             CleanupPartialOpen();
             player = null;
@@ -871,11 +871,11 @@ public sealed class MediaPlayer : IDisposable
     }
 
     // NXT-26: a live receiver's TryReadNextFrame blocks until a frame arrives (or the source faults/disposes),
-    // so the first-frame wait needs a backstop — a live sender that produced nothing for this long is a failed
+    // so the first-frame wait needs a backstop - a live sender that produced nothing for this long is a failed
     // open, not something to block a cue fire on indefinitely.
     private static readonly TimeSpan LiveFirstFrameTimeout = TimeSpan.FromSeconds(30);
 
-    /// <summary>Waits (bounded + cancellable — NXT-26) for a live source's first video frame so its native
+    /// <summary>Waits (bounded + cancellable - NXT-26) for a live source's first video frame so its native
     /// pixel formats are published for negotiation; the frame itself is discarded. Returns false on the
     /// backstop timeout; throws <see cref="OperationCanceledException"/> when the open's token fires. An
     /// abandoned blocking read unblocks once the caller's failure path disposes the source (live receivers
@@ -885,8 +885,8 @@ public sealed class MediaPlayer : IDisposable
         var read = Task.Run(
             () => videoSource.TryReadNextFrame(out var frame) ? frame : null,
             CancellationToken.None);
-        // The warm frame is always discarded — and an abandoned read's late frame/fault must not leak/go
-        // unobserved — so one continuation owns both.
+        // The warm frame is always discarded - and an abandoned read's late frame/fault must not leak/go
+        // unobserved - so one continuation owns both.
         _ = read.ContinueWith(
             static t =>
             {
@@ -905,7 +905,7 @@ public sealed class MediaPlayer : IDisposable
         }
         catch (AggregateException)
         {
-            // The read itself faulted (source faulted/disposed mid-open) — proceed; the format negotiation
+            // The read itself faulted (source faulted/disposed mid-open) - proceed; the format negotiation
             // right after surfaces the real failure as the open error.
             return true;
         }
@@ -926,7 +926,7 @@ public sealed class MediaPlayer : IDisposable
 
         public bool IsExhausted => true;
 
-        // ISeekableSource: the stub carries no frames, so duration/position are zero and seek is a no-op —
+        // ISeekableSource: the stub carries no frames, so duration/position are zero and seek is a no-op -
         // this lets audio-only registry clips honour a coordinated A/V seek (the audio source does the work).
         public TimeSpan Duration => TimeSpan.Zero;
 

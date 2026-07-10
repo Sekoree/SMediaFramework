@@ -3,11 +3,11 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Covers <c>MediaPlayerViewModel.ConfirmShowSessionEnded</c> — the deck poll's end-of-track decision
+/// <summary>Covers <c>MediaPlayerViewModel.ConfirmShowSessionEnded</c> - the deck poll's end-of-track decision
 /// under the ShowSession path. A coordinated SEEK transiently pauses the clip (IsRunning=false) while it reseeks
 /// the demux; without debouncing that transient, the poll mistook it for end-of-track and tore the deck down
 /// ("freezes then stops" after a few seeks). This pins the guard: mid-seek/scrub is never "ended", a real end
-/// must persist across two ticks, and a timeline-generation change (the session's NXT-04 discontinuity signal —
+/// must persist across two ticks, and a timeline-generation change (the session's NXT-04 discontinuity signal -
 /// any seek/pause/resume/clip swap, including ones the deck did not initiate) restarts the window outright.</summary>
 public sealed class MediaPlayerDeckEndDetectionTests
 {
@@ -51,7 +51,7 @@ public sealed class MediaPlayerDeckEndDetectionTests
     public void SeekInFlight_NeverEnds_AndResetsAnyPartialCount()
     {
         var ticks = 1; // a stopped tick was already seen
-        // A seek is now in flight (the clip is transiently paused mid-reseek) — must NOT be treated as ended,
+        // A seek is now in flight (the clip is transiently paused mid-reseek) - must NOT be treated as ended,
         // and the partial count is cleared so the seek's pause can't combine with a later tick to reach 2.
         Assert.False(Confirm(isRunning: false, isPlaying: true, isScrubbing: false, seekInFlight: true, ref ticks));
         Assert.Equal(0, ticks);
@@ -61,7 +61,7 @@ public sealed class MediaPlayerDeckEndDetectionTests
     public void ResumeInFlight_NeverEnds_AndResetsAnyPartialCount()
     {
         // Regression: resume flips the deck's IsPlaying=true immediately, but the session's Play() prefills
-        // and starts the audio hardware before the clip clock runs — IsRunning stays false (same generation)
+        // and starts the audio hardware before the clip clock runs - IsRunning stays false (same generation)
         // long enough to span poll ticks. That read as a natural end and auto-advanced; with a single-item
         // playlist the "next" item is the same item, so pause→resume restarted from the beginning. The deck
         // now raises the in-flight flag (same parameter as a seek arc) for the whole awaited resume.
@@ -82,7 +82,7 @@ public sealed class MediaPlayerDeckEndDetectionTests
     [Fact]
     public void StoppedWhileNotPlaying_IsNotEnd()
     {
-        // Paused deck (IsPlaying=false): the clip is stopped but the operator paused it — not an end-of-track.
+        // Paused deck (IsPlaying=false): the clip is stopped but the operator paused it - not an end-of-track.
         var ticks = 0;
         Assert.False(Confirm(false, false, false, false, ref ticks));
         Assert.False(Confirm(false, false, false, false, ref ticks));
@@ -104,7 +104,7 @@ public sealed class MediaPlayerDeckEndDetectionTests
     public void TimelineGenerationChange_RestartsTheWindow_EvenWhenStoppedTicksWouldConfirm()
     {
         // The authoritative discontinuity path (NXT-04): a seek the deck did NOT initiate (control surface,
-        // REST API) bumps the session's generation — its transient pause must restart the window even though
+        // REST API) bumps the session's generation - its transient pause must restart the window even though
         // the deck's own seek-in-flight flag is false and the stopped state spans multiple ticks.
         var ticks = 1;           // one stopped tick already seen at generation 7
         var lastGeneration = 7;

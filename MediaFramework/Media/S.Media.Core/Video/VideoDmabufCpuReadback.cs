@@ -12,10 +12,10 @@ namespace S.Media.Core.Video;
 /// <para>
 /// This path only works when the driver exposes dma-buf memory that is <c>mmap</c>-readable (often true for
 /// linear / generic modifiers; tiled or protected buffers may return <see langword="false"/>). It is a
-/// blocking full-frame copy — use sparingly (e.g. one mixed fan-out branch).
+/// blocking full-frame copy - use sparingly (e.g. one mixed fan-out branch).
 /// </para>
 /// <para>
-/// <strong>Win32</strong> shared NV12 textures are not supported here — callers should keep using all-NV12 outputs,
+/// <strong>Win32</strong> shared NV12 textures are not supported here - callers should keep using all-NV12 outputs,
 /// a single output, or software decode until a D3D11 staging readback exists.
 /// </para>
 /// </remarks>

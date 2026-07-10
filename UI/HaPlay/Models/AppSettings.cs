@@ -7,7 +7,7 @@ namespace HaPlay.Models;
 
 /// <summary>
 /// Per-machine settings that persist across app launches but live outside any project file
-/// (§12.1 — sidebar state is per-machine, not part of <see cref="HaPlayProject"/>).
+/// (§12.1 - sidebar state is per-machine, not part of <see cref="HaPlayProject"/>).
 /// Stored under <c>%LocalAppData%/HaPlay/app-settings.json</c>.
 /// </summary>
 public sealed class AppSettings
@@ -16,25 +16,25 @@ public sealed class AppSettings
     internal static string? FilePathOverride { get; set; }
     public bool SidebarCollapsed { get; set; }
 
-    /// <summary>Workspace selected on last shutdown — restored on next launch.</summary>
+    /// <summary>Workspace selected on last shutdown - restored on next launch.</summary>
     public string? LastSelectedWorkspace { get; set; }
 
-    /// <summary>Phase E (§8.7) — last-known main window placement. Restored on next launch; ignored
+    /// <summary>Phase E (§8.7) - last-known main window placement. Restored on next launch; ignored
     /// when the saved position would land off all visible screens (multi-monitor change between
     /// sessions). <see langword="null"/> means "use the window's design-time defaults".</summary>
     public WindowStateSnapshot? MainWindow { get; set; }
 
-    /// <summary>Phase B (§12.2) — per-dialog-type size memory. Key is the dialog's
+    /// <summary>Phase B (§12.2) - per-dialog-type size memory. Key is the dialog's
     /// <see cref="DialogStatePersister"/> id (e.g. <c>"AddNDIOutputDialog"</c>); value is the
-    /// last-known size. Position is not persisted — dialogs always centre on their owner.</summary>
+    /// last-known size. Position is not persisted - dialogs always centre on their owner.</summary>
     public Dictionary<string, DialogSizeSnapshot> DialogSizes { get; set; } = new();
 
-    /// <summary>Phase E (§8.6) — chrome theme. <see cref="AppThemeMode.System"/> defers to the OS
+    /// <summary>Phase E (§8.6) - chrome theme. <see cref="AppThemeMode.System"/> defers to the OS
     /// setting; <see cref="AppThemeMode.Light"/> / <see cref="AppThemeMode.Dark"/> force the variant.
     /// Saved as a string ("system"/"light"/"dark") via the source-gen contract.</summary>
     public AppThemeMode Theme { get; set; } = AppThemeMode.System;
 
-    /// <summary>Phase E (§8.6) — Fluent density. <see cref="AppDensityMode.Compact"/> keeps the
+    /// <summary>Phase E (§8.6) - Fluent density. <see cref="AppDensityMode.Compact"/> keeps the
     /// tight pre-§8.6 spacing (the default), <see cref="AppDensityMode.Normal"/> opens it up.</summary>
     public AppDensityMode Density { get; set; } = AppDensityMode.Compact;
 
@@ -157,7 +157,7 @@ public sealed class AppSettings
 
     /// <summary>Copies the current primary to <c>&lt;path&gt;.bak</c> so a later corrupt primary can be
     /// recovered (SET-01). Never overwrites the backup with a corrupt primary (a JSON parse failure means the
-    /// existing backup is the last good copy — leave it), and never throws. Retries a transient share violation:
+    /// existing backup is the last good copy - leave it), and never throws. Retries a transient share violation:
     /// on Windows an AV/indexer scan briefly locks the just-written primary, and a SILENTLY-skipped backup would
     /// let the next corrupt-primary load fall through to defaults instead of the backup (the 2026-07-09 win-x64
     /// "Actual: null" flake).</summary>
@@ -168,34 +168,34 @@ public sealed class AppSettings
             try
             {
                 // Read the primary ourselves so a transient LOCK (retry) is distinguishable from CORRUPTION
-                // (leave the good backup) — TryLoadFrom collapses both into "false".
+                // (leave the good backup) - TryLoadFrom collapses both into "false".
                 using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
                 {
                     if (JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.AppSettings) is null)
-                        return; // structurally empty — not a good primary; keep the existing backup
+                        return; // structurally empty - not a good primary; keep the existing backup
                 }
                 File.Copy(path, path + ".bak", overwrite: true);
                 return;
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
-                return; // no primary yet (first save) — nothing to back up; don't retry
+                return; // no primary yet (first save) - nothing to back up; don't retry
             }
             catch (JsonException)
             {
-                return; // corrupt primary — do NOT clobber the last good backup
+                return; // corrupt primary - do NOT clobber the last good backup
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 if (attempt == 4)
-                    return; // give up — the backup is best-effort and Save must never throw
+                    return; // give up - the backup is best-effort and Save must never throw
                 Thread.Sleep(10 * (attempt + 1)); // let the transient AV/indexer lock clear, then retry
             }
         }
     }
 }
 
-/// <summary>Phase E (§8.7) — persisted window placement. Coordinates are in Avalonia pixel space and
+/// <summary>Phase E (§8.7) - persisted window placement. Coordinates are in Avalonia pixel space and
 /// must be re-validated against the current <see cref="Avalonia.Controls.Screens"/> collection before
 /// being applied (multi-monitor unplug between sessions can leave the saved point off-screen).</summary>
 public sealed class WindowStateSnapshot
@@ -211,7 +211,7 @@ public sealed class WindowStateSnapshot
     public bool IsMaximized { get; set; }
 }
 
-/// <summary>Phase B (§12.2) — persisted size of a resizable dialog. Position is intentionally not
+/// <summary>Phase B (§12.2) - persisted size of a resizable dialog. Position is intentionally not
 /// captured: dialogs centre on their owner so a saved point would land on the wrong monitor when the
 /// main window moves between sessions.</summary>
 public sealed class DialogSizeSnapshot
@@ -220,7 +220,7 @@ public sealed class DialogSizeSnapshot
     public double Height { get; set; }
 }
 
-/// <summary>Phase E (§8.6) — chrome theme variant. <see cref="System"/> follows the OS preference.</summary>
+/// <summary>Phase E (§8.6) - chrome theme variant. <see cref="System"/> follows the OS preference.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<AppThemeMode>))]
 public enum AppThemeMode
 {
@@ -229,7 +229,7 @@ public enum AppThemeMode
     Dark,
 }
 
-/// <summary>Phase E (§8.6) — Fluent theme density. <see cref="Compact"/> matches the pre-§8.6 default
+/// <summary>Phase E (§8.6) - Fluent theme density. <see cref="Compact"/> matches the pre-§8.6 default
 /// (tight padding), <see cref="Normal"/> opens spacing up for touch / accessibility.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<AppDensityMode>))]
 public enum AppDensityMode

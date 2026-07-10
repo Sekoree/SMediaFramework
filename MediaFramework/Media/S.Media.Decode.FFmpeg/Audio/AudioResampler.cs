@@ -6,7 +6,7 @@ namespace S.Media.Decode.FFmpeg.Audio;
 /// Reusable <c>swresample</c> converter for packed 32‑bit float, interleaved audio.
 /// </summary>
 /// <remarks>
-/// <para>Not thread-safe — one instance per concurrent pipeline.</para>
+/// <para>Not thread-safe - one instance per concurrent pipeline.</para>
 /// <para><see cref="Dispose"/> frees the <c>swresample</c> context; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.</para>
 /// </remarks>
 public sealed unsafe class AudioResampler : IDisposable

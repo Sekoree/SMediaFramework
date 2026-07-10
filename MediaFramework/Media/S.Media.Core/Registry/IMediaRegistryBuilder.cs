@@ -37,7 +37,7 @@ public interface IMediaRegistryBuilder
     IMediaRegistryBuilder Use(IMediaModule module);
 
     /// <summary>Registers a disposable lifetime (e.g. a native runtime lease) that the built
-    /// <see cref="IMediaRegistry"/> owns and disposes when the registry is disposed — so a module can acquire a
+    /// <see cref="IMediaRegistry"/> owns and disposes when the registry is disposed - so a module can acquire a
     /// process/native resource at registration and release it deterministically with the registry instead of
     /// leaking it (NXT-05). Lifetimes are disposed in reverse registration order.</summary>
     IMediaRegistryBuilder AddLifetime(IDisposable lifetime);

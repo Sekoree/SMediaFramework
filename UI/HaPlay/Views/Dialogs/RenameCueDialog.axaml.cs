@@ -9,7 +9,7 @@ public partial class RenameCueDialog : Window
     public RenameCueDialog()
     {
         InitializeComponent();
-        // Focus the Label box on open — Number is usually fine; Label is what operators want to
+        // Focus the Label box on open - Number is usually fine; Label is what operators want to
         // edit most often.
         Opened += (_, _) => LabelBox.SelectAll();
         Opened += (_, _) => LabelBox.Focus();

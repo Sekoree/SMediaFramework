@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Compositor — layers, transforms, mesh warp, multi-output. Salvaged from S.Media.Effects.
+    <!-- S.Media.Compositor - layers, transforms, mesh warp, multi-output. Salvaged from S.Media.Effects.
          NO decoder dependency (P3): the CPU BGRA converter is injected via VideoCompositorOptions
          .CpuFrameConverterFactory (registry-wired IVideoCpuFrameConverter), never S.Media.FFmpeg. -->
 

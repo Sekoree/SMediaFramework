@@ -237,7 +237,7 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    /// <summary>Phase C.5 (§6.4) — open the PortAudio-input dialog and, on commit, add the produced
+    /// <summary>Phase C.5 (§6.4) - open the PortAudio-input dialog and, on commit, add the produced
     /// <see cref="PortAudioInputPlaylistItem"/> to the active playlist tab. Live items sit alongside
     /// file items in the same list and round-trip through the project file (§6.8).</summary>
     [RelayCommand]
@@ -257,7 +257,7 @@ public partial class MediaPlayerViewModel
         SelectedPlaylistItem = result;
     }
 
-    /// <summary>Phase C.5 (§6.3) — open the NDI-input dialog and add the produced
+    /// <summary>Phase C.5 (§6.3) - open the NDI-input dialog and add the produced
     /// <see cref="NDIInputPlaylistItem"/>. The discovery list + manual-name path land alongside the
     /// dialog VM in task #3; until then the menu entry surfaces a banner so users know the data
     /// model is ready but the dialog isn't wired yet.</summary>
@@ -286,7 +286,7 @@ public partial class MediaPlayerViewModel
 
     private bool CanAddNDIInput() => IsNDIAvailable;
 
-    /// <summary>Gate 6 — opens the MMD scene dialog (model/motion pickers + the rudimentary 3D
+    /// <summary>Gate 6 - opens the MMD scene dialog (model/motion pickers + the rudimentary 3D
     /// camera-placement preview) and adds the produced item to the playlist.</summary>
     [RelayCommand]
     private async Task AddMMDAsync()
@@ -303,7 +303,7 @@ public partial class MediaPlayerViewModel
         HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
     }
 
-    /// <summary>Gate 5 — opens the YouTube stream-selection dialog (resolve → pick video/audio/subtitle
+    /// <summary>Gate 5 - opens the YouTube stream-selection dialog (resolve → pick video/audio/subtitle
     /// streams → download &amp; cache) and adds the produced item. Muxed streams are rarely offered, so the
     /// dialog selects a separate video-only + audio-only pair; playback later runs from the local cache.</summary>
     [RelayCommand]
@@ -348,7 +348,7 @@ public partial class MediaPlayerViewModel
         StatusMessage = Strings.Format(nameof(Strings.MediaPropertiesAppliedStatusFormat), result.DisplayName);
         HaPlayPlaybackHelpers.StartBackgroundPhysicsBake(result);
 
-        // An edit that changes HOW the running clip decodes — audio-track or subtitle selection — only takes
+        // An edit that changes HOW the running clip decodes - audio-track or subtitle selection - only takes
         // effect on (re)open: the live clip was opened with the old selection. When the edited item is the one
         // loaded in the deck, re-open it and restore the playhead so a movie doesn't jump back to the start.
         if (wasActive && RequiresReopenForPlayback(item, result))
@@ -361,7 +361,7 @@ public partial class MediaPlayerViewModel
     }
 
     /// <summary>True when an edit changed a field the decoder open consumes (audio-track index or the subtitle
-    /// selection) — the only edits that need the running clip re-opened to take effect.</summary>
+    /// selection) - the only edits that need the running clip re-opened to take effect.</summary>
     private static bool RequiresReopenForPlayback(PlaylistItem before, PlaylistItem after) =>
         before is FilePlaylistItem o && after is FilePlaylistItem n
         && (o.AudioTrackIndex != n.AudioTrackIndex || !o.Subtitles.SequenceEqual(n.Subtitles));
@@ -430,7 +430,7 @@ public partial class MediaPlayerViewModel
         {
             // Never let a picker/add failure escape the command. An unhandled exception flowing out of an
             // AsyncRelayCommand runs as an async-void throw on the UI thread, which can pre-empt the
-            // continuation that re-raises CanExecuteChanged — leaving the "Add files" entry stuck greyed
+            // continuation that re-raises CanExecuteChanged - leaving the "Add files" entry stuck greyed
             // out even though the app survives. Surface it as a status message instead (matches the other
             // picker commands, e.g. LoadPlaylistTabAsync).
             StatusMessage = $"Add files failed: {ex.Message}";
@@ -495,7 +495,7 @@ public partial class MediaPlayerViewModel
         SelectedPlaylistItem = item;
     }
 
-    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing
+    /// <summary>Invoked from the view when the user double-clicks a playlist item - load it and start playing
     /// (the ShowSession open fires immediately for file and live items alike).</summary>
     public async Task PlayPlaylistItemAsync(PlaylistItem? item)
     {
@@ -508,7 +508,7 @@ public partial class MediaPlayerViewModel
             return;
         }
 
-        // Callable from pool threads (cue executors) as well as the view — marshal the observable
+        // Callable from pool threads (cue executors) as well as the view - marshal the observable
         // property sets (SelectedPlaylistItem fires transport CanExecuteChanged into the buttons).
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -522,7 +522,7 @@ public partial class MediaPlayerViewModel
         SDebug.ChangeTrace.End("PlayPlaylistItemAsync");
     }
 
-    /// <summary>Phase C.5 — sets <see cref="_currentPlaylistItem"/> and the file-item path projection that
+    /// <summary>Phase C.5 - sets <see cref="_currentPlaylistItem"/> and the file-item path projection that
     /// the existing file-based open path consumes. Live items leave <see cref="MediaFilePath"/> null and are
     /// short-circuited by <see cref="OpenOrReloadAsync"/> until live wiring lands (task #4).</summary>
     private Task PrepareCurrentItemAsync(PlaylistItem? item)

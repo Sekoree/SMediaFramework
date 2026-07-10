@@ -118,7 +118,7 @@
       </MenuItem>
     </Menu>
 
-    <!-- P1: fixed-height status line — text changes, layout never does (no banner push-down). -->
+    <!-- P1: fixed-height status line - text changes, layout never does (no banner push-down). -->
     <controls:StatusLineControl DockPanel.Dock="Top"
                                 Padding="8,0"
                                 Text="{Binding ProjectStatus}" />
@@ -146,7 +146,7 @@
                       ToolTip.Tip="{Binding Label}"
                       AutomationProperties.Name="{Binding Label}">
                 <!-- ConverterParameter can't bind, so the old ObjectConverters.Equal approach never
-                     matched — the active workspace was never highlighted. Compare via MultiBinding. -->
+                     matched - the active workspace was never highlighted. Compare via MultiBinding. -->
                 <Classes.selected>
                   <MultiBinding Converter="{x:Static views:AllEqualConverter.Instance}">
                     <Binding Path="$parent[ItemsControl].((vm:MainViewModel)DataContext).SelectedWorkspace" />
@@ -353,7 +353,7 @@
           </Border>
 
           <StackPanel Grid.Column="1" Spacing="10">
-            <!-- §8.6 Display preferences — per-machine, not part of the project file.
+            <!-- §8.6 Display preferences - per-machine, not part of the project file.
                  Style = base control theme (Classic / Simple / Fluent). The Theme (light/dark) and Density
                  controls disable for base themes that don't support them: Classic is light-only, and only
                  Fluent has a density axis. -->
@@ -423,7 +423,7 @@
               </StackPanel>
             </Border>
 
-            <!-- Remote API — per-machine HTTP control surface for show controllers. -->
+            <!-- Remote API - per-machine HTTP control surface for show controllers. -->
             <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.RemoteApiSectionHeader}" FontWeight="SemiBold" />
@@ -486,7 +486,7 @@
               </StackPanel>
             </Border>
 
-            <!-- Media caches — per-machine prepared media (YouTube downloads, MMD bakes): size, open, clear. -->
+            <!-- Media caches - per-machine prepared media (YouTube downloads, MMD bakes): size, open, clear. -->
             <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.CacheSectionHeader}" FontWeight="SemiBold" />
@@ -530,7 +530,7 @@
     </Grid>
   </DockPanel>
 
-  <!-- P1: toast overlay — top-right, stacked, hit-testable only where toasts are. Body click pins
+  <!-- P1: toast overlay - top-right, stacked, hit-testable only where toasts are. Body click pins
        (stops auto-dismiss), ✕ closes. Never affects layout below. -->
   <ItemsControl ItemsSource="{Binding Toasts}"
                 HorizontalAlignment="Right" VerticalAlignment="Top"

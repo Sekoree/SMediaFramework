@@ -1,4 +1,4 @@
-// Phase 3 CompositorSmoke — proves the GL compositor (Gpu + Compositor + the SDL3 bridge) composites on
+// Phase 3 CompositorSmoke - proves the GL compositor (Gpu + Compositor + the SDL3 bridge) composites on
 // real hardware GL with NO decoder/FFmpeg/Skia in the graph. Builds two synthetic BGRA layers
 // (red background + a centered green foreground) entirely from StaticFrameSource, composites them on the
 // SDL3 GL backend, reads the frame back, and checks the pixels: corner stays red, centre turns green.
@@ -43,8 +43,8 @@ using (compositor)
             return 1;
         }
 
-        var (cr, cg, cb) = SamplePixel(frame, W / 2, H / 2);   // centre — should be green
-        var (er, eg, eb) = SamplePixel(frame, 4, 4);           // corner — should be red
+        var (cr, cg, cb) = SamplePixel(frame, W / 2, H / 2);   // centre - should be green
+        var (er, eg, eb) = SamplePixel(frame, 4, 4);           // corner - should be red
         Console.WriteLine($"centre BGRA-as-RGB = ({cr},{cg},{cb}); corner = ({er},{eg},{eb})");
 
         var centreGreen = cg > 180 && cr < 80 && cb < 80;
@@ -58,7 +58,7 @@ using (compositor)
     }
 }
 
-Console.WriteLine("CompositorSmoke OK — GL composite + readback correct, FFmpeg absent.");
+Console.WriteLine("CompositorSmoke OK - GL composite + readback correct, FFmpeg absent.");
 return 0;
 
 static StaticFrameSource SolidBgra(int w, int h, byte b, byte g, byte r)

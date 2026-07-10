@@ -17,7 +17,7 @@ internal static class NDIVideoFrameUnpack
     /// <summary>
     /// OBS / NDI HX PGM is computer-range (full) BT.709 UYVY. Limited-range GL or swscale flags crush
     /// it to black; full-range metadata matches what worked in the field (passthrough may look gray on
-    /// some GPUs — use default BGRA conversion).
+    /// some GPUs - use default BGRA conversion).
     /// </summary>
     private static readonly VideoFrameMetadata NDISdrFullRangeBt709 = new(
         ColorTransferHint: VideoTransferHint.Sdr,
@@ -25,7 +25,7 @@ internal static class NDIVideoFrameUnpack
         ColorRange: VideoColorRange.Full,
         AlphaMode: VideoAlphaMode.Opaque);
 
-    /// <summary>Quick sanity metric for logs — average luma (Y or BGRA G) after unpack.</summary>
+    /// <summary>Quick sanity metric for logs - average luma (Y or BGRA G) after unpack.</summary>
     internal static double SampleAveragePackedLuma(VideoFrame frame)
     {
         try
@@ -195,7 +195,7 @@ internal static class NDIVideoFrameUnpack
     /// Live receivers often report <c>Xres</c> equal to the line stride in bytes (not luma width),
     /// which doubles the interpreted width and looks "extremely zoomed in" in UYVY/BGRA shaders.
     /// The union field <see cref="NDIVideoFrameV2.LineStrideInBytes"/> can also carry the total
-    /// <c>PData</c> size for some payloads — treat that as "use default line stride".
+    /// <c>PData</c> size for some payloads - treat that as "use default line stride".
     /// </remarks>
     internal static bool TryResolveGeometry(
         in NDIVideoFrameV2 native,
@@ -225,7 +225,7 @@ internal static class NDIVideoFrameUnpack
             LogGeometryHeuristic(
                 native,
                 pixelFormat,
-                "LineStrideInBytes looks like total PData size — using default line stride");
+                "LineStrideInBytes looks like total PData size - using default line stride");
             lineStrideBytes = DefaultLineStride(pixelFormat, width);
             return true;
         }
@@ -242,7 +242,7 @@ internal static class NDIVideoFrameUnpack
                 LogGeometryHeuristic(
                     native,
                     pixelFormat,
-                    "Xres equals LineStrideInBytes — treating Xres as bytes-per-line, recovering pixel width");
+                    "Xres equals LineStrideInBytes - treating Xres as bytes-per-line, recovering pixel width");
                 width = recovered;
             }
         }
@@ -257,7 +257,7 @@ internal static class NDIVideoFrameUnpack
             LogGeometryHeuristic(
                 native,
                 pixelFormat,
-                "Xres is 2× line stride width — using stride-derived pixel width");
+                "Xres is 2× line stride width - using stride-derived pixel width");
             width = widthFromStride;
         }
 
@@ -309,7 +309,7 @@ internal static class NDIVideoFrameUnpack
             throw new InvalidOperationException(
                 $"NDI packed stride too small for {format.PixelFormat} {width}x{height}: stride={stride} visible={visibleStride}.");
 
-        // Always copy row-by-row using SDK line stride — PData is not guaranteed tightly packed even
+        // Always copy row-by-row using SDK line stride - PData is not guaranteed tightly packed even
         // when LineStrideInBytes equals the visible bytes-per-line.
         var tightBytes = visibleStride * height;
         var tight = ArrayPool<byte>.Shared.Rent(tightBytes);

@@ -6,12 +6,12 @@ namespace HaPlay.Playback;
 
 /// <summary>
 /// Stateless media-open / output helpers shared across the playback paths (cue workspace, playlist cache,
-/// output-setup dialog, clip composition runtime). Pure functions only — no session state.
+/// output-setup dialog, clip composition runtime). Pure functions only - no session state.
 /// </summary>
 internal static class HaPlayPlaybackHelpers
 {
     /// <summary>Whether an output line can carry audio (a PortAudio device, or an NDI carrier whose stream
-    /// mode includes audio) — the soundboard/routing pickers' filter.</summary>
+    /// mode includes audio) - the soundboard/routing pickers' filter.</summary>
     internal static bool IsAudioCapableOutput(OutputDefinition definition) =>
         definition is PortAudioOutputDefinition
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
@@ -38,13 +38,13 @@ internal static class HaPlayPlaybackHelpers
             }
             catch
             {
-                // best effort — the playback path bakes on first open when this didn't land
+                // best effort - the playback path bakes on first open when this didn't land
             }
         });
     }
 
     /// <summary>Builds the provider-owned <c>ndi:</c> descriptor URI for a live NDI input item, carrying its
-    /// per-item stream selection, bandwidth mode, and audio jitter-buffer override — the ONE builder both the
+    /// per-item stream selection, bandwidth mode, and audio jitter-buffer override - the ONE builder both the
     /// deck and the cue mapper must use, so a persisted item keeps its options on either playback path (the
     /// registry's <c>NDIDecoderProvider.ParseSourceUri</c> is the counterpart).</summary>
     internal static string BuildNDIInputUri(NDIInputPlaylistItem item)
@@ -84,7 +84,7 @@ internal static class HaPlayPlaybackHelpers
         return $"padev://{Uri.EscapeDataString(item.DeviceName)}?{string.Join('&', query)}";
     }
 
-    /// <summary>Builds the <c>mmd://</c> URI for an MMD scene item — the manual camera placement only
+    /// <summary>Builds the <c>mmd://</c> URI for an MMD scene item - the manual camera placement only
     /// applies when no camera VMD is set (the source prefers the camera track).</summary>
     internal static string BuildMMDUri(MMDPlaylistItem item)
     {
@@ -105,9 +105,9 @@ internal static class HaPlayPlaybackHelpers
         });
     }
 
-    /// <summary>Builds the canonical <c>youtube://</c> URI for a prepared item — the provider maps it to the
+    /// <summary>Builds the canonical <c>youtube://</c> URI for a prepared item - the provider maps it to the
     /// locally cached asset (reliable mode: an unprepared selection fails the open, never starts a download).</summary>
-    /// <summary>The prepared cache asset behind a YouTube item, when it exists — a real local file, so
+    /// <summary>The prepared cache asset behind a YouTube item, when it exists - a real local file, so
     /// file-path consumers (the deck's scrubber waveform) can use it directly.</summary>
     internal static string? TryGetPreparedYouTubeAssetPath(YouTubePlaylistItem item)
     {
@@ -148,7 +148,7 @@ internal static class HaPlayPlaybackHelpers
             TryHardwareAcceleration: !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
             // Windows D3D11VA only: keep decoded frames on their D3D11 NV12 surfaces and let the GL output do the
             // GPU->CPU staging upload on its OWN render thread, instead of av_hwframe_transfer_data on the decode
-            // thread. That parallelizes decode and upload and is what holds file video at a stable 60 fps — the
+            // thread. That parallelizes decode and upload and is what holds file video at a stable 60 fps - the
             // decode-thread transfer otherwise jitters frame production so the player presents ~1/6 of frames late
             // (measured: retain ≈ 60 fps / 0 late vs transfer ≈ 50 fps / climbing late). Gated exactly like hardware
             // decode: NDI needs CPU-readable pixels (a D3D11 surface has none), and a faulted hw path forces software.

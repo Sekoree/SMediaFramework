@@ -9,7 +9,7 @@ using S.Media.NDI.Video;
 namespace S.Media.NDI;
 
 /// <summary>
-/// One NDI source on the network — owns a single <see cref="NDISender"/> plus
+/// One NDI source on the network - owns a single <see cref="NDISender"/> plus
 /// the <see cref="NDIRuntime"/> ref-count, and exposes child outputs for audio
 /// and video. Receivers see one combined source carrying both streams.
 /// </summary>
@@ -70,7 +70,7 @@ public sealed class NDIOutput : IDisposable
     public int GetReceiverConnectionCount(uint timeoutMs = 0) => _sender.GetConnectionCount(timeoutMs);
 
     /// <summary>
-    /// Video output — always available; format negotiated via
+    /// Video output - always available; format negotiated via
     /// <see cref="Core.Video.IVideoOutput.Configure"/>.
     /// </summary>
     public IVideoOutput Video
@@ -99,7 +99,7 @@ public sealed class NDIOutput : IDisposable
     /// Use with <paramref name="clockVideo"/>:false when you want MFPlayer to pace instead of NDI timestamps.
     /// </param>
     /// <param name="videoTimecodeMode">
-    /// How <see cref="NDIVideoSender"/> fills NDI video timecodes — use
+    /// How <see cref="NDIVideoSender"/> fills NDI video timecodes - use
     /// <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> for an explicit timeline aligned with
     /// <see cref="NDIAudioOutput"/> when muxing file A/V.
     /// </param>

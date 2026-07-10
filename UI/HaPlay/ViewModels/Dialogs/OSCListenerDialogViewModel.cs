@@ -7,7 +7,7 @@ namespace HaPlay.ViewModels.Dialogs;
 public sealed record OSCListenerEditValues(string Name, int LocalPort, bool IsEnabled);
 
 /// <summary>
-/// Add/edit dialog for an app-level OSC listener — an inbound UDP port that external OSC control sources
+/// Add/edit dialog for an app-level OSC listener - an inbound UDP port that external OSC control sources
 /// send to (device replies use the client socket and need no listener). Edits the name, local port, and
 /// enabled state; validation gates Save.
 /// </summary>

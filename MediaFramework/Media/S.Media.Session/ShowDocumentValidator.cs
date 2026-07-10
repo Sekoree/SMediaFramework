@@ -1,7 +1,7 @@
 namespace S.Media.Session;
 
 /// <summary>Thrown when a <see cref="ShowDocument"/> fails validation at load. The running show is left
-/// untouched — validation happens before any teardown (NXT-12), so a malformed document can never destroy
+/// untouched - validation happens before any teardown (NXT-12), so a malformed document can never destroy
 /// a live show or leave a half-built replacement.</summary>
 public sealed class ShowDocumentValidationException(IReadOnlyList<string> errors)
     : Exception("show document is invalid:" + Environment.NewLine + "  - " + string.Join(Environment.NewLine + "  - ", errors))
@@ -43,7 +43,7 @@ public static class ShowDocumentValidator
             if (string.IsNullOrEmpty(cue.Label))
                 errors.Add($"cue '{cue.Id}' has an empty label.");
             if (!cueNumbers.Add(cue.Number))
-                errors.Add($"duplicate cue number {cue.Number} — GO uses the number as its cursor, so it must be unique.");
+                errors.Add($"duplicate cue number {cue.Number} - GO uses the number as its cursor, so it must be unique.");
         }
 
         // Compositions: unique ids, positive dimensions and frame rate.
@@ -60,13 +60,13 @@ public static class ShowDocumentValidator
                 errors.Add($"composition '{comp.Id}' has a non-positive frame rate {comp.FrameRateNum}/{comp.FrameRateDen}.");
         }
 
-        // Clips: at most one per cue (the runtime keys clips by cue id — a duplicate throws at load), and every
+        // Clips: at most one per cue (the runtime keys clips by cue id - a duplicate throws at load), and every
         // clip must reference an existing cue and, if placed, an existing composition.
         var clipCues = new HashSet<string>(StringComparer.Ordinal);
         foreach (var clip in document.Clips ?? [])
         {
             if (!clipCues.Add(clip.CueId))
-                errors.Add($"more than one clip binds cue '{clip.CueId}' — a cue binds at most one clip.");
+                errors.Add($"more than one clip binds cue '{clip.CueId}' - a cue binds at most one clip.");
             if (!string.IsNullOrEmpty(clip.CueId) && !cueIds.Contains(clip.CueId))
                 errors.Add($"a clip binds unknown cue '{clip.CueId}'.");
             if (clip.CompositionId is { Length: > 0 } cid && !compIds.Contains(cid))
@@ -135,7 +135,7 @@ public static class ShowDocumentValidator
                     errors.Add($"cue '{cue.Id}' lists unknown stop-target cue '{target}'.");
 
         // Audio outputs: unique ids. Routes: an enabled route's SourceId is a cue id and its OutputId must be a
-        // declared audio output or the implicit master — a dangling route otherwise silently never matches at
+        // declared audio output or the implicit master - a dangling route otherwise silently never matches at
         // play time instead of being caught at load (NXT-25).
         var audioOutputIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var output in document.AudioOutputs ?? [])
@@ -215,7 +215,7 @@ public static class ShowDocumentValidator
     }
 
     /// <summary>Checks that follow-on links resolve, and that the <em>auto-continue</em> subgraph (the only one
-    /// that recurses in <see cref="CueGraph"/>) is acyclic — a cycle would auto-continue forever.</summary>
+    /// that recurses in <see cref="CueGraph"/>) is acyclic - a cycle would auto-continue forever.</summary>
     private static void ValidateFollowOn(IReadOnlyList<CueDefinition> cues, HashSet<string> cueIds, List<string> errors)
     {
         // Out-degree ≤ 1 functional graph over auto-continue follow-on edges.

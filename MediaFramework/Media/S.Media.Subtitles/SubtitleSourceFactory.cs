@@ -5,7 +5,7 @@ namespace S.Media.Subtitles;
 /// <summary>
 /// Builds an <see cref="IVideoOverlaySource"/> from a sidecar <strong>ASS/SSA</strong> file, rendered full-fidelity
 /// through libass (<see cref="AssSubtitleLayerSource"/>). Returns <c>null</c> for a missing file or a non-ASS
-/// extension — every other format (SRT/VTT/MicroDVD/SAMI/SubViewer/…) and in-container subtitle streams are decoded
+/// extension - every other format (SRT/VTT/MicroDVD/SAMI/SubViewer/…) and in-container subtitle streams are decoded
 /// to ASS events by FFmpeg first; that path lives in the host (which references the FFmpeg decoder), not here.
 /// </summary>
 /// <remarks>

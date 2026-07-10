@@ -139,7 +139,7 @@ public class MediaClockTests
         Assert.Throws<ArgumentOutOfRangeException>(() => clock.Seek(TimeSpan.FromSeconds(-1)));
     }
 
-    [TimingFact] // real-time timer rate — starves on an oversubscribed CI VM; opt-in via MFP_TIMING_TESTS=1
+    [TimingFact] // real-time timer rate - starves on an oversubscribed CI VM; opt-in via MFP_TIMING_TESTS=1
     public void AudioTick_FiresAtApproximateRate()
     {
         var interval = TimeSpan.FromMilliseconds(20);
@@ -153,7 +153,7 @@ public class MediaClockTests
         clock.Pause();
         sw.Stop();
 
-        // The tick count scales with the ACTUAL Start→Pause window, not the requested 300 ms — a loaded
+        // The tick count scales with the ACTUAL Start→Pause window, not the requested 300 ms - a loaded
         // CI runner sleeps well past 300 ms, so an absolute range is flaky. Derive the expected count from
         // the measured elapsed and allow generous slack for timer resolution + scheduling.
         var expected = sw.Elapsed.TotalMilliseconds / interval.TotalMilliseconds;
@@ -161,7 +161,7 @@ public class MediaClockTests
         Assert.InRange(observed, expected * 0.4, expected * 1.75 + 3);
     }
 
-    [TimingFact] // real-time timer rate — starves on an oversubscribed CI VM; opt-in via MFP_TIMING_TESTS=1
+    [TimingFact] // real-time timer rate - starves on an oversubscribed CI VM; opt-in via MFP_TIMING_TESTS=1
     public void VideoTick_FiresAtApproximateRate()
     {
         var interval = TimeSpan.FromMilliseconds(50);

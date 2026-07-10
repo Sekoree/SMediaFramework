@@ -5,7 +5,7 @@ using S.Media.NDI;
 using S.Media.Players;
 
 // Phase 5 NDI-output smoke. Decodes a file and fans its video to an NDIOutput (NDI send), then discovers
-// that sender on the network and receives the frames back (in-process loopback) — proving NDI out works
+// that sender on the network and receives the frames back (in-process loopback) - proving NDI out works
 // end-to-end through the same registry/router path used for any video output. Needs FFmpeg + libndi.
 
 if (args.Length < 1)
@@ -56,5 +56,5 @@ if (received < 10 || vf.Width <= 0)
     return 1;
 }
 
-Console.WriteLine("NDILoopbackSmoke OK — NDI out send → discover → receive round-trip verified.");
+Console.WriteLine("NDILoopbackSmoke OK - NDI out send → discover → receive round-trip verified.");
 return 0;

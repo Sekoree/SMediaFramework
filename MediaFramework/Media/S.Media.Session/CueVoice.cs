@@ -30,14 +30,14 @@ public sealed class CueVoice
     /// <summary>Playback position within the clip.</summary>
     public TimeSpan Position => _voice.Position;
 
-    /// <summary>True until the voice finishes — natural end, or after <see cref="Stop"/>'s release fade.</summary>
+    /// <summary>True until the voice finishes - natural end, or after <see cref="Stop"/>'s release fade.</summary>
     public bool IsActive => !_voice.IsExhausted;
 
     /// <summary>Begins a click-free release fade; the voice finishes after the fade and is reaped by the <see cref="Soundboard"/>.</summary>
     public void Stop() => _voice.Stop();
 
     /// <summary>
-    /// Sets this voice's route gain (click-free ramp). Returns false once the voice has been reaped — its
+    /// Sets this voice's route gain (click-free ramp). Returns false once the voice has been reaped - its
     /// route no longer exists.
     /// </summary>
     public bool SetGain(float gain)
@@ -56,7 +56,7 @@ public sealed class CueVoice
 
     /// <summary>
     /// Raised exactly once when the voice finishes (detected by <see cref="Soundboard.Reap"/> or the next
-    /// <see cref="Soundboard.Fire"/>). The handler runs on the reaping thread — keep it light.
+    /// <see cref="Soundboard.Fire"/>). The handler runs on the reaping thread - keep it light.
     /// </summary>
     public event Action<CueVoice>? Completed;
 

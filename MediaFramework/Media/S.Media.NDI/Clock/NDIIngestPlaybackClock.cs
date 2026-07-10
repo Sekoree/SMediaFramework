@@ -8,7 +8,7 @@ namespace S.Media.NDI.Clock;
 /// <summary>
 /// Public NDI ingest master: <see cref="IPlaybackClock"/> driven by receiver audio timecode / timestamp
 /// (100 ns units, same as <see cref="TimeSpan.Ticks"/>) plus wall-clock extrapolation between
-/// captures — analogous to <see cref="VideoPtsClock"/> but fed from ingest.
+/// captures - analogous to <see cref="VideoPtsClock"/> but fed from ingest.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -96,7 +96,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     }
 
     /// <summary>
-    /// Wall time since the last <see cref="AttachReceiver"/> — used for live playout PTS so video
+    /// Wall time since the last <see cref="AttachReceiver"/> - used for live playout PTS so video
     /// matches the audio ring (arrival order) and PortAudio, not the sender's NDI timecode.
     /// </summary>
     public TimeSpan SnapshotWallPresentationPosition()

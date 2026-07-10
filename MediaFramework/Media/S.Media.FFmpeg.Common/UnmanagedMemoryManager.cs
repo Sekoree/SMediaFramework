@@ -5,7 +5,7 @@ namespace S.Media.FFmpeg.Common;
 /// <summary>
 /// <see cref="MemoryManager{T}"/> that wraps an unmanaged pointer + length so it
 /// can be exposed as <see cref="ReadOnlyMemory{T}"/>. The pointed-to memory must
-/// outlive every <see cref="Memory"/> handle handed out — typically the producer
+/// outlive every <see cref="Memory"/> handle handed out - typically the producer
 /// keeps the underlying buffer alive (e.g. via a refcounted FFmpeg AVFrame) and
 /// frees it explicitly when consumers are done.
 /// </summary>

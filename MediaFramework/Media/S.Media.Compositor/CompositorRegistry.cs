@@ -5,7 +5,7 @@ namespace S.Media.Compositor;
 /// <summary>
 /// Compositor-owned registration extension (Doc 05): higher layers and native (<c>S.Abi</c>) plugins add
 /// custom GL layer-surface factories <em>by kind</em> without Core ever depending on the compositor. Built
-/// once at the composition root and injected — no process-wide mutable state (P2/D6).
+/// once at the composition root and injected - no process-wide mutable state (P2/D6).
 /// </summary>
 public interface ICompositorRegistryBuilder
 {
@@ -20,7 +20,7 @@ public interface ICompositorRegistryBuilder
     ICompositorRegistryBuilder AddLayerSurface(string kind, Func<string?, IVideoCompositorLayerSurface> factory);
 }
 
-/// <summary>Immutable resolved compositor capabilities — the layer-surface factories registered by kind.</summary>
+/// <summary>Immutable resolved compositor capabilities - the layer-surface factories registered by kind.</summary>
 public interface ICompositorRegistry
 {
     /// <summary>The registered layer-surface kinds.</summary>

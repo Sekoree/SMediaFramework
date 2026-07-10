@@ -5,7 +5,7 @@ using HaPlay.Models;
 
 namespace HaPlay.Views;
 
-/// <summary>Maps a playlist item to its kind icon (<see cref="AppIcons"/>) for the playlist row —
+/// <summary>Maps a playlist item to its kind icon (<see cref="AppIcons"/>) for the playlist row -
 /// replaces the per-kind emoji <c>KindGlyph</c> that rendered as tofu without a color-emoji font.</summary>
 public sealed class PlaylistItemIconConverter : IValueConverter
 {

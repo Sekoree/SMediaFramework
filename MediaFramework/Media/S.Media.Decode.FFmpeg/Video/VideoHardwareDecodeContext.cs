@@ -46,7 +46,7 @@ public sealed class VideoDecoderOpenOptions
     /// from DXGI NT shared handles only (omit non-owning libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers on the backing).
     /// GL import then uses <c>OpenSharedResource</c> on a host-owned D3D11 device (e.g. SDL <c>D3D11GlInteropDeviceHost</c> or
     /// <see cref="IVideoOutputD3D11GlBorrowSetup"/>). Incompatible with lazy true zero-host that binds the uploader solely from the first frame's
-    /// <c>LibavD3D11DeviceComPtr</c> — keep SDL's interop device or a pre-bound renderer device when this is enabled.
+    /// <c>LibavD3D11DeviceComPtr</c> - keep SDL's interop device or a pre-bound renderer device when this is enabled.
     /// </summary>
     /// <remarks>
     /// Same behavior when the environment variable <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> is <c>1</c> or <c>true</c> (with
@@ -55,14 +55,14 @@ public sealed class VideoDecoderOpenOptions
     public bool Win32Nv12SharedHandleOnlyExport { get; init; }
 
     /// <summary>
-    /// Maximum demuxed audio packets buffered ahead of the audio decoder. Default 192 — enough for
+    /// Maximum demuxed audio packets buffered ahead of the audio decoder. Default 192 - enough for
     /// well-behaved containers; raise for HEVC 4K with deep B-frame reorder buffers when the demux
     /// thread otherwise blocks waiting for the video queue to drain. <c>0</c> falls back to the default.
     /// </summary>
     public int AudioPacketQueueDepth { get; init; }
 
     /// <summary>
-    /// Maximum demuxed video packets buffered ahead of the video decoder. Default 384 — tight for
+    /// Maximum demuxed video packets buffered ahead of the video decoder. Default 384 - tight for
     /// some HEVC 4K streams with 16+ reference frames; raise if the demuxer pauses noticeably while
     /// the decoder works through a long GOP. <c>0</c> falls back to the default.
     /// </summary>
@@ -71,7 +71,7 @@ public sealed class VideoDecoderOpenOptions
     /// <summary>
     /// AVIO read buffer for local-file opens, in bytes. <c>0</c> uses FFmpeg's native file protocol (small
     /// ~32 KB reads). When &gt; 0, the file is opened through a custom AVIO with this buffer size so each
-    /// read pulls a large block — markedly better sustained throughput on high-per-IOP-latency media (USB /
+    /// read pulls a large block - markedly better sustained throughput on high-per-IOP-latency media (USB /
     /// external drives), where many small reads can't keep the demux fed. Suggested 1–4 MB. Ignored for
     /// stream/URI opens (those already supply their own I/O).
     /// </summary>
@@ -82,14 +82,14 @@ public sealed class VideoDecoderOpenOptions
     /// <c>null</c> = automatic election (<c>av_find_best_stream</c>, current behavior).
     /// <see cref="MediaStreamSelection.Disabled"/> disables audio entirely (no packets demuxed, no decoder
     /// opened). An explicit index that is out of range / not audio / not decodable logs a warning and falls
-    /// back to automatic election — a stale persisted track choice must not make a file unplayable.
+    /// back to automatic election - a stale persisted track choice must not make a file unplayable.
     /// </summary>
     public int? AudioStreamIndex { get; init; }
 
     /// <summary>
     /// Explicit video stream to decode, same semantics as <see cref="AudioStreamIndex"/>.
     /// <see cref="MediaStreamSelection.Disabled"/> makes a video file behave like an audio-only file (stub
-    /// video source) at zero video-decode cost — use for audio-only playback of video containers.
+    /// video source) at zero video-decode cost - use for audio-only playback of video containers.
     /// </summary>
     public int? VideoStreamIndex { get; init; }
 
@@ -134,7 +134,7 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
     /// Value for <c>AVCodecContext.extra_hw_frames</c> when decoded GPU surfaces are retained for zero-copy GL
     /// upload (RetainD3D11SharedHandleForGl / RetainDmabufForGl). Every retained frame pins one surface from the
     /// decoder's FIXED hardware pool, so the pool must hold the DPB <em>plus</em> the whole downstream pipeline at
-    /// once — VideoPlayer's jitter buffer (up to 16) + VideoOutputPump (3) + a couple in flight in the compositor.
+    /// once - VideoPlayer's jitter buffer (up to 16) + VideoOutputPump (3) + a couple in flight in the compositor.
     /// Without this head-room the pool drains after ~one queue's worth of frames and the next
     /// <c>avcodec_send_packet</c> fails with <c>AVERROR_INVALIDDATA</c>, faulting the decode loop. Must exceed the
     /// maximum number of frames held downstream simultaneously; raise it if the consumer queue grows.
@@ -359,7 +359,7 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
         return AVPixelFormat.AV_PIX_FMT_NONE;
     }
 
-    /// <summary>CPU copy of a hardware frame — <paramref name="hwFrame"/> stays valid for the caller.</summary>
+    /// <summary>CPU copy of a hardware frame - <paramref name="hwFrame"/> stays valid for the caller.</summary>
     public AVFrame* TransferToScratch(AVFrame* hwFrame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -370,14 +370,14 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
         // av_hwframe_transfer_data copies ONLY pixel data, not frame properties. Without this the scratch
         // frame's best_effort_timestamp / pts are AV_NOPTS_VALUE, so callers (ResolveVideoPts) silently fall
         // back to a frame-counter PTS. That counter is re-anchored to the seek target on every seek, which
-        // mislabels the post-seek keyframe as the target — leaving hardware-decoded video one GOP behind the
+        // mislabels the post-seek keyframe as the target - leaving hardware-decoded video one GOP behind the
         // (correctly timestamped) audio. Copy props so hw frames carry the same timestamps as software ones.
         var propRet = av_frame_copy_props(_swScratch, hwFrame);
         FFmpegException.ThrowIfError(propRet, nameof(av_frame_copy_props));
         return _swScratch;
     }
 
-    /// <summary>Clear hooks on <paramref name="codecCtx"/> — does not dispose this context (caller still owns).</summary>
+    /// <summary>Clear hooks on <paramref name="codecCtx"/> - does not dispose this context (caller still owns).</summary>
     public void DetachFromCodec(AVCodecContext* codecCtx)
     {
         codecCtx->get_format = null;

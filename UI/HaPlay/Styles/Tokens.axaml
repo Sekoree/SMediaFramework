@@ -42,7 +42,7 @@
 
       <!-- Operational-state roles (UX-05). Semantic names so a critical state is never communicated by a raw
            hex only; reserve these saturated colors for live operation. Single-variant to match the (light)
-           Classic chrome — they gain dark values if/when a real dark theme lands (UI-01). -->
+           Classic chrome - they gain dark values if/when a real dark theme lands (UI-01). -->
       <SolidColorBrush x:Key="StateSelected" Color="#333B82F6" />  <!-- selection highlight (translucent blue) -->
       <SolidColorBrush x:Key="StateLive"     Color="#2E9E4B" />    <!-- playing / active output -->
       <SolidColorBrush x:Key="StateHeld"     Color="#E67E22" />    <!-- latched HOLD (engaged safety state) -->
@@ -74,7 +74,7 @@
     <Setter Property="FontSize" Value="13" />
   </Style>
 
-  <!-- ===== Surfaces ===== (square corners — the Classic theme has no rounded chrome) -->
+  <!-- ===== Surfaces ===== (square corners - the Classic theme has no rounded chrome) -->
   <Style Selector="Border.Card">
     <Setter Property="BorderBrush" Value="{StaticResource BorderSubtle}" />
     <Setter Property="BorderThickness" Value="1" />
@@ -124,7 +124,7 @@
   <!-- Primary action accent (GO, Play) -->
   <!-- Accent buttons set Background for templates that honour it (Classic/Simple) AND the template
        ContentPresenter for templates that don't (Fluent paints its buttons from theme resources, ignoring
-       Button.Background) — so Go stays green / Danger stays red across all base themes. The presenter's
+       Button.Background) - so Go stays green / Danger stays red across all base themes. The presenter's
        TextElement.Foreground keeps the label + PathIcon white on the accent fill. -->
   <Style Selector="Button.Go">
     <Setter Property="Background" Value="{StaticResource AccentGo}" />
@@ -138,7 +138,7 @@
   <Style Selector="Button.Go:pointerover /template/ ContentPresenter">
     <Setter Property="Background" Value="{StaticResource AccentGoHover}" />
   </Style>
-  <!-- Panic-path action (Stop) — mirrors Button.Go in the stop/error hue. -->
+  <!-- Panic-path action (Stop) - mirrors Button.Go in the stop/error hue. -->
   <Style Selector="Button.Danger">
     <Setter Property="Background" Value="{StaticResource StatePanic}" />
     <Setter Property="Foreground" Value="White" />

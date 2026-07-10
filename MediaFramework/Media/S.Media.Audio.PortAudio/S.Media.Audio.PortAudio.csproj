@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Audio.PortAudio — IAudioBackend over PortAudio (PALib). The old FFmpeg/Playback couplings
+    <!-- S.Media.Audio.PortAudio - IAudioBackend over PortAudio (PALib). The old FFmpeg/Playback couplings
          are gone: resampling is supplied via the media registry, and the playback-host orchestration
          (MediaPlayerOpenBuilder / MediaContainerPlaybackBundle wiring) is deferred to Phase 4. -->
 

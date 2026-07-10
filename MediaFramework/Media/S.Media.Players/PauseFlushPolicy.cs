@@ -8,6 +8,6 @@ public enum PauseFlushPolicy
     /// <summary>Run the default flush hook (e.g. <c>MediaContainerDecoder.FlushCodecPipelines</c>).</summary>
     FlushCodecPipelines,
 
-    /// <summary>Skip flush — use when the decode thread may still be inside libav.</summary>
+    /// <summary>Skip flush - use when the decode thread may still be inside libav.</summary>
     SkipFlush,
 }

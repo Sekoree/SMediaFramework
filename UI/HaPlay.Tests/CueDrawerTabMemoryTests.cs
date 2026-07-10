@@ -9,7 +9,7 @@ namespace HaPlay.Tests;
 
 /// <summary>
 /// P4 close-out (plan §3.1): the property drawer never shows a hidden/stale tab after a cue
-/// switch, and remembers the last tab per cue type — the A→B→A scenario from the plan.
+/// switch, and remembers the last tab per cue type - the A→B→A scenario from the plan.
 /// </summary>
 public sealed class CueDrawerTabMemoryTests
 {

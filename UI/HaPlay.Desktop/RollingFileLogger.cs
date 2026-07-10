@@ -21,9 +21,9 @@ namespace HaPlay.Desktop;
 /// <remarks>
 /// Designed to never block the producer (LOG-01): <see cref="ILogger.Log{TState}"/> formats a
 /// length-bounded line and hands it to a <see cref="Channel.CreateBounded{T}(BoundedChannelOptions)"/>
-/// (single-reader, drop-oldest); a single background task drains and writes. Writes are batched — the
+/// (single-reader, drop-oldest); a single background task drains and writes. Writes are batched - the
 /// stream is flushed at most every <see cref="RollingFileLoggerOptions.FlushIntervalMs"/>, and
-/// immediately on a warning/error/critical line or shutdown — instead of once per line. Dropped lines
+/// immediately on a warning/error/critical line or shutdown - instead of once per line. Dropped lines
 /// (queue overflow) are counted and periodically surfaced into the log. File I/O failures fall back to
 /// <see cref="Console.Error"/> rather than throwing into framework hot paths.
 /// </remarks>
@@ -197,7 +197,7 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
                 catch { /* best effort */ }
             }
         }
-        catch { /* best effort — pruning is not critical */ }
+        catch { /* best effort - pruning is not critical */ }
     }
 
     public void Dispose()
@@ -232,7 +232,7 @@ public sealed class RollingFileLoggerOptions
     public LogLevel MinimumLevel { get; init; } = LogLevel.Information;
     /// <summary>Queue capacity before drop-oldest kicks in (LOG-01: lowered from 8192).</summary>
     public int QueueCapacity { get; init; } = 2048;
-    /// <summary>Number of historical log files to keep beyond the new one — older are deleted at startup.</summary>
+    /// <summary>Number of historical log files to keep beyond the new one - older are deleted at startup.</summary>
     public int RetainCount { get; init; } = 10;
     /// <summary>Maximum interval between disk flushes for buffered info/debug/trace lines (LOG-01: batching).
     /// Warning/error/critical lines and shutdown flush immediately regardless.</summary>

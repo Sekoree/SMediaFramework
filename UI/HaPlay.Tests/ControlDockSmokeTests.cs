@@ -20,9 +20,9 @@ namespace HaPlay.Tests;
 
 /// <summary>The Control workspace hosts its four panes in a Dock.Avalonia layout (ControlDockFactory), with a
 /// Dock theme wired into every base-theme bundle. These tests lay the real view out under each theme (catching
-/// missing-resource crashes — the docking chrome pulls in a fresh set of theme keys), and verify each pane
+/// missing-resource crashes - the docking chrome pulls in a fresh set of theme keys), and verify each pane
 /// resolves its OWN view when the active tab changes (Dock's recycling content presenter reused one view until
-/// the pane templates moved to app scope — see App.axaml).</summary>
+/// the pane templates moved to app scope - see App.axaml).</summary>
 public sealed class ControlDockSmokeTests
 {
     private static void RunUi(Action body) =>

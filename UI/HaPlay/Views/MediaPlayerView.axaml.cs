@@ -88,7 +88,7 @@ public partial class MediaPlayerView : UserControl
     private void OnPlaylistDrop(object? sender, DragEventArgs e)
     {
         _ = sender;
-        // Consume it even when nothing is added — otherwise the drop bubbles on to the
+        // Consume it even when nothing is added - otherwise the drop bubbles on to the
         // Players-workspace host and gets handled twice.
         e.Handled = true;
         if (DataContext is not MediaPlayerViewModel vm)
@@ -139,7 +139,7 @@ public partial class MediaPlayerView : UserControl
         }
     }
 
-    /// <summary>Removes the Set a per-tab control belongs to — the rename-mode X button and the right-click
+    /// <summary>Removes the Set a per-tab control belongs to - the rename-mode X button and the right-click
     /// "Remove" menu item both route here (the Set is the control's DataContext). Code-behind rather than a
     /// command binding because the context menu lives in a popup an ancestor binding can't cross.</summary>
     private void OnPlaylistTabRemoveClick(object? sender, RoutedEventArgs e)

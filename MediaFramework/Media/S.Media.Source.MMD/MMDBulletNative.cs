@@ -3,11 +3,11 @@ using System.Runtime.InteropServices;
 namespace S.Media.Source.MMD;
 
 /// <summary>
-/// Direct P/Invoke binding for <c>libmmd_bullet</c> — a compact C ABI over real Bullet 3.25 that
+/// Direct P/Invoke binding for <c>libmmd_bullet</c> - a compact C ABI over real Bullet 3.25 that
 /// reproduces MikuMikuDance's physics exactly as babylon-mmd's Bullet runtime does (see the native
 /// <c>MediaFramework/Native/mmd_bullet</c> shim). Handles are opaque <see cref="nint"/> world pointers;
 /// bodies/constraints are integer handles owned by the world. Transforms are 16-float column-major
-/// matrices — bit-identical to <see cref="System.Numerics.Matrix4x4"/>'s in-memory layout, so no
+/// matrices - bit-identical to <see cref="System.Numerics.Matrix4x4"/>'s in-memory layout, so no
 /// transpose is needed at the boundary. <see cref="MMDPhysics"/> is the managed surface; this is the raw ABI.
 /// </summary>
 internal static unsafe partial class MMDBulletNative
@@ -15,14 +15,14 @@ internal static unsafe partial class MMDBulletNative
     private const string Library = "mmd_bullet";
 
     /// <summary>ABI version this binding was generated against. MUST equal the shim's <c>MMD_ABI_VERSION</c>
-    /// (see <c>mmd_bullet.h</c>) — bumped together on any breaking change to the signatures below (MMD-03).</summary>
+    /// (see <c>mmd_bullet.h</c>) - bumped together on any breaking change to the signatures below (MMD-03).</summary>
     public const uint AbiVersion = 1;
 
     private static readonly Lazy<bool> LazyAvailable = new(ProbeAvailable);
 
     /// <summary>True when the native shim is present AND reports an ABI version matching this binding (MMD-03).
     /// Probed once and cached. A missing library, a pre-versioning shim (no <c>mmd_abi_version</c> export), a
-    /// wrong-architecture library, or a version mismatch all read as unavailable — callers then run without
+    /// wrong-architecture library, or a version mismatch all read as unavailable - callers then run without
     /// physics rather than mis-calling an incompatible ABI across the boundary (which could corrupt memory).</summary>
     public static bool IsAvailable => LazyAvailable.Value;
 

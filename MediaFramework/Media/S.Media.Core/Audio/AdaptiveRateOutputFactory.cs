@@ -9,7 +9,7 @@ namespace S.Media.Core.Audio;
 /// <param name="playbackPpmBias">The router-derived drift signal (parts-per-million, signed): negative ⇒ the
 /// output is slow, shed samples; positive ⇒ starved, add samples.</param>
 /// <param name="maxRateDeltaHz">Clamp for the rate correction around the device rate.</param>
-/// <param name="biasSource">Optional object disposed with the returned wrapper — e.g. the (Routing-side)
+/// <param name="biasSource">Optional object disposed with the returned wrapper - e.g. the (Routing-side)
 /// pump-pressure monitor backing <paramref name="playbackPpmBias"/>, so its subscription is released when the
 /// output is removed.</param>
 public delegate IAudioOutput AdaptiveRateOutputFactory(

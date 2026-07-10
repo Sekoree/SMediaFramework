@@ -13,7 +13,7 @@ public sealed class AudioRouterPumpLifecycleTests
     {
         // Lazy pump-thread start (P2-1): the drainer Thread is created idle at AddOutput time
         // and only .Start()ed when the router runs (avoids one OS thread per output for routers
-        // that never start — the suite-level thread-pressure / OOM source). If Start() forgets to
+        // that never start - the suite-level thread-pressure / OOM source). If Start() forgets to
         // EnsureStarted the registered pumps, committed chunks never reach the output. Guard it.
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var output = new RecordingOutput(Stereo);
@@ -50,7 +50,7 @@ public sealed class AudioRouterPumpLifecycleTests
     public void ClockedOutputAddedWhileRunning_DoesNotThrow_AndReceivesAudio()
     {
         // Regression: hot-wiring an audio device (PortAudio is IClockedOutput + IPlaybackClock) into a
-        // running router used to throw "cannot slave clock while router is running" — AutoWirePrimary
+        // running router used to throw "cannot slave clock while router is running" - AutoWirePrimary
         // tried to promote the first clocked output to pacing primary mid-stream. A running router must
         // instead keep the new clocked output as a non-primary slave (no mid-stream re-clock).
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
@@ -146,7 +146,7 @@ public sealed class AudioRouterPumpLifecycleTests
     {
         // Regression: Commit's pool-exhaustion eviction removed an already-enqueued chunk from _ready but did
         // not mark it "no longer in flight" (only counted the drop). So processed stayed permanently below
-        // enqueued and WaitForIdle — which Pause/Stop/Seek call to quiesce a pump — spun to its FULL timeout
+        // enqueued and WaitForIdle - which Pause/Stop/Seek call to quiesce a pump - spun to its FULL timeout
         // after ANY drop. The _audio_discard negotiation-lead sink hit this on every deck stop (~1s stall).
         // A blocked non-primary output floods the pump until it evicts; after release, Stop's per-pump
         // WaitForIdle must return at once (evictions counted as settled), not burn the ~1s timeout.

@@ -7,7 +7,7 @@ namespace S.Media.Core.Threading;
 /// Serial command loop for the public session API (D5 / OQ8). Callers <see cref="Post"/>
 /// (fire-and-forget) or <see cref="InvokeAsync(Action)"/> (awaitable) onto one owner context; queries
 /// elsewhere read immutable snapshots. There is deliberately <strong>no</strong> blocking
-/// <c>Invoke</c> — that is the deadlock OQ8 warns about — so a UI/plugin callback can only re-enter via
+/// <c>Invoke</c> - that is the deadlock OQ8 warns about - so a UI/plugin callback can only re-enter via
 /// <c>Post</c>/<c>InvokeAsync</c>, never by blocking the loop on itself. Lives in Core so every tier
 /// shares one dispatcher contract; <c>S.Media.Session</c>'s <c>ShowSession</c> owns one (Phase 4).
 /// </summary>
@@ -29,7 +29,7 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Queues <paramref name="action"/> to run on the loop. Returns <c>true</c> if enqueued; <c>false</c>
-    /// if the dispatcher is disposed (or disposing) so the work won't run — callers that await completion
+    /// if the dispatcher is disposed (or disposing) so the work won't run - callers that await completion
     /// must handle that (see <see cref="InvokeAsync(Action)"/>, which faults instead of hanging).
     /// </summary>
     public bool Post(Action action)

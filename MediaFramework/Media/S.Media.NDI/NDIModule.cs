@@ -5,7 +5,7 @@ using S.Media.Core.Video;
 namespace S.Media.NDI;
 
 /// <summary>
-/// Registers NDI receive capabilities into the media registry — the AOT-pure replacement for the old
+/// Registers NDI receive capabilities into the media registry - the AOT-pure replacement for the old
 /// static <c>.UseNDI()</c> hook (P2). Acquires one ref-counted NDI runtime scope and contributes a
 /// decoder provider for the <c>ndi:</c> scheme, so <c>ndi://&lt;source-name&gt;</c> opens as an
 /// <see cref="IVideoSource"/> / <see cref="IAudioSource"/>. The NDI <em>sender</em> path (egress as a
@@ -13,7 +13,7 @@ namespace S.Media.NDI;
 /// convergence work; this module is the receive + runtime half.
 /// </summary>
 /// <param name="audioMinBuffer">Overrides the receiver's audio jitter reserve (<see cref="NDISource"/> default
-/// 50 ms). Smaller brings the audio forward — lower latency, closer to the live video — at more underrun risk;
+/// 50 ms). Smaller brings the audio forward - lower latency, closer to the live video - at more underrun risk;
 /// <c>null</c> keeps the default. This is the lever for live A/V sync: shrink it so audio meets the low-latency
 /// video instead of holding video back.</param>
 public sealed class NDIModule(TimeSpan? audioMinBuffer = null) : IMediaModule
@@ -40,7 +40,7 @@ public sealed class NDIModule(TimeSpan? audioMinBuffer = null) : IMediaModule
 /// Opens <c>ndi:</c> URIs through the registry (D2/D3). <c>ndi://&lt;name&gt;</c> (name optionally
 /// URL-encoded) identifies an NDI sender on the network; the provider resolves it via
 /// <see cref="NDISource.Find"/> (<c>find_wait_for_sources</c>, OQ9) and connects a receiver. Claims the
-/// <c>ndi:</c> scheme exclusively — FFmpeg's provider defers it.
+/// <c>ndi:</c> scheme exclusively - FFmpeg's provider defers it.
 /// </summary>
 internal sealed class NDIDecoderProvider : IMediaDecoderProvider
 {
@@ -64,10 +64,10 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
                     descriptor.ReceiveAudio,
                     descriptor.ReceiveVideo,
                     descriptor.LowBandwidth ? NDILib.NDIRecvBandwidth.Lowest : NDILib.NDIRecvBandwidth.Highest),
-                // The audio jitter reserve — the dominant tunable latency between the audio and the live video.
+                // The audio jitter reserve - the dominant tunable latency between the audio and the live video.
                 AudioMinBufferedDuration = descriptor.AudioMinBufferedDuration ?? audioMinBuffer,
             });
-            // Warm up so the A/V formats are available before the open path reads them — the audio router needs
+            // Warm up so the A/V formats are available before the open path reads them - the audio router needs
             // the format up front (live NDI delivers no format until the first frame arrives). Best-effort: an
             // A/V sender is ready in ~ms; a video-only sender just won't satisfy the audio wait.
             source.WaitForStreams(TimeSpan.FromSeconds(3));

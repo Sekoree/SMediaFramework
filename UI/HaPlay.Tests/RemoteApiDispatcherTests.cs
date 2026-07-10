@@ -7,7 +7,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Remote API routing: 1-based addressing, verb dispatch, and failure codes — all without
+/// <summary>Remote API routing: 1-based addressing, verb dispatch, and failure codes - all without
 /// HTTP (the listener is a thin shell over <see cref="RemoteApiDispatcher.ExecuteAsync"/>).</summary>
 public sealed class RemoteApiDispatcherTests
 {

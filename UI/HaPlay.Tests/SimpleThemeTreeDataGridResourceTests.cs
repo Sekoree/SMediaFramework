@@ -14,15 +14,15 @@ namespace HaPlay.Tests;
 /// <summary>Regression for the Simple-theme Cue-player crash. The TreeDataGrid package ships only a *Fluent*
 /// theme, whose brushes resolve four Fluent-palette colours (SystemListLowColor / SystemBaseHighColor /
 /// SystemBaseMediumLowColor / SystemAccentColor) via <c>StaticResource</c>. FluentTheme defines them, SimpleTheme
-/// does not — so under Simple, building any of those brushes threw <see cref="KeyNotFoundException"/>
+/// does not - so under Simple, building any of those brushes threw <see cref="KeyNotFoundException"/>
 /// ("Static resource 'SystemListLowColor' not found") the instant the Cue list's <c>TreeDataGrid</c> was laid
-/// out (a StaticResource on a SolidColorBrush has no runtime fallback — it throws rather than defers).
+/// out (a StaticResource on a SolidColorBrush has no runtime fallback - it throws rather than defers).
 /// <see cref="Themes.SimpleThemeBundle"/> now supplies those colours at bundle scope; these tests pin it.
 /// <para>NB: the session <c>Dispatch</c> is awaited (<c>GetAwaiter().GetResult()</c>) so an exception on the UI
-/// thread — a crash, or a failed <c>Assert</c> — actually fails the test. Fire-and-forget dispatch swallows it.</para></summary>
+/// thread - a crash, or a failed <c>Assert</c> - actually fails the test. Fire-and-forget dispatch swallows it.</para></summary>
 public sealed class SimpleThemeTreeDataGridResourceTests
 {
-    // Awaited on purpose — see the class remarks. Without it, a KeyNotFoundException on the dispatched UI thread
+    // Awaited on purpose - see the class remarks. Without it, a KeyNotFoundException on the dispatched UI thread
     // lands on a discarded Task and the test passes regardless.
     private static void RunUi(Action body) =>
         HeadlessUnitTestSession
@@ -31,7 +31,7 @@ public sealed class SimpleThemeTreeDataGridResourceTests
             .GetAwaiter().GetResult();
 
     // Each TreeDataGrid brush that the Fluent TreeDataGrid theme derives from a Fluent-only System*Color; if a
-    // colour is missing, building the brush throws — so resolving the brush exercises the crash path end to end.
+    // colour is missing, building the brush throws - so resolving the brush exercises the crash path end to end.
     private static readonly (string Brush, string Color)[] BrushToColor =
     {
         ("TreeDataGridGridLinesBrush", "SystemListLowColor"),
@@ -64,7 +64,7 @@ public sealed class SimpleThemeTreeDataGridResourceTests
                     window.Show();
                     Dispatcher.UIThread.RunJobs();
                     grid.Measure(new Size(400, 300));
-                    grid.Arrange(new Rect(0, 0, 400, 300)); // template + brushes realised here — the crash point
+                    grid.Arrange(new Rect(0, 0, 400, 300)); // template + brushes realised here - the crash point
                 }
                 finally
                 {

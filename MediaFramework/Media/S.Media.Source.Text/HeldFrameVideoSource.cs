@@ -4,7 +4,7 @@ using S.Media.Decode.FFmpeg.Video;
 namespace S.Media.Source.Text;
 
 /// <summary>
-/// An <see cref="IVideoSource"/> that emits copies of a single static BGRA frame indefinitely — used to hold a
+/// An <see cref="IVideoSource"/> that emits copies of a single static BGRA frame indefinitely - used to hold a
 /// rendered text card for a cue's duration (the cue's clip window ends playback). Each read hands out a fresh
 /// owned copy; <see cref="SelectOutputFormat"/> converts the held BGRA template to the negotiated output format
 /// once (swscale) so the pipeline pulls it zero-conversion afterward.

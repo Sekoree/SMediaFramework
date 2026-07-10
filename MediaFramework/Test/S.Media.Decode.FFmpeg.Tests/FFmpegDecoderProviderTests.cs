@@ -53,7 +53,7 @@ public sealed class FFmpegDecoderProviderTests
     public async Task OpenAsync_CancellingABlockedNetworkOpen_AbortsViaInterruptCallback()
     {
         // NXT-02/03: a blocked open (a TCP connect that hangs) aborts when the token is cancelled, via the AVIO
-        // interrupt callback fed the open's token — instead of waiting out FFmpeg's full connect timeout.
+        // interrupt callback fed the open's token - instead of waiting out FFmpeg's full connect timeout.
         // Opt-in (network-dependent): set MFP_RUN_NETWORK_TESTS=1 to run.
         if (Environment.GetEnvironmentVariable("MFP_RUN_NETWORK_TESTS") != "1")
             return;
@@ -71,7 +71,7 @@ public sealed class FFmpegDecoderProviderTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => open);
         sw.Stop();
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8),
-            $"blocked open took {sw.Elapsed} — the interrupt callback didn't abort it");
+            $"blocked open took {sw.Elapsed} - the interrupt callback didn't abort it");
     }
 
     private static IMediaDecoderProvider CreateProvider()

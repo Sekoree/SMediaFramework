@@ -56,7 +56,7 @@ public class ControlShowBridgeTests
     }
 
     // The device-driving runtime (ControlSystemRuntimeSession/ControlScriptRuntimeSession) now also accepts the show
-    // actions, so a script triggered by a MIDI/OSC device — not just a directly-invoked one — can drive the show.
+    // actions, so a script triggered by a MIDI/OSC device - not just a directly-invoked one - can drive the show.
     [Fact]
     public async Task RuntimeSessionScript_DrivesShow_WhenShowActionsWired()
     {

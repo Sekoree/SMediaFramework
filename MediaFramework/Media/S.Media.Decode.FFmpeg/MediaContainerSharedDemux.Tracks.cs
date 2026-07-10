@@ -176,7 +176,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux
 
                 if (!_o._hasVideo)
                 {
-                    // No real video stream — just record the negotiated output format on the stub so the
+                    // No real video stream - just record the negotiated output format on the stub so the
                     // output's Configure(Format) call sees a coherent VideoFormat. The decode path is inert.
                     Format = Format with { PixelFormat = format };
                     _o._vOutPixFmt = format;

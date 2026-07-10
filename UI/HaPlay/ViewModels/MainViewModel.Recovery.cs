@@ -15,7 +15,7 @@ public partial class MainViewModel
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
     /// <summary>
     /// Startup crash-recovery check (called once the main window is up, from <c>MainWindow.OnOpened</c>). Offers
-    /// the most recent crashed session for restore, then ages out stale recovery folders. Best-effort — a
+    /// the most recent crashed session for restore, then ages out stale recovery folders. Best-effort - a
     /// recovery hiccup must never block the app from opening.
     /// </summary>
     public async Task CheckForRecoverableSessionAsync()
@@ -27,7 +27,7 @@ public partial class MainViewModel
             if (orphans.Count == 0)
                 return;
 
-            // Never pop a modal during the CI smoke self-exit — it would block the "first frame → shutdown" gate.
+            // Never pop a modal during the CI smoke self-exit - it would block the "first frame → shutdown" gate.
             if (Environment.GetEnvironmentVariable("HAPLAY_SMOKE") is "1" or "true")
                 return;
 
@@ -75,7 +75,7 @@ public partial class MainViewModel
 
     /// <summary>
     /// Loads a recovered snapshot into the live shell. <paramref name="intoOriginal"/> re-points it at the
-    /// crashed session's file (as unsaved changes — the operator then chooses Save to overwrite, or Save As);
+    /// crashed session's file (as unsaved changes - the operator then chooses Save to overwrite, or Save As);
     /// otherwise it lands as an untitled copy that leaves the original file untouched. For an untitled recovery
     /// the mirrored scratch scripts are re-materialized first so the control config's script references resolve.
     /// </summary>

@@ -40,7 +40,7 @@ public partial class MediaPlayerViewModel
             return;
         }
 
-        // Phase 1C — auto-route: if the user clicks Play with no outputs selected, pick a sensible
+        // Phase 1C - auto-route: if the user clicks Play with no outputs selected, pick a sensible
         // default (first compatible output) so playback isn't silent on first run.
         await TryAutoRouteAsync();
 
@@ -142,14 +142,14 @@ public partial class MediaPlayerViewModel
         // yet (Play with a playlist row), assume audio+video so we'll happily route to either.
         var preferVideo = true;
         var preferAudio = true;
-        // File items probe via the decoder; live items don't have a file path — fall back to
+        // File items probe via the decoder; live items don't have a file path - fall back to
         // "prefer both" so we still pick a compatible output.
         var path = (SelectedPlaylistItem as FilePlaylistItem)?.Path
                    ?? (_currentPlaylistItem as FilePlaylistItem)?.Path
                    ?? MediaFilePath;
         if (!string.IsNullOrEmpty(path) && File.Exists(path))
         {
-            // Best-effort probe — failures fall back to "pick anything compatible".
+            // Best-effort probe - failures fall back to "pick anything compatible".
             try
             {
                 var dec = await Task.Run(() => S.Media.Decode.FFmpeg.MediaContainerDecoder.Open(path))
@@ -161,7 +161,7 @@ public partial class MediaPlayerViewModel
                 }
                 finally { dec.Dispose(); }
             }
-            catch { /* unreadable file — caller will surface the open error */ }
+            catch { /* unreadable file - caller will surface the open error */ }
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -169,7 +169,7 @@ public partial class MediaPlayerViewModel
             var picked = PickAutoRoute(preferVideo, preferAudio);
             if (picked is null) return;
             picked.IsSelected = true;
-            StatusMessage = $"Auto-routed to {picked.Line.KindLabel} — {picked.Line.Definition.DisplayName}. " +
+            StatusMessage = $"Auto-routed to {picked.Line.KindLabel} - {picked.Line.Definition.DisplayName}. " +
                             "Change in Routing below.";
         });
     }
@@ -310,7 +310,7 @@ public partial class MediaPlayerViewModel
 
     private bool CanTransport() => !_isTransportBusy && ShowSessionActive;
 
-    /// <summary>Phase C.5 — Stop is enabled while playing OR while a live item is in the waiting-for-source
+    /// <summary>Phase C.5 - Stop is enabled while playing OR while a live item is in the waiting-for-source
     /// state. Without the second clause, Stop can't cancel the retry loop on a manual-name NDI item whose
     /// source never came online.</summary>
     private bool CanStop() => !_isTransportBusy && (IsWaitingForSource || ShowSessionActive);
@@ -347,7 +347,7 @@ public partial class MediaPlayerViewModel
                 {
                     if (_pendingSeekValue is not { } pending)
                     {
-                        _seekArcRunning = false; // atomic with the emptiness check — no lost wakeup
+                        _seekArcRunning = false; // atomic with the emptiness check - no lost wakeup
                         return;
                     }
                     target = pending;
@@ -372,16 +372,16 @@ public partial class MediaPlayerViewModel
 
     private bool CanSeek() => ShowSessionActive && IsMediaLoaded && Duration > TimeSpan.Zero;
 
-    /// <summary>Phase C — Keyboard `,` jog backward 5 s. Routes through <see cref="SeekToSliderAsync"/>
+    /// <summary>Phase C - Keyboard `,` jog backward 5 s. Routes through <see cref="SeekToSliderAsync"/>
     /// so the bounded-CT teardown timing matches a normal drag-end commit.</summary>
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private Task JogBackAsync() => JogByAsync(TimeSpan.FromSeconds(-5));
 
-    /// <summary>Phase C — Keyboard `.` jog forward 5 s.</summary>
+    /// <summary>Phase C - Keyboard `.` jog forward 5 s.</summary>
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private Task JogForwardAsync() => JogByAsync(TimeSpan.FromSeconds(5));
 
-    /// <summary>Keyboard Home — jump to the start of the track.</summary>
+    /// <summary>Keyboard Home - jump to the start of the track.</summary>
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private Task SeekToStartAsync()
     {
@@ -454,11 +454,11 @@ public partial class MediaPlayerViewModel
 
     private const double KeyboardVolumeStepDb = 1.0;
 
-    /// <summary>Keyboard `+` — nudge master volume up, clamped to the volume slider's range.</summary>
+    /// <summary>Keyboard `+` - nudge master volume up, clamped to the volume slider's range.</summary>
     [RelayCommand]
     private void VolumeUp() => MasterVolumeDb = Math.Clamp(MasterVolumeDb + KeyboardVolumeStepDb, -60.0, 12.0);
 
-    /// <summary>Keyboard `-` — nudge master volume down.</summary>
+    /// <summary>Keyboard `-` - nudge master volume down.</summary>
     [RelayCommand]
     private void VolumeDown() => MasterVolumeDb = Math.Clamp(MasterVolumeDb - KeyboardVolumeStepDb, -60.0, 12.0);
 
@@ -529,7 +529,7 @@ public partial class MediaPlayerViewModel
     /// <summary>Peeks the item natural-end auto-advance will pick next, *without* consuming shuffle-bag
     /// state, so the warm-decoder pre-open targets the real next track in shuffle mode too. Returns null
     /// when the next track isn't decided yet (the shuffle bag is built lazily on the first advance, and
-    /// an exhausted repeat-all bag reshuffles an unpredictable order) — those fall back to the linear
+    /// an exhausted repeat-all bag reshuffles an unpredictable order) - those fall back to the linear
     /// neighbours warmed alongside.</summary>
     private PlaylistItem? PeekAutoAdvanceNext(IList<PlaylistItem> items)
     {
@@ -542,14 +542,14 @@ public partial class MediaPlayerViewModel
         if (shuffle && items.Count > 1)
         {
             if (!ShuffleBagMatches(items))
-                return null; // bag not built for this list yet — nothing reliable to warm
+                return null; // bag not built for this list yet - nothing reliable to warm
             for (var i = _shuffleBagIndex; i < _shuffleBag.Count; i++)
             {
                 var candidate = _shuffleBag[i];
                 if (items.Contains(candidate) && !ReferenceEquals(candidate, _currentPlaylistItem))
                     return candidate;
             }
-            return null; // end of bag — repeat-all reshuffles at advance time
+            return null; // end of bag - repeat-all reshuffles at advance time
         }
 
         var idx = items.IndexOf(_currentPlaylistItem);
@@ -629,7 +629,7 @@ public partial class MediaPlayerViewModel
     {
         // Loaded media normally owns the outputs: the engine path holds its own LogoFallback wrappers and the
         // ShowSession deck covers its composition with the hold top-layer. The EXCEPTION is ShowSession
-        // audio-only playback — it acquires no video lines, so the idle slate stays responsible for showing
+        // audio-only playback - it acquires no video lines, so the idle slate stays responsible for showing
         // the hold image on them (legacy parity: audio track + logo on the video outputs).
         if (IsMediaLoaded && !(ShowSessionActive && _playerAcquiredLines.Count == 0))
         {

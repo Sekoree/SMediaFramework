@@ -7,14 +7,14 @@
        FluentTheme's own values (e.g. the OS SystemAccentColor) under Fluent. Scoping to the non-Fluent bundles
        means these are simply absent when Fluent is active.
 
-       Consumers (all resolve these keys when their control is realised — a StaticResource ref throws hard if
+       Consumers (all resolve these keys when their control is realised - a StaticResource ref throws hard if
        the key is missing, which is what crashed the app):
          • TreeDataGrid Fluent theme (both non-Fluent bundles bundle it): SystemListLowColor, SystemBaseHighColor,
-           SystemBaseMediumLowColor, SystemAccentColor.  [StaticResource — hard]
+           SystemBaseMediumLowColor, SystemAccentColor.  [StaticResource - hard]
          • AvaloniaEdit Fluent theme (app-wide, used by the script editor's TextEditor):
-             ControlContentThemeFontSize            → SearchPanelFontSize        [StaticResource — hard]
-             ToolTip{Background,Foreground,BorderBrush,BorderThemeThickness} → CompletionToolTip*  [StaticResource — hard]
-             SystemChromeMediumColor, SystemBaseLowColor, SystemAccentColor → search panel / selection [DynamicResource — soft]
+             ControlContentThemeFontSize            → SearchPanelFontSize        [StaticResource - hard]
+             ToolTip{Background,Foreground,BorderBrush,BorderThemeThickness} → CompletionToolTip*  [StaticResource - hard]
+             SystemChromeMediumColor, SystemBaseLowColor, SystemAccentColor → search panel / selection [DynamicResource - soft]
        Values mirror Fluent's BaseColorsPalette / BaseResources / FluentControlResources (Default = light, Dark). -->
   <ResourceDictionary.ThemeDictionaries>
     <ResourceDictionary x:Key="Default">

@@ -4,7 +4,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Covers <c>MediaPlayerViewModel.ResolveDeckCanvasSize</c> — the composition-canvas size the deck uses
+/// <summary>Covers <c>MediaPlayerViewModel.ResolveDeckCanvasSize</c> - the composition-canvas size the deck uses
 /// on the ShowSession path. It composites at the largest driven output resolution (best quality, one downscale
 /// per line) instead of a fixed 1080p, falling back to 1080p when no output advertises a locked resolution.</summary>
 public sealed class MediaPlayerDeckCanvasSizeTests
@@ -50,7 +50,7 @@ public sealed class MediaPlayerDeckCanvasSizeTests
     public void AsSource_MatchesTheSourceRasterAndRate_NotTheOutput()
     {
         // A 9:16 vertical clip on a 16:9 output: the canvas is the SOURCE raster (so the OUTPUT letterboxes it),
-        // NOT the 1920x1080 output (which would crop it to cover — the reported bug).
+        // NOT the 1920x1080 output (which would crop it to cover - the reported bug).
         var canvas = MediaPlayerViewModel.ResolveDeckCanvas(
             PlayerOutputPreset.AsSource, 0, 0,
             sourceWidth: 1080, sourceHeight: 1920, sourceFpsNum: 60, sourceFpsDen: 1,
@@ -72,7 +72,7 @@ public sealed class MediaPlayerDeckCanvasSizeTests
     [Fact]
     public void FixedPreset_SizesToThePresetRaster_IgnoringSourceAndOutput()
     {
-        // A 720p60 preset pins the canvas to 1280x720@60 regardless of the (4K) source and (1080p) output — the
+        // A 720p60 preset pins the canvas to 1280x720@60 regardless of the (4K) source and (1080p) output - the
         // source is then letterboxed into it by the clip placement.
         var canvas = MediaPlayerViewModel.ResolveDeckCanvas(
             PlayerOutputPreset.Preset720p60, 0, 0,

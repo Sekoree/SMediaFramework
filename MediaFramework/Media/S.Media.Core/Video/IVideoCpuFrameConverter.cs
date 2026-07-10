@@ -20,7 +20,7 @@ public interface IVideoCpuFrameConverter : IDisposable
 }
 
 // Phase 1: the old `VideoCpuFrameConverterRegistry` (a process-wide hook over MediaFrameworkPlugins) is
-// removed — CPU converters are now resolved through `IMediaRegistry` (see Registry/). The interface above
+// removed - CPU converters are now resolved through `IMediaRegistry` (see Registry/). The interface above
 // and the pure-managed `VideoFrameCpuClone` below stay in Core.
 
 /// <summary>
@@ -33,7 +33,7 @@ public static class VideoFrameCpuClone
     /// <summary>
     /// Duplicates the CPU plane bytes of <paramref name="source"/> into pooled buffers and returns
     /// a new <see cref="VideoFrame"/> that owns them. Throws for hardware backings (DRM dma-buf /
-    /// Win32 D3D11 shared NV12) — those need a converter or a refcounted shared reference instead.
+    /// Win32 D3D11 shared NV12) - those need a converter or a refcounted shared reference instead.
     /// </summary>
     public static VideoFrame DuplicateCpuBacking(VideoFrame source, VideoTransferHint hint)
     {

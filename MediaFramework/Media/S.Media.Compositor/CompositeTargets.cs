@@ -5,7 +5,7 @@ public readonly record struct CompositeViewport(int X, int Y, int Width, int Hei
 
 /// <summary>
 /// Where one <c>CompositeMulti</c> output goes (Doc 04 §4). The compositor composites the layers once into
-/// its retained canvas, runs each output's warp pass, then routes the warped result to its target — three
+/// its retained canvas, runs each output's warp pass, then routes the warped result to its target - three
 /// domains: same-context GL (zero-copy), CPU readback, or an exported external image (zero-copy across an
 /// API/context boundary). One of <see cref="GlCompositeTarget"/> / <see cref="CpuFrameCompositeTarget"/> /
 /// <see cref="ExternalImageCompositeTarget"/>.
@@ -27,7 +27,7 @@ public sealed class GlCompositeTarget : ICompositeOutputTarget
 
 /// <summary>
 /// CPU readback: one readback into a <see cref="VideoFrame"/> handed to <see cref="OnFrameReady"/>. The path
-/// for NDI (its SDK send is CPU <c>p_data</c> — OQ3), file dump, CPU encoders, and the fallback when no
+/// for NDI (its SDK send is CPU <c>p_data</c> - OQ3), file dump, CPU encoders, and the fallback when no
 /// external-image type fits. The callback owns the frame and must dispose it.
 /// </summary>
 public sealed class CpuFrameCompositeTarget : ICompositeOutputTarget
@@ -39,7 +39,7 @@ public sealed class CpuFrameCompositeTarget : ICompositeOutputTarget
 /// Zero-copy across a context/API boundary (Avalonia's render context, a D3D11/Vulkan consumer, a cross-API
 /// plugin): export the warped result as an external image (dmabuf fd on Linux / D3D11 DXGI shared handle on
 /// Windows) plus a negotiated sync primitive (OQ2). The consumer imports it. Same handle currency as the D8
-/// plugin frame ABI (D7). NDI is <strong>not</strong> an external-image target (OQ3) — use the CPU target.
+/// plugin frame ABI (D7). NDI is <strong>not</strong> an external-image target (OQ3) - use the CPU target.
 /// </summary>
 public sealed class ExternalImageCompositeTarget : ICompositeOutputTarget
 {
@@ -55,7 +55,7 @@ public sealed class ExternalImageCompositeTarget : ICompositeOutputTarget
 /// <summary>The negotiated cross-boundary synchronization primitive for an exported image (OQ2).</summary>
 public enum ExternalImageSyncKind
 {
-    /// <summary>No explicit sync — the producer finished (e.g. a glFinish/fence already waited).</summary>
+    /// <summary>No explicit sync - the producer finished (e.g. a glFinish/fence already waited).</summary>
     None = 0,
     /// <summary>A GL/EGL/Vulkan sync-fd fence the consumer waits on before reading (Linux).</summary>
     SyncFdFence = 1,

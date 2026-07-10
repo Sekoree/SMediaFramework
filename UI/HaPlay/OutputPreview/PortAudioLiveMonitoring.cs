@@ -5,7 +5,7 @@ namespace HaPlay.OutputPreview;
 /// <summary>PortAudio stream sizing for live monitoring (low end-to-end latency).</summary>
 internal static class PortAudioLiveMonitoring
 {
-    /// <summary>~250 ms ring at 48 kHz — enough for live jitter without the old 1 s path.</summary>
+    /// <summary>~250 ms ring at 48 kHz - enough for live jitter without the old 1 s path.</summary>
     public static int RingCapacityFrames(int sampleRate) =>
         Math.Clamp(sampleRate / 4, 4096, 16384);
 

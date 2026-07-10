@@ -10,7 +10,7 @@ public enum RenumberScope
     SelectionOnly,
 }
 
-/// <summary>VM for the "Renumber…" dialog. Operators rarely live without a numbering scheme —
+/// <summary>VM for the "Renumber…" dialog. Operators rarely live without a numbering scheme -
 /// this lets them apply one in bulk: pick a start, a step, and what to renumber. Selection-only
 /// mode is essential after drag-reorder.</summary>
 public sealed partial class RenumberSelectionDialogViewModel : ViewModelBase

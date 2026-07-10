@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- SubtitleDecodeSmoke — proves the unified subtitle path: FFmpeg decodes ANY text format (sidecar or
+    <!-- SubtitleDecodeSmoke - proves the unified subtitle path: FFmpeg decodes ANY text format (sidecar or
          in-container) into ASS events → libass; bitmap subs (PGS/DVB/VobSub) → images → composited directly. -->
 
     <PropertyGroup>

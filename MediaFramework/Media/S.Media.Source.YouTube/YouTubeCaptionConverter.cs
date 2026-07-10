@@ -7,7 +7,7 @@ namespace S.Media.Source.YouTube;
 /// <summary>
 /// Converts YouTube's rich <c>json3</c> timedtext format to an ASS/SSA document so the full styling and
 /// positioning survive into libass. YoutubeExplode only exposes captions as flat SRT (plain text + timing),
-/// which drops colours, bold/italic/underline, edge/outline and — most visibly — the per-cue window
+/// which drops colours, bold/italic/underline, edge/outline and - most visibly - the per-cue window
 /// positioning YouTube subtitles use. json3 carries all of it: a <c>pens</c> table (colour, alpha, b/i/u,
 /// edge), a <c>wpWinPositions</c> table (anchor point + horizontal/vertical percentage), and events whose
 /// segments reference those tables. This maps them to ASS override tags (<c>\pos</c>/<c>\an</c>, <c>\c</c>,
@@ -126,7 +126,7 @@ public static class YouTubeCaptionConverter
                 ? p.GetInt32()
                 : eventPen;
             // Every segment carries a COMPLETE style override (not just its deltas) so styling never bleeds
-            // from an earlier segment — and \pos/\an above are untouched by these style-only tags.
+            // from an earlier segment - and \pos/\an above are untouched by these style-only tags.
             sb.Append('{').Append(PenOverride(pens, penId)).Append('}').Append(text);
             hasText = true;
         }
@@ -205,7 +205,7 @@ public static class YouTubeCaptionConverter
             {
                 case '\n': sb.Append("\\N"); break;
                 case '\r': break;
-                case '{': sb.Append('('); break; // braces delimit ASS override blocks — neutralise stray ones
+                case '{': sb.Append('('); break; // braces delimit ASS override blocks - neutralise stray ones
                 case '}': sb.Append(')'); break;
                 default: sb.Append(ch); break;
             }

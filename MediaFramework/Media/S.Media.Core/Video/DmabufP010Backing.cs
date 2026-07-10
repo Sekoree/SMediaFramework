@@ -4,7 +4,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Owns POSIX file descriptors plus layout metadata for decoded P010 in Linux
-/// DRM PRIME / dma-buf form. Callers import via EGL; do not pin CPU <see cref="VideoFrame.Planes"/> — they are stubs.
+/// DRM PRIME / dma-buf form. Callers import via EGL; do not pin CPU <see cref="VideoFrame.Planes"/> - they are stubs.
 /// </summary>
 public sealed class DmabufP010Backing : VideoFrameHardwareBacking
 {

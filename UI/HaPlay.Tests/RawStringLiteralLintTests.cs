@@ -7,15 +7,15 @@ namespace HaPlay.Tests;
 /// <summary>
 /// UX-07: user-facing UI text must go through the <c>Strings</c> resource system, not be hardcoded in AXAML. This
 /// lint scans the Views for raw literal <c>Text</c>/<c>Content</c>/<c>Header</c>/<c>Title</c>/<c>ToolTip.Tip</c>/
-/// <c>Watermark</c> values that look like words — exempting bindings, <c>x:Static</c>, glyph entities, and single
-/// symbols — and fails if the count exceeds the tracked baseline. So no NEW hardcoded string is added, and the
+/// <c>Watermark</c> values that look like words - exempting bindings, <c>x:Static</c>, glyph entities, and single
+/// symbols - and fails if the count exceeds the tracked baseline. So no NEW hardcoded string is added, and the
 /// existing debt is migrated down over time (lower <see cref="Baseline"/> as strings move to Strings.resx; the
 /// test prints the new floor when it drops). See <c>MIDIDevicesView</c> for the migration pattern.
 /// </summary>
 public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
 {
-    // Tracked debt of hardcoded user-facing literals across ALL Views (scanned recursively — top-level views,
-    // Dialogs/, and the ControlPanes/ dock panes). RATCHET ONLY DOWNWARD — never raise this to accommodate a
+    // Tracked debt of hardcoded user-facing literals across ALL Views (scanned recursively - top-level views,
+    // Dialogs/, and the ControlPanes/ dock panes). RATCHET ONLY DOWNWARD - never raise this to accommodate a
     // new literal. (Jumped from 166 to 264 when the scan went recursive: the previous top-level-only glob was
     // blind to Dialogs/ and to the ControlPanes/ views the Control workspace tabs were extracted into.)
     private const int Baseline = 264;
@@ -45,7 +45,7 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
             string.Join("\n  ", offenders.TakeLast(15)));
 
         if (offenders.Count < Baseline)
-            output.WriteLine($"NOTE: strings were migrated — lower the Baseline constant to {offenders.Count}.");
+            output.WriteLine($"NOTE: strings were migrated - lower the Baseline constant to {offenders.Count}.");
     }
 
     private static bool IsUserFacing(string value)

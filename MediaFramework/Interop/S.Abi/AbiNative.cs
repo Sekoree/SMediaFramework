@@ -4,7 +4,7 @@ namespace S.Abi;
 
 // Managed mirrors of the C ABI in include/mfp_plugin.h. Layout-critical: [StructLayout(Sequential)] + the exact
 // C field order/types so a struct read/written across the boundary matches byte-for-byte on x64. Plugin->host
-// callbacks are `delegate* unmanaged` to [UnmanagedCallersOnly] methods (AOT-safe — no reflection).
+// callbacks are `delegate* unmanaged` to [UnmanagedCallersOnly] methods (AOT-safe - no reflection).
 
 internal enum MfpStatus
 {
@@ -155,7 +155,7 @@ internal struct MfpGlTextureFrame
     public ulong ContextId;
 }
 
-// Tagged union — the kind-specific payload of MfpVideoFrame. Explicit overlay; its size = the largest member
+// Tagged union - the kind-specific payload of MfpVideoFrame. Explicit overlay; its size = the largest member
 // (MfpDmaBufFrame), so the managed struct's total size equals the C sizeof and a plugin can't write past it.
 [StructLayout(LayoutKind.Explicit)]
 internal unsafe struct MfpFramePayload

@@ -24,7 +24,7 @@ public sealed class ShowSessionTests
         await using var session = new ShowSession(MediaRegistry.Build(_ => { }));
 
         // A command that itself marshals onto the session thread must run inline (the dispatcher is busy
-        // running us) rather than enqueue-and-await — otherwise it self-deadlocks.
+        // running us) rather than enqueue-and-await - otherwise it self-deadlocks.
         var result = await session.InvokeAsync(async () =>
             await session.InvokeAsync(() => Task.FromResult(7)));
 
@@ -157,7 +157,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task Snapshot_LockFree_ReflectsFireAndStop_WithoutMarshaling()
     {
-        // NXT-16: the synchronous Snapshot() reads a volatile published view, not the dispatcher — it reflects
+        // NXT-16: the synchronous Snapshot() reads a volatile published view, not the dispatcher - it reflects
         // the fired group and then the stop, so a UI position poll never has to queue behind a long command.
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         Assert.Empty(session.Snapshot()); // nothing loaded yet
@@ -278,7 +278,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task Go_SkipsDisabledCue_AndFiresNextEnabled()
     {
-        // NXT-07: GO fires the next ARMED+ENABLED cue — a disabled cue is stepped over, never "fired" as a no-op.
+        // NXT-07: GO fires the next ARMED+ENABLED cue - a disabled cue is stepped over, never "fired" as a no-op.
         var doc = new ShowDocument(1,
             [new CueDefinition("a", 1, "A"),
              new CueDefinition("b", 2, "B", Enabled: false),
@@ -318,7 +318,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task Stop_PreemptsLongPreWait_InsteadOfQueuingBehindIt()
     {
-        // NXT-03: a cue with a long pre-wait must not park the serial dispatcher — STOP cancels the in-flight
+        // NXT-03: a cue with a long pre-wait must not park the serial dispatcher - STOP cancels the in-flight
         // fire and returns promptly instead of queuing behind the (here 30s) pre-wait.
         var doc = new ShowDocument(1,
             [new CueDefinition("slow", 1, "Slow", PreWait: TimeSpan.FromSeconds(30))],
@@ -341,7 +341,7 @@ public sealed class ShowSessionTests
     public async Task Stop_PreemptsABlockedColdOpen_InsteadOfWaitingForIt()
     {
         // NXT-03: a STOP cancels an in-flight COLD clip open (here a provider that blocks until cancelled), so
-        // STOP returns bounded instead of waiting for the open — the cue token now threads to the media open.
+        // STOP returns bounded instead of waiting for the open - the cue token now threads to the media open.
         await using var session = new ShowSession(BlockingOpenProvider.Registry());
         await session.LoadDocumentAsync(new ShowDocument(1,
             [new CueDefinition("c", 1, "C")],
@@ -363,7 +363,7 @@ public sealed class ShowSessionTests
     public async Task Fire_RunsOffDispatcher_SoASlowOpenDoesNotParkOtherCommands()
     {
         // NXT-03 off-dispatcher: a fire's media open runs OFF the serial dispatcher, so a dispatcher-marshaled
-        // command (here a seek) is NOT queued behind a slow/blocked open — the loop stays responsive.
+        // command (here a seek) is NOT queued behind a slow/blocked open - the loop stays responsive.
         await using var session = new ShowSession(BlockingOpenProvider.Registry());
         await session.LoadDocumentAsync(new ShowDocument(1,
             [new CueDefinition("c", 1, "C")],
@@ -461,7 +461,7 @@ public sealed class ShowSessionTests
 
         var fired = Assert.Single(await session.SnapshotAsync()).TimelineGeneration;
 
-        await Task.Delay(60); // plain progress — no discontinuity
+        await Task.Delay(60); // plain progress - no discontinuity
         Assert.Equal(fired, Assert.Single(await session.SnapshotAsync()).TimelineGeneration);
 
         await session.SeekAsync(TimeSpan.FromMilliseconds(200));
@@ -547,7 +547,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task LoadDocument_TheCAbiSmokesEmptyShowJson_OnABackendlessSession_Loads()
     {
-        // The EXACT call the outbound C-ABI smoke makes (SmpSmoke EMPTY_SHOW + audioBackend: null) — this
+        // The EXACT call the outbound C-ABI smoke makes (SmpSmoke EMPTY_SHOW + audioBackend: null) - this
         // regressed on CI with an NRE while the smoke step had been unreachable for a while; pin it here so
         // the managed suite catches it before the C client does.
         const string emptyShow =
@@ -565,7 +565,7 @@ public sealed class ShowSessionTests
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         session.LoadDocument(TwoAudioCues());
 
-        await session.SetPausedAsync(true); // nothing fired yet — must not throw
+        await session.SetPausedAsync(true); // nothing fired yet - must not throw
 
         Assert.All(await session.SnapshotAsync(), s => Assert.False(s.IsRunning));
     }
@@ -589,7 +589,7 @@ public sealed class ShowSessionTests
         await session.WarmUpcomingAsync();
         Assert.Contains("cue1", await session.GetPreparedCueIdsAsync());
 
-        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync()); // arms cue1 — takes it out of standby
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync()); // arms cue1 - takes it out of standby
 
         Assert.DoesNotContain("cue1", await session.GetPreparedCueIdsAsync());
     }
@@ -660,7 +660,7 @@ public sealed class ShowSessionTests
     public async Task ApplyActiveAudioRoutesAsync_ReAppliesRoutesToTheActiveClip()
     {
         // NXT-06 live audio-route edit: a cue with per-clip audio routes attaches clip{i} outputs at fire; the
-        // live edit re-applies each route to its clip{i} in place (via AddRoute's legacy id — NOT ApplyMatrix,
+        // live edit re-applies each route to its clip{i} in place (via AddRoute's legacy id - NOT ApplyMatrix,
         // which would double it). Asserts the active-clip lookup + apply path; the audible result is HW-verified.
         var backend = new RecordingAudioBackend();
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
@@ -682,7 +682,7 @@ public sealed class ShowSessionTests
         Assert.True(await session.ApplyActiveAudioRoutesAsync("cue1", updated)); // found + re-applied
         Assert.False(await session.ApplyActiveAudioRoutesAsync("nope", updated)); // not the active clip
 
-        // A count change (an extra route vs the one live clip output) is not mis-patched live — it still returns
+        // A count change (an extra route vs the one live clip output) is not mis-patched live - it still returns
         // true (deferred to the next fire) rather than throwing or writing to the wrong output.
         var twoRoutes = new[]
         {
@@ -697,7 +697,7 @@ public sealed class ShowSessionTests
     {
         // The audio-output factory seam: a host can supply a BORROWED sink for a route's device (an NDI sender's
         // audio side that must share the carrier emitting the composition's video). The session must WIRE it but
-        // never dispose it — only run its Release hook on teardown — mirroring the video-lease ownership contract.
+        // never dispose it - only run its Release hook on teardown - mirroring the video-lease ownership contract.
         var borrowed = new TrackingAudioOutput(new AudioFormat(48_000, 2));
         var released = 0;
         await using var session = new ShowSession(
@@ -739,7 +739,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task RebuildActiveClipAudioOutputs_AddsAndRemovesDeviceOutputsLive_IncludingToZero()
     {
-        // Deck hot output add/remove: rebuild the active clip's audio outputs from a fresh route set — unlike the
+        // Deck hot output add/remove: rebuild the active clip's audio outputs from a fresh route set - unlike the
         // in-place ApplyActiveAudioRoutesAsync, this handles a COUNT change (a line routed/unrouted), down to ZERO
         // device outputs (the clip keeps running on its discard sink). Proven via the per-device pump snapshot.
         var backend = new RecordingAudioBackend();
@@ -765,19 +765,19 @@ public sealed class ShowSessionTests
         var devices = session.GetActiveAudioPumpStatsByDevice();
         Assert.True(devices.ContainsKey("hw:0") && devices.ContainsKey("hw:1"), "both fire-time devices routed");
 
-        // Unroute hw:1 (count drops 2→1) — the in-place path would defer this; the rebuild applies it.
+        // Unroute hw:1 (count drops 2→1) - the in-place path would defer this; the rebuild applies it.
         Assert.True(await session.RebuildActiveClipAudioOutputsAsync("cue1",
             [new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [0, 1], Gain: 1f)]));
         devices = session.GetActiveAudioPumpStatsByDevice();
         Assert.True(devices.ContainsKey("hw:0"));
         Assert.False(devices.ContainsKey("hw:1"), "the unrouted device is gone");
 
-        // Unroute the LAST device (→ zero) — the clip must not fault; it runs on its discard sink.
+        // Unroute the LAST device (→ zero) - the clip must not fault; it runs on its discard sink.
         Assert.True(await session.RebuildActiveClipAudioOutputsAsync("cue1", []));
         Assert.Empty(session.GetActiveAudioPumpStatsByDevice());
         Assert.True(Assert.Single(session.Snapshot()).IsActive, "the clip stays active with zero device outputs");
 
-        // Re-route a different device (→ one) — re-attaches live.
+        // Re-route a different device (→ one) - re-attaches live.
         Assert.True(await session.RebuildActiveClipAudioOutputsAsync("cue1",
             [new ShowClipAudioRoute(DeviceId: "hw:2", ChannelMatrix: [0, 1], Gain: 1f)]));
         Assert.True(session.GetActiveAudioPumpStatsByDevice().ContainsKey("hw:2"));
@@ -845,7 +845,7 @@ public sealed class ShowSessionTests
 
         await session.StopVoiceAsync("v1");
         Assert.False(await session.IsVoicePlayingAsync("v1"));
-        Assert.True(await session.IsVoicePlayingAsync("v2")); // polyphonic — stopping one leaves the others
+        Assert.True(await session.IsVoicePlayingAsync("v2")); // polyphonic - stopping one leaves the others
 
         await session.StopAllVoicesAsync();
         Assert.False(await session.IsVoicePlayingAsync("v2"));
@@ -1043,7 +1043,7 @@ public sealed class ShowSessionTests
 
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
 
-        Assert.Equal(2, backend.OutputCount); // the two clip routes — NOT the (null-device) group outputs
+        Assert.Equal(2, backend.OutputCount); // the two clip routes - NOT the (null-device) group outputs
         Assert.Contains(("hw:0", 2), backend.Created.Select(c => (c.DeviceId, c.Channels)));
         Assert.Contains(("hw:1", 4), backend.Created.Select(c => (c.DeviceId, c.Channels))); // 2→4 remap
         Assert.All(backend.Created, created => Assert.Equal(48_000, created.SampleRate));
@@ -1139,7 +1139,7 @@ public sealed class ShowSessionTests
     {
         // A cue may place its ONE decoded source onto several compositions at once (PiP, or mirrored to a second
         // canvas). Each placement gets its own composition layer fed by the same clip, and each distinct
-        // composition is clock-mastered to the group — so BOTH canvases master, not just the primary.
+        // composition is clock-mastered to the group - so BOTH canvases master, not just the primary.
         var doc = new ShowDocument(
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
@@ -1229,7 +1229,7 @@ public sealed class ShowSessionTests
     public async Task MultiPlacement_LivePlacementEdit_TargetsTheAddressedLayer()
     {
         // With a clip fanned onto two canvases, a live placement edit must resolve the specific (composition, layer)
-        // it addresses — and REJECT a key that matches no layer rather than silently moving the wrong one.
+        // it addresses - and REJECT a key that matches no layer rather than silently moving the wrong one.
         var doc = new ShowDocument(
             Version: 1,
             Cues: [new CueDefinition("c", 1, "C")],
@@ -1338,7 +1338,7 @@ public sealed class ShowSessionTests
             ],
             Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
-            // 30s of fake video: the STOP must always win the fade claim — with the default 1s clip a slow
+            // 30s of fake video: the STOP must always win the fade claim - with the default 1s clip a slow
             // CI runner could reach the natural fade-out window first, and the stop then returns without
             // ramping (the documented lost-claim path; flaked on the Windows runner).
             FakeVideoDecoderProvider.Registry(frameCount: 900),
@@ -1450,7 +1450,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task NaturalEnd_Freeze_HoldsClipInsteadOfReleasing()
     {
-        // NXT-07/14: ClipEndBehavior.FreezeLastFrame pauses on the last frame — the clip stays ATTACHED (held),
+        // NXT-07/14: ClipEndBehavior.FreezeLastFrame pauses on the last frame - the clip stays ATTACHED (held),
         // unlike a plain Stop which releases it. Observable: IsRunning goes false but the player is still attached
         // (ClipDuration > 0), whereas a released clip reports a zero duration.
         var (doc, output) = EndBehaviorShow(ClipEndBehavior.FreezeLastFrame);
@@ -1505,7 +1505,7 @@ public sealed class ShowSessionTests
     {
         // The 2026-07-03 "loop/repeat stuck at the beginning" report, distilled: the synthetic audio
         // source EXHAUSTS after ~40 ms while its metadata claims 10 s (the VBR-overshoot shape), so the
-        // position never reaches the out-point — natural end must come from the stall detection. That
+        // position never reaches the out-point - natural end must come from the stall detection. That
         // requires MediaPlayer.IsRunning to go FALSE at router natural-EOF and Position to clamp to the
         // duration; before the fix the EOF flush rewound the clock epoch, the transport read
         // "running at 0:00" forever, and every EOF consumer (deck loop/auto-advance, this event) hung.
@@ -1543,7 +1543,7 @@ public sealed class ShowSessionTests
     public async Task SetAllPausedAsync_PausesAndResumesEveryActiveGroup()
     {
         // NXT-04/06: pause parity with StopAllAsync. The single-group SetPausedAsync only touches one group, so a
-        // multi-group cue show would keep the others running on pause — SetAllPausedAsync freezes them together.
+        // multi-group cue show would keep the others running on pause - SetAllPausedAsync freezes them together.
         // A LONG-lived fake: this test observes running state across several pause/resume waits, and natural
         // EOF legitimately flips the player to not-running on slow shared runners.
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
@@ -1555,7 +1555,7 @@ public sealed class ShowSessionTests
         static bool Running(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).IsRunning;
 
         // IsRunning is driven by the per-group transport, which can lag a just-awaited pause/resume by a
-        // scheduler tick on a loaded runner — poll the snapshot until it settles (times out → still asserts).
+        // scheduler tick on a loaded runner - poll the snapshot until it settles (times out → still asserts).
         async Task<IReadOnlyList<TransportSnapshot>> SettledSnapshot(Func<IReadOnlyList<TransportSnapshot>, bool> until)
         {
             // Poll WITH a yield: SnapshotAsync can complete synchronously, so a tight await-loop would hot-spin
@@ -1574,7 +1574,7 @@ public sealed class ShowSessionTests
         Assert.True(Running(fired, "A"));
         Assert.True(Running(fired, "B"));
 
-        // Single-group pause hits only its group — the other keeps running (the gap SetAllPausedAsync closes).
+        // Single-group pause hits only its group - the other keeps running (the gap SetAllPausedAsync closes).
         await session.SetPausedAsync(true, "A");
         var afterOne = await SettledSnapshot(s => !Running(s, "A") && Running(s, "B"));
         Assert.False(Running(afterOne, "A"));
@@ -1597,7 +1597,7 @@ public sealed class ShowSessionTests
     public async Task FireCuesAsync_FiresEveryCueInTheGroup_Together()
     {
         // NXT-04/06: the fire-time start barrier fires a simultaneous cue group together (opens overlap), so both
-        // cues end up active — vs a sequential loop that starts them staggered. Both groups run after one call.
+        // cues end up active - vs a sequential loop that starts them staggered. Both groups run after one call.
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
         await session.LoadDocumentAsync(TwoGroupAudioCues());
 
@@ -1625,7 +1625,7 @@ public sealed class ShowSessionTests
     [Fact]
     public async Task SeekManyAsync_SeeksEachTargetedGroup_BehindOneBarrier()
     {
-        // NXT-04: the group-seek barrier seeks several groups together. Both groups must land at their target — a
+        // NXT-04: the group-seek barrier seeks several groups together. Both groups must land at their target - a
         // sequential loop that dropped the second group would leave it near the head.
         var outA = new PixelRecordingVideoOutput();
         var outB = new PixelRecordingVideoOutput();
@@ -1675,7 +1675,7 @@ public sealed class ShowSessionTests
     {
         // NXT-06 text cue: a held (text/still) source never signals EOF, so EndAtDuration ends the clip at its
         // reported duration via the time-based monitor. This is what keeps a resize/live-edit re-read from ending
-        // it early — the clip stops on the clock, not on how many frames got read.
+        // it early - the clip stops on the clock, not on how many frames got read.
         var output = new PixelRecordingVideoOutput();
         var doc = new ShowDocument(
             Version: 1,
@@ -1719,7 +1719,7 @@ public sealed class ShowSessionTests
     public async Task NotifyNaturalEnd_BarePlainStopClip_ReleasesAndRaisesClipNaturallyEnded()
     {
         // A bare plain-Stop file cue (no trim/fade/loop) previously started NO end monitor, so at EOF it just
-        // idled — cue auto-follow never fired. NotifyNaturalEnd opts the clip into the monitor: at the
+        // idled - cue auto-follow never fired. NotifyNaturalEnd opts the clip into the monitor: at the
         // duration out-point it is released and ClipNaturallyEnded is raised for the host's auto-follow.
         var output = new PixelRecordingVideoOutput();
         var doc = new ShowDocument(
@@ -1772,7 +1772,7 @@ public sealed class ShowSessionTests
             ],
             Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
         await using var session = new ShowSession(
-            UnboundedHeldProvider.Registry(TimeSpan.FromSeconds(30)), // long — stays up for the assertion
+            UnboundedHeldProvider.Registry(TimeSpan.FromSeconds(30)), // long - stays up for the assertion
             videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
             compositorFactory: fmt => new ClipCompositionCompositor(
                 new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
@@ -1816,7 +1816,7 @@ public sealed class ShowSessionTests
         }
     }
 
-    /// <summary>An output that records how many times it was disposed — to prove the borrow contract.</summary>
+    /// <summary>An output that records how many times it was disposed - to prove the borrow contract.</summary>
     private sealed class DisposeCountingVideoOutput : IVideoOutput, IDisposable
     {
         private VideoFormat _format;
@@ -1838,7 +1838,7 @@ public sealed class ShowSessionTests
     public async Task BorrowedVideoOutput_NotDisposed_OnReloadOrDispose()
     {
         // NXT-01: a host-borrowed output (DisposeOutputOnRuntimeDispose=false) must survive document reload AND
-        // session disposal — the host owns its lifetime. Disposing it would tear down the SDL/NDI window the host
+        // session disposal - the host owns its lifetime. Disposing it would tear down the SDL/NDI window the host
         // reuses across plays (a concrete use-after-reload defect before this fix).
         var borrowed = new DisposeCountingVideoOutput();
         var session = new ShowSession(

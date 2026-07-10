@@ -1,4 +1,4 @@
-// Phase 3 FormatSwitchProbe — proves mid-stream video format-change reconfig through the VideoRouter.
+// Phase 3 FormatSwitchProbe - proves mid-stream video format-change reconfig through the VideoRouter.
 // Submits synthetic BGRA frames at one resolution, switches resolution mid-stream, and verifies the
 // downstream IVideoOutput re-Configures to the new format (the idempotent reconfigure path). No decoder.
 using S.Media.Core.Video;
@@ -10,7 +10,7 @@ var outId = router.AddOutput(sink, synchronous: true);
 var input = router.AddInput(outId);
 
 Submit(input.Output, 320, 240, count: 3, startFrame: 0);   // format A
-Submit(input.Output, 640, 480, count: 3, startFrame: 3);   // format B — mid-stream switch
+Submit(input.Output, 640, 480, count: 3, startFrame: 3);   // format B - mid-stream switch
 
 router.Dispose();
 
@@ -24,7 +24,7 @@ if (!sawA || !sawB || sink.Frames < 6)
     return 1;
 }
 
-Console.WriteLine("FormatSwitchProbe OK — VideoRouter reconfigured the output mid-stream on a resolution change.");
+Console.WriteLine("FormatSwitchProbe OK - VideoRouter reconfigured the output mid-stream on a resolution change.");
 return 0;
 
 static void Submit(IVideoOutput input, int w, int h, int count, int startFrame)

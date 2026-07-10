@@ -33,18 +33,18 @@ public sealed class MediaContainerDecoder : IDisposable
         _ownedTempPath = ownedTempPath;
     }
 
-    /// <summary>Audio side — <see cref="ISeekableSource"/> for coordinated seeks. For video-only
+    /// <summary>Audio side - <see cref="ISeekableSource"/> for coordinated seeks. For video-only
     /// files <see cref="HasAudio"/> is <c>false</c> and this source reports <c>IsExhausted = true</c>
     /// immediately; consumers should check <see cref="HasAudio"/> before wiring an audio path.</summary>
     public IAudioSource Audio => _shared.Audio;
 
-    /// <summary>Video side — <see cref="ISeekableSource"/>.</summary>
+    /// <summary>Video side - <see cref="ISeekableSource"/>.</summary>
     public IVideoSource Video => _shared.Video;
 
-    /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
+    /// <summary>True when the container exposed a decodable audio stream - false for video-only files.</summary>
     public bool HasAudio => _shared.HasAudio;
 
-    /// <summary>True when the container exposed a decodable video stream — false for audio-only files
+    /// <summary>True when the container exposed a decodable video stream - false for audio-only files
     /// (e.g. an MP3 without cover art). <see cref="Video"/> stays non-null but its source reports
     /// <c>IsExhausted = true</c> immediately, so the negotiated video pipeline runs but never produces frames.</summary>
     public bool HasVideo => _shared.HasVideo;

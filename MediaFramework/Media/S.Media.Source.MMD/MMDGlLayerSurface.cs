@@ -13,11 +13,11 @@ namespace S.Media.Source.MMD;
 /// <para>Threading: everything GL runs on the compositor thread (<see cref="ConfigureGl"/>/<see cref="Render"/>
 /// per the <see cref="IVideoCompositorLayerSurface"/> contract). The surface owns a PRIVATE
 /// <see cref="MMDAnimator"/> over the same documents as its source, so the source's own (CPU-fallback)
-/// animator is never shared across threads — poses are pure functions of time, so both stay identical.</para>
+/// animator is never shared across threads - poses are pure functions of time, so both stay identical.</para>
 ///
 /// <para>GL resource lifetime: <see cref="Dispose"/> can be called off the GL thread (the session releases
 /// clips on its dispatcher), so it only marks the surface dead; the GL objects live until the composition
-/// retires its compositor (context teardown frees them) — bounded by the composition's lifetime.</para>
+/// retires its compositor (context teardown frees them) - bounded by the composition's lifetime.</para>
 /// </summary>
 internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
 {
@@ -156,7 +156,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
                 RenderbufferTarget.Renderbuffer, _msaaDepthRbo);
             if (gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete)
-                _msaaFbo = 0; // MSAA unsupported here — fall back to the aliased path silently
+                _msaaFbo = 0; // MSAA unsupported here - fall back to the aliased path silently
         }
 
         // Directional self-shadow map. A tiny color renderbuffer keeps the FBO portable across core
@@ -226,7 +226,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         _blitVao = gl.GenVertexArray();
 
         // 1×1 white/black fallbacks + per-material diffuse/sphere/toon textures. The sphere (.spa Add)
-        // and toon ramps ARE the visible detail on many materials — YYB eyes are almost entirely their
+        // and toon ramps ARE the visible detail on many materials - YYB eyes are almost entirely their
         // additive sphere maps (operator report: "the eyes have no textures").
         _whiteTex = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, _whiteTex);
@@ -310,10 +310,10 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         var path = ResolveTexturePath(_modelDirectory, relative);
         if (path is null)
         {
-            // A missing texture degrades that material to white — loud in the log, because a model whose
+            // A missing texture degrades that material to white - loud in the log, because a model whose
             // textures ALL miss (a wrong folder, or case mismatches) renders "black and white".
             S.Media.Core.Diagnostics.MediaDiagnostics.LogWarning(
-                "MMD: texture '{0}' not found under '{1}' — material renders untextured", relative, _modelDirectory);
+                "MMD: texture '{0}' not found under '{1}' - material renders untextured", relative, _modelDirectory);
             return fallback;
         }
 
@@ -335,13 +335,13 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         catch (Exception ex)
         {
             S.Media.Core.Diagnostics.MediaDiagnostics.LogWarning(
-                "MMD: texture '{0}' failed to decode ({1}) — material renders untextured", path, ex.Message);
-            return fallback; // undecodable texture — the material still draws with its diffuse color
+                "MMD: texture '{0}' failed to decode ({1}) - material renders untextured", path, ex.Message);
+            return fallback; // undecodable texture - the material still draws with its diffuse color
         }
     }
 
     /// <summary>Resolves a model-relative texture path, falling back to a CASE-INSENSITIVE per-segment
-    /// walk when the exact path misses — MMD models are authored on Windows, where `tex\Body.PNG` happily
+    /// walk when the exact path misses - MMD models are authored on Windows, where `tex\Body.PNG` happily
     /// matches `tex/body.png`; on Linux it doesn't, and every miss used to silently render white.</summary>
     internal static string? ResolveTexturePath(string root, string relative)
     {
@@ -373,7 +373,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             return;
 
         // Pose at the transport's source time. With a BAKE the pose is a pure function of time
-        // (seek-exact, cadence-immune — the pre-rendered physics the reference MMD videos have);
+        // (seek-exact, cadence-immune - the pre-rendered physics the reference MMD videos have);
         // otherwise the stateful live solver advances by the wall delta and resets on seeks/jumps.
         if (_animator is not null)
         {
@@ -505,8 +505,8 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         gl.BlendFuncSeparate(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha,
             BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
 
-        // Pass 1 — main shading in material order (MMD's transparency convention).
-        // (MFP_MMD_GL_NOBLEND=1 disables blending — a render-debug knob.)
+        // Pass 1 - main shading in material order (MMD's transparency convention).
+        // (MFP_MMD_GL_NOBLEND=1 disables blending - a render-debug knob.)
         if (Environment.GetEnvironmentVariable("MFP_MMD_GL_NOBLEND") == "1")
             gl.Disable(EnableCap.Blend);
         gl.UseProgram(_mainProgram);
@@ -530,8 +530,8 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         gl.CullFace(TriangleFace.Back);
         // PMX winding is authored for MMD's left-handed space; the per-vertex Z-flip mirrors the
         // geometry and reverses winding, so the model's FRONT faces arrive CLOCKWISE in GL. Nearly
-        // every YYB material is double-sided (masking this), but single-sided meshes — the classic
-        // inset iris/eye-highlight shells — vanish under the default CCW convention (the "eyes have
+        // every YYB material is double-sided (masking this), but single-sided meshes - the classic
+        // inset iris/eye-highlight shells - vanish under the default CCW convention (the "eyes have
         // no texture" report).
         gl.FrontFace(FrontFaceDirection.CW);
         // MFP_MMD_GL_ONLYMAT=<index>: draw a single material (render-debug isolation).
@@ -605,11 +605,11 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         gl.ActiveTexture(TextureUnit.Texture0);
         gl.FrontFace(FrontFaceDirection.Ccw); // edge pass + host compositor expect the GL default
 
-        // Pass 2 — MMD inverted-hull edges, AFTER the body so the shell can never occlude it: vertices
+        // Pass 2 - MMD inverted-hull edges, AFTER the body so the shell can never occlude it: vertices
         // expanded along normals, and only the AWAY-facing hull kept. The scene's Z-flip inverts winding,
         // so away-facing here means culling GL-BACK faces (culling FRONT kept the camera-facing shell and
-        // painted it OVER the model — the 2026-07-03 "see-through, wrong colors" report).
-        // (MFP_MMD_GL_NOEDGE=1 skips the pass — a render-debug knob.)
+        // painted it OVER the model - the 2026-07-03 "see-through, wrong colors" report).
+        // (MFP_MMD_GL_NOEDGE=1 skips the pass - a render-debug knob.)
         if (visible && Environment.GetEnvironmentVariable("MFP_MMD_GL_NOEDGE") != "1")
         {
             gl.UseProgram(_edgeProgram);
@@ -774,7 +774,7 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
         _physics?.Dispose(); // ...but the native Bullet world is ours to free
     }
 
-    // MMD is left-handed (+Z away); the shaders flip Z into GL's right-handed clip space — the same
+    // MMD is left-handed (+Z away); the shaders flip Z into GL's right-handed clip space - the same
     // conversion the software rasterizer applies. Visible faces then wind CCW (GL default front).
     private const string MainVs = """
         #version 330 core
@@ -865,8 +865,8 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             vec3 light = normalize(uLightDirection);
             vec3 normal = normalize(vNormal);
             float ndl = dot(normal, -light);
-            // Lighting term (babylon-mmd's diffuseBase): the toon ramp — whose V axis encodes
-            // lit(0) → shadow(1) — or a procedural two-tone fallback, then self-shadow × light colour.
+            // Lighting term (babylon-mmd's diffuseBase): the toon ramp - whose V axis encodes
+            // lit(0) → shadow(1) - or a procedural two-tone fallback, then self-shadow × light colour.
             // BOTH the surface colour and the sphere reflection are modulated by this (see below).
             vec3 diffuseBase;
             if (uHasToon == 1)
@@ -878,14 +878,14 @@ internal sealed class MMDGlLayerSurface : IVideoCompositorLayerSurface
             diffuseBase *= sampleShadow() * uLightColor;
             // MMD/babylon-mmd composite: AMBIENT is added to the shaded diffuse and clamped, THEN modulates
             // the texture (finalDiffuse = clamp(diffuseBase*diffuse + ambient) * baseColor). The ambient is
-            // NOT itself shaded — so high-ambient materials (the EYES) stay bright. The old model folded
+            // NOT itself shaded - so high-ambient materials (the EYES) stay bright. The old model folded
             // ambient into the shaded product (tex * clamp(diffuse*0.8 + ambient*0.6) * diffuseBase), which
             // darkened the eyes below the MMD editor.
             vec3 color = clamp(diffuseBase * uDiffuse.rgb + uAmbient, 0.0, 1.0) * tex.rgb;
             // Sphere map (matcap): view-space normal xy → texture coords. Multiply (.sph) darkens/tints,
             // Add (.spa) is the highlight/iris detail layer. babylon-mmd modulates the reflection by the
             // lighting term before blending (sphereReflectionColor.rgb *= diffuseBase) so an additive eye
-            // matcap is LIT and integrates with the shade — without it the .spa layer blasted a
+            // matcap is LIT and integrates with the shade - without it the .spa layer blasted a
             // full-bright, unlit "bullseye" over the iris (the wrong-looking eyes).
             vec2 sphereUv = normalize(vNormalView).xy * 0.5 + 0.5;
             // babylon-mmd samples the matcap un-flipped (viewSpaceNormal.xy*0.5+0.5), but it loads

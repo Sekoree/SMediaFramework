@@ -14,7 +14,7 @@ public static class PortAudioLibraryResolver
     /// <summary>
     /// Installs an assembly-local DllImport resolver that probes the known PortAudio library names
     /// and optionally configures the resolver's internal logger.
-    /// Safe to call multiple times — the resolver is only registered once, but the logger is
+    /// Safe to call multiple times - the resolver is only registered once, but the logger is
     /// updated on every call that supplies a non-null <paramref name="loggerFactory"/>.
     /// </summary>
     /// <remarks>
@@ -26,7 +26,7 @@ public static class PortAudioLibraryResolver
     {
         lock (Gate)
         {
-            // Always upgrade the logger when a factory is supplied — even if already installed.
+            // Always upgrade the logger when a factory is supplied - even if already installed.
             if (loggerFactory != null)
                 _logger = loggerFactory.CreateLogger("PALib.Runtime");
 

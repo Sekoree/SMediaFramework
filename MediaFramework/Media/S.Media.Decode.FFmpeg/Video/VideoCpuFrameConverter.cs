@@ -103,7 +103,7 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
             throw new ArgumentException("unexpected source plane layout", nameof(source));
 
         // Pin arbitrary ReadOnlyMemory (managed arrays, pooled blocks, or unmanaged libav planes).
-        // Pass-through FFmpeg frames use UnmanagedMemoryManager — GCHandle on arrays would fail.
+        // Pass-through FFmpeg frames use UnmanagedMemoryManager - GCHandle on arrays would fail.
         var srcPins = new MemoryHandle[nSrc];
         var srcLines = new byte*[8];
         var srcStride = new int[8];

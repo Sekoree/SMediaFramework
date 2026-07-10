@@ -33,7 +33,7 @@ public partial class App : Application
         timing?.SetOutcome("xaml-loaded");
     }
 
-    // Maps the Control workspace dock panes to their views — see ControlDockPaneTemplates for why they're
+    // Maps the Control workspace dock panes to their views - see ControlDockPaneTemplates for why they're
     // registered in code rather than App.axaml.
     private void RegisterDockPaneTemplates()
     {
@@ -55,7 +55,7 @@ public partial class App : Application
                 DataContext = mainVm
             };
             // At shutdown, tear down the ShowSession cue re-back first, then dispose the media host so the
-            // modules' native runtime holds are released deterministically (NXT-05 — sessions that borrow the
+            // modules' native runtime holds are released deterministically (NXT-05 - sessions that borrow the
             // registry must go first; the host is the last thing out). Teardown belongs on Exit: doing it during
             // ShutdownRequested can dispose recovery/media state before MainWindow.Closing has a chance to cancel
             // shutdown for unsaved work. Forced Shutdown() still raises Exit.
@@ -106,14 +106,14 @@ public partial class App : Application
 
         var exited = 0;
         desktop.MainWindow!.Opened += (_, _) =>
-            // RequestAnimationFrame fires after a compositor frame actually renders — the "a real frame was
+            // RequestAnimationFrame fires after a compositor frame actually renders - the "a real frame was
             // drawn" signal the old rebuild app's smoke had and the ported app lacked (review NXT-15).
             Avalonia.Controls.TopLevel.GetTopLevel(desktop.MainWindow)?.RequestAnimationFrame(_ =>
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
                     if (System.Threading.Interlocked.Exchange(ref exited, 1) != 0)
                         return;
-                    Trace.LogInformation("HAPLAY_SMOKE: first frame rendered — shutting down (exit 0)");
+                    Trace.LogInformation("HAPLAY_SMOKE: first frame rendered - shutting down (exit 0)");
                     // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke must
                     // exercise the app's real teardown (ShowSession cleanup + MediaRuntime.Shutdown).
                     desktop.TryShutdown(0);
@@ -123,7 +123,7 @@ public partial class App : Application
         {
             if (System.Threading.Interlocked.Exchange(ref exited, 1) != 0)
                 return;
-            Trace.LogError("HAPLAY_SMOKE: no frame rendered within 45s — hard exit 2");
+            Trace.LogError("HAPLAY_SMOKE: no frame rendered within 45s - hard exit 2");
             System.Environment.Exit(2);
         });
     }

@@ -12,7 +12,7 @@ namespace HaPlay.Views.Dialogs;
 /// <summary>
 /// Mapping editor: the preview canvas draws every section's destination rect to scale (rotation
 /// included) and supports drag-to-move; everything else is plain numeric binding. The canvas is
-/// re-rendered from the VM on any mapping change — except while a drag is in flight, where only
+/// re-rendered from the VM on any mapping change - except while a drag is in flight, where only
 /// the dragged visual moves (a rebuild would steal pointer capture mid-drag).
 /// The selected section's mesh warp (when enabled) renders as an overlay: the warped grid as
 /// polylines (sampled from the same Catmull-Rom surface the GL pass tessellates) plus one drag
@@ -227,13 +227,13 @@ public partial class MappingEditorDialog : Window
         UpdateMeshOverlay(section);
     }
 
-    /// <summary>Repositions the grid polylines and handles from the section's current state —
+    /// <summary>Repositions the grid polylines and handles from the section's current state -
     /// cheap enough to run per drag tick (a few hundred surface evaluations).</summary>
     private void UpdateMeshOverlay(MappingSectionViewModel section)
     {
         if (_meshHandles.Count != section.MeshPoints.Count
             || _meshLines.Count != section.MeshRows + section.MeshColumns)
-            return; // shape changed since the overlay was built — the pending re-render rebuilds it
+            return; // shape changed since the overlay was built - the pending re-render rebuilds it
 
         var mesh = BuildPreviewSpaceMesh(section);
         if (mesh is null)
@@ -254,7 +254,7 @@ public partial class MappingEditorDialog : Window
     }
 
     /// <summary>The section's mesh with control points in preview-canvas coordinates (output pixels
-    /// × scale, dest-rect placement and rotation applied) — lets the overlay sample the exact
+    /// × scale, dest-rect placement and rotation applied) - lets the overlay sample the exact
     /// surface the GL pass renders.</summary>
     private WarpMesh? BuildPreviewSpaceMesh(MappingSectionViewModel section)
     {

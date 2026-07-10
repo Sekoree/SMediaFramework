@@ -51,7 +51,7 @@ public partial class RecoverSessionDialog : Window, INotifyPropertyChanged
     /// <summary>True when the crashed session had a real project file (⇒ "into original" is offered).</summary>
     public bool HasSavedProject => SelectedSession?.HadSavedProject == true;
 
-    /// <summary>Complement of <see cref="HasSavedProject"/> — toggles the untitled button row.</summary>
+    /// <summary>Complement of <see cref="HasSavedProject"/> - toggles the untitled button row.</summary>
     public bool IsUntitled => !HasSavedProject;
 
     /// <summary>Localized description of what was found (project name + when it was last captured).</summary>
@@ -88,7 +88,7 @@ public partial class RecoverSessionDialog : Window, INotifyPropertyChanged
 
 public enum RecoverSessionChoice
 {
-    /// <summary>Load the recovered content and re-point it at the original file (unsaved — the operator then
+    /// <summary>Load the recovered content and re-point it at the original file (unsaved - the operator then
     /// chooses Save to overwrite, or Save As).</summary>
     RestoreIntoOriginal,
 

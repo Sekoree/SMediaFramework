@@ -13,7 +13,7 @@ namespace S.Media.Core.Audio;
 /// </para>
 /// <para>
 /// With <c>normalize: true</c> (the default) every matrix is scaled so no output channel's
-/// summed |gain| exceeds 1.0 — a full-scale correlated input cannot clip. Pass
+/// summed |gain| exceeds 1.0 - a full-scale correlated input cannot clip. Pass
 /// <c>normalize: false</c> for the raw textbook coefficients.
 /// </para>
 /// </remarks>
@@ -33,14 +33,14 @@ public static class AudioChannelLayoutPresets
 
     /// <summary>
     /// Standard mix matrix from <paramref name="sourceChannels"/> to
-    /// <paramref name="outputChannels"/>. Throws when no standard mapping exists — use
+    /// <paramref name="outputChannels"/>. Throws when no standard mapping exists - use
     /// <see cref="TryGetDownmix"/> to probe, or build a custom matrix.
     /// </summary>
     public static float[,] Downmix(int sourceChannels, int outputChannels, bool normalize = true) =>
         TryGetDownmix(sourceChannels, outputChannels, out var m, normalize)
             ? m
             : throw new NotSupportedException(
-                $"no standard downmix from {sourceChannels} to {outputChannels} channels — supported: equal counts, mono↔N, 2→1, N≥src identity placement, 5.1→2.0, 7.1→2.0, 7.1→5.1.");
+                $"no standard downmix from {sourceChannels} to {outputChannels} channels - supported: equal counts, mono↔N, 2→1, N≥src identity placement, 5.1→2.0, 7.1→2.0, 7.1→5.1.");
 
     /// <summary>Probe form of <see cref="Downmix"/>.</summary>
     public static bool TryGetDownmix(int sourceChannels, int outputChannels, out float[,] gains, bool normalize = true)

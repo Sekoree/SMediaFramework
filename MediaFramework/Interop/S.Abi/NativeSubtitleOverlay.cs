@@ -4,7 +4,7 @@ using S.Media.Core.Video;
 namespace S.Abi;
 
 /// <summary>
-/// Adapts a native plugin's <c>MfpSubtitleProviderVTable</c> — opens a sidecar/stream URI at a canvas size into a
+/// Adapts a native plugin's <c>MfpSubtitleProviderVTable</c> - opens a sidecar/stream URI at a canvas size into a
 /// plugin subtitle instance, wrapped as <see cref="NativeSubtitleOverlay"/> (an <see cref="IVideoOverlaySource"/>).
 /// Subtitles are consumed via a factory delegate (e.g. <c>ShowSession</c>'s overlay factory), not a registry, so
 /// this exposes <see cref="TryOpen"/> rather than registering into one.

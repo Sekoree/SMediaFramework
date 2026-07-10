@@ -4,7 +4,7 @@ namespace S.Media.NDI;
 
 /// <summary>
 /// One correlated sample of NDI sender receiver feedback (NDI Monitor and other receivers) plus optional
-/// host <c>VideoRouter</c> / <c>AudioRouter</c> pump counters — for HUDs and field diagnostics beside raw
+/// host <c>VideoRouter</c> / <c>AudioRouter</c> pump counters - for HUDs and field diagnostics beside raw
 /// <see cref="S.Media.Core.Video.VideoPlayer"/> / <c>PumpPressure</c> signals.
 /// </summary>
 /// <remarks>

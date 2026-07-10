@@ -2,14 +2,14 @@ namespace S.Media.NDI;
 
 /// <summary>
 /// Host-facing hints derived from <see cref="NDIMonitorReceiverPumpFusion"/> (HUD / logging / optional policy wiring).
-/// This is <strong>not</strong> automatic NDI pacing — product-level policy remains host-owned. See <c>Doc/NDI-Terminology.md</c>.
+/// This is <strong>not</strong> automatic NDI pacing - product-level policy remains host-owned. See <c>Doc/NDI-Terminology.md</c>.
 /// </summary>
 public readonly record struct NDIFusionPlaybackHints(
     bool ReviewAudioPumpIfNonZeroDrops,
     bool ReviewVideoPumpIfNonZeroDrops,
     bool ReviewVideoQueueIfSustainedDepth)
 {
-    /// <summary>True when any individual review flag is set — convenience for HUD one-liners.</summary>
+    /// <summary>True when any individual review flag is set - convenience for HUD one-liners.</summary>
     public bool AnyReviewSuggested =>
         ReviewAudioPumpIfNonZeroDrops || ReviewVideoPumpIfNonZeroDrops || ReviewVideoQueueIfSustainedDepth;
 

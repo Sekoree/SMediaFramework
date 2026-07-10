@@ -6,7 +6,7 @@ namespace S.Media.Compositor;
 /// <summary>
 /// Wraps an <see cref="IVideoSource"/> and converts each decoded frame to a fixed
 /// <paramref name="targetPixelFormat"/> via an injected CPU converter factory
-/// (registry-wired, <c>IMediaRegistry.CreateCpuConverter</c> — P3, no direct FFmpeg dependency).
+/// (registry-wired, <c>IMediaRegistry.CreateCpuConverter</c> - P3, no direct FFmpeg dependency).
 /// </summary>
 /// <remarks>
 /// Used for live NDI (UYVY) into local SDL/Avalonia outputs that are most reliable on BGRA32.
@@ -82,7 +82,7 @@ public sealed class PixelFormatConvertingVideoSource : IVideoSource, ICooperativ
         }
         catch
         {
-            // Unsupported source format for this converter — skip (the old CanConvert==false path).
+            // Unsupported source format for this converter - skip (the old CanConvert==false path).
             src.Dispose();
             return false;
         }

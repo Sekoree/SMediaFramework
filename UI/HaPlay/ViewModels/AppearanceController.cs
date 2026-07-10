@@ -17,7 +17,7 @@ namespace HaPlay.ViewModels;
 /// </summary>
 internal static class AppearanceController
 {
-    // Held so ApplyDensity can reach the live FluentTheme — only Fluent exposes DensityStyle. Null whenever a
+    // Held so ApplyDensity can reach the live FluentTheme - only Fluent exposes DensityStyle. Null whenever a
     // non-Fluent base theme is active.
     private static FluentTheme? _activeFluentTheme;
     private static AppBaseTheme _activeBase = AppBaseTheme.Classic;

@@ -55,7 +55,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private bool _syncingPlaylistTabState;
     private readonly ObservableCollection<PlaylistItem> _emptyPlaylistItems = new();
 
-    /// <summary>Phase C.5 (§6.8) — the playlist entry currently loaded into the session. Tracks the
+    /// <summary>Phase C.5 (§6.8) - the playlist entry currently loaded into the session. Tracks the
     /// active item across <see cref="PlaylistItem"/> kinds so navigation (next/prev/end-of-track
     /// auto-advance) works for both files and live inputs.</summary>
     private PlaylistItem? _currentPlaylistItem;
@@ -74,7 +74,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>Marks the Set the player is playing from (<see cref="PlaylistTabViewModel.IsPlaying"/>).
-    /// Only the active-playback tab is flagged, and only while an item is actually loaded — so the marker
+    /// Only the active-playback tab is flagged, and only while an item is actually loaded - so the marker
     /// shows on the playing Set even when the user has switched to view a different Set.</summary>
     private void RefreshPlayingTabIndicators()
     {
@@ -96,12 +96,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// Wall-clock cap for a Play/resume. Must exceed AvPlaybackCoordinator.Play's internal
     /// WaitForVideoBufferBeforeStartingAudio budget (8 s) plus the sync-present + hardware-start tail; otherwise
     /// the UI abandons (IsPlaying stays false) while the background Play actually completes a moment later,
-    /// leaving audio running with a "Play" button — the user then has to wait out the lock and retry.
+    /// leaving audio running with a "Play" button - the user then has to wait out the lock and retry.
     /// </summary>
     private static readonly TimeSpan PlayWallTimeout = TimeSpan.FromSeconds(11);
     private volatile bool _isTransportBusy;
 
-    /// <summary>Phase C.5 (§6.9) — switch into the "waiting for source" state. Surfaces a status banner,
+    /// <summary>Phase C.5 (§6.9) - switch into the "waiting for source" state. Surfaces a status banner,
     /// stamps the next retry deadline, and ensures the loop timer is running so the deadline ticks.</summary>
     private void EnterWaitingForSource(PlaylistItem item, string reason)
     {
@@ -112,12 +112,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (retrySec > 0)
         {
             _nextRetryAt = DateTime.UtcNow.AddSeconds(retrySec);
-            WaitingForSourceMessage = $"WAITING: {item.DisplayName} — {reason} (retry in {retrySec}s).";
+            WaitingForSourceMessage = $"WAITING: {item.DisplayName} - {reason} (retry in {retrySec}s).";
             EnsureLoopTimerStarted();
         }
         else
         {
-            WaitingForSourceMessage = $"WAITING: {item.DisplayName} — {reason}.";
+            WaitingForSourceMessage = $"WAITING: {item.DisplayName} - {reason}.";
         }
         StatusMessage = WaitingForSourceMessage;
     }
@@ -131,8 +131,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         WaitingForSourceMessage = null;
     }
 
-    /// <summary>Phase C.5 — per-kind retry interval. Files never retry (0). NDI inputs use their saved
-    /// <see cref="NDIInputPlaylistItem.RetrySeconds"/>. PortAudio inputs retry on a fixed 2 s cadence —
+    /// <summary>Phase C.5 - per-kind retry interval. Files never retry (0). NDI inputs use their saved
+    /// <see cref="NDIInputPlaylistItem.RetrySeconds"/>. PortAudio inputs retry on a fixed 2 s cadence -
     /// device disappearance is rare and PortAudio doesn't have a discovery handshake to wait on.</summary>
     private static int GetRetrySeconds(PlaylistItem item) => item switch
     {
@@ -257,11 +257,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Name = name;
         SyncOutputsCollection();
         _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
-        // Phase B (§3.4) — also resync on definition changes (Edit) so clone-of transitions update
+        // Phase B (§3.4) - also resync on definition changes (Edit) so clone-of transitions update
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged += OnOutputNamingChanged;
-        // Phase B follow-up — unwire from the active session BEFORE the runtime is disposed (§4.3.3).
+        // Phase B follow-up - unwire from the active session BEFORE the runtime is disposed (§4.3.3).
         // Without this the AudioRouter pump keeps Submit'ing to a disposed PortAudioOutput and spams
         // ObjectDisposedException until the session is torn down.
         _outputs.OutputLineRemoving += OnOutputLineRemoving;
@@ -277,7 +277,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Dispatcher.UIThread.Post(() => SyncIdleSlate(), DispatcherPriority.Loaded);
     }
 
-    /// <summary>Per-deck tint (null = none) — a subtle color-code so you can tell decks apart. The view washes
+    /// <summary>Per-deck tint (null = none) - a subtle color-code so you can tell decks apart. The view washes
     /// its background with <see cref="TintBrush"/> and offers the swatch picker. Persisted in the player config.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TintBrush))]
@@ -289,7 +289,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>True when a tint is set.</summary>
     public bool HasTint => TintColor is not null;
 
-    /// <summary>Low-alpha wash for the deck background — a hint of color, not a solid block. Transparent when unset.</summary>
+    /// <summary>Low-alpha wash for the deck background - a hint of color, not a solid block. Transparent when unset.</summary>
     public Avalonia.Media.IBrush TintBrush => TintColor is { } c
         ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(0x24, c.R, c.G, c.B))
         : Avalonia.Media.Brushes.Transparent;
@@ -310,7 +310,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>The quick-pick tint swatches (plus a ColorPicker for custom) shown in the deck's tint menu.</summary>
     public IReadOnlyList<Models.PlayerTintSwatch> TintSwatches => Models.PlayerTintPalette.Swatches;
 
-    /// <summary>Sets (or, with null, clears) the deck tint — bound by the swatch buttons.</summary>
+    /// <summary>Sets (or, with null, clears) the deck tint - bound by the swatch buttons.</summary>
     [RelayCommand]
     private void SetTint(Avalonia.Media.Color? color) => TintColor = color;
 
@@ -337,7 +337,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         await CloseSessionAsync().ConfigureAwait(false);
 
         // 8a.4 re-back: tear down the per-player ShowSession (poll stop + lease release on the UI thread; the
-        // session disposes on its own dispatcher). No observable-property writes here — the VM is going away.
+        // session disposes on its own dispatcher). No observable-property writes here - the VM is going away.
         await Dispatcher.UIThread.InvokeAsync(StopShowSessionPoll);
         var playerSession = _playerShowSession;
         _playerShowSession = null;
@@ -508,7 +508,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// outputs are guarded by a rewire prompt so one physical video sink is owned by one player at a time.</summary>
     public ObservableCollection<PlayerOutputBinding> Outputs { get; } = new();
 
-    /// <summary>True when no outputs are registered yet — view shows the "click Play to auto-route" hint.</summary>
+    /// <summary>True when no outputs are registered yet - view shows the "click Play to auto-route" hint.</summary>
     public bool HasNoOutputs => Outputs.Count == 0;
 
     /// <summary>Short header summary so the routing expander reads e.g. "2 selected of 3" when collapsed.</summary>
@@ -526,11 +526,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// Drives the deck header's aggregate output chip and its per-output flyout.</summary>
     public IEnumerable<PlayerOutputBinding> SelectedOutputs => Outputs.Where(b => b.IsSelected);
 
-    /// <summary>True when at least one output is routed — used to swap the header flyout between the
+    /// <summary>True when at least one output is routed - used to swap the header flyout between the
     /// per-output list and the "not routed anywhere" warning.</summary>
     public bool HasRoutedOutputs => Outputs.Any(b => b.IsSelected);
 
-    /// <summary>Worst-case health across the routed outputs — the aggregate dot's state. Error dominates
+    /// <summary>Worst-case health across the routed outputs - the aggregate dot's state. Error dominates
     /// Warning dominates Healthy; an unrouted or all-unknown set stays
     /// <see cref="OutputLineHealthState.Unknown"/> (the enum is ordered Unknown &lt; Healthy &lt; Warning &lt; Error).</summary>
     public OutputLineHealthState DeckOutputHealth
@@ -612,8 +612,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         get
         {
             if (!HoldFallbackVideo)
-                return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(off)" : "(off — image set)";
-            return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(on — no image)" : "(on)";
+                return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(off)" : "(off - image set)";
+            return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(on - no image)" : "(on)";
         }
     }
 
@@ -663,7 +663,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private PlaylistTabViewModel? _selectedPlaylistTab;
 
-    /// <summary>Phase C.5 (§6.8) — discriminated entries (files + live inputs) queued for sequential
+    /// <summary>Phase C.5 (§6.8) - discriminated entries (files + live inputs) queued for sequential
     /// playback on the visible playlist tab.</summary>
     public ObservableCollection<PlaylistItem> PlaylistItems => SelectedPlaylistTab?.Items ?? _emptyPlaylistItems;
 
@@ -671,10 +671,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     public IReadOnlyList<PlayerTransitionMode> TransitionModes { get; } = Enum.GetValues<PlayerTransitionMode>();
 
-    /// <summary>Phase C (§4.3.4) — combobox choices for the per-output channel-mix mode.</summary>
+    /// <summary>Phase C (§4.3.4) - combobox choices for the per-output channel-mix mode.</summary>
     public IReadOnlyList<AudioRouteMixMode> MixModes { get; } = Enum.GetValues<AudioRouteMixMode>();
 
-    /// <summary>Phase C (§4.3.4) — TreeDataGrid rows. One row per (selected device × output channel),
+    /// <summary>Phase C (§4.3.4) - TreeDataGrid rows. One row per (selected device × output channel),
     /// rebuilt whenever the selection set or the sized input channel count changes. Bound by the view's
     /// code-behind, which also installs dynamic input-channel columns.</summary>
     public ObservableCollection<AudioMatrixRow> AudioMatrixRows { get; } = new();
@@ -698,7 +698,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>Per-player auto-preset rules (one per source channel count). When media whose audio
     /// channel count matches a rule loads, the rule's preset is applied to every selected output's
-    /// matrix — this is how an occasional 5.1 file folds down properly without manual cell edits.</summary>
+    /// matrix - this is how an occasional 5.1 file folds down properly without manual cell edits.</summary>
     public ObservableCollection<ChannelPresetRule> ChannelPresetRules { get; } = new();
 
     public IReadOnlyList<AudioDownmixPreset> DownmixPresetChoices { get; } = AudioDownmixPresets.All;
@@ -725,7 +725,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         ApplyChannelPresetRuleIfMatching(MatrixInputChannelCount);
     }
 
-    /// <summary>P5c — save this output's matrix as a shareable framework preset file (.mfmix).</summary>
+    /// <summary>P5c - save this output's matrix as a shareable framework preset file (.mfmix).</summary>
     [RelayCommand]
     private async Task SaveMatrixPresetAsync(PlayerOutputBinding? binding)
     {
@@ -759,7 +759,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
-    /// <summary>P5c — load a framework preset file into this output's matrix.</summary>
+    /// <summary>P5c - load a framework preset file into this output's matrix.</summary>
     [RelayCommand]
     private async Task LoadMatrixPresetAsync(PlayerOutputBinding? binding)
     {
@@ -824,7 +824,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private int _audioMatrixSourceChannels = 2;
 
-    /// <summary>Phase C (§4.3.4) — current source channel count for the TreeDataGrid's input columns.
+    /// <summary>Phase C (§4.3.4) - current source channel count for the TreeDataGrid's input columns.
     /// 0 until a matrix has been sized. Watched by the view's code-behind to rebuild input columns.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasAudioMatrix))]
@@ -832,7 +832,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(HasAudioMatrixInputTrims))]
     private int _audioMatrixInputChannelCount;
 
-    /// <summary>True once the matrix has been sized and at least one routed output exists — gates the
+    /// <summary>True once the matrix has been sized and at least one routed output exists - gates the
     /// TreeDataGrid's visibility and the empty-state hint.</summary>
     public bool HasAudioMatrix => AudioMatrixInputChannelCount > 0 && AudioMatrixRows.Count > 0;
 
@@ -841,7 +841,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     public bool HasAudioMatrixInputTrims => AudioMatrixInputTrims.Count > 0;
 
-    /// <summary>Phase C (§4.3.4) — change-stamp the view can hook to rebuild columns/rows after the matrix
+    /// <summary>Phase C (§4.3.4) - change-stamp the view can hook to rebuild columns/rows after the matrix
     /// rows or channel counts change. Fires once per coalesced rebuild.</summary>
     public event EventHandler? AudioMatrixLayoutChanged;
 
@@ -854,7 +854,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _fallbackImagePath;
 
-    /// <summary>Phase C.5 — selected item in the visible playlist tab (file OR live input). Replaces
+    /// <summary>Phase C.5 - selected item in the visible playlist tab (file OR live input). Replaces
     /// the v1-era string-path selection; the view binds <c>SelectedItem</c> of the playlist ListBox to
     /// this property.</summary>
     [ObservableProperty]
@@ -877,7 +877,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private bool _isLooping;
 
     /// <summary>When true, the loop timer auto-loads the next playlist entry on natural end of file.
-    /// Defaults to false — auto-advance is rarely wanted in performance contexts where each track is cued.</summary>
+    /// Defaults to false - auto-advance is rarely wanted in performance contexts where each track is cued.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasActiveOptions))]
     [NotifyPropertyChangedFor(nameof(ActiveOptionCount))]
@@ -937,7 +937,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isMediaLoaded;
 
-    /// <summary>Phase C.5 (§6.9) — true while a live item is offline / disconnected and the retry loop
+    /// <summary>Phase C.5 (§6.9) - true while a live item is offline / disconnected and the retry loop
     /// is waiting for the source to come back. The transport bar shows the waiting banner via
     /// <see cref="WaitingForSourceMessage"/> and the loop timer drives reconnect attempts on the item's
     /// <see cref="NDIInputPlaylistItem.RetrySeconds"/> cadence.</summary>
@@ -950,7 +950,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(BusyStatusText))]
     private string? _waitingForSourceMessage;
 
-    /// <summary>True whenever the header should show the slim indeterminate bar — a media open is in
+    /// <summary>True whenever the header should show the slim indeterminate bar - a media open is in
     /// flight, the waveform is still being analysed, or a live source is waiting to (re)connect.</summary>
     public bool IsBusy => IsLoadingMedia || IsExtractingWaveform || IsWaitingForSource;
 
@@ -965,7 +965,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         : IsExtractingWaveform ? Resources.Strings.ExtractingWaveformLabel
         : string.Empty;
 
-    /// <summary>Phase C.5 — wall-clock deadline for the next reconnect attempt. The loop timer reopens
+    /// <summary>Phase C.5 - wall-clock deadline for the next reconnect attempt. The loop timer reopens
     /// the session via <see cref="OpenOrReloadAsync"/> as soon as <see cref="DateTime.UtcNow"/> reaches
     /// this value. Cleared by <see cref="ExitWaitingForSource"/>.</summary>
     private DateTime _nextRetryAt;
@@ -988,7 +988,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>True while the user is actively dragging the seek slider (or navigating it with the
     /// keyboard). The view sets it on pointer/key down and clears it once the seek is committed on
-    /// release. While set — and until the resulting seek arc finishes (<see cref="_seekArcRunning"/>) —
+    /// release. While set - and until the resulting seek arc finishes (<see cref="_seekArcRunning"/>) -
     /// the playback clock must not write <see cref="SeekSliderValue"/>, otherwise the thumb snaps back
     /// from under the user and the committed target can be a stale clock value (the "jumps back / seeks
     /// somewhere random" symptom).</summary>
@@ -1012,7 +1012,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(DeckStatusSeverity))]
     private PlayerLoadState _loadState = PlayerLoadState.Idle;
 
-    /// <summary>True while a media open is in flight — drives the slim indeterminate loading bar in the
+    /// <summary>True while a media open is in flight - drives the slim indeterminate loading bar in the
     /// transport header. Distinct from <see cref="IsWaitingForSource"/> (live source not yet connected).</summary>
     public bool IsLoadingMedia => LoadState == PlayerLoadState.Loading;
 
@@ -1086,17 +1086,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private static readonly TimeSpan LowTimeWarningThreshold = TimeSpan.FromSeconds(10);
 
-    /// <summary>Phase C.5 (§6.5) — true when the loaded source has a finite, seekable duration. Files
+    /// <summary>Phase C.5 (§6.5) - true when the loaded source has a finite, seekable duration. Files
     /// with non-zero duration are seekable; live items (PortAudio capture, NDI receiver) are not (their
     /// duration stays zero). The view disables seeking (slider + jump box) when this is false.</summary>
     public bool IsTransportSeekable => Duration > TimeSpan.Zero;
 
     /// <summary>True while the loaded source is a live input (NDI / PortAudio capture). The view swaps
-    /// the timeline slot from scrubber+clocks to a LIVE badge in place — same reserved height either
+    /// the timeline slot from scrubber+clocks to a LIVE badge in place - same reserved height either
     /// way, so the transport row never moves when the media type changes.</summary>
     public bool IsLiveSource => IsMediaLoaded && _currentPlaylistItem is { IsLive: true };
 
-    /// <summary>Pre-formatted text bound by the view — Avalonia's <c>StringFormat=-{}{0:...}</c> with a leading minus
+    /// <summary>Pre-formatted text bound by the view - Avalonia's <c>StringFormat=-{}{0:...}</c> with a leading minus
     /// is fragile (the binding silently fails). Formatting in the VM avoids the trap.</summary>
     public string CurrentPositionText => FormatClock(CurrentPosition);
     public string RemainingTimeText => "-" + FormatClock(RemainingTime);
@@ -1126,7 +1126,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private CancellationTokenSource? _waveformCts;
     private Task? _waveformTask;
 
-    /// <summary>True while the background waveform peaks are being computed for the loaded file — drives
+    /// <summary>True while the background waveform peaks are being computed for the loaded file - drives
     /// the slim indeterminate bar's "Analysing waveform…" state once the media itself has opened.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsBusy))]
@@ -1246,7 +1246,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         : Math.Clamp((PeakLevelDb + 60) / 72.0, 0, 1);
 
     /// <summary>Metering taps wrapped around every deck audio-output lease (registered by the ShowSession
-    /// audio-output factory on the session thread, read by the UI poll) — the deck's VU source.</summary>
+    /// audio-output factory on the session thread, read by the UI poll) - the deck's VU source.</summary>
     private readonly object _meterTapGate = new();
     private readonly List<Playback.MeteringAudioOutput> _meterTaps = [];
 
@@ -1487,7 +1487,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.
-    /// Clones (§3.4) are deliberately excluded — their routing is mirrored from the parent's checkbox by
+    /// Clones (§3.4) are deliberately excluded - their routing is mirrored from the parent's checkbox by
     /// <see cref="SelectedOutputLines"/>, so showing them as separate checkboxes would be misleading.</summary>
     private void SyncOutputsCollection()
     {
@@ -1502,7 +1502,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         foreach (var line in _outputs.Outputs)
         {
             if (!line.SupportsMediaPlayerRouting)
-                continue; // skip clones — handled via the parent's binding
+                continue; // skip clones - handled via the parent's binding
             if (!keep.TryGetValue(line, out var binding))
                 binding = new PlayerOutputBinding(line);
             binding.PropertyChanged += OnOutputBindingPropertyChanged;
@@ -1519,7 +1519,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private int SanitizedCustomOutputHeight() => Math.Clamp(CustomOutputHeight, 16, 4320);
 
-    /// <summary>Phase C (§4.3.4) — subscribe to per-cell PropertyChanged so any matrix edit pushes the new
+    /// <summary>Phase C (§4.3.4) - subscribe to per-cell PropertyChanged so any matrix edit pushes the new
     /// route layout into the session. New cells added by <see cref="AudioMatrixViewModel.Resize"/> get
     /// re-subscribed via the CollectionChanged hook.</summary>
     private void WatchMatrixCells(PlayerOutputBinding binding)
@@ -1782,7 +1782,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase C (§4.3.4) — apply the mix-mode preset by rebuilding the matrix cells; the per-cell push
+    /// Phase C (§4.3.4) - apply the mix-mode preset by rebuilding the matrix cells; the per-cell push
     /// then re-installs router routes via <see cref="ApplyOutputMatrixToSession"/>. Falls back to the
     /// single-route <c>ChannelMap</c> path on lines whose matrix hasn't been sized yet (no session open).
     /// </summary>
@@ -1797,7 +1797,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase C (§4.3.4) — push the binding's matrix cells down into the playback session, installing
+    /// Phase C (§4.3.4) - push the binding's matrix cells down into the playback session, installing
     /// one router route per audible cell. Re-applies after any cell edit; click-free gain rides for
     /// master/per-output changes go through <see cref="ApplyOutputCompoundGainToSession"/> instead.
     /// </summary>
@@ -1815,7 +1815,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         return (float)Math.Pow(10.0, db / 20.0);
     }
 
-    /// <summary>Click-free gain ride for one line — the ShowSession re-apply carries the compound gain on
+    /// <summary>Click-free gain ride for one line - the ShowSession re-apply carries the compound gain on
     /// every route, so a single full re-apply covers it.</summary>
     private void ApplyOutputCompoundGainToSession(OutputLineViewModel line)
     {
@@ -1830,7 +1830,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void ApplyAllOutputMatricesToSession() => ReapplyDeckAudioToShowSessionIfActive();
 
     /// <summary>
-    /// Phase C (§4.3.4) — rebuild <see cref="AudioMatrixRows"/> from the currently-selected bindings.
+    /// Phase C (§4.3.4) - rebuild <see cref="AudioMatrixRows"/> from the currently-selected bindings.
     /// Each ticked output contributes one row per output channel. The view's code-behind watches this list
     /// + <see cref="AudioMatrixInputChannelCount"/> to add / remove dynamic input-channel columns.
     /// </summary>
@@ -1866,7 +1866,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private IEnumerable<VirtualOutputSlot> BuildVirtualOutputMap()
     {
-        // UI rewrite P2: rows are simply (line, channel) in alias order — the operator-managed
+        // UI rewrite P2: rows are simply (line, channel) in alias order - the operator-managed
         // "VOut" numbering is gone; the ordinal is just the 1-based row number.
         var rows = new List<VirtualOutputSlot>();
         foreach (var binding in Outputs)
@@ -1997,7 +1997,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B follow-up (§4.3.3) — call the session's hot route APIs from a checkbox toggle.
+    /// Phase B follow-up (§4.3.3) - call the session's hot route APIs from a checkbox toggle.
     /// Includes the line's clones (PlayerRoutingMirror) so a parent tick wires every child as well.
     /// Routes through the playback arc semaphore so a toggle can't race with Stop / Seek / Dispose.
     /// </summary>
@@ -2012,7 +2012,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         targets.AddRange(_outputs.GetClonesOf(line.Definition.Id));
 
         // Hot add/remove each target on the LIVE composition. Hold the playback arc so a toggle can't race
-        // Stop/switch, and marshal the (UI-affine) acquire/attach to the UI thread — the arc runs its action
+        // Stop/switch, and marshal the (UI-affine) acquire/attach to the UI thread - the arc runs its action
         // off-thread.
         if (!ShowSessionHotSwapActive)
             return;
@@ -2055,7 +2055,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         return result;
     }
 
-    /// <summary>Phase B (§3.6) — true when this player is playing AND drives the line (video acquisition or
+    /// <summary>Phase B (§3.6) - true when this player is playing AND drives the line (video acquisition or
     /// an audio route to its device). Used by the Edit confirm prompt.</summary>
     public bool IsActivelyPlayingThroughLine(OutputLineViewModel line) =>
         IsPlaying && ShowSessionActive
@@ -2085,11 +2085,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
         ApplyAllOutputGainsToSession();
     }
 
-    /// <summary>Phase A — public snapshot for project save (§7). Internally still calls the same builder
+    /// <summary>Phase A - public snapshot for project save (§7). Internally still calls the same builder
     /// used by the per-player Save Player command, so the JSON shape stays identical.</summary>
     public MediaPlayerConfig BuildPlayerConfigSnapshot() => BuildPlayerConfig();
 
-    /// <summary>Phase A — public companion to <see cref="BuildPlayerConfigSnapshot"/>; applies a player
+    /// <summary>Phase A - public companion to <see cref="BuildPlayerConfigSnapshot"/>; applies a player
     /// config in-place. Same semantics as the per-player Load Player command.</summary>
     public void ApplyPlayerConfigSnapshot(MediaPlayerConfig config) => ApplyPlayerConfig(config);
 
@@ -2098,7 +2098,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Name = Name,
         PlaylistTabs = PlaylistTabs.Select(t => t.ToConfig()).ToList(),
         SelectedPlaylistTabIndex = SelectedPlaylistTab is null ? 0 : Math.Max(0, PlaylistTabs.IndexOf(SelectedPlaylistTab)),
-        // Phase C.5 — the discriminated items live in PlaylistTabs[*].Items now. Keep the legacy flat
+        // Phase C.5 - the discriminated items live in PlaylistTabs[*].Items now. Keep the legacy flat
         // file-path projection for v1 readers (HaPlay builds older than the Items field) so they don't
         // silently lose the playlist on round-trip through an older build.
         PlaylistPaths = PlaylistItems.OfType<FilePlaylistItem>().Select(f => f.Path).ToList(),
@@ -2152,7 +2152,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         || AudioMatrixInputTrims.Any(t => Math.Abs(t.GainDb) > 0.0001 || t.Muted)
         || Outputs.Any(HasNonDefaultMatrix);
 
-    /// <summary>Phase C — a matrix is non-default when any cell deviates from the identity layout
+    /// <summary>Phase C - a matrix is non-default when any cell deviates from the identity layout
     /// produced by <see cref="AudioMatrixViewModel.Resize"/> (audible diagonal cells at 0 dB; everything
     /// else muted). We persist only non-default matrices to keep saved configs compact.</summary>
     private static bool HasNonDefaultMatrix(PlayerOutputBinding b)
@@ -2318,14 +2318,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool CanLoadMedia()
     {
-        // Phase C.5 — live items go through TryCreate(PlaylistItem) which dispatches to TryCreateLive.
+        // Phase C.5 - live items go through TryCreate(PlaylistItem) which dispatches to TryCreateLive.
         // File items need a readable path; live items are accepted unconditionally (the playback path
         // will surface its own error if the device / source can't be resolved).
         if (_currentPlaylistItem is { IsLive: true })
             return true;
         if (_currentPlaylistItem is FilePlaylistItem f && File.Exists(f.Path))
             return true;
-        // Registry-URI items (youtube:// prepared-cache assets, mmd:// scenes): accepted unconditionally —
+        // Registry-URI items (youtube:// prepared-cache assets, mmd:// scenes): accepted unconditionally -
         // the open path surfaces its own actionable error (reliable-mode "not prepared", missing model
         // file). Gating them here silently no-ops the play with nothing in the log (the 2026-07-03
         // "YouTube item is instantly done" report: this gate predated both item kinds).
@@ -2399,9 +2399,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task ProcessLoopTimerTickAsync()
     {
-        // Phase C.5 (§6.9) — drive the reconnect retry loop; the ShowSession open fires on success (the
-        // retry re-opens the last-known live item). Playback progression itself — natural end / loop /
-        // playlist auto-advance — is owned by the ShowSession poll (OnShowSessionPollTick).
+        // Phase C.5 (§6.9) - drive the reconnect retry loop; the ShowSession open fires on success (the
+        // retry re-opens the last-known live item). Playback progression itself - natural end / loop /
+        // playlist auto-advance - is owned by the ShowSession poll (OnShowSessionPollTick).
         if (IsWaitingForSource && _waitingItem is not null && DateTime.UtcNow >= _nextRetryAt)
         {
             var item = _waitingItem;

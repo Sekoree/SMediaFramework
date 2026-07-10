@@ -17,29 +17,29 @@ namespace S.Media.Core.Audio;
 /// The map is intentionally one-directional and exhaustive on the *output*
 /// side: every output channel must be assigned (to a source channel or to
 /// silence). Source channels not referenced anywhere in the map are
-/// **dropped** — this is the explicit contract the router enforces, so the
+/// **dropped** - this is the explicit contract the router enforces, so the
 /// caller never gets surprise leakage from unmapped channels.
 /// </para>
 /// <para>
 /// Examples:
 /// <list type="bullet">
-/// <item><c>new ChannelMap([0, 1])</c> — identity stereo.</item>
-/// <item><c>new ChannelMap([1, 0])</c> — swap L/R.</item>
-/// <item><c>new ChannelMap([0, 0, 1, 1])</c> — stereo into a 4-channel output, L→1+2, R→3+4.</item>
-/// <item><c>new ChannelMap([-1, 0, 0, -1])</c> — center channels carry the source, sides silent.</item>
-/// <item><c>new ChannelMap([0, 0])</c> — duplicate L to both outputs (stereo source).</item>
-/// <item><c>new ChannelMap([1, 1])</c> — duplicate R to both outputs.</item>
-/// <item><c>new ChannelMap([-1, -1])</c> — both outputs silent (additive mix leaves dst unchanged).</item>
-/// <item><c>new ChannelMap([0])</c> / <c>[1]</c> — stereo source downmix to mono left or right only (additive).</item>
-/// <item><c>new ChannelMap([p])</c> from a **wider** packed source — one mono output taken from channel <c>p</c> each frame (additive).</item>
-/// <item><c>new ChannelMap([0, 1])</c> / <c>[2, 3]</c> / <c>[4, 5]</c> with a **wider** packed source — take one consecutive L/R pair per frame, drop unmapped channels (additive).</item>
-/// <item><c>new ChannelMap([0, 0])</c> / <c>[1, 1]</c> from a **wider** source — duplicate one packed channel to both stereo outputs (additive).</item>
-/// <item><c>ChannelMap.StereoToNSwapped(4)</c> — same as <c>[1,0,1,0]</c> (R,L,R,L into quad).</item>
+/// <item><c>new ChannelMap([0, 1])</c> - identity stereo.</item>
+/// <item><c>new ChannelMap([1, 0])</c> - swap L/R.</item>
+/// <item><c>new ChannelMap([0, 0, 1, 1])</c> - stereo into a 4-channel output, L→1+2, R→3+4.</item>
+/// <item><c>new ChannelMap([-1, 0, 0, -1])</c> - center channels carry the source, sides silent.</item>
+/// <item><c>new ChannelMap([0, 0])</c> - duplicate L to both outputs (stereo source).</item>
+/// <item><c>new ChannelMap([1, 1])</c> - duplicate R to both outputs.</item>
+/// <item><c>new ChannelMap([-1, -1])</c> - both outputs silent (additive mix leaves dst unchanged).</item>
+/// <item><c>new ChannelMap([0])</c> / <c>[1]</c> - stereo source downmix to mono left or right only (additive).</item>
+/// <item><c>new ChannelMap([p])</c> from a **wider** packed source - one mono output taken from channel <c>p</c> each frame (additive).</item>
+/// <item><c>new ChannelMap([0, 1])</c> / <c>[2, 3]</c> / <c>[4, 5]</c> with a **wider** packed source - take one consecutive L/R pair per frame, drop unmapped channels (additive).</item>
+/// <item><c>new ChannelMap([0, 0])</c> / <c>[1, 1]</c> from a **wider** source - duplicate one packed channel to both stereo outputs (additive).</item>
+/// <item><c>ChannelMap.StereoToNSwapped(4)</c> - same as <c>[1,0,1,0]</c> (R,L,R,L into quad).</item>
 /// </list>
 /// </para>
 /// <para>
 /// SIMD fast paths cover same-width packed gathers with indices in <c>0..N-1</c> (<c>N ∈ {3, 4, 5, 6, 7, 8}</c> via
-/// <see cref="TryAccumulatePackedPermutationInterleaved"/> — bijective permutations and duplicate-lane gathers, no silence; <c>N = 4</c>: SSE <c>SHUFPS</c>; <c>N ∈ {3, 5, 6, 7, 8}</c>: AVX2 <c>PermuteVar8x32</c>),
+/// <see cref="TryAccumulatePackedPermutationInterleaved"/> - bijective permutations and duplicate-lane gathers, no silence; <c>N = 4</c>: SSE <c>SHUFPS</c>; <c>N ∈ {3, 5, 6, 7, 8}</c>: AVX2 <c>PermuteVar8x32</c>),
 /// stereo → quad paired duplicates (<c>[0,0,1,1]</c>, <c>[1,1,0,0]</c> via
 /// <see cref="TryAccumulateStereoDuplexGroupedInterleaved"/> / <see cref="TryAccumulateStereoDuplexGroupedSwappedInterleaved"/>),
 /// and stereo routes using only L/R/silence (<see cref="TryAccumulateStereoSilenceOrZeroDupInterleaved"/>, e.g. <c>[-1,0,0,-1]</c>),
@@ -98,7 +98,7 @@ public readonly partial struct ChannelMap : IEquatable<ChannelMap>
     /// into <paramref name="dst"/> (packed, <see cref="OutputChannels"/> channels).
     /// </summary>
     /// <remarks>
-    /// Output is overwritten, not summed — caller does any mixing. <paramref name="dst"/>
+    /// Output is overwritten, not summed - caller does any mixing. <paramref name="dst"/>
     /// channels mapped to <see cref="Silence"/> are zeroed.
     /// </remarks>
     public void Apply(ReadOnlySpan<float> src, int srcChannels, Span<float> dst, int samplesPerChannel)
@@ -279,7 +279,7 @@ public readonly partial struct ChannelMap : IEquatable<ChannelMap>
     /// N→M repeats the source channels in order (<c>map[outCh] = outCh % inputChannels</c>). Because the
     /// indices are taken modulo <paramref name="inputChannels"/>, the map never references a channel the
     /// source lacks, so it always satisfies the router's <c>RequiredInputChannels ≤ source channels</c>
-    /// contract — a mono (or otherwise mismatched) source up/down-mixes instead of failing the route.
+    /// contract - a mono (or otherwise mismatched) source up/down-mixes instead of failing the route.
     /// </summary>
     public static ChannelMap DefaultFor(int inputChannels, int outputChannels)
     {

@@ -177,7 +177,7 @@ public sealed class CompositionOutputLayoutViewModelTests
             Sections = { new CueOutputMappingSection { SrcX = 0, SrcY = 0, SrcWidth = 1.0, SrcHeight = 0.5 } },
         };
 
-        // Reported raster is the full 2160-tall canvas, but the saved mapping says 1080 — reopening the
+        // Reported raster is the full 2160-tall canvas, but the saved mapping says 1080 - reopening the
         // editor must show the resolution last saved, not reset to the reported/canvas size.
         var vm = CompositionOutputLayoutViewModel.Build(1920, 2160, new[]
         {
@@ -226,7 +226,7 @@ public sealed class CompositionOutputLayoutViewModelTests
         vm.Items[1].SetSrcRect(0.4, 0.0, 0.6, 1.0);
         Assert.True(vm.Items[0].SrcX + vm.Items[0].SrcWidth > vm.Items[1].SrcX, "items may overlap");
 
-        // Shrink both to leave an uncovered gap in the middle — also allowed (no exception, values kept).
+        // Shrink both to leave an uncovered gap in the middle - also allowed (no exception, values kept).
         vm.Items[0].SetSrcRect(0.0, 0.0, 0.4, 1.0);
         vm.Items[1].SetSrcRect(0.6, 0.0, 0.4, 1.0);
         Assert.Equal(0.4, vm.Items[0].SrcWidth, 6);

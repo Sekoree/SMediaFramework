@@ -6,11 +6,11 @@ namespace S.Media.NDI.Tests;
 
 /// <summary>
 /// NDI-01: the opt-in real loopback soak. Unlike the pure <c>NDIFrameTiming</c>/bandwidth tests, this drives the
-/// actual native receive path end-to-end against a live NDI source on the network — discover → open → receive →
-/// read diagnostics → dispose — asserting real timestamp correlation (non-negative, non-decreasing video PTS),
+/// actual native receive path end-to-end against a live NDI source on the network - discover → open → receive →
+/// read diagnostics → dispose - asserting real timestamp correlation (non-negative, non-decreasing video PTS),
 /// that frames actually flow, that the capture thread is healthy, and <strong>exactly-once release</strong> (the
 /// process-wide live-connection count returns to its baseline after dispose). It is gated behind
-/// <c>MFP_RUN_NDI_TESTS=1</c> and self-skips when no source is discovered, so it never runs — or flakes — in the
+/// <c>MFP_RUN_NDI_TESTS=1</c> and self-skips when no source is discovered, so it never runs - or flakes - in the
 /// hermetic suite; run it with an NDI source present to validate the hardware path.
 /// </summary>
 public sealed class NDILoopbackSoakTests(ITestOutputHelper output)
@@ -68,7 +68,7 @@ public sealed class NDILoopbackSoakTests(ITestOutputHelper output)
             }
 
             output.WriteLine($"received video={videoFrames} audio={audioFrames}; state={ndi.State}");
-            Assert.True(videoFrames + audioFrames > 0, "no NDI frames received within the timeout — source connected but silent?");
+            Assert.True(videoFrames + audioFrames > 0, "no NDI frames received within the timeout - source connected but silent?");
 
             var diag = ndi.GetReceiveDiagnostics();
             output.WriteLine($"diagnostics: {diag}");

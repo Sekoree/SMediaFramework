@@ -12,7 +12,7 @@ namespace HaPlay.ViewModels;
 
 /// <summary>
 /// The media-player deck's file and live-input playback runs on a per-player headless
-/// <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) — the only playback runtime since the
+/// <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) - the only playback runtime since the
 /// legacy engines were deleted (NXT-13). Covers play / pause / resume / stop / seek + position readout,
 /// end-of-track auto-advance, idle logo/hold, and NDI live input. The transport methods operate only while
 /// <see cref="ShowSessionActive"/>.
@@ -23,14 +23,14 @@ public partial class MediaPlayerViewModel
 
     private ShowSession? _playerShowSession;
     // Per-composition video outputs the deck drives, tagged with the OUTPUT LINE they belong to so each gets a
-    // STABLE composition-output id (CompositionOutputId) — required for hot add/remove of a single line on a
+    // STABLE composition-output id (CompositionOutputId) - required for hot add/remove of a single line on a
     // live composition (index-based ids would shift when a line is added/removed).
     private Dictionary<string, List<(Guid LineId, IVideoOutput Output)>> _playerVideoOutputs =
         new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredLines = new();
     // NDI-output audio (ShowSession re-back): each selected audio-capable NDI line's carrier audio sink, keyed
     // by the route device id the audio-output factory resolves. Populated (and the lines held) on open, released
-    // on stop/switch — the audio analogue of _playerVideoOutputs / _playerAcquiredLines.
+    // on stop/switch - the audio analogue of _playerVideoOutputs / _playerAcquiredLines.
     private readonly Dictionary<string, IAudioOutput> _playerNDIAudioOutputs = new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredAudioLines = new();
     // PortAudio route device id → the LINE's configured sample rate, so the audio-output factory can fall back
@@ -45,11 +45,11 @@ public partial class MediaPlayerViewModel
     // The last TransportSnapshot.TimelineGeneration the poll saw (NXT-04): a change = seek/pause/resume/clip
     // swap just happened, so the end-confirmation window restarts (its transient pause must not read as end).
     private int _showSessionLastTimelineGeneration = -1;
-    // The current show's composition canvas size (set at open) — the HOLD image renders at this size so the
+    // The current show's composition canvas size (set at open) - the HOLD image renders at this size so the
     // top layer covers the canvas exactly.
     private (int Width, int Height) _playerShowCanvas = (1920, 1080);
     // Whether the current source opened with a video composition (the file probe / live stream selection at
-    // open) — drives the SourceKindLabel readout.
+    // open) - drives the SourceKindLabel readout.
     private bool _playerShowHasVideo;
 
     /// <summary>True while a deck source is playing through the per-player ShowSession (transport diverts here).</summary>
@@ -93,7 +93,7 @@ public partial class MediaPlayerViewModel
                 break;
             case PortAudioInputPlaylistItem paIn:
                 // Live capture through the registry's `padev:` provider (the same URI the cue path uses; the
-                // provider unescapes, so device names with spaces round-trip). Audio-only — no composition.
+                // provider unescapes, so device names with spaces round-trip). Audio-only - no composition.
                 mediaPath = BuildPortAudioInputUri(paIn);
                 hasVideo = false;
                 break;
@@ -108,7 +108,7 @@ public partial class MediaPlayerViewModel
                 MediaRuntime.Registry.AudioBackends.FirstOrDefault(),
                 (path, streamIndex, w, h) => SubtitleOverlayFactory.FromFileDeferred(path, w, h, streamIndex),
                 // Borrowed lines: the deck owns each output's lifetime (acquire/release via _playerAcquiredLines),
-                // so the leases declare DisposeOutputOnRuntimeDispose=false — the session never disposes them (NXT-01).
+                // so the leases declare DisposeOutputOnRuntimeDispose=false - the session never disposes them (NXT-01).
                 (compId, name, _, _) => _playerVideoOutputs.TryGetValue(compId, out var outs)
                     ? outs.Select(o => new ClipCompositionOutputLease(
                         CompositionOutputId(o.LineId), name, o.Output, DisposeOutputOnRuntimeDispose: false)).ToArray()
@@ -120,7 +120,7 @@ public partial class MediaPlayerViewModel
                 // NDI-output audio: hand a clip's audio route to the SAME NDI carrier that emits its video. The
                 // carrier audio is borrowed (held via _playerAcquiredAudioLines, released on stop) so the session
                 // never disposes it; only a per-fire resampler wrapper (when the carrier rate ≠ the clip rate) is
-                // session-owned. Pure lookup — the carrier was acquired on the UI thread during open.
+                // session-owned. Pure lookup - the carrier was acquired on the UI thread during open.
                 audioOutputFactory: (deviceId, format) => BuildDeckAudioLease(deviceId, format));
 
             // Switching from a currently-playing source: stop its poll and clip FIRST so the old clip releases its
@@ -137,7 +137,7 @@ public partial class MediaPlayerViewModel
                 // NXT-20: detach the still-attached outputs from the LIVE composition BEFORE the release/
                 // re-acquire block below. The composition pump outlives the clip; releasing a line first
                 // reconfigures its sink (idle slate) while the old composition is still submitting canvas
-                // frames into it — the same format-mismatch flood ShowSessionStopAsync guards against.
+                // frames into it - the same format-mismatch flood ShowSessionStopAsync guards against.
                 var attachedLines = await Dispatcher.UIThread.InvokeAsync(() => _playerAcquiredLines.ToList());
                 foreach (var held in attachedLines)
                 {
@@ -179,8 +179,8 @@ public partial class MediaPlayerViewModel
                         if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
                             resolutions.Add((rw, rh));
                     }
-                    // Media-player sizing: the compositor is AUTOSIZED to the source (AsSource) — or to the chosen
-                    // fixed preset — and the OUTPUT letterboxes into each display. This replaces the old
+                    // Media-player sizing: the compositor is AUTOSIZED to the source (AsSource) - or to the chosen
+                    // fixed preset - and the OUTPUT letterboxes into each display. This replaces the old
                     // "canvas = largest output resolution + Cover fit", which cropped differing-aspect media to
                     // cover the screen. A live input with no known raster still falls back to the driven outputs.
                     var resolved = ResolveDeckCanvas(
@@ -211,11 +211,11 @@ public partial class MediaPlayerViewModel
                     _playerAcquiredAudioLines.Add(line.Definition.Id);
                 }
 
-                // Route audio to the deck's selected device(s) (on the UI thread — reads deck observable state).
+                // Route audio to the deck's selected device(s) (on the UI thread - reads deck observable state).
                 audioRoutes = BuildDeckShowAudioRoutes(lines);
             });
 
-            // NXT-21: await the load instead of the sync-blocking LoadDocument — this runs on the UI thread,
+            // NXT-21: await the load instead of the sync-blocking LoadDocument - this runs on the UI thread,
             // and blocking it on the session dispatcher turns any dispatcher stall into a whole-app freeze.
             await _playerShowSession.LoadDocumentAsync(
                 MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
@@ -227,7 +227,7 @@ public partial class MediaPlayerViewModel
                     // The operator's audio-track choice from the Properties dialog (null = automatic). File items
                     // only; live/YouTube sources have no container multi-track selection here.
                     audioStreamIndex: (item as FilePlaylistItem)?.AudioTrackIndex,
-                    // The compositor runs at the source (or preset) rate, not a hardcoded 30 — so 50/60 fps
+                    // The compositor runs at the source (or preset) rate, not a hardcoded 30 - so 50/60 fps
                     // content is composited frame-for-frame instead of being decimated to 30.
                     canvasFrameRateNum: canvasFps.Num,
                     canvasFrameRateDen: canvasFps.Den)).ConfigureAwait(true);
@@ -254,7 +254,7 @@ public partial class MediaPlayerViewModel
                 StartShowSessionPoll();
                 // Kick the scrubber waveform explicitly. The engine path starts it post-arc (OpenOrReload's tail),
                 // but the ShowSession path returns before that, and OnMediaFilePathChanged bails while a transport
-                // is busy — so without this the waveform intermittently never loads on the deck. Safe/idempotent:
+                // is busy - so without this the waveform intermittently never loads on the deck. Safe/idempotent:
                 // StartWaveformExtraction cancels any in-flight run and no-ops for a null/NDI (non-file) path.
                 // A prepared YouTube item's cached asset IS a local file, so the scrubber waveform works there too.
                 StartWaveformExtraction(item switch
@@ -300,7 +300,7 @@ public partial class MediaPlayerViewModel
 
     // Pause/resume command in flight (like _seekArcRunning for seeks): resume flips IsPlaying=true
     // immediately, but the session's Play() prefills + starts the audio hardware before the clip clock
-    // runs — the lock-free snapshot shows IsRunning=false with an unchanged generation for that whole
+    // runs - the lock-free snapshot shows IsRunning=false with an unchanged generation for that whole
     // window. Without this guard the 250 ms poll read those ticks as a natural end and auto-advanced;
     // with a single-item playlist the "next" item is the same item, so resume restarted from zero.
     private int _pauseResumeInFlight;
@@ -328,7 +328,7 @@ public partial class MediaPlayerViewModel
     /// sums this player's ShowSession composition throughput for a video line it drives AND the audio-pump
     /// chunks of any deck route to the line's device (a PortAudio line's backend device id, or an NDI line's
     /// carrier-audio key), scoring a combined state like the engine's
-    /// <see cref="Playback.OutputLineHealthEvaluator"/> — so an audio-only deck line lights up too (it used to
+    /// <see cref="Playback.OutputLineHealthEvaluator"/> - so an audio-only deck line lights up too (it used to
     /// report Idle because this probe was gated on the deck's VIDEO lines). Returns null when this deck isn't
     /// ShowSession-driving the line at all, so the caller falls back to the engine probe. Lock-free
     /// (composition stats + audio-pump snapshot), no marshaling.</summary>
@@ -349,8 +349,8 @@ public partial class MediaPlayerViewModel
             videoDropped = stats.PumpOverruns + stats.SlotOverflowFrames;
         }
 
-        // Audio: reverse-map the line to the device id the deck routes to — PortAudio lines by their backend
-        // device, NDI lines by their carrier-audio key — and sum the active clip's pump chunks for it.
+        // Audio: reverse-map the line to the device id the deck routes to - PortAudio lines by their backend
+        // device, NDI lines by their carrier-audio key - and sum the active clip's pump chunks for it.
         long audioEnqueued = 0;
         long audioDropped = 0;
         var deviceId = _outputs.DefinitionsSnapshot
@@ -384,7 +384,7 @@ public partial class MediaPlayerViewModel
 
     /// <summary>Builds the deck's initial ShowSession audio routes from its selected PortAudio output bindings, so
     /// a deck on the ShowSession path plays audio on the operator-SELECTED device(s) (with the binding's channel
-    /// map + effective gain) instead of the default device — the core parity fix for the flipped default.
+    /// map + effective gain) instead of the default device - the core parity fix for the flipped default.
     /// Runs on the UI thread (reads deck observable state).</summary>
     /// <remarks>One device route per selected audio line with a full per-cell gain matrix + the compound
     /// (master × per-output) gain. PortAudio lines route to their backend device; audio-capable NDI lines route
@@ -436,12 +436,12 @@ public partial class MediaPlayerViewModel
         return routes;
     }
 
-    /// <summary>Stable route device id for an NDI line's carrier audio — the key shared by
+    /// <summary>Stable route device id for an NDI line's carrier audio - the key shared by
     /// <see cref="BuildDeckShowAudioRoutes"/> (emits it), the <c>_playerNDIAudioOutputs</c> map (populated on
     /// open), and <see cref="BuildNDIAudioLease"/> (resolves it in the audio-output factory).</summary>
     private static string NDIAudioDeviceId(Guid lineId) => $"ndi-audio:{lineId}";
 
-    /// <summary>Stable composition-output id for a driven output line — shared by the video-output factory (fire
+    /// <summary>Stable composition-output id for a driven output line - shared by the video-output factory (fire
     /// path) and hot add/remove, so a single line's composition output is attached/detached by a fixed id
     /// (index-based ids would shift when a line is added or removed).</summary>
     private static string CompositionOutputId(Guid lineId) =>
@@ -471,7 +471,7 @@ public partial class MediaPlayerViewModel
     /// <summary>The audio-output factory body. NDI route device ids resolve to the borrowed carrier audio held
     /// since open (wrapped in a per-fire resampler only when the carrier's format differs). Every other device id
     /// is a PortAudio route: the deck creates it here so a device that rejects the clip's mix rate (a fixed-rate
-    /// JACK graph, mismatched hardware) can be opened at the LINE's configured rate behind an egress resampler —
+    /// JACK graph, mismatched hardware) can be opened at the LINE's configured rate behind an egress resampler -
     /// without this, routing a device to an already-playing clip whose mix rate the device can't open simply
     /// failed (the mid-play "route → no output" bug). Safe on the session thread.</summary>
     private ClipAudioOutputLease? BuildDeckAudioLeaseCore(string deviceId, AudioFormat format)
@@ -488,7 +488,7 @@ public partial class MediaPlayerViewModel
         }
 
         if (MediaRuntime.Registry.AudioBackends.FirstOrDefault() is not { } backend)
-            return null; // no backend — let the session report the failure its own way
+            return null; // no backend - let the session report the failure its own way
 
         try
         {
@@ -505,7 +505,7 @@ public partial class MediaPlayerViewModel
                 deviceRate = (int)Math.Round(backend.EnumerateOutputDevices()
                     .FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))?.DefaultSampleRate ?? 0);
             if (deviceRate <= 0 || deviceRate == format.SampleRate)
-                throw; // no viable alternative rate — surface the real open failure
+                throw; // no viable alternative rate - surface the real open failure
             var device = backend.CreateOutput(deviceId, new AudioFormat(deviceRate, format.Channels));
             return new ClipAudioOutputLease(
                 ResamplingAudioOutput.Wrap(device, format),
@@ -527,7 +527,7 @@ public partial class MediaPlayerViewModel
     }
 
     /// <summary>Pure: the deck's composition-canvas raster (size + rate). The compositor is sized like a media
-    /// player — <em>autosized to the media</em> — not like a cue's fixed program raster:
+    /// player - <em>autosized to the media</em> - not like a cue's fixed program raster:
     /// <list type="bullet">
     /// <item><see cref="PlayerOutputPreset.AsSource"/> (default) → the source's own resolution/rate, so the media
     /// fills the canvas 1:1 and each OUTPUT letterboxes it into its physical display (the fix for differing-aspect
@@ -535,8 +535,8 @@ public partial class MediaPlayerViewModel
     /// <item>a fixed preset (1080p60 / 720p60 / Custom) → that preset's raster, into which the clip placement
     /// letterboxes the source.</item>
     /// </list>
-    /// Falls back to the largest driven output resolution (then 1080p) when the source resolution is unknown —
-    /// a live NDI/capture input, or a probe miss — since there is no media raster to match yet.</summary>
+    /// Falls back to the largest driven output resolution (then 1080p) when the source resolution is unknown -
+    /// a live NDI/capture input, or a probe miss - since there is no media raster to match yet.</summary>
     internal static (int Width, int Height, int FpsNum, int FpsDen) ResolveDeckCanvas(
         PlayerOutputPreset preset,
         int customWidth,
@@ -609,12 +609,12 @@ public partial class MediaPlayerViewModel
     }
 
     /// <summary>Live-re-apply the deck's current audio routing (per-line channel maps + compound gains + mutes)
-    /// to the RUNNING ShowSession clip, so matrix / gain / mute edits take effect DURING playback — the
+    /// to the RUNNING ShowSession clip, so matrix / gain / mute edits take effect DURING playback - the
     /// ShowSession analog of the engine deck's <c>TrySetOutputMatrix</c> ride. No-op off the ShowSession path
     /// (the engine methods handle their own case). Fire-and-forget: it hops the session dispatcher; a
     /// stable-composition edit (gain / per-cell route / output-mute) is applied in place, while a change that
     /// adds/removes a whole route (a line selected/deselected or all-cells-muted) is deferred by the framework
-    /// to the next fire — see <see cref="ShowSession.ApplyActiveAudioRoutesAsync"/>.</summary>
+    /// to the next fire - see <see cref="ShowSession.ApplyActiveAudioRoutesAsync"/>.</summary>
     private void ReapplyDeckAudioToShowSessionIfActive()
     {
         if (!ShowSessionActive || _playerShowSession is not { } session)
@@ -636,7 +636,7 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    /// <summary>True while a file is playing through the per-player ShowSession — the deck's hot output add/remove
+    /// <summary>True while a file is playing through the per-player ShowSession - the deck's hot output add/remove
     /// (the ShowSession analog of the engine's TryAddOutput/TryRemoveOutput) should divert here.</summary>
     internal bool ShowSessionHotSwapActive => ShowSessionActive && _playerShowSession is not null;
 
@@ -651,7 +651,7 @@ public partial class MediaPlayerViewModel
         var lineId = line.Definition.Id;
 
         // Video: acquire + attach to the live composition (skip if already driven). AddCompositionOutputAsync
-        // returns false for an audio-only source (no composition) — release rather than hold the lease.
+        // returns false for an audio-only source (no composition) - release rather than hold the lease.
         if (_playerVideoOutputs.TryGetValue(MediaPlayerShowMapper.PlayerCompositionId, out var vids)
             && !_playerAcquiredLines.Contains(lineId)
             && _outputs.AcquireVideoOutputForLine(lineId) is { } vo)
@@ -687,7 +687,7 @@ public partial class MediaPlayerViewModel
     /// <summary>Hot-removes an output LINE from the RUNNING ShowSession deck (the ShowSession analog of the
     /// engine's <c>TryRemoveOutput</c>): detaches its video from the live composition, REBUILDS the clip's audio
     /// outputs to drop its route (the clip keeps playing on its discard sink even at zero outputs), THEN releases
-    /// the physical outputs — the order matters: releasing a sink before its router route is gone would dangle.
+    /// the physical outputs - the order matters: releasing a sink before its router route is gone would dangle.
     /// UI thread.</summary>
     private async Task HotRemoveOutputFromShowSessionAsync(OutputLineViewModel line)
     {
@@ -710,11 +710,11 @@ public partial class MediaPlayerViewModel
         if (hadNDIAudio)
             _playerAcquiredAudioLines.Remove(lineId);
 
-        // 3) Rebuild the clip's audio outputs from the REMAINING routes — removes the dead route in the router
+        // 3) Rebuild the clip's audio outputs from the REMAINING routes - removes the dead route in the router
         //    before we release its sink; the clip keeps playing (its discard sink stays) even down to zero.
         await RebuildDeckShowSessionAudioAsync().ConfigureAwait(true);
 
-        // 4) Now the physical outputs carry no route/composition reference — safe to release.
+        // 4) Now the physical outputs carry no route/composition reference - safe to release.
         if (hadVideo)
             _outputs.ReleaseVideoOutputForLine(lineId);
         if (hadNDIAudio)
@@ -723,7 +723,7 @@ public partial class MediaPlayerViewModel
         UpdateNoOutputWarning();
     }
 
-    /// <summary>Rebuilds the RUNNING ShowSession clip's audio outputs from the deck's current routes — the
+    /// <summary>Rebuilds the RUNNING ShowSession clip's audio outputs from the deck's current routes - the
     /// count-change path (hot add/remove) that <see cref="ReapplyDeckAudioToShowSessionIfActive"/>'s in-place
     /// re-apply defers. Keeps playback running (the clip's discard sink stays) even when no output is routed.</summary>
     private async Task RebuildDeckShowSessionAudioAsync()
@@ -744,11 +744,11 @@ public partial class MediaPlayerViewModel
 
     /// <summary>Applies (HOLD on + image set) or clears the deck's hold image on the RUNNING per-player
     /// ShowSession: the image renders letterboxed at the composition canvas size and is held in the top-most
-    /// full-canvas layer (<see cref="ShowSession.SetCompositionTestPatternAsync"/> — the same held-top-layer
+    /// full-canvas layer (<see cref="ShowSession.SetCompositionTestPatternAsync"/> - the same held-top-layer
     /// mechanism the calibration grid uses), so every fanned-out output shows it while audio keeps playing.
     /// This is the ShowSession replacement for the engine's <c>LogoFallbackVideoOutput</c> hold: under the
     /// flipped default the engine session is null, so the old wiring made the HOLD button a silent no-op
-    /// during playback. Audio-only media has no composition (returns false harmlessly) — the idle slate
+    /// during playback. Audio-only media has no composition (returns false harmlessly) - the idle slate
     /// covers that case (see <c>SyncIdleSlate</c>). UI thread (reads deck observable state).</summary>
     internal async Task ApplyShowSessionHoldImageAsync()
     {
@@ -782,12 +782,12 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    /// <summary>Surfaces a banner when a loaded/playing deck has NO output routed — playback continues (to
+    /// <summary>Surfaces a banner when a loaded/playing deck has NO output routed - playback continues (to
     /// nothing) rather than stopping, matching a hardware player. Cleared once any output is routed again.</summary>
     private void UpdateNoOutputWarning()
     {
         if (IsMediaLoaded && SelectedOutputLines().Count == 0)
-            StatusMessage = "No output routed — the deck is still playing. Route an output to see/hear it.";
+            StatusMessage = "No output routed - the deck is still playing. Route an output to see/hear it.";
         else if (StatusMessage is not null && StatusMessage.StartsWith("No output routed", StringComparison.Ordinal))
             StatusMessage = null;
     }
@@ -816,7 +816,7 @@ public partial class MediaPlayerViewModel
             }
         }
         // UI thread: stop the poll, release the video leases, reset deck state, then hand the outputs to the
-        // idle logo slate (FallbackImagePath) — the same idle fallback the engine path shows when it stops.
+        // idle logo slate (FallbackImagePath) - the same idle fallback the engine path shows when it stops.
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             StopShowSessionPoll();
@@ -832,7 +832,7 @@ public partial class MediaPlayerViewModel
             ShowSessionActive = false;
             IsPlaying = false;
             IsMediaLoaded = false;
-            CurrentPlayingItem = null; // deck back to idle — clear the now-playing markers
+            CurrentPlayingItem = null; // deck back to idle - clear the now-playing markers
             CurrentPosition = TimeSpan.Zero;
             SyncIdleSlate();
         });
@@ -875,7 +875,7 @@ public partial class MediaPlayerViewModel
             }
 
             // Live-source disconnect: an NDI/capture input dropped (its live source is exhausted, though a live
-            // router can keep reporting IsRunning while it waits for data — so this is checked separately). A
+            // router can keep reporting IsRunning while it waits for data - so this is checked separately). A
             // live source NEVER playlist-auto-advances; return the deck to idle.
             if (snap.LiveSourceDisconnected && IsPlaying)
             {
@@ -888,7 +888,7 @@ public partial class MediaPlayerViewModel
             // shuffle/repeat), else return the deck to idle. Stop the poll first so the (async) advance can't
             // be re-entered by the next tick.
             //
-            // A coordinated seek transiently pauses the clip (IsRunning=false) while it reseeks the demux —
+            // A coordinated seek transiently pauses the clip (IsRunning=false) while it reseeks the demux -
             // sometimes 100ms+ when the audio pump is slow to idle. Without discrimination the poll mistakes
             // that transient for end-of-track and tears the deck down ("freezes then stops" after a few seeks).
             // Guard on it two ways: skip while a seek/scrub is in flight, AND require the stopped state to
@@ -919,13 +919,13 @@ public partial class MediaPlayerViewModel
 
     /// <summary>Pure end-of-track decision for the deck poll. A coordinated seek transiently pauses the clip
     /// (IsRunning=false) while it reseeks the demux, so this treats "stopped while playing" as the true end
-    /// only when NOT mid-seek/scrub/pause-resume AND the stopped state has PERSISTED across two poll ticks — a
+    /// only when NOT mid-seek/scrub/pause-resume AND the stopped state has PERSISTED across two poll ticks - a
     /// seek's pause is far shorter than the 250 ms poll interval, so it can never span two ticks; a genuine end
     /// does. <paramref name="seekInFlight"/> also covers a resume in flight: the session's Play() prefills +
     /// starts audio hardware before the clip clock runs, so IsRunning stays false (with IsPlaying already true)
-    /// long enough to span ticks — that window must never read as an end.
+    /// long enough to span ticks - that window must never read as an end.
     /// A change of <paramref name="timelineGeneration"/> (the session's NXT-04 discontinuity signal: any
-    /// seek/pause/resume/clip swap, including ones the deck did not initiate — e.g. a control-surface seek)
+    /// seek/pause/resume/clip swap, including ones the deck did not initiate - e.g. a control-surface seek)
     /// authoritatively restarts the window, however long that discontinuity's transient pause lasts.
     /// <paramref name="confirmTicks"/> accumulates consecutive qualifying ticks and is reset otherwise.</summary>
     internal static bool ConfirmShowSessionEnded(

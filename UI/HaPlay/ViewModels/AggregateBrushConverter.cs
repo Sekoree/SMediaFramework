@@ -5,7 +5,7 @@ using Avalonia.Media;
 
 namespace HaPlay.ViewModels;
 
-/// <summary>Phase E (§8.1) — converter that maps the aggregate-health flag to a chip background brush.
+/// <summary>Phase E (§8.1) - converter that maps the aggregate-health flag to a chip background brush.
 /// Green when everything's healthy (or idle), red when any line is warn/error. Kept as a one-way
 /// converter so the chip stays declarative in XAML.</summary>
 public sealed class AggregateBrushConverter : IValueConverter

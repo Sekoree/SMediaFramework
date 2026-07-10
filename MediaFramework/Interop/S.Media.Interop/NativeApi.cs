@@ -10,9 +10,9 @@ using S.Media.Session;
 namespace S.Media.Interop;
 
 /// <summary>
-/// The outbound C ABI (<c>s_media_player.h</c>) — `[UnmanagedCallersOnly]` exports over the headless
+/// The outbound C ABI (<c>s_media_player.h</c>) - `[UnmanagedCallersOnly]` exports over the headless
 /// <see cref="ShowSession"/>, AOT-published as <c>s_media_player.so</c>/<c>.dll</c>. Each export is sync over the
-/// session's async dispatcher (block on the returned task — the dispatcher runs on its own thread, so no deadlock).
+/// session's async dispatcher (block on the returned task - the dispatcher runs on its own thread, so no deadlock).
 /// Nothing throws across the boundary: failures set a thread-local last error (see <see cref="mfp_last_error"/>)
 /// and return a negative status / null handle. Handles are opaque monotonic tokens resolved through a guarded table.
 /// </summary>
@@ -34,7 +34,7 @@ internal static unsafe class NativeApi
 
     /// <summary>Bound on how long <c>mfp_session_destroy</c>/<c>mfp_shutdown</c> wait for in-flight calls on a
     /// session to drain before returning. A timed-out teardown is completed in the background after the final
-    /// lease leaves, rather than disposing under a live call — ABI-02.</summary>
+    /// lease leaves, rather than disposing under a live call - ABI-02.</summary>
     private static readonly TimeSpan CallDrainTimeout = TimeSpan.FromSeconds(30);
 
     private static volatile bool s_initialized;
@@ -42,7 +42,7 @@ internal static unsafe class NativeApi
     [ThreadStatic] private static string? s_lastError;
     [ThreadStatic] private static nint s_lastErrorNative;
 
-    // Session handles are opaque, monotonically-increasing tokens into a synchronized table — NEVER raw
+    // Session handles are opaque, monotonically-increasing tokens into a synchronized table - NEVER raw
     // GCHandle pointers handed back by (untrusted) C callers. A stale, random, or double-freed token simply
     // isn't in the table, so it is rejected without ever dereferencing caller-supplied memory (NXT-08). Ids
     // are never reused (64-bit monotonic), so there is no ABA window that a separate generation would guard.
@@ -79,7 +79,7 @@ internal static unsafe class NativeApi
     }
 
     /// <summary>Destroys every live session deterministically, then closes the runtime. The old behaviour only
-    /// flipped a flag — after which destruction was refused, so live sessions and their native resources leaked
+    /// flipped a flag - after which destruction was refused, so live sessions and their native resources leaked
     /// (NXT-08). No-throw across the boundary.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_shutdown")]
     private static void Shutdown()
@@ -112,7 +112,7 @@ internal static unsafe class NativeApi
 
     /// <summary>The last error string for the calling thread, or "" if none. The returned pointer is owned by
     /// the library and is valid <strong>only until the next <c>mfp_*</c> call on this thread</strong> (it is
-    /// freed and re-issued on each call) — C callers must copy it immediately (NXT-17). Never throws.</summary>
+    /// freed and re-issued on each call) - C callers must copy it immediately (NXT-17). Never throws.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_last_error")]
     private static byte* LastError()
     {
@@ -143,7 +143,7 @@ internal static unsafe class NativeApi
         {
             var host = MediaHost.Build(b => b.Use(new FFmpegModule()).Use(new PortAudioModule()));
 
-            // Headless by default — a show runner that drives transport + composition without owning an audio device
+            // Headless by default - a show runner that drives transport + composition without owning an audio device
             // (CI-safe, no flaky-ALSA/device dependency). Audio-out on a real backend is a later create-with-audio option.
             var session = new ShowSession(host.Registry, audioBackend: null);
 
@@ -270,7 +270,7 @@ internal static unsafe class NativeApi
 
     /// <summary>ABI-01: derive the transport state from the snapshot. A group holding a clip is PLAYING when
     /// its clock advances, else PAUSED (paused / frozen / held). No clip held ⇒ IDLE. ENDED and ERROR are
-    /// reserved — the headless snapshot does not distinguish a played-through cue from idle, and carries no
+    /// reserved - the headless snapshot does not distinguish a played-through cue from idle, and carries no
     /// error flag (see s_media_player.h).</summary>
     private static int MapState(TransportSnapshot s) =>
         !s.IsActive ? MfpStateIdle : s.IsRunning ? MfpStatePlaying : MfpStatePaused;
@@ -482,7 +482,7 @@ internal static unsafe class NativeApi
 
     /// <summary>Marks a resolved box closing + removes it from the table, waits for in-flight calls to drain
     /// (bounded), then disposes it. On drain timeout teardown continues in the background after the last call
-    /// leaves — a wedged call must not cause use-after-dispose across the ABI (ABI-02).</summary>
+    /// leaves - a wedged call must not cause use-after-dispose across the ABI (ABI-02).</summary>
     private static void CloseAndDispose(nint session)
     {
         SessionBox? box;

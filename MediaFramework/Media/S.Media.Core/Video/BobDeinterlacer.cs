@@ -19,7 +19,7 @@ namespace S.Media.Core.Video;
 /// I420 (3 planes), NV12 (2 planes). Other formats throw at <see cref="Configure"/>.
 /// </para>
 /// <para>
-/// Progressive input bypasses the deinterlacer — <see cref="Process"/> returns the original frame
+/// Progressive input bypasses the deinterlacer - <see cref="Process"/> returns the original frame
 /// as a single output (caller still owns disposal of the inner frame).
 /// </para>
 /// </remarks>
@@ -74,7 +74,7 @@ public sealed class BobDeinterlacer : IDeinterlacer
             throw new ArgumentException(
                 $"frame format {frame.Format} does not match configured input {_input}", nameof(frame));
 
-        // Progressive passthrough — emit the input frame as the sole output. The caller still owns it.
+        // Progressive passthrough - emit the input frame as the sole output. The caller still owns it.
         if (frame.FieldOrder == VideoFieldOrder.Progressive)
         {
             outputs[0] = frame;

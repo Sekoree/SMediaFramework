@@ -51,14 +51,14 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
             canvasFormat.FrameRate.Denominator);
         _composition = new ClipCompositionRuntime(definition, outputs, compositorFactory ?? CreateDefaultCompositor);
 
-        // Layer 0 — the deck's video, full-frame inside the canvas. The local/NDI output may be resized
+        // Layer 0 - the deck's video, full-frame inside the canvas. The local/NDI output may be resized
         // independently, so do not bake a cover-crop into the composition.
         _videoLayer = _composition.AddLayer(
             videoSourceFormat,
             new VideoPlacementSpec(CompositionId, LayerIndex: 0, Opacity: 1.0, Placement: "Letterbox",
                 DestX: 0, DestY: 0, DestWidth: 1, DestHeight: 1));
 
-        // Layer 1 — the hold/logo image, on top, hidden until SetHold(true). Submitted once; the compositor
+        // Layer 1 - the hold/logo image, on top, hidden until SetHold(true). Submitted once; the compositor
         // retains the latest layer frame, so a static logo needs no continuous feed.
         if (logoFrame is not null)
             SetHoldFrame(logoFrame);

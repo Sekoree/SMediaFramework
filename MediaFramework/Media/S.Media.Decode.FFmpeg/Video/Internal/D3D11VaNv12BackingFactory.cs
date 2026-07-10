@@ -8,7 +8,7 @@ namespace S.Media.Decode.FFmpeg.Video.Internal;
 
 /// <summary>
 /// Maps libav <see cref="AVPixelFormat.AV_PIX_FMT_D3D11"/> frames (see libavutil
-/// <c>hwcontext_d3d11va.h</c> — <c>AVFrame.data[0]</c> texture, <c>data[1]</c> array index)
+/// <c>hwcontext_d3d11va.h</c> - <c>AVFrame.data[0]</c> texture, <c>data[1]</c> array index)
 /// into <see cref="Win32SharedNv12Backing"/> via DXGI shared NT handles. When <paramref name="sharedHandleOnly"/> is false,
 /// also records libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers for same-device GL upload (no <c>OpenSharedResource</c>).
 /// </summary>

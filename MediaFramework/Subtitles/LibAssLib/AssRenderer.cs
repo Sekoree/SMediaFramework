@@ -3,7 +3,7 @@ using System.Text;
 namespace LibAssLib;
 
 /// <summary>
-/// Managed wrapper over an <c>ASS_Renderer</c> — renders a track to <see cref="AssImage"/> alpha-bitmap layers at
+/// Managed wrapper over an <c>ASS_Renderer</c> - renders a track to <see cref="AssImage"/> alpha-bitmap layers at
 /// a given frame size and time. Configure the frame/storage size and fonts once, then call
 /// <see cref="RenderFrame"/> per output frame.
 /// </summary>
@@ -25,7 +25,7 @@ public sealed unsafe class AssRenderer : IDisposable
         LibAssNative.ass_set_frame_size(_handle, width, height);
     }
 
-    /// <summary>Source storage size — the resolution events were authored against (a track's PlayResX/Y).</summary>
+    /// <summary>Source storage size - the resolution events were authored against (a track's PlayResX/Y).</summary>
     public void SetStorageSize(int width, int height)
     {
         ThrowIfDisposed();
@@ -71,7 +71,7 @@ public sealed unsafe class AssRenderer : IDisposable
     /// Render <paramref name="track"/> at <paramref name="timeMs"/>. Returns the head of the layer list (or
     /// <c>null</c> when nothing shows); <paramref name="changed"/> is true when the image differs from the prior
     /// call. The returned pointer is owned by libass and is only valid until the next <see cref="RenderFrame"/>
-    /// or dispose — composite it immediately (see <see cref="AssImageBlender"/>).
+    /// or dispose - composite it immediately (see <see cref="AssImageBlender"/>).
     /// </summary>
     public AssImage* RenderFrame(AssTrack track, long timeMs, out bool changed)
     {
@@ -87,9 +87,9 @@ public sealed unsafe class AssRenderer : IDisposable
     /// Renders <paramref name="track"/> at <paramref name="timeMs"/> and composites the result into
     /// <paramref name="bgra"/> (premultiplied BGRA32, <paramref name="stride"/> bytes/row). Returns
     /// <see cref="AssRenderOutcome.Empty"/> when nothing shows (buffer untouched), <see cref="AssRenderOutcome.Unchanged"/>
-    /// when the image equals the previous render (buffer untouched — keep your last frame), or
+    /// when the image equals the previous render (buffer untouched - keep your last frame), or
     /// <see cref="AssRenderOutcome.Rendered"/> after clearing + blending. Safe to call per output frame: libass
-    /// caches internally and flags unchanged frames so the blend is skipped. This is the allocation-free path —
+    /// caches internally and flags unchanged frames so the blend is skipped. This is the allocation-free path -
     /// no pointers escape to the caller.
     /// </summary>
     public AssRenderOutcome RenderInto(AssTrack track, long timeMs, Span<byte> bgra, int width, int height, int stride)

@@ -25,7 +25,7 @@
   </UserControl.Styles>
 
   <!-- Rows: header / outputs (fills) / shared-headphones / virtual-channels. Previously a DockPanel,
-       which docked these cards Left as columns and squeezed the outputs list — a Grid stacks them. -->
+       which docked these cards Left as columns and squeezed the outputs list - a Grid stacks them. -->
   <Grid Margin="16" RowDefinitions="Auto,*,Auto" RowSpacing="10">
     <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto">
       <StackPanel Grid.Column="0" Spacing="2">
@@ -36,7 +36,7 @@
         <TextBlock Classes="hint" FontFamily="monospace" Opacity="0.55"
                    Text="{Binding MediaBackendsSummary}" />
       </StackPanel>
-      <!-- §8.1 aggregate health chip — recolors when any line is warn/error. -->
+      <!-- §8.1 aggregate health chip - recolors when any line is warn/error. -->
       <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="0"
               VerticalAlignment="Center"
               Background="{Binding HasAggregateIssues, Converter={x:Static vm:AggregateBrushConverter.Instance}}">

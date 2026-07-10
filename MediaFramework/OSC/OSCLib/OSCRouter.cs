@@ -42,7 +42,7 @@ internal sealed class OSCRouter
 
     public async ValueTask<int> DispatchAsync(OSCMessageContext context, CancellationToken cancellationToken)
     {
-        // Single volatile read — no lock required, route table is replaced atomically.
+        // Single volatile read - no lock required, route table is replaced atomically.
         var routes = _routes;
         var hits = 0;
 

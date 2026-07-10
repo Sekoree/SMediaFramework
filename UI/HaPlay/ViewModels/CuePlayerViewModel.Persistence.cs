@@ -57,7 +57,7 @@ public partial class CuePlayerViewModel
         }
     }
 
-    /// <summary>Save/load rework — export the selected cue list's compositions (virtual canvases)
+    /// <summary>Save/load rework - export the selected cue list's compositions (virtual canvases)
     /// as a standalone shareable file.</summary>
     [RelayCommand]
     private async Task ExportCompositionsAsync()
@@ -96,7 +96,7 @@ public partial class CuePlayerViewModel
         }
     }
 
-    /// <summary>Save/load rework — merge a compositions file into the selected cue list. Same-named
+    /// <summary>Save/load rework - merge a compositions file into the selected cue list. Same-named
     /// compositions update their size/fps in place (keeping the Id, so cue placements bound to them
     /// stay valid); new names append (fresh Id on collision).</summary>
     [RelayCommand]

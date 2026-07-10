@@ -6,7 +6,7 @@ namespace S.Media.Time;
 public sealed record OutputSyncGroupOptions
 {
     /// <summary>
-    /// Control-loop bandwidth in Hz — how quickly a member locks to the reference. Lower is gentler and
+    /// Control-loop bandwidth in Hz - how quickly a member locks to the reference. Lower is gentler and
     /// more noise-immune; higher snaps faster but chases jitter. ~0.1&nbsp;Hz locks in a handful of seconds.
     /// </summary>
     public double LoopBandwidthHz { get; init; } = 0.1;
@@ -35,14 +35,14 @@ public readonly record struct OutputSyncMemberHandle(int Id);
 /// Genlock domain (issues-doc #2, Option&nbsp;B): disciplines several independently-mastered playback clocks
 /// onto one shared <em>reference</em> timeline. Each member drifts on its own physical crystal; a bounded
 /// PI controller derives a per-member ppm rate correction from the member's phase error versus the
-/// reference. Feed that correction into the member's audio actuator — Option&nbsp;A's
+/// reference. Feed that correction into the member's audio actuator - Option&nbsp;A's
 /// <c>AdaptiveRateAudioOutput</c> via its ppm-provider constructor: slewing the device's effective rate
 /// paces the member's master clock, which in turn paces its video, so audio and video both converge.
 /// Clocks not added to any group keep their independent behaviour (correct for unrelated program feeds).
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the Phase-1 foundation — the coordinated master-ppm policy the architecture doc lists as
+/// This is the Phase-1 foundation - the coordinated master-ppm policy the architecture doc lists as
 /// "not implemented". Wiring sketch for a two-device composition:
 /// <code>
 /// var group = new OutputSyncGroup(referenceDeviceClock);       // e.g. device 0's IPlaybackClock
@@ -52,14 +52,14 @@ public readonly record struct OutputSyncMemberHandle(int Id);
 /// </code>
 /// </para>
 /// <para>
-/// The video counterpart — lock-step frame <em>present</em> across grouped outputs (for stitched walls, and
-/// for video-only outputs that have no audio actuator) — is <see cref="S.Media.Core.Video.VideoPresentSyncGroup"/>.
+/// The video counterpart - lock-step frame <em>present</em> across grouped outputs (for stitched walls, and
+/// for video-only outputs that have no audio actuator) - is <see cref="S.Media.Core.Video.VideoPresentSyncGroup"/>.
 /// They compose through one master playhead; see <c>Doc/HaPlay-MultiOutput-Sync.md</c>.
 /// </para>
 /// </remarks>
 public sealed class OutputSyncGroup : IDisposable
 {
-    // IPlaybackClock (raw monotonic ElapsedSinceStart) is the genlock-correct phase metric — it reflects
+    // IPlaybackClock (raw monotonic ElapsedSinceStart) is the genlock-correct phase metric - it reflects
     // the physical crystal directly, unlike a media-time playhead that folds in seeks / base position.
     private readonly IPlaybackClock _reference;
     private readonly OutputSyncGroupOptions _options;
@@ -154,7 +154,7 @@ public sealed class OutputSyncGroup : IDisposable
 
         var phaseError = (m.Clock.ElapsedSinceStart - refElapsed).TotalSeconds; // + ⇒ member ahead of reference
 
-        // A large jump is a seek/flush, not crystal drift — reset rather than chase it.
+        // A large jump is a seek/flush, not crystal drift - reset rather than chase it.
         if (Math.Abs(phaseError) > _options.ResyncThreshold.TotalSeconds)
         {
             m.Integral = 0;

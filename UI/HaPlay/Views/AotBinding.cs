@@ -24,7 +24,7 @@ internal static class AotBinding
     /// <summary>
     /// Two-way bind <paramref name="control"/> on <paramref name="target"/> to a nested object
     /// selected from the control's <c>DataContext</c>. Rebinds when the parent context or selected
-    /// source changes — safe for recycled TreeDataGrid template cells.
+    /// source changes - safe for recycled TreeDataGrid template cells.
     /// </summary>
     public static void TwoWayFromDataContext<TParent, TSource>(
         Control control,

@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Phase C polish (§4.3.5 follow-up / framework gap "NDI pixel-format / resolution lock") — per-branch
+/// Phase C polish (§4.3.5 follow-up / framework gap "NDI pixel-format / resolution lock") - per-branch
 /// <see cref="IVideoOutput"/> wrapper that pins the negotiated pixel format and/or dimensions an NDI
 /// (or any) output presents to its receivers, regardless of what the source produces.
 /// </summary>

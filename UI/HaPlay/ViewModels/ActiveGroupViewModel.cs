@@ -33,7 +33,7 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
 
     public ObservableCollection<ActiveCueViewModel> Children { get; } = new();
 
-    /// <summary>Collapsed by default — the aggregate row is the at-a-glance surface; expanding
+    /// <summary>Collapsed by default - the aggregate row is the at-a-glance surface; expanding
     /// reveals the per-cue rows (the pre-P4 flat list).</summary>
     [ObservableProperty]
     private bool _isExpanded;
@@ -49,7 +49,7 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
     [ObservableProperty]
     private bool _isNearEnd;
 
-    /// <summary>Longest child duration — the timeline the aggregate progress runs on.</summary>
+    /// <summary>Longest child duration - the timeline the aggregate progress runs on.</summary>
     public long LongestDurationMs { get; private set; }
 
     private void OnChildProgressChanged(object? sender, PropertyChangedEventArgs e)

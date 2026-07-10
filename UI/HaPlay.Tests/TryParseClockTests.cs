@@ -10,7 +10,7 @@ public sealed class TryParseClockTests
 {
     [Theory]
     [InlineData("0", 0, 0, 0, 0)]
-    [InlineData("90", 0, 0, 90, 0)]           // seconds only (over 60 is fine — clamped to duration at the call site)
+    [InlineData("90", 0, 0, 90, 0)]           // seconds only (over 60 is fine - clamped to duration at the call site)
     [InlineData("01:30", 0, 1, 30, 0)]
     [InlineData("1:2:3", 1, 2, 3, 0)]
     [InlineData("01:12.500", 0, 1, 12, 500)]  // fractional seconds → milliseconds

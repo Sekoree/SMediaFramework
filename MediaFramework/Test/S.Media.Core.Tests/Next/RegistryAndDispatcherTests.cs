@@ -115,7 +115,7 @@ public class MediaRegistryTests
         registry.Dispose();
         Assert.Equal(new[] { "b", "a" }, order); // reverse registration order
 
-        registry.Dispose(); // idempotent — no second release
+        registry.Dispose(); // idempotent - no second release
         Assert.Equal(new[] { "b", "a" }, order);
     }
 
@@ -123,7 +123,7 @@ public class MediaRegistryTests
     public async Task OpenAsync_AtomicResult_OwnsAsset_DisposedExactlyOnce()
     {
         // NXT-02: an atomic open returns one MediaOpenResult owning the (shared) asset; disposing the result
-        // tears it down once — both correlated tracks come from the single asset, not two independent opens.
+        // tears it down once - both correlated tracks come from the single asset, not two independent opens.
         var provider = new SharedAssetProvider();
         IMediaRegistry registry = MediaRegistry.Build(b => b.AddDecoder(provider));
 
@@ -169,7 +169,7 @@ public class MediaRegistryTests
     [Fact]
     public async Task OpenAsync_HonoursCancellation()
     {
-        // NXT-02: the open is cancellable — an already-cancelled token aborts before doing work.
+        // NXT-02: the open is cancellable - an already-cancelled token aborts before doing work.
         IMediaRegistry registry = MediaRegistry.Build(b => b.AddDecoder(new FakeDecoderProvider("A", 0.9)));
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();

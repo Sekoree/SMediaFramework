@@ -187,7 +187,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     private static int _liveConnectionCount;
 
     /// <summary>Live NDI receiver connections process-wide (diagnostic). The shared <see cref="NDIDecoderProvider"/>
-    /// keeps this at one per distinct source even when both audio and video are opened — i.e. A and V share one
+    /// keeps this at one per distinct source even when both audio and video are opened - i.e. A and V share one
     /// receiver rather than anchoring on two.</summary>
     public static int LiveConnectionCount => Volatile.Read(ref _liveConnectionCount);
 
@@ -268,7 +268,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 
     /// <summary>
     /// Blocks until every <em>enabled</em> stream (<see cref="ReceiveAudio"/> / <see cref="ReceiveVideo"/>)
-    /// has delivered its first frame — i.e. a format is available — or <paramref name="timeout"/> elapses.
+    /// has delivered its first frame - i.e. a format is available - or <paramref name="timeout"/> elapses.
     /// Returns true only if all enabled streams connected. Lets a caller obtain the format up front (e.g.
     /// before <c>AudioRouter.AddSource</c>) without hand-rolling a poll loop. The receiver runs from
     /// <see cref="Open"/>, so this just waits for the first frame(s).
@@ -324,7 +324,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 
     public long VideoFramesUnpacked => Interlocked.Read(ref _videoFramesUnpacked);
 
-    /// <summary>NDI-02: one consistent snapshot of this receiver's health — frames unpacked, the several
+    /// <summary>NDI-02: one consistent snapshot of this receiver's health - frames unpacked, the several
     /// drop tallies (unpack / overflow / audio-conversion), currently-buffered video frames, whether the
     /// native capture thread is wedged, and the process-wide live NDI connection count. Consolidates the
     /// counters that were previously exposed one-off so callers/soak tests can read them together.</summary>
@@ -366,7 +366,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         if (buffered <= keepFloats) return;
 
         Volatile.Write(ref snap.ReadIndex, read + (buffered - keepFloats));
-        // Keep Primed when enough samples remain so Play/Prefill can read immediately — clearing Primed
+        // Keep Primed when enough samples remain so Play/Prefill can read immediately - clearing Primed
         // forces another 50 ms holdback and causes PortAudio underruns on the first chunk.
         Volatile.Write(ref snap.Primed, keepFloats >= snap.MinBufferedFloats ? 1 : 0);
     }
@@ -703,7 +703,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
                 _nextVideoPts = absolute + _videoPtsStep;
                 return absolute;
             }
-            // No NDI timing on this frame — continue the synthetic timeline below.
+            // No NDI timing on this frame - continue the synthetic timeline below.
         }
         else if (NDIFrameTiming.TryMapPresentationTime(
                      video.Timecode,

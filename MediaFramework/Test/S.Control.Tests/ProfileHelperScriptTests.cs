@@ -4,7 +4,7 @@ namespace HaPlay.Tests;
 
 // Proves the data-driven helper design: the X32 profile's embedded Mond HelperScript is exposed to control
 // scripts as the `x32` global, and its functions read addresses from the profile's own command data
-// (devices.command(id).address) — no hardcoded device C# in the runtime.
+// (devices.command(id).address) - no hardcoded device C# in the runtime.
 public class ProfileHelperScriptTests
 {
     private static ControlScriptFileHost CreateHost(string scriptSource)

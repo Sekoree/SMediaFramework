@@ -5,7 +5,7 @@ namespace S.Media.Session;
 /// <summary>
 /// SESSION-01: the short-lived audio-output device enumeration cache extracted from <see cref="ShowSession"/>.
 /// Enumerating backend output devices is expensive (PortAudio re-scans the host APIs; ALSA setup makes it worse)
-/// and the clip-spec builder runs on every fire / warm / voice — so a burst of those must enumerate once, not
+/// and the clip-spec builder runs on every fire / warm / voice - so a burst of those must enumerate once, not
 /// once per call. The cache is a stable invariant on its own: given a backend it returns the device list for up
 /// to <see cref="Ttl"/> and resolves a device's nominal sample rate. It is thread-safe because the fire path
 /// builds specs OFF the session dispatcher (NXT-24).

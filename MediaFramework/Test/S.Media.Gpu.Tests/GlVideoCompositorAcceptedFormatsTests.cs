@@ -7,7 +7,7 @@ using Xunit;
 namespace S.Media.Gpu.Tests;
 
 /// <summary>
-/// Static-surface checks that don't need a live GL context — they ensure the compositor's
+/// Static-surface checks that don't need a live GL context - they ensure the compositor's
 /// accepted-layer list matches the renderer's supported-format set, so the user's
 /// <c>yuva444p12le</c> over <c>yuv422p10le</c> pipeline doesn't fall back to BGRA32 conversion.
 /// </summary>
@@ -41,7 +41,7 @@ public sealed class GlVideoCompositorAcceptedFormatsTests
     public void GlCompositorAccepted_Includes_KeyProfessionalFormats(PixelFormat fmt)
     {
         // We construct a stub compositor type purely to read its static AcceptedLayerPixelFormats
-        // surface — no GL context is needed because the accepted set is a static initialiser.
+        // surface - no GL context is needed because the accepted set is a static initialiser.
         var accepted = (System.Collections.Generic.IReadOnlyList<PixelFormat>)
             typeof(GlVideoCompositor)
                 .GetField("AcceptedFormatsArr",

@@ -8,13 +8,13 @@ namespace S.Control;
 /// <para><strong>Bounded (CTRL-01).</strong> The backing buffer is bounded to <see cref="_capacity"/>. A
 /// native MIDI/UDP receive callback that floods the queue, or a slow/hung script that stops draining it, can
 /// no longer grow memory or latency without limit. Enqueue never blocks the calling (receive-callback)
-/// thread — it either appends, coalesces, or drops synchronously and returns immediately.</para>
+/// thread - it either appends, coalesces, or drops synchronously and returns immediately.</para>
 /// <para><strong>Pressure relief.</strong> Under normal load (the script keeps up) the queue is a plain FIFO:
 /// every value is delivered in order, so relative encoders and rapid distinct commands are never lost. Only
 /// when the buffer is <em>full</em> does relief kick in:</para>
 /// <list type="bullet">
 ///   <item>A newer value of a <em>continuous</em> control (MIDI CC / pitch-bend / aftertouch / scalar meter)
-///   coalesces onto the pending one — only the latest value matters for an absolute control
+///   coalesces onto the pending one - only the latest value matters for an absolute control
 ///   (<see cref="CoalescedCount"/>).</item>
 ///   <item>Otherwise the oldest <em>continuous</em> item is dropped to make room, so button/note and
 ///   lifecycle edges survive; only when the buffer is entirely edges is the oldest edge dropped as a last
@@ -152,7 +152,7 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
     /// <summary>
     /// Coalesce key for an event, or null when the event must be preserved (button/note edges, transport,
     /// program change, OSC, device/layer/health lifecycle, text, blob). Only absolute continuous controls,
-    /// where solely the newest value matters, are coalescable — and coalescing only ever happens under
+    /// where solely the newest value matters, are coalescable - and coalescing only ever happens under
     /// pressure (see the type remarks), so relative encoders survive normal load.
     /// </summary>
     private static string? CoalesceKeyFor(ControlEvent evt) => evt switch
@@ -202,7 +202,7 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
 
             if (_fifo.Count < _capacity)
             {
-                // Normal path: plain FIFO append. No coalescing — every value is preserved (relative
+                // Normal path: plain FIFO append. No coalescing - every value is preserved (relative
                 // encoders, distinct rapid commands). Continuous controls are indexed so a later
                 // full-queue enqueue can coalesce onto them.
                 var node = _fifo.AddLast(item);
@@ -271,8 +271,8 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
             _coalesceIndex[coalesceKey] = node; // most-recent pending node for this control
     }
 
-    /// <summary>Removes one item to make room: the oldest continuous (coalescable) item when any exists —
-    /// so button/lifecycle edges are preserved — otherwise the oldest item overall. Caller holds <c>_gate</c>.</summary>
+    /// <summary>Removes one item to make room: the oldest continuous (coalescable) item when any exists -
+    /// so button/lifecycle edges are preserved - otherwise the oldest item overall. Caller holds <c>_gate</c>.</summary>
     private bool TryEvictOneLocked(out ControlEventQueueItem evicted)
     {
         for (var node = _fifo.First; node is not null; node = node.Next)

@@ -4,7 +4,7 @@ using Xunit;
 
 namespace OSCLib.Tests;
 
-/// <summary>OSC-01: a malformed or truncated datagram must be rejected cleanly — <see cref="OSCPacketCodec.TryDecode"/>
+/// <summary>OSC-01: a malformed or truncated datagram must be rejected cleanly - <see cref="OSCPacketCodec.TryDecode"/>
 /// returns <c>false</c> with a diagnostic message and a null packet, and never throws across the receive path or
 /// yields a half-decoded packet. A hostile or buggy sender therefore cannot crash the listener with crafted bytes.</summary>
 public sealed class OSCMalformedPacketTests
@@ -48,7 +48,7 @@ public sealed class OSCMalformedPacketTests
         Assert.True(OSCPacketCodec.TryDecode(full, new OSCDecodeOptions(), out var complete, out var fullError), fullError);
         Assert.Equal(sentArgs, complete!.Message!.Arguments.Count);
 
-        // No proper prefix reproduces the complete command (and none throws — TryDecode is a bool contract).
+        // No proper prefix reproduces the complete command (and none throws - TryDecode is a bool contract).
         for (var len = 0; len < full.Length; len++)
         {
             if (OSCPacketCodec.TryDecode(full.AsSpan(0, len), new OSCDecodeOptions(), out var decoded, out _))

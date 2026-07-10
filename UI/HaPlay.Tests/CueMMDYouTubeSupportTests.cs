@@ -9,7 +9,7 @@ namespace HaPlay.Tests;
 /// Gates for MMD + YouTube cues being first-class in the cue player: the standalone cue-list JSON
 /// context must round-trip their sources (it listed every other PlaylistItem subtype), and setting
 /// one as a cue's media source must raise the drawer-gating capability flags (SourceHasVideo /
-/// SourceHasAudio) — without them the Video/Audio tabs never show, so no placement or routing could
+/// SourceHasAudio) - without them the Video/Audio tabs never show, so no placement or routing could
 /// be authored ("cue player cannot play MMD/YouTube").
 /// </summary>
 public sealed class CueMMDYouTubeSupportTests

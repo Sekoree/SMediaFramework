@@ -3,13 +3,13 @@ namespace S.Media.Decode.FFmpeg.Audio;
 
 /// <summary>
 /// Presents an inner <see cref="IAudioSource"/> at a different sample rate. Mirror of
-/// <see cref="ResamplingAudioOutput"/> for the source (input) direction — used by
+/// <see cref="ResamplingAudioOutput"/> for the source (input) direction - used by
 /// <see cref="AudioRouter.AddSource(IAudioSource, string?, bool)"/> with <c>autoResample: true</c>
 /// when a source's rate doesn't match the router (e.g. a 44.1 kHz clip feeding a 48 kHz router).
 /// </summary>
 /// <remarks>
 /// <para>
-/// Direct instances own their inner by default — disposing the wrapper disposes <c>inner</c>.
+/// Direct instances own their inner by default - disposing the wrapper disposes <c>inner</c>.
 /// Hosts can pass <paramref name="disposeInnerWhenDisposed"/> as <see langword="false"/> when the
 /// original source remains caller-owned. The default FFmpeg auto-resample factory installed for
 /// <see cref="AudioRouter.AddSource(IAudioSource, string?, bool)"/> uses that caller-owned mode so
@@ -152,7 +152,7 @@ public class ResamplingAudioSource : IAudioSource, ICooperativeAudioReadInterrup
     }
 }
 
-/// <summary>Seekable variant of <see cref="ResamplingAudioSource"/> — forwards the inner source's
+/// <summary>Seekable variant of <see cref="ResamplingAudioSource"/> - forwards the inner source's
 /// <see cref="ISeekableSource"/> surface and flushes the resampler on seek. Created by
 /// <see cref="ResamplingAudioSource.Create"/> when the inner source is seekable.</summary>
 internal sealed class SeekableResamplingAudioSource : ResamplingAudioSource, ISeekableSource

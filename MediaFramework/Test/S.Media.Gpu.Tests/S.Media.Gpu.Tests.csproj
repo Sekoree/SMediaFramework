@@ -2,7 +2,7 @@
 
     <!-- Ported from S.Media.OpenGL.Tests. Pure unit tests of the GL helpers (color/gamut/HDR, format
          support, shader source, dmabuf formats, NV12 layout/interop) + one GlVideoCompositor format test.
-         No real GL context needed — runs headless. -->
+         No real GL context needed - runs headless. -->
 
     <PropertyGroup>
         <IsPackable>false</IsPackable>

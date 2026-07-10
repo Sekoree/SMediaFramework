@@ -54,7 +54,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         _hasFormat
             ? _format
             : throw new InvalidOperationException(
-                "NDI source has not delivered a video frame yet — wait until IsConnected is true");
+                "NDI source has not delivered a video frame yet - wait until IsConnected is true");
 
     public IReadOnlyList<PixelFormat> NativePixelFormats => _native;
 
@@ -80,7 +80,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     /// Discards any frames currently queued and resets the PTS counter so the next captured frame is
     /// presented at <paramref name="nextPresentationTime"/>. Intended for the play-start moment: the receiver runs
     /// continuously from connect, so by the time the operator hits Play the PTS counter has advanced
-    /// to <c>Tconnect</c> seconds while the consumer's playback clock may be at a fresh playhead —
+    /// to <c>Tconnect</c> seconds while the consumer's playback clock may be at a fresh playhead -
     /// <see cref="S.Media.Core.Video.VideoPlayer"/> would then sit waiting for the playhead to catch
     /// up, leaving the output black. Calling this immediately before Play rebases the source so video
     /// presents in sync with the playback clock.

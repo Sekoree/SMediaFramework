@@ -4,13 +4,13 @@ using System.Text.Json.Serialization.Metadata;
 namespace HaPlay.Models;
 
 /// <summary>
-/// Serialization helpers for <see cref="HaPlayProject"/>. Pure I/O — no UI dependency so unit tests
+/// Serialization helpers for <see cref="HaPlayProject"/>. Pure I/O - no UI dependency so unit tests
 /// can round-trip projects without spinning up Avalonia. Save / Load command plumbing on
 /// <c>MainViewModel</c> is built on top of these.
 /// </summary>
 public static class ProjectIO
 {
-    /// <summary>Default project file extension (§7.3 — Save Project dialog uses this).</summary>
+    /// <summary>Default project file extension (§7.3 - Save Project dialog uses this).</summary>
     public const string FileExtension = "haplayproj";
 
     /// <summary>Reads a project from <paramref name="path"/>. Throws on missing file or malformed JSON.</summary>
@@ -121,7 +121,7 @@ public static class CueListIO
     }
 }
 
-/// <summary>Save/load rework — standalone composition (virtual canvas) sets, shareable between
+/// <summary>Save/load rework - standalone composition (virtual canvas) sets, shareable between
 /// cue lists/shows. Import merges by composition <em>name</em> (same name updates size/fps in
 /// place keeping the Id, so existing cue placements stay bound; new names append).</summary>
 public sealed record CueCompositionsDocument

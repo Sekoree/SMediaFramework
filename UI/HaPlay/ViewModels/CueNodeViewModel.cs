@@ -137,7 +137,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 }
                 break;
             // An MMD scene is a pure video source (30 fps BGRA at the scene's render size, no audio
-            // leg) — without these flags the drawer never offers the Video tab, so the cue could not
+            // leg) - without these flags the drawer never offers the Video tab, so the cue could not
             // be placed on a composition at all.
             case MMDPlaylistItem mmd:
                 SourceHasVideo = true;
@@ -181,10 +181,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     /// <summary>Font families for the dropdown: the installed system fonts plus this cue's current family pinned at
-    /// the top (so the embedded "Inter" default — which isn't an OS system font — still shows and stays selected).</summary>
+    /// the top (so the embedded "Inter" default - which isn't an OS system font - still shows and stays selected).</summary>
     public IReadOnlyList<string> FontFamilyOptions => FontCatalog.WithCurrent(TextFontFamily);
 
-    /// <summary>The tight bounding box of this text cue's rendered text, as fractions (0..1) of its canvas — for
+    /// <summary>The tight bounding box of this text cue's rendered text, as fractions (0..1) of its canvas - for
     /// the placement editor to outline the actual text extent inside the placed frame. Null for a non-text cue.</summary>
     public Avalonia.Rect? TextBounds =>
         TextSource is { } t && S.Media.Source.Text.TextFrameRenderer.MeasureNormalizedBounds(HaPlay.Playback.TextSourceSpecMapper.ToSpec(t)) is { } b
@@ -300,7 +300,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private int? _audioTrackIndex;
 
-    /// <summary>Content signature of the chosen track at pick time — guards against re-muxed files.</summary>
+    /// <summary>Content signature of the chosen track at pick time - guards against re-muxed files.</summary>
     [ObservableProperty]
     private string? _audioTrackSignature;
 
@@ -428,7 +428,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             });
         }
 
-        // Sidecar selections aren't represented in the embedded-track picker — round-trip them untouched.
+        // Sidecar selections aren't represented in the embedded-track picker - round-trip them untouched.
         result.AddRange(PersistedSubtitles.Where(s => !s.IsEmbedded));
         return result;
     }
@@ -488,7 +488,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         PreparedCueState.Preparing => "Standby: preparing…",
         PreparedCueState.Ready => "Standby: ready (decoder open, seeked to start)",
-        PreparedCueState.Stale => "Standby: stale (cue changed — re-preparing)",
+        PreparedCueState.Stale => "Standby: stale (cue changed - re-preparing)",
         PreparedCueState.Failed => $"Standby failed: {PreRollError}",
         _ => null,
     };
@@ -609,7 +609,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             if (Kind == CueNodeKind.Group)
                 return BuildGroupDurationDisplay();
             if (Kind != CueNodeKind.Media || EffectiveDurationMs <= 0)
-                return Strings.EmDash;
+                return Strings.Dash;
             return FormatDurationMs(EffectiveDurationMs);
         }
     }
@@ -634,9 +634,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         }
 
         if (rollupMs <= 0 && itemCount == 0)
-            return Strings.EmDash;
+            return Strings.Dash;
 
-        var time = rollupMs <= 0 ? Strings.EmDash : FormatDurationMs((int)Math.Min(int.MaxValue, rollupMs));
+        var time = rollupMs <= 0 ? Strings.Dash : FormatDurationMs((int)Math.Min(int.MaxValue, rollupMs));
         return $"{time} · {itemCount}";
     }
 
@@ -793,7 +793,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(GroupFireMode));
         OnPropertyChanged(nameof(ActionKind));
-        // GroupFireMode determines the roll-up formula — refresh derived displays.
+        // GroupFireMode determines the roll-up formula - refresh derived displays.
         if (Kind == CueNodeKind.Group)
         {
             OnPropertyChanged(nameof(DurationDisplay));

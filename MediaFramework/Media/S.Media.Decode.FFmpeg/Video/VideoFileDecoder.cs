@@ -19,7 +19,7 @@ namespace S.Media.Decode.FFmpeg.Video;
 /// <remarks>
 /// <para>
 /// Not thread-safe. <see cref="VideoFrame"/>s returned by <see cref="TryReadNextFrame"/>
-/// must be <see cref="VideoFrame.Dispose"/>d — the release callback either
+/// must be <see cref="VideoFrame.Dispose"/>d - the release callback either
 /// unrefs a cloned <c>AVFrame</c> (pass-through) or returns nothing
 /// (conversion path owns a fresh byte array).
 /// Hardware decode without Linux DRM dma-bufs or Windows D3D11 shared-handle export leaves <see cref="NativePixelFormats"/> empty until one
@@ -30,7 +30,7 @@ namespace S.Media.Decode.FFmpeg.Video;
 /// <c>Array.Clear</c> runs on the release path before returning slots so pooled arrays never retain
 /// stale plane views. Optional counters: set environment variable
 /// <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> and read <see cref="PassThroughArenaProfiling"/> (rent/return wall time and
-/// <see cref="PassThroughArenaProfiling.TreiberCasRetries"/> — failed Treiber <c>CompareExchange</c> attempts on the free lists).
+/// <see cref="PassThroughArenaProfiling.TreiberCasRetries"/> - failed Treiber <c>CompareExchange</c> attempts on the free lists).
 /// If profiling shows sustained retries, set <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c> for a per-arena mutex around
 /// rent/return/dispose (<see cref="PassThroughArenaSerialization"/>).
 /// Further wait-free work is only for <strong>outer</strong> decode/release synchronization if profiling shows sustained retries,
@@ -81,7 +81,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     /// </summary>
     private readonly PassThroughDescriptorArena _passThroughArena = new();
 
-    /// <remarks>Caches FFmpeg swscale pointer/strides — do not reorder across concurrent calls (<see cref="TryReadNextFrame"/> is single-threaded).</remarks>
+    /// <remarks>Caches FFmpeg swscale pointer/strides - do not reorder across concurrent calls (<see cref="TryReadNextFrame"/> is single-threaded).</remarks>
     private readonly byte*[] _swScaleSrcLines = new byte*[8];
 
     private readonly int[] _swScaleSrcStride = new int[8];
@@ -407,7 +407,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (hw != null && (retainD3D11 || retainDmabuf))
             _codecCtx->extra_hw_frames = VideoHardwareDecodeContext.RetainedFramePoolHeadroom;
 
-        // Frame/slice threading helps heavy software codecs; skip while a HW device is attached — libav
+        // Frame/slice threading helps heavy software codecs; skip while a HW device is attached - libav
         // hardware decode paths are not reliably compatible with frame threading.
         if (hw == null)
             ApplyDecoderThreading(codec, _codecCtx, options);
@@ -458,12 +458,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             else
             {
                 // Real layout comes from av_hwframe_transfer_data (first frame). Do not advertise the
-                // native/transfer format here — negotiation would pick it before we know the transfer
+                // native/transfer format here - negotiation would pick it before we know the transfer
                 // format (e.g. ProRes → YUV422P10LE) and break swscale. But this path is NOT passthrough:
                 // it sws-converts the transferred frame and always EMITS BGRA32, so advertise that (what
                 // we emit). A source that declares nothing throws "neither source nor output declared any
                 // pixel formats" when negotiated against a permissive empty-declaring sink (e.g. the deck's
-                // discard negotiation lead) — the same guard the software path below applies.
+                // discard negotiation lead) - the same guard the software path below applies.
                 _srcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
                 _nativePixelFormat = PixelFormat.Unknown;
                 _passThrough = false;
@@ -479,7 +479,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             _passThrough = nativeSoft != PixelFormat.Unknown;
             _outPixelFormat = _nativePixelFormat;
             // Unmapped pixfmt ⇒ we sws-convert to BGRA32, so advertise BGRA32 (what we emit) instead of
-            // nothing — otherwise this source declares no formats and negotiation against a permissive
+            // nothing - otherwise this source declares no formats and negotiation against a permissive
             // empty-declaring sink throws "neither source nor output declared any pixel formats".
             _nativePixelFormats = nativeSoft != PixelFormat.Unknown ? [nativeSoft] : [PixelFormat.Bgra32];
         }
@@ -498,7 +498,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
         if (hw == null && !_passThrough)
         {
-            // Codec's native format isn't in our enum — fall back to BGRA32.
+            // Codec's native format isn't in our enum - fall back to BGRA32.
             _swsCtx = sws_getCachedContext(null,
                 _codecCtx->width, _codecCtx->height, _srcPixelFormat,
                 _codecCtx->width, _codecCtx->height, AVPixelFormat.AV_PIX_FMT_BGRA,
@@ -790,7 +790,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     private VideoFrame BuildConvertedFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
     {
         if (_swsCtx == null)
-            throw new InvalidOperationException("swscale is not configured — SelectOutputFormat must run before decoding.");
+            throw new InvalidOperationException("swscale is not configured - SelectOutputFormat must run before decoding.");
 
         var width = Format.Width;
         var height = Format.Height;
@@ -800,7 +800,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             if (_outPixelFormat is PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.I420)
                 return BuildConvertedPlanarFrame(work, pts, meta);
             throw new NotSupportedException(
-                $"sws conversion to {_outPixelFormat} is not implemented — use BGRA32, NV12, I420, or a packed RGB layout.");
+                $"sws conversion to {_outPixelFormat} is not implemented - use BGRA32, NV12, I420, or a packed RGB layout.");
         }
 
         var stride = width * bytesPerPixel;
@@ -878,7 +878,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             strides[i] = PixelFormatInfo.PlaneByteWidth(_outPixelFormat, width, i);
 
         var buffers = new byte[n][];
-        // Pinning scratch is transient (freed before return), so keep it on the stack — only the plane
+        // Pinning scratch is transient (freed before return), so keep it on the stack - only the plane
         // count's worth (n ≤ 4 for any planar output). `allocated` tracks how many were pinned so a
         // mid-loop Rent failure frees exactly those.
         Span<GCHandle> handles = stackalloc GCHandle[n];
@@ -1223,7 +1223,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         catch (ArgumentException)
         {
             // Malformed timecode (out-of-range fields, drop-frame at a non-drop-rate). Drop it
-            // rather than crashing the decode loop — the absence is signalling enough.
+            // rather than crashing the decode loop - the absence is signalling enough.
             return null;
         }
     }

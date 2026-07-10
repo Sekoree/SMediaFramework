@@ -25,7 +25,7 @@ public partial class SoundboardView : UserControl
     private SoundboardWorkspaceViewModel? Vm => DataContext as SoundboardWorkspaceViewModel;
 
     // A11Y-02: the tile is now a Button, so this fires on both pointer taps and keyboard activation
-    // (Space/Enter) — the soundboard is fully operable from the keyboard.
+    // (Space/Enter) - the soundboard is fully operable from the keyboard.
     private void OnTileTapped(object? sender, RoutedEventArgs e)
     {
         if (Vm is not { } vm || (sender as Control)?.DataContext is not SoundboardTileViewModel tile)
@@ -67,7 +67,7 @@ public partial class SoundboardView : UserControl
         _ = BindDroppedFilesAsync(vm, tile, paths);
     }
 
-    /// <summary>Multiple dropped files fill the target tile, then following free tiles row-major —
+    /// <summary>Multiple dropped files fill the target tile, then following free tiles row-major -
     /// "drop a folder of stingers on the grid" in one gesture.</summary>
     private static async Task BindDroppedFilesAsync(
         SoundboardWorkspaceViewModel vm,

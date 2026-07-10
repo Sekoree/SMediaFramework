@@ -13,7 +13,7 @@ namespace HaPlay.ViewModels.Dialogs;
 /// <summary>
 /// Add/edit dialog for an MMD scene with the RUDIMENTARY 3D camera-placement preview (Gate-6): pick a
 /// PMX model + optional motion/camera VMDs, then frame the shot with the manual camera controls while a
-/// software-rendered preview updates live. The preview renders on a worker at a debounced cadence — the
+/// software-rendered preview updates live. The preview renders on a worker at a debounced cadence - the
 /// same renderer playback uses, so what you frame here is what the composition gets.
 /// </summary>
 public sealed partial class AddMMDDialogViewModel : ObservableObject
@@ -33,7 +33,7 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
     [ObservableProperty] private double _cameraTargetY = 10;
     [ObservableProperty] private double _cameraTargetZ;
     // Direct camera-EYE placement (operator request): kept in two-way sync with the orbit fields
-    // (distance/rotation/target) — the persisted item stays in MMD's orbit form, so nothing downstream
+    // (distance/rotation/target) - the persisted item stays in MMD's orbit form, so nothing downstream
     // changes. Position = target + orbitBack(rotation)·|distance|.
     [ObservableProperty] private double _cameraPositionX;
     [ObservableProperty] private double _cameraPositionY = 10;
@@ -131,7 +131,7 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
     partial void OnCameraPositionYChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
     partial void OnCameraPositionZChanged(double value) { SyncOrbitFromPosition(); ScheduleRender(); }
 
-    /// <summary>Orbit → eye-position: position = target + back(rotation)·|distance| — the exact vector the
+    /// <summary>Orbit → eye-position: position = target + back(rotation)·|distance| - the exact vector the
     /// renderer places the camera at (roll does not move the eye, only the horizon).</summary>
     private void SyncPositionFromOrbit()
     {
@@ -157,7 +157,7 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
     }
 
     /// <summary>Eye-position → orbit: distance = |eye − target|, pitch = atan2(dy, dz),
-    /// yaw = atan2(dx, √(dy² + dz²)) — the closed-form inverse of the renderer's
+    /// yaw = atan2(dx, √(dy² + dz²)) - the closed-form inverse of the renderer's
     /// back = (sin yaw, cos yaw·sin pitch, cos yaw·cos pitch). Roll is left untouched.</summary>
     private void SyncOrbitFromPosition()
     {
@@ -171,7 +171,7 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
                 (float)(CameraPositionZ - CameraTargetZ));
             var distance = d.Length();
             if (distance < 0.01f)
-                return; // eye on the target — orbit undefined, keep the current fields
+                return; // eye on the target - orbit undefined, keep the current fields
             var pitch = Math.Atan2(d.Y, d.Z);
             var yaw = Math.Atan2(d.X, Math.Sqrt((double)d.Y * d.Y + (double)d.Z * d.Z));
             CameraDistance = -Math.Round(distance, 2);
@@ -213,7 +213,7 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
             return;
 
         // Preview at the OUTPUT's aspect ratio (was a fixed 480×270) so a portrait/ultrawide render is
-        // framed here exactly as the composition will frame it — MMD fov is vertical, so matching the
+        // framed here exactly as the composition will frame it - MMD fov is vertical, so matching the
         // aspect matches the shot. Longest side capped for a fast preview; the view's Stretch=Uniform
         // letterboxes the result into the preview panel.
         var outW = Math.Clamp(RenderWidth, 16, 7680);
@@ -235,7 +235,7 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
                 (float)CameraFovDeg);
 
             // A fresh source per render keeps this dead simple; model parse dominates and stays in the
-            // OS file cache. Fine for a placement dialog — playback uses a long-lived source.
+            // OS file cache. Fine for a placement dialog - playback uses a long-lived source.
             using var source = new MMDVideoSource(request);
             var duration = source.Duration.TotalSeconds;
             source.Seek(TimeSpan.FromSeconds(Math.Clamp(PreviewTimeSeconds, 0, Math.Max(0, duration - 0.1))));

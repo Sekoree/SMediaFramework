@@ -5,12 +5,12 @@ namespace S.Media.Routing;
 /// <summary>
 /// Pacing source that defers to a specific output's <see cref="IClockedOutput.WaitForCapacity"/>.
 /// Falls back to a wall-clock impl when the slaved output is missing or hasn't
-/// implemented <see cref="IClockedOutput"/> — so dynamically removing the
+/// implemented <see cref="IClockedOutput"/> - so dynamically removing the
 /// slaved output doesn't stall the router.
 /// </summary>
 /// <remarks>
 /// The output lookup is a callback so the router can resolve from its current
-/// (immutable) state on each tick — additions and removals take effect on the
+/// (immutable) state on each tick - additions and removals take effect on the
 /// next chunk without re-binding the clock.
 /// <para>
 /// The wall-clock fallback is created <strong>lazily</strong> the first time
@@ -38,11 +38,11 @@ internal sealed class OutputSlavedRouterClock : IRouterClock
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Audio.OutputSlavedRouterClock");
 
     /// <remarks>
-    /// <strong>Invariant — ctor must not invoke any <see cref="AudioRouter"/> API.</strong>
+    /// <strong>Invariant - ctor must not invoke any <see cref="AudioRouter"/> API.</strong>
     /// <see cref="AudioRouter.SlaveTo"/>, <see cref="AudioRouter.RetargetSlaveClock"/>, and
     /// <see cref="AudioRouter.ReconfigureSampleRateWhileRunning"/> construct the clock while
     /// holding the router's internal <c>_gate</c> lock; calling back into the router from
-    /// here would deadlock the run loop. Keep this ctor field-store-only — defer all router
+    /// here would deadlock the run loop. Keep this ctor field-store-only - defer all router
     /// interaction to <paramref name="resolveOutput"/>, which runs lock-free on the producer
     /// thread.
     /// </remarks>
@@ -78,7 +78,7 @@ internal sealed class OutputSlavedRouterClock : IRouterClock
         var fallbacks = Interlocked.Increment(ref _consecutiveFallbacks);
         // Log on first fallback and every ~5 seconds afterwards (~500 chunks at 480/48k).
         if (fallbacks == 1 || fallbacks % 500 == 0)
-            Trace.LogWarning("WaitForNextChunk: slaved output unresolvable — falling back to wall clock (consecutiveFallbacks={Count})", fallbacks);
+            Trace.LogWarning("WaitForNextChunk: slaved output unresolvable - falling back to wall clock (consecutiveFallbacks={Count})", fallbacks);
 
         WallClockRouterClock fb;
         lock (_fallbackGate)

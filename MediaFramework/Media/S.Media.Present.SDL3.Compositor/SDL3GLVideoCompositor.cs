@@ -139,7 +139,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
         _output = output;
         if (_inner is not null)
         {
-            // _inner.Configure recreates GL FBOs — it must run against our own context, which another
+            // _inner.Configure recreates GL FBOs - it must run against our own context, which another
             // compositor sharing this thread may have displaced (see EnsureContextCurrent remarks).
             EnsureContextCurrent();
             _inner.Configure(output);
@@ -167,7 +167,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
         return _inner!.CompositeMulti(layersBackToFront, outputs, presentationTime);
     }
 
-    /// <summary>Surface-host capability (NXT-10) — delegates to the inner <see cref="GlVideoCompositor"/>
+    /// <summary>Surface-host capability (NXT-10) - delegates to the inner <see cref="GlVideoCompositor"/>
     /// with this host's context current, exactly like <see cref="Composite"/>. Without this the app's
     /// SDL3-driven compositions (the deck/cue default) reported no surface support, and surface-capable
     /// sources (MMD) silently fell back to their CPU frame path (the 2026-07-03 grayscale-MMD report).</summary>
@@ -211,7 +211,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
     /// <inheritdoc />
     public void SetWarpPass(VideoFormat warpOutput, IReadOnlyList<WarpSection>? sections)
     {
-        // The inner compositor is created lazily on the pump thread — buffer the warp config until
+        // The inner compositor is created lazily on the pump thread - buffer the warp config until
         // then. The inner setter itself is a GL-free snapshot swap, so forwarding from any thread
         // is safe once it exists.
         lock (_warpGate)
@@ -322,6 +322,6 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
     }
 }
 
-// The old global MediaFrameworkRuntime registration extension (UseSDL3OpenGLCompositor) is removed (P2 —
+// The old global MediaFrameworkRuntime registration extension (UseSDL3OpenGLCompositor) is removed (P2 -
 // no process-wide runtime). Wire SDL3GLVideoCompositor.TryCreate as a VideoCompositorBackendFactory via
 // per-session VideoCompositorOptions.AutoBackends, or VideoCompositor.RegisterAutoBackend at a composition root.

@@ -22,7 +22,7 @@ namespace S.Media.Compositor;
 /// <para>
 /// Pixel formats are fixed to whatever <see cref="VideoFormat.PixelFormat"/> was passed in;
 /// <see cref="SelectOutputFormat"/> throws on mismatch. Callers wanting a different layout should
-/// pre-build the planes in that format or compose with an external converter — the source
+/// pre-build the planes in that format or compose with an external converter - the source
 /// intentionally has no swscale dependency so it can live in Core.
 /// </para>
 /// </remarks>
@@ -38,7 +38,7 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
     // Refcount guarding the shared backing when a release hook is present (pooled/native buffers via
     // releaseBuffersOnDispose / FromFrame's ArrayPool clone). The source holds one ref; each emitted
     // frame holds one while alive. The hook fires only once the source is disposed AND every emitted
-    // frame is — so a still-queued frame can't read buffers Dispose has already returned to the pool.
+    // frame is - so a still-queued frame can't read buffers Dispose has already returned to the pool.
     // No refs / no per-frame allocation when the backing is plain managed arrays (hook null): the GC
     // keeps those alive behind any queued frame, so there's nothing to defer.
     private readonly Lock _gate = new();
@@ -47,11 +47,11 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
     private bool _disposed;
 
     /// <param name="format">Frame format: dimensions, pixel layout, and frame rate (drives PTS spacing).</param>
-    /// <param name="planes">Plane data — wrapped (not copied) into every returned frame.</param>
+    /// <param name="planes">Plane data - wrapped (not copied) into every returned frame.</param>
     /// <param name="strides">Per-plane stride in bytes; same length as <paramref name="planes"/>.</param>
     /// <param name="ptsCadence">Override PTS spacing per frame. Defaults to <c>format.FrameRate</c>'s period (or 33 ms when invalid).</param>
     /// <param name="colorTransferHint">Optional transfer hint stamped onto every frame.</param>
-    /// <param name="releaseBuffersOnDispose">Fires once on <see cref="Dispose"/> — return arrays to a pool, free a refcount, etc.</param>
+    /// <param name="releaseBuffersOnDispose">Fires once on <see cref="Dispose"/> - return arrays to a pool, free a refcount, etc.</param>
     public StaticFrameSource(
         VideoFormat format,
         ReadOnlyMemory<byte>[] planes,
@@ -140,14 +140,14 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
     private void InvokeBufferRelease()
     {
         try { _bufferRelease!(); }
-        catch { /* best effort — buffer release is the consumer's hook */ }
+        catch { /* best effort - buffer release is the consumer's hook */ }
     }
 
     /// <summary>
     /// Builds a static source from one frame. The frame's CPU planes are <strong>copied</strong> into
     /// source-owned backing, so the caller may dispose <paramref name="frame"/> immediately afterwards.
-    /// (The previous non-copying mode aliased the caller's planes with no ownership — a use-after-free
-    /// footgun if the caller disposed the original — and is removed.)
+    /// (The previous non-copying mode aliased the caller's planes with no ownership - a use-after-free
+    /// footgun if the caller disposed the original - and is removed.)
     /// </summary>
     public static StaticFrameSource FromFrame(VideoFrame frame, TimeSpan? ptsCadence = null)
     {

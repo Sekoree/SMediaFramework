@@ -47,7 +47,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
     /// <summary>
     /// Serializes native stream-lifecycle transitions so two managed threads can never call
-    /// Pa_AbortStream / Pa_StopStream / Pa_StartStream on the same handle concurrently — which
+    /// Pa_AbortStream / Pa_StopStream / Pa_StartStream on the same handle concurrently - which
     /// wedges the PortAudio backend. <see cref="Submit"/> runs on the router's per-output drainer
     /// thread while <see cref="WaitForCapacity"/> runs on the router's run-loop thread, and right
     /// after a <see cref="Flush"/> both can reach <see cref="EnsureStreamRunningAfterFlush"/>.
@@ -57,14 +57,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.PortAudio.PortAudioOutput");
     private long _waitForCapacityWarnTicks;
 
-    /// <summary>Pa_GetStreamTime at <see cref="_segmentPlayed0Samples"/> — set on first callback after Start/Flush.</summary>
+    /// <summary>Pa_GetStreamTime at <see cref="_segmentPlayed0Samples"/> - set on first callback after Start/Flush.</summary>
     private double _segmentStreamT0;
     /// <summary><see cref="PlayedSamples"/> snapshot paired with <see cref="_segmentStreamT0"/>.</summary>
     private long _segmentPlayed0Samples;
     /// <summary>1 after first callback calibrates stream time vs played samples for this stream segment.</summary>
     private int _streamSmoothCalibrated;
     /// <summary>
-    /// <see cref="PlayedSamples"/> baseline for <see cref="IPlaybackClock"/> — reset on each
+    /// <see cref="PlayedSamples"/> baseline for <see cref="IPlaybackClock"/> - reset on each
     /// <see cref="Start"/>/<see cref="Flush"/> so pause/resume drift math sees segment-local time,
     /// not lifetime output counters that keep advancing on underrun silence.
     /// </summary>
@@ -102,7 +102,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// <summary>1 = PA reports stream active, 0 = inactive, negative = error/closed.</summary>
     public int StreamActive => _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
 
-    /// <summary>PortAudio's stream clock — wall-clock seconds since the stream started.</summary>
+    /// <summary>PortAudio's stream clock - wall-clock seconds since the stream started.</summary>
     public double StreamTime => _stream != nint.Zero ? Native.Pa_GetStreamTime(_stream) : 0.0;
 
     // The negotiated output (DAC) latency in ticks, captured at Start; the master clock subtracts it so it
@@ -110,11 +110,11 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     private long _outputLatencyTicks;
 
     /// <summary>
-    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic <strong>audible</strong> playback time — the
+    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic <strong>audible</strong> playback time - the
     /// consumed-sample position (aligned with <see cref="PlayedSamples"/>, advanced with <c>Pa_GetStreamTime</c>
     /// between callbacks so it isn't stuck for a whole buffer) <em>minus the output buffer latency</em>. The
     /// subtraction is what keeps A/V in sync: the device holds ~outputLatency of audio after we hand it over, so
-    /// the consumed count leads the speaker by that much — without it, video scheduled against the master clock
+    /// the consumed count leads the speaker by that much - without it, video scheduled against the master clock
     /// leads the audio (lip-sync drift, pronounced on high-latency hosts like JACK/ALSA). Falls back to sample
     /// counts before the first callback.
     /// </summary>
@@ -143,7 +143,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                     if (streamElapsedSec < 0)
                         streamElapsedSec = 0;
                     // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
-                    // still drain the ring — never let the master clock lag behind sample progress.
+                    // still drain the ring - never let the master clock lag behind sample progress.
                     elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
                 }
             }
@@ -193,7 +193,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
     /// <summary>
     /// Target queue depth (samples per channel) maintained by
-    /// <see cref="WaitForCapacity"/>. Defaults to half the ring's capacity —
+    /// <see cref="WaitForCapacity"/>. Defaults to half the ring's capacity -
     /// enough headroom to absorb producer jitter without piling up enough
     /// latency to feel sluggish. Set before <see cref="Start"/>.
     /// </summary>
@@ -396,7 +396,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                     var frames = dropped / _format.Channels;
                     var total = Volatile.Read(ref _droppedSamples);
                     MediaDiagnostics.LogWarning(
-                        $"PortAudioOutput: ring full — dropped {dropped} floats (~{frames} frames this Submit); " +
+                        $"PortAudioOutput: ring full - dropped {dropped} floats (~{frames} frames this Submit); " +
                         $"total DroppedSamples={total}. Prefill / TargetQueueSamples / stream-not-started windows can cause bursts.");
                 }
             }
@@ -467,12 +467,12 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     {
         if (chunkSamples <= 0) return !token.IsCancellationRequested;
 
-        // Before the stream is started PA isn't draining yet — pretend ready,
+        // Before the stream is started PA isn't draining yet - pretend ready,
         // so prebuffering can fill the ring up to the target before Start().
         if (!Volatile.Read(ref _isRunning))
         {
             if (Trace.IsEnabled(LogLevel.Trace))
-                Trace.LogTrace("WaitForCapacity: stream not running yet — returning ready (chunk={Chunk})", chunkSamples);
+                Trace.LogTrace("WaitForCapacity: stream not running yet - returning ready (chunk={Chunk})", chunkSamples);
             return !token.IsCancellationRequested;
         }
 
@@ -490,7 +490,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 if (now - prev >= 2000 || prev == 0)
                 {
                     if (Interlocked.CompareExchange(ref _waitForCapacityWarnTicks, now, prev) == prev)
-                        Trace.LogWarning("WaitForCapacity: timed out after 5s (queued={Queued}f target={Target}f played={Played}f underrun={Underrun}f cbCount={CB} streamActive={Active}) — router pacing will stall",
+                        Trace.LogWarning("WaitForCapacity: timed out after 5s (queued={Queued}f target={Target}f played={Played}f underrun={Underrun}f cbCount={CB} streamActive={Active}) - router pacing will stall",
                             QueuedSamples, target, Volatile.Read(ref _playedSamples), Volatile.Read(ref _underrunSamples),
                             Volatile.Read(ref _callbackCount), StreamActive);
                 }
@@ -594,7 +594,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                     self._ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(output[firstChunk..]);
                 Volatile.Write(ref self._readIndex, read + toRead);
                 // _playedSamples is the lifetime per-channel frame counter
-                // (preserved across Stop/Start) — separate from the ring read
+                // (preserved across Stop/Start) - separate from the ring read
                 // pointer, which may reset on Stop or Flush.
                 Interlocked.Add(ref self._playedSamples, toRead / self._format.Channels);
             }

@@ -136,7 +136,7 @@ public sealed class VMDDocument
         foreach (var track in morphTracks.Values)
             track.Sort(static (a, b) => a.Frame.CompareTo(b.Frame));
 
-        // Camera frames (absent in model motions — the section may be missing entirely at EOF)
+        // Camera frames (absent in model motions - the section may be missing entirely at EOF)
         var camera = new List<VMDCameraFrame>();
         if (stream.Position < stream.Length)
         {

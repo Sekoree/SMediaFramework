@@ -126,15 +126,15 @@ public sealed class ControlSystemMIDIDeviceSessionManagerTests
         using var midi = new ControlSystemMIDIDeviceSessionManager(config, monitor, provider);
 
         midi.Start(manager);
-        provider.Input(1).Raise(new ControlChange(0, 0, 100));  // coarse (MSB) — held back
-        provider.Input(1).Raise(new ControlChange(0, 32, 50));  // fine (LSB) — emits the combined value
+        provider.Input(1).Raise(new ControlChange(0, 0, 100));  // coarse (MSB) - held back
+        provider.Input(1).Raise(new ControlChange(0, 32, 50));  // fine (LSB) - emits the combined value
 
         await WaitUntilAsync(() => oscSender.Sent.Count >= 1);
-        await Task.Delay(30); // a broken combiner would leak a second (coarse) send — give it time to land
+        await Task.Delay(30); // a broken combiner would leak a second (coarse) send - give it time to land
 
         var sent = Assert.Single(oscSender.Sent);
         Assert.Equal("/ch/01/mix/fader", sent.Address);
-        Assert.Equal((100 << 7) | 50, Assert.Single(sent.Arguments).AsInt32()); // 12850 — full 14-bit value
+        Assert.Equal((100 << 7) | 50, Assert.Single(sent.Arguments).AsInt32()); // 12850 - full 14-bit value
     }
 
     [Fact]

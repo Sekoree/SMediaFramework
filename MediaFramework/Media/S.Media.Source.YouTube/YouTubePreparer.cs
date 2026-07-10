@@ -10,14 +10,14 @@ public enum YouTubePreparePhase { Resolving, DownloadingVideo, DownloadingAudio,
 public readonly record struct YouTubePrepareProgress(YouTubePreparePhase Phase, double Fraction);
 
 /// <summary>The locally prepared, playable result of one youtube selection. <see cref="ResolvedSelection"/>
-/// carries the CONCRETE stream descriptors a "best" request resolved to — persist THAT (and build the
+/// carries the CONCRETE stream descriptors a "best" request resolved to - persist THAT (and build the
 /// canonical URI from it), because a best-selection URI cannot be mapped to a cache asset offline.</summary>
 public sealed record YouTubePreparedMedia(
     string AssetPath, string? SubtitlePath, YouTubeMediaManifest Manifest, YouTubeStreamSelection ResolvedSelection);
 
 /// <summary>
 /// Downloads the selected separate video/audio streams and stream-copy remuxes them into ONE local MKV
-/// in a content-addressed cache, so playback runs entirely from disk (reliable mode — the review's
+/// in a content-addressed cache, so playback runs entirely from disk (reliable mode - the review's
 /// Gate-5 default; progressive playback is a later, explicitly-opted path). Cache identity =
 /// videoId + resolved stream descriptors; writes go to <c>.partial</c> paths and commit by atomic
 /// rename; concurrent prepares of the same key coalesce onto one task.
@@ -78,7 +78,7 @@ public sealed class YouTubePreparer
         return $"{videoId}-{hash}";
     }
 
-    /// <summary>The final asset path a selection WOULD occupy — exists ⇒ prepared (used by the provider's
+    /// <summary>The final asset path a selection WOULD occupy - exists ⇒ prepared (used by the provider's
     /// no-network open path and by readiness queries). Requires descriptors already resolved (not "best").</summary>
     public string AssetPathFor(string videoId, string? videoDescriptor, string? audioDescriptor) =>
         Path.Combine(_cacheRoot, CacheKey(videoId, videoDescriptor, audioDescriptor) + ".mkv");
@@ -87,7 +87,7 @@ public sealed class YouTubePreparer
         File.Exists(AssetPathFor(videoId, videoDescriptor, audioDescriptor));
 
     /// <summary>Content-addressed cache path for ONE downloaded stream, keyed by its OWN descriptor so it is
-    /// reused across selection changes — swapping the audio stream keeps the already-downloaded video and
+    /// reused across selection changes - swapping the audio stream keeps the already-downloaded video and
     /// vice-versa, instead of re-downloading both. <paramref name="ext"/> tags the role (<c>.v</c>/<c>.a</c>);
     /// the container is content-probed at remux time, so the extension need not encode it.</summary>
     private string StreamCachePath(string videoId, string descriptor, string ext)
@@ -104,7 +104,7 @@ public sealed class YouTubePreparer
     /// <paramref name="cancellationToken"/> cancels only <em>this caller's wait</em>; the shared run keeps
     /// going for other joiners and is aborted only when the last caller leaves before it finishes. Progress
     /// is reported to the caller that <em>starts</em> the run; a later joiner sees no progress (there is only
-    /// one shared run) — poll <see cref="IsPrepared"/> instead.</remarks>
+    /// one shared run) - poll <see cref="IsPrepared"/> instead.</remarks>
     public Task<YouTubePreparedMedia> PrepareAsync(
         string videoId,
         YouTubeStreamSelection selection,
@@ -122,7 +122,7 @@ public sealed class YouTubePreparer
             if (!_inFlight.TryGetValue(coalesceKey, out entry!))
             {
                 entry = new PrepareEntry(coalesceKey);
-                // Shared run on the entry's internal token — decoupled from any one caller (YT-02).
+                // Shared run on the entry's internal token - decoupled from any one caller (YT-02).
                 entry.Task = PrepareCoreAsync(videoId, selection, progress, entry.Cts.Token);
                 _inFlight[coalesceKey] = entry;
                 var captured = entry;
@@ -225,8 +225,8 @@ public sealed class YouTubePreparer
 
     /// <summary>YT-03: bound the committed-asset cache. Evicts committed <c>.mkv</c> assets (and their
     /// <c>.ass</c> subtitle sidecars) that are older than <see cref="_maxCacheAge"/> or, oldest-first, over
-    /// <see cref="_maxCacheBytes"/>. Only ever touches final committed assets — never <c>.partial</c> temps or
-    /// the per-stream <c>.v</c>/<c>.a</c> caches an in-flight remux may be reading — and always keeps the asset
+    /// <see cref="_maxCacheBytes"/>. Only ever touches final committed assets - never <c>.partial</c> temps or
+    /// the per-stream <c>.v</c>/<c>.a</c> caches an in-flight remux may be reading - and always keeps the asset
     /// that was just prepared. Best-effort; never throws into the prepare path. No-op unless a limit is set.</summary>
     private void TryCleanupCache(string keepAssetPath)
     {
@@ -275,7 +275,7 @@ public sealed class YouTubePreparer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Cache maintenance is best-effort — a locked/missing file must never fail a prepare.
+            // Cache maintenance is best-effort - a locked/missing file must never fail a prepare.
         }
 
         static long SafeLength(string path)
@@ -316,10 +316,10 @@ public sealed class YouTubePreparer
             throw new InvalidOperationException($"YouTube video '{videoId}' offers no downloadable streams.");
         if (selection.Video is not null && manifest.VideoStreams.All(s => s.Descriptor != selection.Video))
             throw new InvalidOperationException(
-                $"Selected video stream '{selection.Video}' is no longer offered for '{videoId}' — reselect streams.");
+                $"Selected video stream '{selection.Video}' is no longer offered for '{videoId}' - reselect streams.");
         if (selection.Audio is not null && manifest.AudioStreams.All(s => s.Descriptor != selection.Audio))
             throw new InvalidOperationException(
-                $"Selected audio stream '{selection.Audio}' is no longer offered for '{videoId}' — reselect streams.");
+                $"Selected audio stream '{selection.Audio}' is no longer offered for '{videoId}' - reselect streams.");
 
         Directory.CreateDirectory(_cacheRoot);
         var key = CacheKey(videoId, videoDescriptor, audioDescriptor);
@@ -334,7 +334,7 @@ public sealed class YouTubePreparer
             if (!File.Exists(assetPath))
             {
                 // Per-stream caches (keyed by each stream's own descriptor) so changing ONE stream selection
-                // reuses the other — swapping audio keeps the cached video and vice-versa, instead of
+                // reuses the other - swapping audio keeps the cached video and vice-versa, instead of
                 // re-downloading both. They persist for that reuse (like the .mkv assets); only the remux is temp.
                 var videoCache = videoDescriptor is null ? null : StreamCachePath(videoId, videoDescriptor, ".v");
                 var audioCache = audioDescriptor is null ? null : StreamCachePath(videoId, audioDescriptor, ".a");
@@ -362,7 +362,7 @@ public sealed class YouTubePreparer
                         () => _remux(videoCache, audioCache, assetTemp, cancellationToken),
                         cancellationToken).ConfigureAwait(false);
 
-                    File.Move(assetTemp, assetPath, overwrite: true); // atomic commit — readers only ever see complete assets
+                    File.Move(assetTemp, assetPath, overwrite: true); // atomic commit - readers only ever see complete assets
                 }
                 finally
                 {
@@ -380,7 +380,7 @@ public sealed class YouTubePreparer
                             videoId, selection.SubtitleLanguage!, subTemp, cancellationToken).ConfigureAwait(false))
                         File.Move(subTemp, subtitlePath, overwrite: true);
                     else
-                        subtitlePath = null; // requested language not offered — asset still plays
+                        subtitlePath = null; // requested language not offered - asset still plays
                 }
                 finally
                 {
@@ -403,7 +403,7 @@ public sealed class YouTubePreparer
 
         // Download one stream into its content-addressed cache atomically: to a unique temp, then rename into
         // place. A concurrent prepare that reuses the same stream either finds the finished cache file (and
-        // skips) or races to its own temp — it never observes a partial cache file.
+        // skips) or races to its own temp - it never observes a partial cache file.
         async Task DownloadToCacheAsync(string descriptor, string cachePath, IProgress<double>? p)
         {
             var temp = $"{cachePath}.{Guid.NewGuid():N}.partial";

@@ -3,7 +3,7 @@ using System.Globalization;
 namespace S.Media.Audio.PortAudio;
 
 /// <summary>
-/// <see cref="IAudioBackend"/> over PortAudio — a thin adapter over <see cref="PortAudioDeviceCatalog"/> and
+/// <see cref="IAudioBackend"/> over PortAudio - a thin adapter over <see cref="PortAudioDeviceCatalog"/> and
 /// the <see cref="PortAudioOutput"/> / <see cref="PortAudioInput"/> constructors (no behaviour change). A
 /// device <see cref="AudioDeviceInfo.Id"/> is the global PortAudio device index as an invariant string;
 /// <c>null</c>/empty selects the system default device. Registered by

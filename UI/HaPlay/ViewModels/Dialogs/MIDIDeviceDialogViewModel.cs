@@ -34,7 +34,7 @@ public sealed partial class MIDIDeviceDialogViewModel : ViewModelBase
 
         ProfileOptions =
         [
-            new MIDIDeviceProfileOption("generic-midi", "(generic MIDI — no profile)"),
+            new MIDIDeviceProfileOption("generic-midi", "(generic MIDI - no profile)"),
             .. midiProfiles
                 .OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .Select(p => new MIDIDeviceProfileOption(p.Id, $"{p.DisplayName} ({p.Id})")),

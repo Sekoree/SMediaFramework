@@ -5,7 +5,7 @@ using HaPlay.ViewModels.Dialogs;
 
 namespace HaPlay.Views.Dialogs;
 
-/// <summary>UX-03: the searchable keyboard-shortcut help overlay. Self-contained — owns its VM and closes
+/// <summary>UX-03: the searchable keyboard-shortcut help overlay. Self-contained - owns its VM and closes
 /// on Close / Escape.</summary>
 public partial class KeyboardShortcutsDialog : Window
 {

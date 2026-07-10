@@ -9,14 +9,14 @@ namespace S.Media.Time;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="ElapsedSinceStart"/> is monotonic — it never goes backwards. It
+/// <see cref="ElapsedSinceStart"/> is monotonic - it never goes backwards. It
 /// represents real playback progress (samples consumed by the device divided
 /// by sample rate, etc.). Pausing the underlying source should freeze it;
 /// stopping should also freeze it.
 /// </para>
 /// <para>
 /// Implementations should be safe to read concurrently from <see cref="MediaClock"/>'s
-/// driver thread. <see cref="ElapsedSinceStart"/> is read frequently — keep it
+/// driver thread. <see cref="ElapsedSinceStart"/> is read frequently - keep it
 /// cheap (a couple of <see cref="System.Threading.Interlocked"/> reads + a
 /// division is fine).
 /// </para>

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <!-- Phase 6 S.Abi GL gate: verifies the native plugin GL layer-surface adapter end-to-end on a real SDL GL
-         context — the plugin's layer surface (created from a config blob, registered into an ICompositorRegistry)
+         context - the plugin's layer surface (created from a config blob, registered into an ICompositorRegistry)
          renders into a canvas FBO; readback confirms the config-driven colour. Headless: run under xvfb. -->
 
     <PropertyGroup>

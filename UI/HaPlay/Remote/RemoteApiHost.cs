@@ -1,7 +1,7 @@
 namespace HaPlay.Remote;
 
 /// <summary>
-/// APP-02: owns the remote-API listener lifecycle that used to live inline in <c>MainViewModel</c> — the
+/// APP-02: owns the remote-API listener lifecycle that used to live inline in <c>MainViewModel</c> - the
 /// <see cref="RestApiServer"/> instance and the lazily-built <see cref="RemoteApiDispatcher"/>, plus the
 /// stop/start dance on every settings change. The view model keeps only the bound settings (enabled/port/
 /// token/LAN) and presentation; this service turns those into a running (or stopped) listener with an explicit

@@ -13,7 +13,7 @@ namespace HaPlay.Models;
 /// </para>
 /// <para>
 /// Dedicated single-item formats (one cue list, one player config, one playlist tab, the control
-/// config) keep their existing commands/extensions — this layer is for section-level scoping.
+/// config) keep their existing commands/extensions - this layer is for section-level scoping.
 /// </para>
 /// </remarks>
 public static class ProjectSections
@@ -26,7 +26,7 @@ public static class ProjectSections
     public const string Soundboards = "soundboards";
     public const string Control = "control";
 
-    // Sub-sections (finer I/O split — the "checkboxes instead of a menu per combination" ask).
+    // Sub-sections (finer I/O split - the "checkboxes instead of a menu per combination" ask).
     public const string OutputsAudio = "outputs.audio";
     public const string OutputsVideo = "outputs.video";
     public const string TargetsMIDI = "targets.midi";
@@ -46,7 +46,7 @@ public static class ProjectSections
     ];
 
     /// <summary>True when <paramref name="savedSections"/> (null = full project) covers
-    /// <paramref name="leaf"/> — either directly or via its parent section id.</summary>
+    /// <paramref name="leaf"/> - either directly or via its parent section id.</summary>
     public static bool Includes(IReadOnlyCollection<string>? savedSections, string leaf)
     {
         if (savedSections is null)

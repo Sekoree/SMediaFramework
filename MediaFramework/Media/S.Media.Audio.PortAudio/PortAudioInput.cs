@@ -46,7 +46,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     public bool IsRunning => Volatile.Read(ref _isRunning);
     public int DeviceIndex => _deviceIndex;
 
-    /// <summary>Live source — only "exhausted" if disposed; otherwise more samples may yet arrive.</summary>
+    /// <summary>Live source - only "exhausted" if disposed; otherwise more samples may yet arrive.</summary>
     public bool IsExhausted => _disposed;
 
     public int ReadInto(Span<float> dst)
@@ -289,7 +289,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     /// <summary>
     /// Pulls <paramref name="samplesPerChannel"/> samples per channel out of the
     /// capture buffer into a fresh frame. Returns false if not enough samples
-    /// are available yet — caller can wait and retry.
+    /// are available yet - caller can wait and retry.
     /// </summary>
     /// <remarks>
     /// Allocates a fresh sample array per call. For high-frequency capture
@@ -306,7 +306,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
 
     /// <summary>
     /// Same as <see cref="TryReadFrame(int, out AudioFrame)"/> but writes into
-    /// a caller-supplied destination — eliminates the per-call allocation.
+    /// a caller-supplied destination - eliminates the per-call allocation.
     /// <paramref name="destination"/>'s length must equal
     /// <c>samplesPerChannel × Format.Channels</c>; the resulting <see cref="AudioFrame"/>
     /// references the same memory, so callers must not reuse it until the

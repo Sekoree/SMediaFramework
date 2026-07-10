@@ -8,7 +8,7 @@ using Xunit;
 namespace S.Media.Decode.FFmpeg.Tests;
 
 /// <summary>
-/// End-to-end gate for <see cref="FFmpegStreamCopyRemuxer"/> — the YouTube prepare path's
+/// End-to-end gate for <see cref="FFmpegStreamCopyRemuxer"/> - the YouTube prepare path's
 /// separate-streams → one-asset step. Inputs are generated with the host's <c>ffmpeg</c> CLI
 /// (lavfi test sources), so the tests skip where the CLI or usable natives are absent (CI runners).
 /// </summary>
@@ -39,7 +39,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
 
     /// <summary>The "YouTube seek" regression: a remuxed local asset opened through the registry's
     /// OpenVideo path (exactly how the YouTube provider plays its cache) must surface
-    /// <see cref="ISeekableSource"/> — <see cref="S.Media.Players.VideoPlayer"/> gates its seek on that
+    /// <see cref="ISeekableSource"/> - <see cref="S.Media.Players.VideoPlayer"/> gates its seek on that
     /// interface, and a wrapper hiding it makes coordinated seeks move audio and the clock while video
     /// keeps decoding from the old position (backward = frozen frame, forward = fast-forward).</summary>
     [RemuxFact]

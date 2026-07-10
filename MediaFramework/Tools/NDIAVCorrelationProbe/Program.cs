@@ -1,11 +1,11 @@
 // Phase 5 NDI A/V-correlation probe. Quantifies the divergence between the two ways an NDI source can be
 // opened:
-//   • TWO connections — what MediaPlayer's `ndi://` open does today: registry.TryOpenVideo then TryOpenAudio,
+//   • TWO connections - what MediaPlayer's `ndi://` open does today: registry.TryOpenVideo then TryOpenAudio,
 //     each opening a SEPARATE NDISource (video-only / audio-only). They connect and start receiving
 //     independently, so their A and V timelines anchor at different moments.
-//   • ONE connection — the SourceSyncGroup fix: a single receiver delivers both A and V, anchored together.
+//   • ONE connection - the SourceSyncGroup fix: a single receiver delivers both A and V, anchored together.
 // NDI's ingest clock is AUDIO-driven (video is matched to the audio ring), so a video-only connection has no
-// advancing clock — the measurable divergence is the first-frame anchor offset: how far apart the two
+// advancing clock - the measurable divergence is the first-frame anchor offset: how far apart the two
 // independent receivers begin their A and V streams. Re-run after the fix: one connection ⇒ a single anchor.
 using System.Diagnostics;
 using NDILib;
@@ -38,7 +38,7 @@ if (chosen.Name is null)
     return 4;
 }
 
-Console.WriteLine($"source '{chosen.Name}' — two-connection vs one-connection A/V anchoring…");
+Console.WriteLine($"source '{chosen.Name}' - two-connection vs one-connection A/V anchoring…");
 
 var running = true;
 long firstVideoMs = 0; // set-once, 0 = not yet
@@ -80,7 +80,7 @@ if (!SpinWait.SpinUntil(
         TimeSpan.FromSeconds(12)))
 {
     Volatile.Write(ref running, false);
-    Console.Error.WriteLine("FAIL: a stream never delivered a frame — does the sender send both audio and video?");
+    Console.Error.WriteLine("FAIL: a stream never delivered a frame - does the sender send both audio and video?");
     return 5;
 }
 
@@ -88,7 +88,7 @@ var vFirst = Interlocked.Read(ref firstVideoMs);
 var aFirst = Interlocked.Read(ref firstAudioMs);
 var anchorOffset = vFirst - aFirst; // +ve ⇒ video started later than audio
 
-// Let both run a while to confirm they keep flowing (no measurement drift expected — RebaseToLatest on the
+// Let both run a while to confirm they keep flowing (no measurement drift expected - RebaseToLatest on the
 // video side re-anchors continuously, so this offset is the *startup* lip-sync the two-connection open ships).
 Thread.Sleep(settleFor);
 Volatile.Write(ref running, false);
@@ -100,7 +100,7 @@ var hasVideo = combined.TryGetVideoFormat(out var vf);
 var hasAudio = combined.TryGetAudioFormat(out var af);
 
 // --- THE FIX: open ndi:// through the registry exactly as MediaPlayer does (TryOpenVideo then TryOpenAudio).
-//     With the shared cache, both must land on ONE receiver — LiveConnectionCount rises by 1, not 2 — and
+//     With the shared cache, both must land on ONE receiver - LiveConnectionCount rises by 1, not 2 - and
 //     releasing both leases tears it down. -----------------------------------------------------------------
 var registry = MediaRegistry.Build(b => b.Use(new NDIModule()));
 var ndiUri = "ndi://" + Uri.EscapeDataString(chosen.Name);
@@ -114,12 +114,12 @@ var releasedToBaseline = NDISource.LiveConnectionCount == connectionsBefore;
 
 Console.WriteLine();
 Console.WriteLine($"two-connection (old)   : V first frame @ {vFirst} ms, A first frame @ {aFirst} ms → independent anchor offset {anchorOffset:+0;-0;0} ms");
-Console.WriteLine($"one-connection (direct): both on one receiver (V={(hasVideo ? $"{vf.Width}x{vf.Height}" : "—")} + A={(hasAudio ? $"{af.SampleRate}Hz/{af.Channels}ch" : "—")}): {(combinedReady && hasVideo && hasAudio ? "confirmed" : "NOT confirmed")}");
-Console.WriteLine($"registry path (fix)    : one ndi:// OpenVideo+OpenAudio opened {registryOpened} receiver(s) — expected 1 (shared); released to baseline: {releasedToBaseline}");
+Console.WriteLine($"one-connection (direct): both on one receiver (V={(hasVideo ? $"{vf.Width}x{vf.Height}" : "-")} + A={(hasAudio ? $"{af.SampleRate}Hz/{af.Channels}ch" : "-")}): {(combinedReady && hasVideo && hasAudio ? "confirmed" : "NOT confirmed")}");
+Console.WriteLine($"registry path (fix)    : one ndi:// OpenVideo+OpenAudio opened {registryOpened} receiver(s) - expected 1 (shared); released to baseline: {releasedToBaseline}");
 Console.WriteLine();
 
 var fixWorks = registryOpened == 1 && releasedToBaseline && combinedReady && hasVideo && hasAudio;
 Console.WriteLine(fixWorks
-    ? $"NDIAVCorrelationProbe OK — the registry now shares ONE receiver for A+V (was two, ~{Math.Abs(anchorOffset)} ms apart at startup). A and V anchor together on the one audio-driven ingest clock; the startup lip-sync offset is removed."
-    : $"NDIAVCorrelationProbe FAIL — registry opened {registryOpened} receiver(s) (expected 1), releasedToBaseline={releasedToBaseline}.");
+    ? $"NDIAVCorrelationProbe OK - the registry now shares ONE receiver for A+V (was two, ~{Math.Abs(anchorOffset)} ms apart at startup). A and V anchor together on the one audio-driven ingest clock; the startup lip-sync offset is removed."
+    : $"NDIAVCorrelationProbe FAIL - registry opened {registryOpened} receiver(s) (expected 1), releasedToBaseline={releasedToBaseline}.");
 return fixWorks ? 0 : 6;

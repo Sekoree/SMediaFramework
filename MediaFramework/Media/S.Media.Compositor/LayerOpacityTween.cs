@@ -14,7 +14,7 @@ public enum LayerEasing
 }
 
 /// <summary>
-/// Tween helper for driving <see cref="VideoCompositorSource.Slot.Opacity"/> over time. Stateless —
+/// Tween helper for driving <see cref="VideoCompositorSource.Slot.Opacity"/> over time. Stateless -
 /// callers feed a timeline-relative elapsed time and apply the result to the slot.
 /// </summary>
 /// <param name="StartOpacity">Opacity at <c>elapsed = 0</c>.</param>
@@ -27,7 +27,7 @@ public enum LayerEasing
 /// <c>slot.Opacity = tween.OpacityAt(clock.Now - tweenStart);</c>.
 /// </para>
 /// <para>
-/// Out-of-range elapsed values are clamped — negative returns <paramref name="StartOpacity"/>,
+/// Out-of-range elapsed values are clamped - negative returns <paramref name="StartOpacity"/>,
 /// past-duration returns <paramref name="EndOpacity"/>. Output is always in <c>[0, 1]</c> after
 /// clamping the inputs.
 /// </para>

@@ -2,14 +2,14 @@ namespace S.Media.Time;
 
 /// <summary>
 /// The master time reference for one <strong>transport group</strong> (a cue, or a set fired/seeked
-/// together) — D4. Every source in the group schedules against it via a <see cref="SourceTimeline"/>.
+/// together) - D4. Every source in the group schedules against it via a <see cref="SourceTimeline"/>.
 /// It advances from one reference <see cref="IPlaybackClock"/>:
 /// <list type="bullet">
-/// <item><b>file-led</b> — the group's master audio output (a clocked device): pass its clock.</item>
-/// <item><b>live-led</b> — no file output to slave to: use <see cref="LiveWallClock"/> (a
+/// <item><b>file-led</b> - the group's master audio output (a clocked device): pass its clock.</item>
+/// <item><b>live-led</b> - no file output to slave to: use <see cref="LiveWallClock"/> (a
 ///   <see cref="MonotonicWallClock"/>).</item>
 /// </list>
-/// When the reference stops advancing (<see cref="IsAdvancing"/> == false) the group idles — mastership
+/// When the reference stops advancing (<see cref="IsAdvancing"/> == false) the group idles - mastership
 /// never floats to an unrelated source. Switching the reference is explicit (<see cref="SetReference"/>)
 /// and continuity-preserving: <see cref="Now"/> does not jump across the swap.
 /// </summary>

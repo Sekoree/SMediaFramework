@@ -4,7 +4,7 @@ namespace S.Media.Compositor;
 /// expose at composite time.</summary>
 public enum SlotKeepPolicy
 {
-    /// <summary>Most recent submit wins — default; matches pre-5.9 behavior.</summary>
+    /// <summary>Most recent submit wins - default; matches pre-5.9 behavior.</summary>
     Latest,
 
     /// <summary>Frame whose presentation time is closest to the master clock position at

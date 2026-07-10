@@ -1,4 +1,4 @@
-// Phase 3 VideoPlaybackSmoke — proves the VideoPlayer salvage: open a video through the registry (FFmpeg,
+// Phase 3 VideoPlaybackSmoke - proves the VideoPlayer salvage: open a video through the registry (FFmpeg,
 // no globals), schedule it against a free-running MediaClock, and present frames to a headless sink. We
 // count presented frames + track the PTS span via VideoPlayer.FramePresentationTimePresented, so this
 // verifies decode -> sync -> scheduled-present without needing a window. Plays a capped wall-clock window.
@@ -109,5 +109,5 @@ if (total < 10 || lastPts <= firstPts)
     return 1;
 }
 
-Console.WriteLine("VideoPlaybackSmoke OK — decode -> sync -> present through VideoPlayer, via the registry.");
+Console.WriteLine("VideoPlaybackSmoke OK - decode -> sync -> present through VideoPlayer, via the registry.");
 return 0;

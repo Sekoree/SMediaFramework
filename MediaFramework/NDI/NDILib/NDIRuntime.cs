@@ -11,7 +11,7 @@ namespace NDILib;
 /// without creating an instance.
 /// </para>
 /// <para>
-/// <b>Reference counting (P2.12):</b> Multiple <see cref="Create"/> calls are safe —
+/// <b>Reference counting (P2.12):</b> Multiple <see cref="Create"/> calls are safe -
 /// only the first calls <c>NDIlib_initialize</c>, and only the last <see cref="Dispose"/>
 /// calls <c>NDIlib_destroy</c>.
 /// </para>
@@ -25,7 +25,7 @@ public sealed class NDIRuntime : IDisposable
     private NDIRuntime() { }
 
     // ------------------------------------------------------------------
-    // Static queries — safe without an active instance
+    // Static queries - safe without an active instance
     // ------------------------------------------------------------------
 
     /// <summary>The NDI SDK version string (e.g. "6.x.x.xxxxx").</summary>
@@ -43,7 +43,7 @@ public sealed class NDIRuntime : IDisposable
     /// <summary>
     /// Initialises the NDI runtime and returns a lifetime scope.
     /// Dispose the returned instance to shut the runtime down.
-    /// Multiple calls are reference-counted — only the first actually initialises.
+    /// Multiple calls are reference-counted - only the first actually initialises.
     /// </summary>
     /// <param name="runtime">
     /// On success, the initialised runtime scope. <see langword="null"/> on failure.

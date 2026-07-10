@@ -6,7 +6,7 @@ namespace S.Media.Source.YouTube;
 /// <summary>
 /// The persisted stream selection for one youtube source. Stream identity is a descriptor string
 /// (<c>label|codec|container</c> for video, <c>codec|container|language</c> for audio) rather than an
-/// itag — YoutubeExplode does not expose itags publicly, and the descriptor stays meaningful to the
+/// itag - YoutubeExplode does not expose itags publicly, and the descriptor stays meaningful to the
 /// operator in saved shows. <c>null</c> means "best by policy" at prepare time.
 /// </summary>
 public sealed record YouTubeStreamSelection(
@@ -103,7 +103,7 @@ public static class YouTubeSourceUri
             return true;
         }
 
-        // Watch/share URLs and bare ids — but NOT arbitrary strings that merely look id-shaped unless
+        // Watch/share URLs and bare ids - but NOT arbitrary strings that merely look id-shaped unless
         // they came through an explicit YouTube entry point. Only accept URL forms here; a bare string
         // is ambiguous with local file names, so the UI passes canonical URIs for those.
         if (uri.Contains("youtube.", StringComparison.OrdinalIgnoreCase) ||

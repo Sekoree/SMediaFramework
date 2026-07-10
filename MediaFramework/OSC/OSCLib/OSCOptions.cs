@@ -197,7 +197,7 @@ public interface IOSCServer : IAsyncDisposable, IDisposable
     /// This is equivalent to calling <see cref="StopAsync"/>.
     /// </para>
     /// <para>
-    /// The token is linked internally — disposing the server also cancels any active receive loop.
+    /// The token is linked internally - disposing the server also cancels any active receive loop.
     /// Callers may pass a scoped <see cref="CancellationToken"/> to limit the server's
     /// lifetime without explicitly calling <see cref="StopAsync"/>.
     /// </para>

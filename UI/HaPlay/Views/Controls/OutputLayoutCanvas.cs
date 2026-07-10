@@ -19,7 +19,7 @@ namespace HaPlay.Views.Controls;
 /// slice</em> (the part of the canvas that output displays). Dragging the body moves it; the bottom-right
 /// handle resizes it; clicking selects it. Overlapping boxes are blend zones (their translucent fills add up);
 /// canvas not covered by any box is a gap (the dark background shows through). All state lives on the bound
-/// <see cref="OutputLayoutItemViewModel"/>s — this control only edits their Src rectangle.
+/// <see cref="OutputLayoutItemViewModel"/>s - this control only edits their Src rectangle.
 /// </summary>
 public sealed class OutputLayoutCanvas : Control
 {
@@ -45,7 +45,7 @@ public sealed class OutputLayoutCanvas : Control
     public static readonly StyledProperty<double> AspectRatioProperty =
         AvaloniaProperty.Register<OutputLayoutCanvas, double>(nameof(AspectRatio), 16.0 / 9.0);
 
-    /// <summary>Composition canvas pixel size — drives 1-pixel keyboard nudges. 0 = use a small relative step.</summary>
+    /// <summary>Composition canvas pixel size - drives 1-pixel keyboard nudges. 0 = use a small relative step.</summary>
     public static readonly StyledProperty<int> CanvasWidthProperty =
         AvaloniaProperty.Register<OutputLayoutCanvas, int>(nameof(CanvasWidth));
 
@@ -236,7 +236,7 @@ public sealed class OutputLayoutCanvas : Control
             var w = Math.Clamp(nx - _drag.SrcX, minW, 1.0 - _drag.SrcX);
             var h = Math.Clamp(ny - _drag.SrcY, minH, 1.0 - _drag.SrcY);
 
-            // Aspect-locked by default — keep the output's proportions so the output isn't distorted while
+            // Aspect-locked by default - keep the output's proportions so the output isn't distorted while
             // fine-tuning. Uncheck the item's aspect lock, or hold Shift, to resize width/height freely.
             if (_drag.AspectLocked && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _dragAspect > 0)
             {

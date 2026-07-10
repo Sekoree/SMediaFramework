@@ -1,7 +1,7 @@
 namespace S.Media.Audio.PortAudio;
 
 /// <summary>
-/// Registers the PortAudio host backend into the media registry — the AOT-pure replacement for the old
+/// Registers the PortAudio host backend into the media registry - the AOT-pure replacement for the old
 /// <c>.UsePortAudio()</c> hook + static <c>AudioBackends</c> registration (P2). Once registered,
 /// <c>IMediaRegistry.AudioBackends</c> exposes PortAudio device discovery and output/input creation.
 /// </summary>

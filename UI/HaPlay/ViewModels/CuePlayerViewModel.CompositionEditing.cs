@@ -223,7 +223,7 @@ public partial class CuePlayerViewModel
     private bool CanApplyCueDownmix() =>
         SelectedCueNode is { Kind: CueNodeKind.Media } && AvailableAudioOutputs.Count > 0;
 
-    /// <summary>P5c follow-through — load a framework <c>.mfmix</c> preset file into the selected
+    /// <summary>P5c follow-through - load a framework <c>.mfmix</c> preset file into the selected
     /// cues' routes on the chosen target line (same replace semantics as the enum quick-applies;
     /// non-zero cells become 1-based cue routes with dB gains).</summary>
     [RelayCommand(CanExecute = nameof(CanApplyCueDownmix))]
@@ -325,7 +325,7 @@ public partial class CuePlayerViewModel
         foreach (var media in targets)
         {
             // Default the box to the source's size (actual size, scaled down to fit the canvas),
-            // centered — so a new layer lands at the video's aspect instead of stretched full-frame.
+            // centered - so a new layer lands at the video's aspect instead of stretched full-frame.
             var (fx, fy, fw, fh) = SourceFitRect(
                 media.SourceVideoWidth, media.SourceVideoHeight, firstComp?.Width ?? 0, firstComp?.Height ?? 0);
             var placement = new CueVideoPlacementViewModel
@@ -449,7 +449,7 @@ public partial class CuePlayerViewModel
     }
 
     /// <summary>Normalized destination rect that places a <paramref name="srcW"/>×<paramref name="srcH"/>
-    /// source on a <paramref name="canvasW"/>×<paramref name="canvasH"/> canvas at its own size, centered —
+    /// source on a <paramref name="canvasW"/>×<paramref name="canvasH"/> canvas at its own size, centered -
     /// scaled down (aspect preserved) only when the source is larger than the canvas, never scaled up.
     /// Falls back to the full frame when any dimension is unknown.</summary>
     internal static (double X, double Y, double W, double H) SourceFitRect(int srcW, int srcH, int canvasW, int canvasH)

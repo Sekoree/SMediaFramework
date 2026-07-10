@@ -8,7 +8,7 @@ namespace S.Media.Core.Video;
 /// <para>
 /// Pixel-format negotiation: <see cref="AcceptedPixelFormats"/> lists every
 /// layout the output can consume <strong>without</strong> a CPU-side conversion
-/// — for a GPU display that decodes YUV in a shader this means listing I420 /
+/// - for a GPU display that decodes YUV in a shader this means listing I420 /
 /// NV12 / etc. directly. The list is ordered by preference; the
 /// <see cref="VideoFormatNegotiator"/> picks the first entry the source can
 /// also deliver natively.
@@ -27,7 +27,7 @@ public interface IVideoOutput
     /// <summary>
     /// Pixel formats this output can render without CPU conversion, ordered
     /// best-to-worst. An empty list means the output will accept whatever it's
-    /// configured with and convert internally — the convention holds both when
+    /// configured with and convert internally - the convention holds both when
     /// the output is a router input's negotiation primary and when it is a
     /// fan-out branch (the branch then receives the negotiated format
     /// pass-through; see <see cref="VideoOutputFanoutFormats.PickBranchPixelFormat(VideoFormat, IReadOnlyList{PixelFormat}, Func{PixelFormat, PixelFormat, int, int, bool})"/>).
@@ -50,7 +50,7 @@ public interface IVideoOutput
     /// <para>
     /// <strong>Thread contract:</strong> <c>Submit</c> is invoked on the clock-driver thread that
     /// fires <see cref="S.Media.Core.Clock.IMediaClock.VideoTick"/> (typically the audio callback
-    /// or wall-clock pacer). It must return promptly — implementations that do real work (uploads,
+    /// or wall-clock pacer). It must return promptly - implementations that do real work (uploads,
     /// network encodes, file writes) should hand the frame off to a worker thread of their own.
     /// A slow <c>Submit</c> delays every other subscriber on the same clock.
     /// </para>

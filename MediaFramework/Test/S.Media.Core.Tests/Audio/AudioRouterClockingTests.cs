@@ -15,7 +15,7 @@ public class AudioRouterClockingTests
     {
         // sinkSlow blocks for 50 ms inside Submit (simulating a clocked NDI
         // sender). With the OutputPump model, this must NOT slow the router or
-        // the fast output — its drainer thread is independent.
+        // the fast output - its drainer thread is independent.
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new TestSource(Stereo, _ => 1f);
         var sinkFast = new CountingOutput(Stereo, blockMs: 0);
@@ -70,7 +70,7 @@ public class AudioRouterClockingTests
         r.Stop();
 
         // The clocked output signals ~once/5 ms, so production scales with the ACTUAL elapsed window, not
-        // the requested 200 ms (a loaded CI runner sleeps well past it — an absolute range is flaky).
+        // the requested 200 ms (a loaded CI runner sleeps well past it - an absolute range is flaky).
         var expected = sw.Elapsed.TotalMilliseconds / 5.0;
         Assert.InRange(produced, expected * 0.4, expected * 1.75 + 5);
     }
@@ -153,7 +153,7 @@ public class AudioRouterClockingTests
     {
         // Regression: WaitForCapacity paces on the device ring, but the router commits into the pump
         // queue first (a drainer thread moves pump -> ring). If WaitForCapacity keeps signalling "ready"
-        // while the drainer lags, the router used to flood the pump and DROP the overflow — and a dropped
+        // while the drainer lags, the router used to flood the pump and DROP the overflow - and a dropped
         // chunk on the master output permanently desyncs A/V (played sample count keeps advancing while
         // the audio content skips). The primary output must now backpressure (wait for its drainer)
         // rather than drop. Here WaitForCapacity is always ready and Submit is slow, so the broken
@@ -170,7 +170,7 @@ public class AudioRouterClockingTests
         r.Start();
         // Poll until the drainer has made meaningful progress rather than asserting a count after a fixed
         // sleep: a loaded CI runner processes far fewer chunks per wall-ms (processed=9-in-300ms flake), so
-        // give it time — a genuine stall never reaches the threshold within the timeout and still fails.
+        // give it time - a genuine stall never reaches the threshold within the timeout and still fails.
         var stats = r.GetPumpStats("primary");
         var sw = Stopwatch.StartNew();
         while (stats.Processed <= 10 && sw.ElapsedMilliseconds < 3000)
@@ -271,7 +271,7 @@ public class AudioRouterClockingTests
     }
 
     /// <summary>Clocked output that is always "ready" to accept a chunk but whose Submit (the drainer
-    /// side) blocks for <c>blockMs</c> — models a drainer that lags the producer, exercising the
+    /// side) blocks for <c>blockMs</c> - models a drainer that lags the producer, exercising the
     /// primary-output backpressure path.</summary>
     private sealed class AlwaysReadySlowOutput(AudioFormat fmt, int blockMs) : IAudioOutput, IClockedOutput
     {

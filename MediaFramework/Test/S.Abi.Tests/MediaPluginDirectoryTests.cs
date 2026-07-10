@@ -9,7 +9,7 @@ namespace S.Abi.Tests;
 /// <summary>
 /// NXT-09 product surface: <see cref="MediaPluginDirectory"/> scans a directory, loads plugin libraries
 /// fail-soft, and registers their capabilities. The real-plugin tests compile the canonical
-/// <c>test_plugin.c</c> with gcc at run time and skip (with the reason) where gcc is unavailable — the
+/// <c>test_plugin.c</c> with gcc at run time and skip (with the reason) where gcc is unavailable - the
 /// same gating pattern as the FFmpeg-native and remux tests.
 /// </summary>
 public sealed class MediaPluginDirectoryTests : IDisposable
@@ -52,7 +52,7 @@ public sealed class MediaPluginDirectoryTests : IDisposable
     // --- real plugin (gcc-compiled test_plugin.c), skipped where gcc is absent ------------------------
 
     /// <summary>Runs only where gcc AND the repo checkout are available (the LibAssFact/RemuxFact
-    /// pattern) — the plugin is compiled from the canonical <c>test_plugin.c</c> at test time.</summary>
+    /// pattern) - the plugin is compiled from the canonical <c>test_plugin.c</c> at test time.</summary>
     private sealed class GccFactAttribute : FactAttribute
     {
         public GccFactAttribute()
@@ -62,7 +62,7 @@ public sealed class MediaPluginDirectoryTests : IDisposable
             else if (FindRepoRoot() is null)
                 Skip = "repo root (test_plugin.c) not reachable from the test base directory";
             else if (!GccAvailable())
-                Skip = "gcc not on PATH — real-plugin load covered by AbiSmoke locally";
+                Skip = "gcc not on PATH - real-plugin load covered by AbiSmoke locally";
         }
 
         private static bool GccAvailable()

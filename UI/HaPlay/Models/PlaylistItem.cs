@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace HaPlay.Models;
 
 /// <summary>
-/// Phase C.5 (§6.8) — discriminated playlist entry. Replaces the v1 flat <see cref="string"/> path
+/// Phase C.5 (§6.8) - discriminated playlist entry. Replaces the v1 flat <see cref="string"/> path
 /// list with a polymorphic union so live inputs (PortAudio capture, NDI receivers) sit alongside
 /// file items in the same playlist / cue list. Persisted via <c>kind</c> discriminator so projects
 /// round-trip even before <see cref="NDIInputPlaylistItem"/> / <see cref="PortAudioInputPlaylistItem"/>
@@ -39,7 +39,7 @@ public abstract record PlaylistItem
     [JsonIgnore] public virtual string KindGlyph => string.Empty;
 }
 
-/// <summary>File-on-disk playlist item — the v1-equivalent path, but now wrapped as a discriminated
+/// <summary>File-on-disk playlist item - the v1-equivalent path, but now wrapped as a discriminated
 /// item so it co-exists with live sources.</summary>
 public sealed record FilePlaylistItem(string Path) : PlaylistItem
 {
@@ -47,7 +47,7 @@ public sealed record FilePlaylistItem(string Path) : PlaylistItem
     /// automatic. A stale index falls back to automatic inside the demuxer, never an open failure.</summary>
     public int? AudioTrackIndex { get; init; }
 
-    /// <summary>Subtitle tracks to render over this item when played in the media player — none / one / many
+    /// <summary>Subtitle tracks to render over this item when played in the media player - none / one / many
     /// (embedded stream or sidecar, with optional font/placement overrides). Empty = no subtitles.</summary>
     public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
 
@@ -167,14 +167,14 @@ public sealed record TextPlaylistItem : PlaylistItem
 
 /// <summary>An MMD scene: a PMX model + optional VMD motion + optional VMD camera
 /// motion, rendered through the MMD compositor surface behind an <c>mmd://</c> URI. When no camera
-/// VMD is set, the manual placement fields below drive the camera — the deck preview IS the
+/// VMD is set, the manual placement fields below drive the camera - the deck preview IS the
 /// camera-placement view (tweak → replay → see the framing).</summary>
 public sealed record MMDPlaylistItem(string ModelPath) : PlaylistItem
 {
     /// <summary>MSAA in the GL renderer (the add-dialog toggle).</summary>
     public bool Antialias { get; init; } = true;
 
-    /// <summary>Stage-5 physics — hair/skirt secondary motion (the add-dialog toggle).</summary>
+    /// <summary>Stage-5 physics - hair/skirt secondary motion (the add-dialog toggle).</summary>
     public bool Physics { get; init; } = true;
 
     public string? MotionPath { get; init; }
@@ -208,10 +208,10 @@ public sealed record MMDPlaylistItem(string ModelPath) : PlaylistItem
 /// <summary>A YouTube video prepared into the local cache (Gate 5). Persists the RESOLVED stream
 /// descriptors chosen in the add/edit dialog (muxed streams are rarely offered, so audio and video are
 /// separate stream selections) plus display metadata cached at resolve time. Playback is reliable-mode:
-/// the mapped <c>youtube://</c> URI only opens the locally cached asset — never the network.</summary>
+/// the mapped <c>youtube://</c> URI only opens the locally cached asset - never the network.</summary>
 public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
 {
-    /// <summary>Video title cached at resolve time (display only — refresh by re-resolving).</summary>
+    /// <summary>Video title cached at resolve time (display only - refresh by re-resolving).</summary>
     public string? Title { get; init; }
 
     public string? Author { get; init; }
@@ -231,7 +231,7 @@ public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
     /// <summary>True = the video leg was deliberately not selected (audio-only cue/deck item).</summary>
     public bool AudioOnly { get; init; }
 
-    /// <summary>Subtitle overlays for playback — filled with the prepared caption sidecar by the dialog;
+    /// <summary>Subtitle overlays for playback - filled with the prepared caption sidecar by the dialog;
     /// same shape as <see cref="FilePlaylistItem.Subtitles"/> so the overlay path is shared.</summary>
     public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
 
@@ -245,7 +245,7 @@ public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
     public override string KindGlyph => "▶";
 }
 
-/// <summary>NDI receiver item — identified by the NDI source name. Manual-name items load even when
+/// <summary>NDI receiver item - identified by the NDI source name. Manual-name items load even when
 /// the source is currently offline (§6.3); the playlist enters a "waiting for source" state on Play.</summary>
 public sealed record NDIInputPlaylistItem(string SourceName) : PlaylistItem
 {
@@ -265,7 +265,7 @@ public sealed record NDIInputPlaylistItem(string SourceName) : PlaylistItem
     public int RetrySeconds { get; init; } = 5;
 
     /// <summary>Manual override for the audio jitter-buffer reserve, in milliseconds. <c>null</c> keeps the
-    /// framework default (~50 ms). Smaller brings the audio forward toward the live video — lower latency, at
+    /// framework default (~50 ms). Smaller brings the audio forward toward the live video - lower latency, at
     /// more underrun risk; use the dialog's probe to find the lowest glitch-free size for this network.</summary>
     public int? AudioMinBufferedDurationMs { get; init; }
 
@@ -279,7 +279,7 @@ public sealed record NDIInputPlaylistItem(string SourceName) : PlaylistItem
     public override string KindGlyph => "📡";
 }
 
-/// <summary>PortAudio capture device item — host API + device name + channel count + sample rate.
+/// <summary>PortAudio capture device item - host API + device name + channel count + sample rate.
 /// On load, the device is resolved by name first with <see cref="GlobalDeviceIndex"/> as fallback so
 /// moving a USB interface between ports doesn't silently break the binding (§6.4).</summary>
 public sealed record PortAudioInputPlaylistItem(string DeviceName) : PlaylistItem
@@ -290,7 +290,7 @@ public sealed record PortAudioInputPlaylistItem(string DeviceName) : PlaylistIte
     public string? HostApiName { get; init; }
     public int? HostApiIndex { get; init; }
 
-    /// <summary>Last known global device index for the device — used as the load-time fallback when
+    /// <summary>Last known global device index for the device - used as the load-time fallback when
     /// no device with <see cref="DeviceName"/> exists on the host.</summary>
     public int? GlobalDeviceIndex { get; init; }
 

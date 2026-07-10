@@ -114,7 +114,7 @@ public sealed class MMDBakeTests
         var root = animator.TryGetBoneWorldPosition("root")!.Value;
         Assert.True(Vector3.Distance(reference, root) < 1.5f, $"arm detached: tip={reference} root={root}");
 
-        // Evaluate a scattered seek pattern, then the same time again — identical pose, no state.
+        // Evaluate a scattered seek pattern, then the same time again - identical pose, no state.
         foreach (var seconds in new[] { 0.2, 1.9, 0.7, 1.2, 0.0 })
             animator.Evaluate(TimeSpan.FromSeconds(seconds), positions, null, baked);
         animator.Evaluate(TimeSpan.FromSeconds(1.5), positions, null, baked);
@@ -201,7 +201,7 @@ public sealed class MMDBakeTests
         MMDPhysicsBakeCache.CacheDirectory = directory;
         try
         {
-            // Paths only key the cache file name — they need not exist.
+            // Paths only key the cache file name - they need not exist.
             var (ready, pending) = MMDPhysicsBakeCache.LoadOrStart("model.pmx", "motion.vmd", model, motion);
             Assert.Null(ready);
             var baked = await pending;

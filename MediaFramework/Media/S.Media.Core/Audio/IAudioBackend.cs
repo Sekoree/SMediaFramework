@@ -28,7 +28,7 @@ public sealed record AudioBackendOptions(
 /// <summary>
 /// A pluggable audio host backend (PortAudio, miniaudio, …): device discovery plus opening
 /// <see cref="IAudioOutput"/> / <see cref="IAudioSource"/> on a device. This is the <strong>only</strong>
-/// layer a new backend must implement — the frame-level graph (<see cref="AudioRouter"/>) is already
+/// layer a new backend must implement - the frame-level graph (<see cref="AudioRouter"/>) is already
 /// backend-neutral, seeing only <see cref="IAudioOutput"/> / <see cref="IAudioSource"/> (and their optional
 /// capability interfaces like <see cref="IClockedOutput"/>), never a concrete backend type. A new backend is
 /// therefore a peer of PortAudio, not a translation of it. Register implementations via the media

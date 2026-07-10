@@ -9,13 +9,13 @@ namespace HaPlay.Views.Dialogs;
 /// <summary>
 /// Pops a region of the shell out into a floating non-modal <see cref="PopoutWindow"/> by MOVING the
 /// host's single content control there (a control can only have one visual parent, and several
-/// regions — the player deck in particular — must never materialize twice for the same view-model).
+/// regions - the player deck in particular - must never materialize twice for the same view-model).
 /// The host shows a placeholder with bring-to-front / restore actions while popped out; closing the
 /// window reparents the content back. One instance per poppable region.
 /// </summary>
 /// <remarks>
 /// Each window owns its own <c>LayoutManager</c>, and a subtree moved across windows within one
-/// dispatcher pass can still have measure/arrange work queued on the source window's manager —
+/// dispatcher pass can still have measure/arrange work queued on the source window's manager -
 /// executing that queue then throws "Attempt to call InvalidateArrange on wrong LayoutManager".
 /// Both moves therefore detach immediately but re-attach in a <see cref="DispatcherPriority.Background"/>
 /// post, which runs after the source window's pending layout pass has drained.
@@ -39,12 +39,12 @@ public sealed class PopoutRegion
             return;
         }
 
-        // _moveInFlight: a deferred re-attach is pending (host currently shows the placeholder) —
+        // _moveInFlight: a deferred re-attach is pending (host currently shows the placeholder) -
         // popping out now would move the placeholder instead of the real content.
         if (_moveInFlight || host.Content is not Control content)
             return;
 
-        // Reparenting breaks DataContext inheritance (the window has none) — carry the host's
+        // Reparenting breaks DataContext inheritance (the window has none) - carry the host's
         // inherited context over so the moved subtree's bindings (including local bindings like
         // CuePlayerView's DataContext="{Binding CuePlayer}") keep resolving.
         var window = new PopoutWindow { Title = title, DataContext = host.DataContext };

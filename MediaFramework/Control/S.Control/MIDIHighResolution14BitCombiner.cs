@@ -10,8 +10,8 @@ namespace S.Control;
 /// <c>(MSB &lt;&lt; 7) | LSB</c>, 0–16383, <see cref="ControlChange.IsHighResolution"/> <see langword="true"/>).
 /// </summary>
 /// <remarks>
-/// Opt-in and precise: only the configured coarse controllers are paired. Every other message — including
-/// 7-bit CCs on unconfigured controllers, notes, etc. — passes through untouched, so this never disturbs a
+/// Opt-in and precise: only the configured coarse controllers are paired. Every other message - including
+/// 7-bit CCs on unconfigured controllers, notes, etc. - passes through untouched, so this never disturbs a
 /// device whose CC 0–31 carry ordinary 7-bit data (e.g. Bank Select). State is keyed per channel + coarse
 /// controller; input from one port is delivered single-threaded, so no locking is needed.
 /// </remarks>
@@ -30,7 +30,7 @@ internal sealed class MIDIHighResolution14BitCombiner
     public bool IsEnabled => _coarseControllers.Count > 0;
 
     /// <summary>
-    /// Returns the message to dispatch, or <see langword="null"/> to swallow it — used for a coarse (MSB)
+    /// Returns the message to dispatch, or <see langword="null"/> to swallow it - used for a coarse (MSB)
     /// byte that is being held until its fine (LSB) partner completes the 14-bit value. Non-CC messages and
     /// CCs on unconfigured controllers are returned unchanged.
     /// </summary>

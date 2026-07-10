@@ -6,14 +6,14 @@
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
         <!-- AOT re-audited 2026-07-02 (NXT-15): linux-x64 publish is clean apart from the one known Mond
-             IL2026 (StackFrame — error-trace detail only), and the published app launches, renders, and
+             IL2026 (StackFrame - error-trace detail only), and the published app launches, renders, and
              tears down (Pa_Terminate + host dispose) under the HAPLAY_SMOKE gate. dotnet run stays JIT;
              only `dotnet publish` pays the AOT compile. -->
         <PublishAot>true</PublishAot>
         <!-- Same single accepted warning as AotSmoke: Mond uses StackFrame.GetMethod only to enrich script
              error text. Keep it visible during publish while repo-wide warnings-as-errors rejects every other ID. -->
         <!-- IL2104 (trim) / IL3053 (AOT) are the per-assembly *aggregate* "this assembly was not trim/AOT
-             tested" warnings ILC raises only for third-party, non-trimmable dependencies — here the
+             tested" warnings ILC raises only for third-party, non-trimmable dependencies - here the
              Dock.Avalonia.* docking packages pulled in by UI/HaPlay (Dock.Avalonia, .Themes.Fluent,
              .Themes.Simple). We can't annotate someone else's package; upstream Dock isn't AOT-clean yet.
              Demote only these two aggregates. First-party libs are IsAotCompatible/IsTrimmable, so any real
@@ -30,10 +30,10 @@
         <AssemblyName>HaPlayer</AssemblyName>
 
         <!-- Real-time audio latency hint (COMPLEMENTARY, not the fix). The AOT-only audio drops were
-             actually a router pacing flaw — fixed by primary-output backpressure in AudioRouter.OutputPump
+             actually a router pacing flaw - fixed by primary-output backpressure in AudioRouter.OutputPump
              (see Doc/MediaFramework-AVSync-Seek-Investigation.md). Background (concurrent) GC still helps:
              a long blocking gen2 pause stalls the audio drainer and drains the ring, and with backpressure
-             that becomes a brief recoverable underrun rather than a drop — shorter pauses make even that
+             that becomes a brief recoverable underrun rather than a drop - shorter pauses make even that
              rare. A plain `dotnet run` build defaults to background GC; the AOT publish did not. Server GC
              spreads collection across cores; drop it if you suspect GC-thread contention with JACK. -->
         <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>

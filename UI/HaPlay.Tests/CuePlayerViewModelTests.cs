@@ -794,7 +794,7 @@ public sealed class CuePlayerViewModelTests
         // Renumber via the all-nodes path (the renumber command builds the same call). Use
         // reflection-free testability: drive the public list directly.
         var nodes = vm.VisibleNodes;
-        // Mirror what the command's "All" scope does — sequential 1..N with sub-numbering for groups.
+        // Mirror what the command's "All" scope does - sequential 1..N with sub-numbering for groups.
         // We can't easily invoke the async command here without a Window owner; verify the model
         // mutation by walking the tree after a manual renumber:
         var n = 1.0;
@@ -832,20 +832,20 @@ public sealed class CuePlayerViewModelTests
         vm.AddEmptyMediaCue();
         var third = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
 
-        // Move third up — expect order [first, third, second].
+        // Move third up - expect order [first, third, second].
         vm.SelectedCueNode = third;
         vm.MoveSelectedCueUpCommand.Execute(null);
         Assert.Equal(new[] { first, third, second }, vm.VisibleNodes.ToArray());
 
-        // Move third (now at index 1) up again — expect [third, first, second].
+        // Move third (now at index 1) up again - expect [third, first, second].
         vm.MoveSelectedCueUpCommand.Execute(null);
         Assert.Equal(new[] { third, first, second }, vm.VisibleNodes.ToArray());
 
-        // Already at top — no-op.
+        // Already at top - no-op.
         vm.MoveSelectedCueUpCommand.Execute(null);
         Assert.Equal(new[] { third, first, second }, vm.VisibleNodes.ToArray());
 
-        // Move first down (now at index 1) — expect [third, second, first].
+        // Move first down (now at index 1) - expect [third, second, first].
         vm.SelectedCueNode = first;
         vm.MoveSelectedCueDownCommand.Execute(null);
         Assert.Equal(new[] { third, second, first }, vm.VisibleNodes.ToArray());
@@ -1050,7 +1050,7 @@ public sealed class CuePlayerViewModelTests
         vm.StandbySelectedCommand.Execute(null);
         vm.GoCommand.Execute(null);
         // Wait for the dispatched trigger-plan run to settle (fixed 50 ms sleeps flake on a loaded
-        // runner) — its steps update CurrentCueNode async and must NOT move the selection back to
+        // runner) - its steps update CurrentCueNode async and must NOT move the selection back to
         // the fired cue.
         await WaitUntilAsync(
             () => ReferenceEquals(vm.CurrentCueNode, cue1) && ReferenceEquals(vm.SelectedCueNode, cue2),
@@ -1190,7 +1190,7 @@ public sealed class CuePlayerViewModelTests
 
         vm.StandbySelectedCommand.Execute(null);
         vm.GoCommand.Execute(null);
-        // GO runs the trigger plan asynchronously — wait for the executor instead of a fixed delay
+        // GO runs the trigger plan asynchronously - wait for the executor instead of a fixed delay
         // (a 20 ms sleep flaked on the loaded CI runner). Exits as soon as the call lands.
         await WaitUntilAsync(() => Volatile.Read(ref callCount) == 1, timeoutMs: 20_000);
 
@@ -1519,7 +1519,7 @@ public sealed class CuePlayerViewModelTests
     [Fact]
     public void SetAvailableOutputs_ResolvesLineRefOnAudioRoutes()
     {
-        // Phase 5.7.1 — audio route VMs should have their LineRef populated so the row dot
+        // Phase 5.7.1 - audio route VMs should have their LineRef populated so the row dot
         // and tooltip can bind to the live OutputLineViewModel.HealthColor / HealthToolTip.
         var vm = new CuePlayerViewModel();
         var pa = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA", 0, "HostApi", 0, "Dev", 2, 48000));
@@ -1555,7 +1555,7 @@ public sealed class CuePlayerViewModelTests
     [Fact]
     public void OnPreRollCacheChanged_FlipsIsPreRollWarmFlag()
     {
-        // Phase 5.7.2 — warming snapshot from the cache pushes IsPreRollWarm onto matching nodes.
+        // Phase 5.7.2 - warming snapshot from the cache pushes IsPreRollWarm onto matching nodes.
         var vm = new CuePlayerViewModel();
         vm.AddEmptyMediaCue();
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
@@ -1631,7 +1631,7 @@ public sealed class CuePlayerViewModelTests
     [Fact]
     public void ColorTag_RoundTripsInSnapshot()
     {
-        // Phase 5.8.1 — ColorTag persists through ToModel/FromModel for every cue kind.
+        // Phase 5.8.1 - ColorTag persists through ToModel/FromModel for every cue kind.
         var vm = new CuePlayerViewModel();
         vm.AddEmptyMediaCue();
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);

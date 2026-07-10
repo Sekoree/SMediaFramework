@@ -2,7 +2,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Converts an interlaced <see cref="VideoFrame"/> into one or more progressive frames. Same
-/// pluggable-registry shape as <see cref="IVideoCpuFrameConverter"/> — Core defines the contract,
+/// pluggable-registry shape as <see cref="IVideoCpuFrameConverter"/> - Core defines the contract,
 /// <c>S.Media.FFmpeg</c> ships the production implementation (libavfilter <c>yadif</c>), and the
 /// always-available <see cref="BobDeinterlacer"/> fallback lives in Core for headless test paths.
 /// </summary>
@@ -14,7 +14,7 @@ namespace S.Media.Core.Video;
 /// null. Owner of every emitted frame is the caller.
 /// </para>
 /// <para>
-/// Progressive frames are passed through unchanged (emit 1 output, identical to input — same plane
+/// Progressive frames are passed through unchanged (emit 1 output, identical to input - same plane
 /// memory, no copy). Implementations should treat <see cref="VideoFieldOrder.Progressive"/> input
 /// as a no-op fast path.
 /// </para>
@@ -35,7 +35,7 @@ public interface IDeinterlacer : IDisposable
 
     /// <summary>
     /// Push one input frame, write 0..2 progressive frames into <paramref name="outputs"/>, return
-    /// how many were filled. <paramref name="frame"/> is not disposed by the deinterlacer — the
+    /// how many were filled. <paramref name="frame"/> is not disposed by the deinterlacer - the
     /// caller still owns it (and may pass it back in <paramref name="outputs"/> for the progressive
     /// fast path).
     /// </summary>
@@ -43,5 +43,5 @@ public interface IDeinterlacer : IDisposable
 }
 
 // Phase 1: the old `VideoDeinterlacerRegistry` (a process-wide hook over MediaFrameworkPlugins) is
-// removed — deinterlacers are resolved through `IMediaRegistry`, with the built-in `BobDeinterlacer`
+// removed - deinterlacers are resolved through `IMediaRegistry`, with the built-in `BobDeinterlacer`
 // fallback (see Registry/). The interface above and `BobDeinterlacer` stay in Core.

@@ -1,5 +1,5 @@
 // Phase 5 Avalonia present-path runtime smoke: host the real VideoOpenGlControl in an Avalonia window, play a
-// video into it through MediaPlayer, and confirm it presents on screen — exercising the shared YuvVideoRenderer
+// video into it through MediaPlayer, and confirm it presents on screen - exercising the shared YuvVideoRenderer
 // and (with HW decode) the dma-buf EGL zero-copy import, the same path SDL3 uses. Closes the runtime-verification
 // gap the checklist flagged ("Present.Avalonia … runtime needs a display"). Needs a GL-capable display + libav.
 using Avalonia;
@@ -22,10 +22,10 @@ Smoke.Seconds = args.Length > 1 && double.TryParse(args[1], out var s) ? s : 5.0
 
 try
 {
-    // Empty args to the lifetime — our media path lives in Smoke.Uri, not Avalonia's CLI parsing. Platform-detect
+    // Empty args to the lifetime - our media path lives in Smoke.Uri, not Avalonia's CLI parsing. Platform-detect
     // picks GLX here; the control's dma-buf zero-copy import engages only on an EGL context (the shared
-    // YuvDmabufEglInterop, verified on the SDL3 EGL path). Forcing X11 EGL segfaults on this radeonsi/Mesa setup —
-    // the same EGL/dma-buf limitation noted for the compositor export — so we verify presentation on GLX here.
+    // YuvDmabufEglInterop, verified on the SDL3 EGL path). Forcing X11 EGL segfaults on this radeonsi/Mesa setup -
+    // the same EGL/dma-buf limitation noted for the compositor export - so we verify presentation on GLX here.
     AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime([]);
 }
 catch (Exception ex)
@@ -126,10 +126,10 @@ internal sealed class MainWindow : Window
         {
             var zeroCopy = dmabuf && hw > 0;
             Smoke.Report =
-                $"AvaloniaVideoSmoke OK — VideoOpenGlControl presented {rendered} frames " +
+                $"AvaloniaVideoSmoke OK - VideoOpenGlControl presented {rendered} frames " +
                 $"(src {fmt?.Width}x{fmt?.Height} {fmt?.PixelFormat}, decode={(_softwareFallback ? "software" : "hardware")}). " +
                 $"hardware-backed frames={hw}, dma-buf import available={dmabuf} → " +
-                $"zero-copy path {(zeroCopy ? "EXERCISED (dma-buf frames imported)" : "not exercised (CPU upload — SW frames or no EGL dma-buf)")}.";
+                $"zero-copy path {(zeroCopy ? "EXERCISED (dma-buf frames imported)" : "not exercised (CPU upload - SW frames or no EGL dma-buf)")}.";
             Smoke.Result = 0;
         }
 

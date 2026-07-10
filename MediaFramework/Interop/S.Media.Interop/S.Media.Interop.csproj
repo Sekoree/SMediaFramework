@@ -1,15 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Interop — the host that bundles backend modules (outbound C ABI s_media_player, NativeAOT shared
-         lib, Phase 7). It also carries cross-module host glue that needs more than one backend — e.g. the unified
+    <!-- S.Media.Interop - the host that bundles backend modules (outbound C ABI s_media_player, NativeAOT shared
+         lib, Phase 7). It also carries cross-module host glue that needs more than one backend - e.g. the unified
          subtitle factory (FFmpeg decode + libass render), which Session/Subtitles must not couple to directly. -->
 
     <PropertyGroup>
         <!-- The outbound ABI ships as s_media_player.{so,dll} so the AOT native lib + the header (s_media_player.h)
              line up; the namespace stays S.Media.Interop. -->
         <AssemblyName>s_media_player</AssemblyName>
-        <!-- Emit a native shared lib only when publishing AOT (dotnet publish -p:PublishAot=true). A normal build —
-             and project references to this assembly (e.g. the subtitle factory) — produce/consume the managed dll. -->
+        <!-- Emit a native shared lib only when publishing AOT (dotnet publish -p:PublishAot=true). A normal build -
+             and project references to this assembly (e.g. the subtitle factory) - produce/consume the managed dll. -->
         <NativeLib Condition="'$(PublishAot)' == 'true'">Shared</NativeLib>
     </PropertyGroup>
 

@@ -306,7 +306,7 @@ public sealed class ControlSystemMIDIDeviceSessionManager : IControlMIDISender, 
         || !string.IsNullOrWhiteSpace(binding.MIDIInputDeviceName);
 
     /// <summary>Coarse CC numbers (0–31) the device's profile marks as 14-bit (high-resolution) faders/encoders.
-    /// Empty when the device has no profile or no 14-bit controls — the combiner then passes everything through.</summary>
+    /// Empty when the device has no profile or no 14-bit controls - the combiner then passes everything through.</summary>
     private static IReadOnlyList<int> ResolveHighResolution14BitControllers(
         IControlDeviceProfileRepository profileRepository,
         ControlDeviceInstanceConfig device)

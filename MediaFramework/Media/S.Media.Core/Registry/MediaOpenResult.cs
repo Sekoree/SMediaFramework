@@ -33,7 +33,7 @@ public sealed record MediaOpenRequest(string Uri)
     /// <summary>Audio open options, or null to not open an audio track.</summary>
     public AudioSourceOpenOptions? Audio { get; init; }
 
-    /// <summary>Optional explicit provider name — pins selection, bypassing confidence (D3).</summary>
+    /// <summary>Optional explicit provider name - pins selection, bypassing confidence (D3).</summary>
     public string? ProviderHint { get; init; }
 
     /// <summary>Opens both kinds with default options.</summary>
@@ -44,7 +44,7 @@ public sealed record MediaOpenRequest(string Uri)
 /// <summary>
 /// The result of an atomic <see cref="IMediaDecoderProvider.OpenAsync"/> (NXT-02): one opened media asset that
 /// owns its (correlated) tracks. For a file with both audio and video, <see cref="Video"/> and <see cref="Audio"/>
-/// share a single underlying demux — so they have one buffering/seek state and the item is opened/probed once.
+/// share a single underlying demux - so they have one buffering/seek state and the item is opened/probed once.
 /// The result OWNS the asset: dispose it (not the individual sources) to tear everything down. The sources are
 /// borrowed views into the asset and must not be disposed independently.
 /// </summary>
@@ -77,17 +77,17 @@ public sealed class MediaOpenResult : IAsyncDisposable, IDisposable
     public string ProviderName { get; }
 
     /// <summary>The selected video track, or null when the request didn't ask for video / the asset has none.
-    /// Borrowed — owned by this result; do not dispose it directly.</summary>
+    /// Borrowed - owned by this result; do not dispose it directly.</summary>
     public IVideoSource? Video { get; }
 
     /// <summary>The selected audio track, or null when the request didn't ask for audio / the asset has none.
-    /// Borrowed — owned by this result; do not dispose it directly.</summary>
+    /// Borrowed - owned by this result; do not dispose it directly.</summary>
     public IAudioSource? Audio { get; }
 
     /// <summary>Asset duration, or <see cref="TimeSpan.Zero"/> when unknown / live.</summary>
     public TimeSpan Duration { get; }
 
-    /// <summary>True for a live source (NDI / capture) — no duration, not seekable.</summary>
+    /// <summary>True for a live source (NDI / capture) - no duration, not seekable.</summary>
     public bool IsLive { get; }
 
     /// <summary>True when the asset supports seeking.</summary>

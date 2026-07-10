@@ -41,7 +41,7 @@ public sealed class MIDIDeviceAliasTests
 
         var values = vm.BuildValues();
         Assert.Null(values.Alias);
-        Assert.Equal("generic-midi", values.ProfileId); // the "(generic MIDI — no profile)" default option
+        Assert.Equal("generic-midi", values.ProfileId); // the "(generic MIDI - no profile)" default option
         Assert.False(values.IsEnabled);
     }
 

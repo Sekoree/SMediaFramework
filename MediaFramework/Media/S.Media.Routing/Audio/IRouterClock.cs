@@ -8,9 +8,9 @@ namespace S.Media.Routing;
 /// <remarks>
 /// Two implementations ship with the framework:
 /// <list type="bullet">
-///   <item><see cref="WallClockRouterClock"/> — free-running stopwatch deadline,
+///   <item><see cref="WallClockRouterClock"/> - free-running stopwatch deadline,
 ///   appropriate when no output can authoritatively pace the producer.</item>
-///   <item><see cref="OutputSlavedRouterClock"/> — defers to an
+///   <item><see cref="OutputSlavedRouterClock"/> - defers to an
 ///   <see cref="IClockedOutput"/> looked up by ID, with a wall-clock fallback so
 ///   removing the slaved output mid-run doesn't stall the router.</item>
 /// </list>

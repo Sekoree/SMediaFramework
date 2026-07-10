@@ -16,7 +16,7 @@ public sealed record CueListsCollectionDocument
 
 /// <summary>
 /// Cue-list root persisted in <c>.haplaycues</c> files. A cue list is a tree of groups and cues
-/// plus its own list of compositions and outputs — the Cue Player is a self-contained playback
+/// plus its own list of compositions and outputs - the Cue Player is a self-contained playback
 /// surface and does not borrow routing from MediaPlayer tabs.
 /// </summary>
 public sealed record CueList
@@ -38,7 +38,7 @@ public sealed record CueList
     public CueTriggerMode DefaultTriggerMode { get; init; } = CueTriggerMode.Manual;
 
     /// <summary>When true, the cue player re-runs the renumber pass after every insert/reorder
-    /// so the operator's numbering stays sequential (Phase 5.8.2). Default off — preserves the
+    /// so the operator's numbering stays sequential (Phase 5.8.2). Default off - preserves the
     /// pre-5.8 behavior where operators set numbers themselves.</summary>
     public bool AutoRenumberOnInsert { get; init; }
 
@@ -46,7 +46,7 @@ public sealed record CueList
     /// same composition (fan-out: composition is rendered once, fed to every referencing output).</summary>
     public List<CueComposition> Compositions { get; init; } = new();
 
-    /// <summary>Video output bindings — each pairs an output line id (from the shared
+    /// <summary>Video output bindings - each pairs an output line id (from the shared
     /// <c>OutputManagementView</c> registry) with the composition that feeds it. Audio outputs
     /// are referenced directly by id from <see cref="CueAudioRoute"/> entries, so no per-cue-list
     /// audio binding is needed.</summary>
@@ -88,7 +88,7 @@ public sealed record CueVideoOutputBinding
     /// <summary>Composition (from <see cref="CueList.Compositions"/>) that feeds this output.</summary>
     public Guid CompositionId { get; init; }
 
-    /// <summary>Optional output mapping (warp sections) for this output — the composited canvas is
+    /// <summary>Optional output mapping (warp sections) for this output - the composited canvas is
     /// cut into sections placed individually in output space (projection onto uneven/multi-panel
     /// surfaces). Null = no mapping stage (identical pipeline and cost to before the feature).
     /// See Doc/HaPlay-Output-Mapping-Plan.md.</summary>
@@ -155,13 +155,13 @@ public sealed record CueOutputMappingSection
     /// <summary>Per-section alpha multiplier [0,1].</summary>
     public double Opacity { get; init; } = 1.0;
 
-    /// <summary>Per-section brightness [0,1] — panel brightness matching.</summary>
+    /// <summary>Per-section brightness [0,1] - panel brightness matching.</summary>
     public double Brightness { get; init; } = 1.0;
 
     /// <summary>Reserved for Phase 3 corner-pin (TL, TR, BR, BL in output pixels); ignored in Phase 1.</summary>
     public List<CuePoint>? Corners { get; init; }
 
-    /// <summary>Mesh warp control grid columns (Phase 4 — projection onto non-flat surfaces);
+    /// <summary>Mesh warp control grid columns (Phase 4 - projection onto non-flat surfaces);
     /// 0 = no mesh, otherwise ≥ 2 with <see cref="MeshRows"/> and a matching
     /// <see cref="MeshPoints"/> count.</summary>
     public int MeshColumns { get; init; }
@@ -173,7 +173,7 @@ public sealed record CueOutputMappingSection
     /// rotating the section carries its warp along. An identity grid renders as pure affine.</summary>
     public List<CuePoint>? MeshPoints { get; init; }
 
-    /// <summary>The identity control grid for <paramref name="columns"/>×<paramref name="rows"/> —
+    /// <summary>The identity control grid for <paramref name="columns"/>×<paramref name="rows"/> -
     /// every point on its un-warped grid position.</summary>
     public static List<CuePoint> IdentityMeshPoints(int columns, int rows)
     {
@@ -221,7 +221,7 @@ public abstract record CueNode
 
     public string? Notes { get; init; }
 
-    /// <summary>Color tag index 0..7 — 0 = none, 1..7 map to a fixed palette in
+    /// <summary>Color tag index 0..7 - 0 = none, 1..7 map to a fixed palette in
     /// <c>CueColorTagPalette</c>. Default-safe for pre-5.8 files (loads as 0 / no tag).</summary>
     public int ColorTag { get; init; }
 }
@@ -235,7 +235,7 @@ public sealed record CueGroupNode : CueNode
 
 /// <summary>
 /// One subtitle track selected for a media cue. Exactly one of <see cref="StreamIndex"/> (an embedded container
-/// subtitle stream — see <c>MediaStreamInfo.Index</c>) or <see cref="Path"/> (a sidecar file) identifies the
+/// subtitle stream - see <c>MediaStreamInfo.Index</c>) or <see cref="Path"/> (a sidecar file) identifies the
 /// source. The optional overrides apply to text formats that support styling (ASS, or any format FFmpeg decodes
 /// to ASS events); they are ignored for bitmap (PGS/DVB) subtitles.
 /// </summary>
@@ -269,12 +269,12 @@ public sealed record MediaCueNode : CueNode
 
     public int DurationMs { get; init; }
 
-    /// <summary>Cached probe result — whether the source has a decodable video stream. Defaults
+    /// <summary>Cached probe result - whether the source has a decodable video stream. Defaults
     /// false; older saved cues (pre-Phase 5.1) load with this unset and the Video tab still shows
     /// until the operator re-probes by re-browsing the source.</summary>
     public bool HasVideo { get; init; }
 
-    /// <summary>Cached probe result — whether the source has a decodable audio stream.</summary>
+    /// <summary>Cached probe result - whether the source has a decodable audio stream.</summary>
     public bool HasAudio { get; init; }
 
     /// <summary>Source channel count probed once on add. 0 when unknown / no audio.</summary>
@@ -288,7 +288,7 @@ public sealed record MediaCueNode : CueNode
     public int? AudioTrackIndex { get; init; }
 
     /// <summary>Content signature of the chosen audio track at pick time (codec/language/channels).
-    /// Guards <see cref="AudioTrackIndex"/> against re-muxed files whose stream indices shifted —
+    /// Guards <see cref="AudioTrackIndex"/> against re-muxed files whose stream indices shifted -
     /// on mismatch the engine re-resolves by signature or falls back to automatic.</summary>
     public string? AudioTrackSignature { get; init; }
 
@@ -297,7 +297,7 @@ public sealed record MediaCueNode : CueNode
     /// hint that it's a still image.</summary>
     public bool VideoIsAttachedPicture { get; init; }
 
-    /// <summary>Subtitle tracks to render over this cue's video — none / one / many. Each is an embedded
+    /// <summary>Subtitle tracks to render over this cue's video - none / one / many. Each is an embedded
     /// container stream (<see cref="CueSubtitleSelection.StreamIndex"/>) or a sidecar file
     /// (<see cref="CueSubtitleSelection.Path"/>), with optional font/placement overrides. Empty = no subtitles.</summary>
     public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
@@ -329,11 +329,11 @@ public sealed record MediaCueNode : CueNode
     /// <summary>Legacy persisted per-cue pre-roll opt-out. Ignored by the current cue runtime.</summary>
     public bool DisablePreRoll { get; init; }
 
-    /// <summary>Per-source-channel audio routing — picks a cue audio output + a device channel
+    /// <summary>Per-source-channel audio routing - picks a cue audio output + a device channel
     /// directly. Replaces the previous virtual-output + route-override model.</summary>
     public List<CueAudioRoute> AudioRoutes { get; init; } = new();
 
-    /// <summary>Per-composition appearance — layer index, position preset, opacity.</summary>
+    /// <summary>Per-composition appearance - layer index, position preset, opacity.</summary>
     public List<CueVideoPlacement> VideoPlacements { get; init; } = new();
 }
 
@@ -380,7 +380,7 @@ public sealed record CueVideoPlacement
     public double Opacity { get; init; } = 1.0;
 
     /// <summary>Destination rectangle on the composition canvas, normalized to [0,1].
-    /// Defaults to the full canvas — older cues load unchanged.</summary>
+    /// Defaults to the full canvas - older cues load unchanged.</summary>
     public double DestX { get; init; }
 
     public double DestY { get; init; }

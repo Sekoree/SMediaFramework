@@ -16,7 +16,7 @@ namespace S.Media.Time;
 /// <para>
 /// Tick events (<see cref="AudioTick"/>, <see cref="VideoTick"/>,
 /// <see cref="PositionChanged"/>) are driven by an internal wall-clock thread
-/// regardless of master attachment — they're "render at this cadence" signals,
+/// regardless of master attachment - they're "render at this cadence" signals,
 /// not "media time advanced by X." When a tick handler runs long or the thread
 /// wakes late, the driver <strong>bursts</strong> missed deadlines (capped) and
 /// then fast-forwards the schedule so a long stall does not freeze the process.
@@ -24,7 +24,7 @@ namespace S.Media.Time;
 /// <para>
 /// <see cref="PositionChanged"/> is usually raised from the driver thread at
 /// ~30 Hz. <see cref="Reset"/> and <see cref="Seek"/> raise it synchronously
-/// on the caller's thread immediately after updating the stored position —
+/// on the caller's thread immediately after updating the stored position -
 /// marshal if your UI requires a single context.
 /// </para>
 /// <para>
@@ -55,7 +55,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private TimeSpan _basePosition;
     private IPlaybackClock? _master;
     private TimeSpan _masterAnchor;
-    /// <summary>Master elapsed at last <see cref="Pause"/> — used to fold in audio that played during pause.</summary>
+    /// <summary>Master elapsed at last <see cref="Pause"/> - used to fold in audio that played during pause.</summary>
     private TimeSpan? _masterElapsedWhenPaused;
 
     private bool _isRunning;
@@ -134,7 +134,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
                     else if (drift < TimeSpan.Zero)
                     {
                         TraceLog.LogDebug(
-                            "Start: master elapsed regressed during pause (flush/segment reset?) pausedAt={PausedAt} now={Now} driftMs={DriftMs} — not folding",
+                            "Start: master elapsed regressed during pause (flush/segment reset?) pausedAt={PausedAt} now={Now} driftMs={DriftMs} - not folding",
                             pausedAt, now, drift.TotalMilliseconds);
                     }
                     _masterElapsedWhenPaused = null;
@@ -172,7 +172,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
         JoinDriver(toJoin, toDispose, cancellationToken);
     }
 
-    /// <summary>Same as <see cref="Pause"/> for now — semantics may diverge later.</summary>
+    /// <summary>Same as <see cref="Pause"/> for now - semantics may diverge later.</summary>
     public void Stop(CancellationToken cancellationToken = default) => Pause(cancellationToken);
 
     public void Reset()

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- SESSION-02: the `text:` cue source, promoted out of HaPlay into an optional first-party module so any host
-       running a ShowDocument can render a text cue identically. SkiaSharp (CPU raster) is isolated HERE — the
+       running a ShowDocument can render a text cue identically. SkiaSharp (CPU raster) is isolated HERE - the
        framework core stays Skia-free; only a host that loads this module pulls the dependency (same pattern as
        the NDI / YouTube / MMD source modules carrying their own natives). -->
 

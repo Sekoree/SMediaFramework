@@ -1,7 +1,7 @@
 namespace LibAssLib;
 
 /// <summary>
-/// Managed wrapper over an <c>ASS_Track</c> — the parsed styles plus timed events. Build it from a whole document
+/// Managed wrapper over an <c>ASS_Track</c> - the parsed styles plus timed events. Build it from a whole document
 /// (<see cref="AssLibrary.ReadMemory"/>) or incrementally: <see cref="ProcessCodecPrivate"/> for the header blob
 /// (the demuxer's codec-private: <c>[Script Info]</c> + <c>[V4+ Styles]</c> + the events <c>Format:</c> line),
 /// then <see cref="ProcessChunk"/> per demuxed event.

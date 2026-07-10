@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.NDI — NDI sender + receiver, registered into the media registry via NDIModule (no static
+    <!-- S.Media.NDI - NDI sender + receiver, registered into the media registry via NDIModule (no static
          MediaFrameworkRuntime hook, P2). Receiver opens 'ndi:' URIs as IVideoSource/IAudioSource; the
          NDI runtime is acquired by the module. The native libndi is host-supplied (NDILibraryResolver). -->
 

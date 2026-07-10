@@ -25,7 +25,7 @@ public sealed partial class ControlMIDIDeviceResolutionRowViewModel : Observable
         SelectedOption = (preferredId is { } id ? Options.FirstOrDefault(o => o.Port.Id == id) : null)
             ?? Options.FirstOrDefault();
 
-        Title = $"{request.DeviceName} — {request.Direction}";
+        Title = $"{request.DeviceName} - {request.Direction}";
         StatusText = string.IsNullOrWhiteSpace(request.Message) ? request.Status.ToString() : request.Message;
     }
 

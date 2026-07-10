@@ -24,7 +24,7 @@ public sealed class NullControlMonitorSink : IControlMonitorSink
 
 /// <summary>
 /// Fixed-capacity, drop-oldest monitor ring (CTRL-03). Backed by a pre-sized array with a moving start
-/// index, so <see cref="Record"/> is O(1) at any fill level — the previous <c>List.RemoveAt(0)</c> shifted
+/// index, so <see cref="Record"/> is O(1) at any fill level - the previous <c>List.RemoveAt(0)</c> shifted
 /// every remaining element on each add once the buffer was full, i.e. O(n) at exactly the sustained
 /// meter/update rate the monitor is meant to absorb.
 /// </summary>
@@ -68,7 +68,7 @@ public sealed class ControlMonitorBuffer : IControlMonitorSink
             }
             else
             {
-                // Full: overwrite the oldest slot and advance the window — O(1) drop-oldest.
+                // Full: overwrite the oldest slot and advance the window - O(1) drop-oldest.
                 _ring[_start] = record;
                 _start = (_start + 1) % _ring.Length;
             }

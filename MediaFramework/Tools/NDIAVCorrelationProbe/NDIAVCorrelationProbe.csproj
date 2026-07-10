@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <!-- Phase 5 NDI A/V-correlation probe: quantifies the scheduling divergence between opening an NDI source
-         as TWO connections (what MediaPlayer's ndi:// open does today — a video-only receiver + an audio-only
+         as TWO connections (what MediaPlayer's ndi:// open does today - a video-only receiver + an audio-only
          receiver, each with its own ingest clock anchored independently) vs ONE connection (the SourceSyncGroup
-         fix — one receiver, one shared ingest clock). The two-connection ingest-clock offset is the A/V desync
+         fix - one receiver, one shared ingest clock). The two-connection ingest-clock offset is the A/V desync
          the fix removes. Verification harness for the NDI SourceSyncGroup work. Optional NDI source substring. -->
 
     <PropertyGroup>

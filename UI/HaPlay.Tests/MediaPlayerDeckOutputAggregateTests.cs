@@ -6,7 +6,7 @@ using Xunit;
 namespace HaPlay.Tests;
 
 /// <summary>The deck header's multi-output aggregate (01·b): worst-case health dot, routed-output count,
-/// and the degraded-suffix summary — plus live re-notification when a routed line's health flips. Drives
+/// and the degraded-suffix summary - plus live re-notification when a routed line's health flips. Drives
 /// <see cref="MediaPlayerViewModel.DeckOutputHealth"/>, <see cref="MediaPlayerViewModel.DeckOutputHealthColor"/>
 /// and <see cref="MediaPlayerViewModel.DeckOutputSummary"/>.</summary>
 public sealed class MediaPlayerDeckOutputAggregateTests

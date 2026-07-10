@@ -7,14 +7,14 @@ namespace S.Media.Time;
 public sealed record VideoPresentSyncGroupOptions
 {
     /// <summary>
-    /// Frames at or before <c>reference + EarlyTolerance</c> are eligible to present this tick — absorbs the
+    /// Frames at or before <c>reference + EarlyTolerance</c> are eligible to present this tick - absorbs the
     /// sub-tick phase between the present cadence and the source frame rate (mirrors
     /// <see cref="VideoPlayer"/>'s early tolerance). Keep it well under one frame interval.
     /// </summary>
     public TimeSpan EarlyTolerance { get; init; } = TimeSpan.FromMilliseconds(2);
 
     /// <summary>
-    /// Constant offset subtracted from the reference position to form the present target — hold video back
+    /// Constant offset subtracted from the reference position to form the present target - hold video back
     /// by the outputs' presentation latency so it lines up with the reference timeline (mirrors
     /// <see cref="VideoPlayer.PlayheadOffset"/>). Default zero.
     /// </summary>
@@ -22,7 +22,7 @@ public sealed record VideoPresentSyncGroupOptions
 
     /// <summary>
     /// When some members are advance-ready but others are not (a member fell behind), the group
-    /// <strong>holds</strong> — presents nothing new — so the ready members do not run ahead and tear the
+    /// <strong>holds</strong> - presents nothing new - so the ready members do not run ahead and tear the
     /// stitched canvas. After this many consecutive holds it gives up waiting and presents the ready
     /// members anyway, so one wedged output can't freeze the whole wall. The lagging member rejoins
     /// lock-step automatically once it has frames again. Set to 0 to never hold (always present the ready
@@ -34,7 +34,7 @@ public sealed record VideoPresentSyncGroupOptions
 /// <summary>Opaque handle to a member registered with a <see cref="VideoPresentSyncGroup"/>.</summary>
 public readonly record struct VideoPresentSyncMemberHandle(int Id);
 
-/// <summary>Outcome of one <see cref="VideoPresentSyncGroup.Tick"/> — for HUD / diagnostics.</summary>
+/// <summary>Outcome of one <see cref="VideoPresentSyncGroup.Tick"/> - for HUD / diagnostics.</summary>
 /// <param name="Presented">The group advanced this tick (at least one member presented a new frame).</param>
 /// <param name="HeldForLaggingMember">Some members were advance-ready but the group held to wait for a lagging member.</param>
 /// <param name="GroupTargetPts">The PTS the group presented at (default when it held / idled).</param>
@@ -51,15 +51,15 @@ public readonly record struct VideoPresentSyncTickResult(
 /// Video genlock domain (issues-doc #2, Option&nbsp;B, Phase&nbsp;2b): drives several
 /// <see cref="ISyncPresentableVideoOutput"/> members from one shared reference timeline so they present the
 /// frame for the same timestamp <em>on the same tick</em>, with coordinated repeat/drop. This is the
-/// missing "synchronized drop/repeat across outputs" the architecture doc lists as not-implemented — what a
+/// missing "synchronized drop/repeat across outputs" the architecture doc lists as not-implemented - what a
 /// stitched video wall (one canvas split across several physical outputs) needs so an object crossing a
 /// panel seam is never one frame ahead on one side.
 /// </summary>
 /// <remarks>
 /// <para>
 /// It pairs with <see cref="OutputSyncGroup"/>: that one rate-disciplines audio crystals (so a member's
-/// master clock — and thus its video timeline — converges); this one phase-aligns the actual video
-/// <em>present</em>. They compose through one master playhead — the same <see cref="MediaClock"/> whose
+/// master clock - and thus its video timeline - converges); this one phase-aligns the actual video
+/// <em>present</em>. They compose through one master playhead - the same <see cref="MediaClock"/> whose
 /// <see cref="IPlaybackClock"/> drives the audio group is the <see cref="IReadOnlyPlayhead"/> reference
 /// here. On a single machine, software video pumps share the system timer and don't drift, so present
 /// scheduling (not rate slewing) is the whole job; separate display pixel clocks ultimately need hardware
@@ -73,7 +73,7 @@ public readonly record struct VideoPresentSyncTickResult(
 /// </para>
 /// <para>
 /// Drive it from a host loop via <see cref="Tick"/>, or let <see cref="Start"/> run an internal timer.
-/// Wiring it into HaPlay's cue engine is deferred until validated on real multi-output hardware — see
+/// Wiring it into HaPlay's cue engine is deferred until validated on real multi-output hardware - see
 /// <c>Doc/HaPlay-MultiOutput-Sync.md</c>.
 /// </para>
 /// </remarks>
@@ -167,7 +167,7 @@ public sealed class VideoPresentSyncGroup : IDisposable
                 }
             }
 
-            // Nobody is due to advance — normal between-frames hold (every device keeps its last frame).
+            // Nobody is due to advance - normal between-frames hold (every device keeps its last frame).
             if (readyCount == 0)
             {
                 _starveHolds = 0;
@@ -178,7 +178,7 @@ public sealed class VideoPresentSyncGroup : IDisposable
             if (!allReady)
             {
                 // Some members would advance but others have fallen behind. Hold so the ready members don't
-                // tear ahead of the laggards — bounded, so a wedged output can't freeze the whole wall.
+                // tear ahead of the laggards - bounded, so a wedged output can't freeze the whole wall.
                 _starveHolds++;
                 if (_options.MaxStarveHoldTicks > 0 && _starveHolds <= _options.MaxStarveHoldTicks)
                     return new VideoPresentSyncTickResult(

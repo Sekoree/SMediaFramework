@@ -6,7 +6,7 @@ using SkiaSharp;
 namespace S.Media.Source.Text;
 
 /// <summary>
-/// Renders a <see cref="TextSourceSpec"/> to a BGRA <see cref="VideoFrame"/> with SkiaSharp (CPU raster — works
+/// Renders a <see cref="TextSourceSpec"/> to a BGRA <see cref="VideoFrame"/> with SkiaSharp (CPU raster - works
 /// off the UI thread and headless). Supports a background box, word wrap, H/V alignment, bold/italic, and an
 /// outline. Falls back to the default typeface when the requested family is missing. Alignment codes: HAlign
 /// 0=left/1=center/2=right, VAlign 0=top/1=middle/2=bottom.
@@ -101,7 +101,7 @@ public static class TextFrameRenderer
         }
     }
 
-    /// <summary>The tight bounding box of the rendered text as fractions (0..1, x/y/w/h) of the cue's canvas — so a
+    /// <summary>The tight bounding box of the rendered text as fractions (0..1, x/y/w/h) of the cue's canvas - so a
     /// placement editor can outline where the actual text sits inside the placed (full-canvas) frame. Mirrors
     /// <see cref="Render"/>'s layout. Null on failure or empty text.</summary>
     public static (double X, double Y, double W, double H)? MeasureNormalizedBounds(TextSourceSpec spec)

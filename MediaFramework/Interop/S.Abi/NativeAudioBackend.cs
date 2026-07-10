@@ -5,7 +5,7 @@ using S.Media.Time;
 namespace S.Abi;
 
 /// <summary>
-/// Adapts a native plugin's <c>MfpAudioBackendVTable</c> to the managed <see cref="IAudioBackend"/> — device
+/// Adapts a native plugin's <c>MfpAudioBackendVTable</c> to the managed <see cref="IAudioBackend"/> - device
 /// enumeration plus opening <see cref="NativeAudioOutput"/> / <see cref="NativeAudioInput"/>. Registered into a live
 /// <see cref="S.Media.Core.Registry.IMediaRegistry"/> via <c>AddAudioBackend</c>, a plugin backend is a peer of
 /// PortAudio/miniaudio.

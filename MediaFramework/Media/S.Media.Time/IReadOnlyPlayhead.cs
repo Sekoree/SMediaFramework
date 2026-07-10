@@ -1,7 +1,7 @@
 namespace S.Media.Time;
 
 /// <summary>
-/// Read-only playhead slice without <see cref="IPlayhead.Seek"/> — what
+/// Read-only playhead slice without <see cref="IPlayhead.Seek"/> - what
 /// <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/> returns for consumers that observe
 /// the timeline but must not drive it.
 /// </summary>

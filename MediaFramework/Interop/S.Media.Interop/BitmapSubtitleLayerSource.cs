@@ -4,11 +4,11 @@ using S.Media.Decode.FFmpeg;
 namespace S.Media.Interop;
 
 /// <summary>
-/// A bitmap-subtitle overlay (PGS / DVB / DVD-VobSub) aligned to the master timeline — the non-libass counterpart
+/// A bitmap-subtitle overlay (PGS / DVB / DVD-VobSub) aligned to the master timeline - the non-libass counterpart
 /// to the ASS path. Given a master time it composites the placed images of the cue active then onto a Bgra32-
 /// premultiplied overlay frame at the subtitle's authored resolution (the compositor scales the layer to the
 /// canvas), or <c>null</c> when nothing shows. The decoded images are already premultiplied BGRA, so this is a
-/// straight source-over blit — no rendering engine.
+/// straight source-over blit - no rendering engine.
 /// </summary>
 /// <remarks>
 /// The returned frame is owned by this source and re-rendered in place (valid until the next call); composite it
@@ -57,7 +57,7 @@ public sealed class BitmapSubtitleLayerSource : IVideoOverlaySource
         }
 
         if (ReferenceEquals(cue, _activeCue))
-            return _frame; // same cue still showing — reuse
+            return _frame; // same cue still showing - reuse
 
         Array.Clear(_buffer);
         foreach (var image in cue.Images)

@@ -42,7 +42,7 @@ public readonly record struct LayerTransform2D(
     public (float X, float Y) Apply(float sx, float sy) =>
         (M11 * sx + M12 * sy + Tx, M21 * sx + M22 * sy + Ty);
 
-    /// <summary>Returns <c>a ∘ b</c> — apply <paramref name="b"/> first, then <paramref name="a"/>.</summary>
+    /// <summary>Returns <c>a ∘ b</c> - apply <paramref name="b"/> first, then <paramref name="a"/>.</summary>
     public static LayerTransform2D Compose(LayerTransform2D a, LayerTransform2D b) => new(
         a.M11 * b.M11 + a.M12 * b.M21,
         a.M11 * b.M12 + a.M12 * b.M22,
@@ -52,7 +52,7 @@ public readonly record struct LayerTransform2D(
         a.M21 * b.Tx + a.M22 * b.Ty + a.Ty);
 
     /// <summary>
-    /// Returns the affine inverse. Throws when the matrix is singular (degenerate — zero scale on
+    /// Returns the affine inverse. Throws when the matrix is singular (degenerate - zero scale on
     /// an axis). Used by <see cref="CpuVideoCompositor"/> for inverse sampling.
     /// </summary>
     public LayerTransform2D Invert()

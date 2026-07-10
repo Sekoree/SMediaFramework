@@ -7,7 +7,7 @@ using PixelFormat = S.Media.Core.Video.PixelFormat;
 namespace S.Media.Compositor.Tests;
 
 /// <summary>
-/// NXT-10 — surface layers as first-class mixer citizens. A fake <see cref="IVideoCompositorSurfaceHost"/>
+/// NXT-10 - surface layers as first-class mixer citizens. A fake <see cref="IVideoCompositorSurfaceHost"/>
 /// (CPU compositing behind the capability interface) proves the mixer's routing logic without a GL
 /// context: surface slots snapshot atomically, ride their placement, and route the composite through
 /// <see cref="IVideoCompositorSurfaceHost.CompositeWithSurfaces"/>; a non-hosting compositor refuses
@@ -25,7 +25,7 @@ public sealed class SurfaceLayerTests
         public void Dispose() { }
     }
 
-    /// <summary>CPU compositing behind the surface-host capability — records what reaches
+    /// <summary>CPU compositing behind the surface-host capability - records what reaches
     /// CompositeWithSurfaces so the mixer's surface routing is observable without GL.</summary>
     private sealed class FakeSurfaceHost(VideoFormat output) : IVideoCompositorSurfaceHost
     {

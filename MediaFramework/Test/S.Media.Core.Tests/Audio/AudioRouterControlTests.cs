@@ -57,7 +57,7 @@ public class AudioRouterControlTests
             // Pause gates Flush behind the pump's WaitForIdle, which waits for the in-flight Submit but is
             // itself capped at a 100ms bounded-pause timeout (a wedged device must not hang Pause forever).
             // Probe with a SHORT window well under that cap: an ungated implementation flushes at ~0ms, so
-            // 30ms still catches the bug, while leaving ~70ms of slack before the 100ms timeout — the old
+            // 30ms still catches the bug, while leaving ~70ms of slack before the 100ms timeout - the old
             // 80ms probe left only 20ms and flaked on the single-CPU CI runner when thread starvation pushed
             // the ReleaseSubmit below past the timeout (Flush then fired while the Submit was still blocked).
             Assert.False(output.FlushStarted.Wait(TimeSpan.FromMilliseconds(30)),
@@ -144,7 +144,7 @@ public class AudioRouterControlTests
 
         Assert.False(r.IsRunning);
         Assert.True(r.CompletedNaturally);
-        // IsRunning flips before the finishing thread's flush call — give the flush its own window instead of
+        // IsRunning flips before the finishing thread's flush call - give the flush its own window instead of
         // asserting the instant the flag drops (a preemption between the two flaked on the CI runner).
         var flushDeadline = DateTime.UtcNow.AddSeconds(2);
         while (output.FlushCount <= flushBefore && DateTime.UtcNow < flushDeadline)
@@ -233,7 +233,7 @@ public class AudioRouterControlTests
         var src = new SeekableTestSource(Stereo);
         r.AddSource(src, "src");
 
-        // Router never started — SeekSource should still call Seek without
+        // Router never started - SeekSource should still call Seek without
         // spinning up the run loop.
         r.SeekSource("src", TimeSpan.FromSeconds(15));
 
@@ -290,7 +290,7 @@ public class AudioRouterControlTests
     {
         // Source = constant 4.0. Initial gain 1.0 (output = 4.0).
         // Change to 0.5 (output = 2.0). The next chunk should ramp linearly:
-        // first sample ≈ 4.0, last sample ≈ 2.0 — not a hard step.
+        // first sample ≈ 4.0, last sample ≈ 2.0 - not a hard step.
         const int chunk = 64;
         using var r = new AudioRouter(SampleRate, chunkSamples: chunk);
         var src = new TestSource(Stereo, _ => 4f);
@@ -304,8 +304,8 @@ public class AudioRouterControlTests
 
         // The capture output sits behind a pump that DROPS on overflow (non-primary outputs must not
         // stall the router), so the one ramp chunk a mutation produces can be lost on a loaded CI
-        // runner. Each attempt re-establishes steady gain 1.0 and mutates down again — a fresh ramp
-        // chunk per attempt — until one is actually captured. The assertion itself stays exact.
+        // runner. Each attempt re-establishes steady gain 1.0 and mutates down again - a fresh ramp
+        // chunk per attempt - until one is actually captured. The assertion itself stays exact.
         float[]? rampChunk = null;
         var rampIndex = -1;
         List<float[]> captured = [];
@@ -319,7 +319,7 @@ public class AudioRouterControlTests
             Thread.Sleep(40);
 
             // Between reading Count and calling SetRouteGain, the router can still
-            // deliver one steady-state chunk (gain 1.0). Scan forward — the ramp
+            // deliver one steady-state chunk (gain 1.0). Scan forward - the ramp
             // chunk has first≈4, last≈2.
             captured = output.AllChunks.ToList();
             for (var i = chunksBeforeMutation; i < captured.Count; i++)
@@ -363,7 +363,7 @@ public class AudioRouterControlTests
     public void SetRouteGain_NoChange_NoRampOverhead()
     {
         // Setting the same gain twice shouldn't introduce a ramp on the
-        // unchanged chunks — they should be exactly constant.
+        // unchanged chunks - they should be exactly constant.
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, _ => 4f);
         var output = new ChunkLogOutput(Stereo);

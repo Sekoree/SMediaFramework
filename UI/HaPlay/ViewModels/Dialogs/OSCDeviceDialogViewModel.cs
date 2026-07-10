@@ -60,7 +60,7 @@ public sealed partial class OSCDeviceDialogViewModel : ViewModelBase
 
         ProfileOptions =
         [
-            new OSCDeviceProfileOption(null, "(raw OSC — no profile)"),
+            new OSCDeviceProfileOption(null, "(raw OSC - no profile)"),
             .. oscProfiles
                 .OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .Select(p => new OSCDeviceProfileOption(p.Id, $"{p.DisplayName} ({p.Id})")),

@@ -27,7 +27,7 @@ public class ListView : ListBox
     internal bool UpdateSelectionFromPointerEvent(Control source, PointerEventArgs e)
     {
         // UpdateSelectionFromEvent derives select/range(Shift)/toggle(command)/right-button from the event
-        // itself — identical to the explicit modifiers this used to compute (Avalonia deprecated the
+        // itself - identical to the explicit modifiers this used to compute (Avalonia deprecated the
         // UpdateSelectionFromEventSource overload in favour of it).
         return UpdateSelectionFromEvent(source, e);
     }

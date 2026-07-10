@@ -187,7 +187,7 @@ public class AudioRouterTests
     [Fact]
     public void AddRoute_ByRouteId_AllowsMultipleRoutesPerPair()
     {
-        // Phase C (§4.3.4) — per-cell audio matrix needs multiple routes per (source, output) pair.
+        // Phase C (§4.3.4) - per-cell audio matrix needs multiple routes per (source, output) pair.
         // The run loop already sums additively, so two routes feeding cell-disjoint output channels
         // produce the union of their contributions on the same output.
         using var r = new AudioRouter(SampleRate, chunkSamples: 32);
@@ -204,7 +204,7 @@ public class AudioRouterTests
         r.Start();
         WaitForChunks(r, 3);
         r.Stop();
-        // Identity-equivalent split across two routes — left cell carries src L, right cell carries src R.
+        // Identity-equivalent split across two routes - left cell carries src L, right cell carries src R.
         AssertFramePattern(output.Captured[0], expected: [3f, 4f]);
     }
 
@@ -246,7 +246,7 @@ public class AudioRouterTests
     [Fact]
     public void RemoveRoute_LegacyPairOverload_RemovesAllRoutesForPair()
     {
-        // Back-compat: callers that didn't opt into route ids see "one logical edge" — RemoveRoute(src,output)
+        // Back-compat: callers that didn't opt into route ids see "one logical edge" - RemoveRoute(src,output)
         // sweeps every route between them, mirroring the pre-Phase-C single-route-per-pair contract.
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
@@ -262,7 +262,7 @@ public class AudioRouterTests
     public void AddRoute_RouteIdCollisionAcrossPairs_Rejected()
     {
         // Reusing a routeId for a different (source, output) pair would silently steer subsequent
-        // SetRouteGainById / RemoveRouteById calls at the wrong cell — reject loudly.
+        // SetRouteGainById / RemoveRouteById calls at the wrong cell - reject loudly.
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src1");
         r.AddSource(new TestSource(Stereo), "src2");

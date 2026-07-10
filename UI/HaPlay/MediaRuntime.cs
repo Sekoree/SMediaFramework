@@ -10,7 +10,7 @@ using S.Media.NDI;
 namespace HaPlay;
 
 /// <summary>
-/// The process-wide media registry — the rewritten framework's single composition root. Replaces the old
+/// The process-wide media registry - the rewritten framework's single composition root. Replaces the old
 /// static <c>MediaFrameworkRuntime.Init().UseFFmpeg()/UsePortAudio()/…</c> + <c>AudioBackends</c> +
 /// <c>MediaFrameworkPlugins</c> surface (all removed in the AOT-pure rewrite, P2). Built once at startup;
 /// engines open media via <c>MediaPlayer.OpenFile(MediaRuntime.Registry, path)</c> and resolve output devices
@@ -36,7 +36,7 @@ internal static class MediaRuntime
             ? dir
             : Path.Combine(AppContext.BaseDirectory, "plugins");
 
-    /// <summary>Layer-surface kinds contributed by native plugins (NXT-09/10) — resolve by kind + config
+    /// <summary>Layer-surface kinds contributed by native plugins (NXT-09/10) - resolve by kind + config
     /// JSON to place a plugin-rendered GPU layer on a composition. Populated when the host builds.</summary>
     public static S.Media.Compositor.ICompositorRegistry CompositorSurfaces
     {
@@ -60,11 +60,11 @@ internal static class MediaRuntime
             {
                 if (_host is null && _shutdown)
                 {
-                    // A late poll/timer touched the registry AFTER Shutdown() released the native runtimes —
+                    // A late poll/timer touched the registry AFTER Shutdown() released the native runtimes -
                     // rebuilding resurrects PortAudio/NDI holds that will now leak (nothing disposes the fresh
                     // host). Rebuild anyway so a straggling teardown path can't crash the exit, but make the
                     // ordering bug loud: fix the caller to stop before MediaRuntime.Shutdown().
-                    Trace.LogError("MediaRuntime: Registry accessed AFTER Shutdown() — rebuilding a fresh host "
+                    Trace.LogError("MediaRuntime: Registry accessed AFTER Shutdown() - rebuilding a fresh host "
                                    + "(native runtime holds will leak). Stop the caller before shutdown.");
                     System.Diagnostics.Debug.Assert(false, "MediaRuntime.Registry accessed after Shutdown()");
                 }
@@ -81,7 +81,7 @@ internal static class MediaRuntime
     public static bool IsInitialized => _host is not null;
 
     /// <summary>AUDIO-02: per-module availability captured during the registry build, so HaPlay can SHOW which
-    /// backends registered and why an optional one (e.g. NDI, PortAudio) was skipped — instead of that only
+    /// backends registered and why an optional one (e.g. NDI, PortAudio) was skipped - instead of that only
     /// living in a log line. Building the host first ensures the list is populated.</summary>
     public static IReadOnlyList<ModuleDiagnostic> ModuleDiagnostics
     {
@@ -98,7 +98,7 @@ internal static class MediaRuntime
 
     /// <summary>
     /// Disposes the owning host at app shutdown, releasing the modules' native runtime holds deterministically
-    /// (NXT-05 — without this the process-wide registry was never disposed and <c>Pa_Terminate</c>/NDI release
+    /// (NXT-05 - without this the process-wide registry was never disposed and <c>Pa_Terminate</c>/NDI release
     /// never ran). Idempotent and thread-safe; call <em>after</em> sessions/engines that borrow the registry have
     /// been torn down. A subsequent <see cref="Registry"/> access would rebuild a fresh host, so only call this on
     /// the way out.
@@ -110,7 +110,7 @@ internal static class MediaRuntime
         {
             host = _host;
             _host = null;
-            _shutdown = true; // a later Registry access is an ordering bug — the getter asserts + logs it
+            _shutdown = true; // a later Registry access is an ordering bug - the getter asserts + logs it
         }
 
         if (host is null)
@@ -118,7 +118,7 @@ internal static class MediaRuntime
         try
         {
             host.Dispose();
-            Trace.LogInformation("MediaRuntime shut down — module native runtimes released.");
+            Trace.LogInformation("MediaRuntime shut down - module native runtimes released.");
         }
         catch (Exception ex)
         {
@@ -126,7 +126,7 @@ internal static class MediaRuntime
         }
 
         // AFTER the registry (its plugin-backed adapters hold the unload-gating leases): request plugin
-        // unload — a library with still-live adapters simply stays loaded until process exit.
+        // unload - a library with still-live adapters simply stays loaded until process exit.
         S.Abi.MediaPluginDirectory? plugins;
         lock (Gate)
         {
@@ -138,7 +138,7 @@ internal static class MediaRuntime
 
     private static MediaHost Build()
     {
-        // Dynamic native plugins (NXT-09): fail-soft like every module — a broken plugin is a log line,
+        // Dynamic native plugins (NXT-09): fail-soft like every module - a broken plugin is a log line,
         // not a startup failure. Loaded before the registry build so capabilities register inside it.
         S.Abi.MediaPluginDirectory? plugins = null;
         try
@@ -148,11 +148,11 @@ internal static class MediaRuntime
                 Trace.LogInformation("MediaRuntime: plugin '{Id}' ({Name}) loaded from {Dir}",
                     plugin.Id, plugin.DisplayName, PluginsDirectory);
             foreach (var (path, error) in plugins.Failures)
-                Trace.LogWarning("MediaRuntime: plugin '{Path}' failed to load — {Error}", path, error);
+                Trace.LogWarning("MediaRuntime: plugin '{Path}' failed to load - {Error}", path, error);
         }
         catch (Exception ex)
         {
-            Trace.LogWarning(ex, "MediaRuntime: plugin directory scan failed — continuing without plugins");
+            Trace.LogWarning(ex, "MediaRuntime: plugin directory scan failed - continuing without plugins");
         }
 
         lock (Gate)
@@ -170,7 +170,7 @@ internal static class MediaRuntime
                 TryUse(b, static () => new NDIModule(), "NDI");
             else
             {
-                Trace.LogInformation("MediaRuntime: NDI module skipped — {Reason}", RuntimeModules.NDIUnavailableReason);
+                Trace.LogInformation("MediaRuntime: NDI module skipped - {Reason}", RuntimeModules.NDIUnavailableReason);
                 RecordDiagnostic(new ModuleDiagnostic("NDI", false, RuntimeModules.NDIUnavailableReason));
             }
 
@@ -196,7 +196,7 @@ internal static class MediaRuntime
                 }
                 catch (Exception ex)
                 {
-                    Trace.LogWarning(ex, "MediaRuntime: plugin capability registration failed — continuing");
+                    Trace.LogWarning(ex, "MediaRuntime: plugin capability registration failed - continuing");
                 }
             }
         });
@@ -207,7 +207,7 @@ internal static class MediaRuntime
             _compositorSurfaces = surfaceBuilder.Build();
         }
 
-        Trace.LogInformation("MediaRuntime ready — audio backends: {Backends}",
+        Trace.LogInformation("MediaRuntime ready - audio backends: {Backends}",
             string.Join(", ", host.Registry.AudioBackends.Select(x => x.Name)));
         return host;
     }
@@ -222,8 +222,8 @@ internal static class MediaRuntime
         catch (Exception ex)
         {
             // A module's Register runs synchronously inside Build's configure callback, so a throw here just
-            // skips that one module — the others still register.
-            Trace.LogWarning(ex, "MediaRuntime: '{Module}' module unavailable — continuing without it", name);
+            // skips that one module - the others still register.
+            Trace.LogWarning(ex, "MediaRuntime: '{Module}' module unavailable - continuing without it", name);
             RecordDiagnostic(new ModuleDiagnostic(name, false, DescribeUnavailability(ex)));
         }
     }

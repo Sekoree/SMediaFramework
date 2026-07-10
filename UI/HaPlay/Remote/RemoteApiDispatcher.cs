@@ -7,7 +7,7 @@ namespace HaPlay.Remote;
 /// <summary>HTTP-status-shaped outcome of one remote command.</summary>
 public readonly record struct RemoteApiResult(int Status, string Body, string? Allow = null)
 {
-    // JsonEncodedText (not JsonSerializer) — the app publishes NativeAOT with source-gen-only
+    // JsonEncodedText (not JsonSerializer) - the app publishes NativeAOT with source-gen-only
     // serialization, and these tiny payloads don't justify a context type.
     public static RemoteApiResult Ok(string message) =>
         new(200, $"{{\"ok\":true,\"message\":\"{JsonEncodedText.Encode(message)}\"}}");
@@ -22,7 +22,7 @@ public readonly record struct RemoteApiResult(int Status, string Body, string? A
 /// <summary>
 /// Routes remote API paths onto the view models. Transport-agnostic (the HTTP listener and unit
 /// tests both call <see cref="ExecuteAsync"/>); every handler hops to the UI thread, validates its
-/// target and *kicks off* the command without awaiting playback — transports can block for seconds
+/// target and *kicks off* the command without awaiting playback - transports can block for seconds
 /// on prefill, and a remote controller needs the request to return immediately.
 ///
 /// URL scheme (all indices 1-based, matching the UI labels; status is GET, mutations are POST):

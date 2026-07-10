@@ -3,7 +3,7 @@ namespace S.Media.Decode.FFmpeg.Audio;
 /// <summary>
 /// Wraps a non-master <see cref="IAudioOutput"/> and applies a small libav <c>swresample</c> rate tweak
 /// driven by an external ppm-bias signal, so an output that drifts against the session master receives
-/// slightly fewer/more samples per chunk — easing queue growth without retuning the global playback clock.
+/// slightly fewer/more samples per chunk - easing queue growth without retuning the global playback clock.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,7 +38,7 @@ public sealed class AdaptiveRateAudioOutput
     /// Wraps <paramref name="inner"/>, biasing its effective output rate by <paramref name="getPlaybackPpmBias"/>
     /// (parts-per-million, signed), clamped to ±<paramref name="maxRateDeltaHz"/> around the device rate.
     /// </summary>
-    /// <param name="biasSource">Optional object disposed with this output — e.g. the (Routing-side) pump-pressure
+    /// <param name="biasSource">Optional object disposed with this output - e.g. the (Routing-side) pump-pressure
     /// monitor backing <paramref name="getPlaybackPpmBias"/>, so its router subscription is released when the
     /// wrapped output is removed.</param>
     public AdaptiveRateAudioOutput(IAudioOutput inner, Func<double> getPlaybackPpmBias, int maxRateDeltaHz = 3,
@@ -59,7 +59,7 @@ public sealed class AdaptiveRateAudioOutput
         _scratch = RentScratch(_format.Channels);
     }
 
-    /// <summary>Router-side format (input to <see cref="Submit"/>) — the wrapper presents the nominal rate.</summary>
+    /// <summary>Router-side format (input to <see cref="Submit"/>) - the wrapper presents the nominal rate.</summary>
     public AudioFormat Format => _format;
 
     public AudioOutputChannelCapabilities ChannelCapabilities =>

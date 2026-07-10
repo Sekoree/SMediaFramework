@@ -32,7 +32,7 @@ public sealed class AppSettingsTests
         }
     }
 
-    /// <summary>Phase E (§8.7) — a saved <see cref="WindowStateSnapshot"/> round-trips through the
+    /// <summary>Phase E (§8.7) - a saved <see cref="WindowStateSnapshot"/> round-trips through the
     /// camelCase JSON contract without loss. Guards against renames on the snapshot fields silently
     /// breaking restore on next launch.</summary>
     [Fact]
@@ -76,7 +76,7 @@ public sealed class AppSettingsTests
         Assert.False(loaded.MainWindow.IsMaximized);
     }
 
-    /// <summary>Phase E (§8.6) — theme + density round-trip through JSON. Both default to the
+    /// <summary>Phase E (§8.6) - theme + density round-trip through JSON. Both default to the
     /// pre-§8.6 behaviour (System theme, Compact density) so legacy files don't surprise users.</summary>
     [Fact]
     public void AppSettings_RoundTrips_ThemeAndDensity()
@@ -128,7 +128,7 @@ public sealed class AppSettingsTests
         Assert.Equal(AppThemeMode.Dark, loaded!.Theme);
     }
 
-    /// <summary>Phase B (§12.2) — per-dialog size memory round-trips through JSON. Keys are dialog-type
+    /// <summary>Phase B (§12.2) - per-dialog size memory round-trips through JSON. Keys are dialog-type
     /// names, values are width/height pairs.</summary>
     [Fact]
     public void AppSettings_RoundTrips_DialogSizes()

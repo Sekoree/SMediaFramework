@@ -112,7 +112,7 @@ public sealed partial class CueCompositionViewModel : ObservableObject
     };
 }
 
-/// <summary>One swatch in the drawer's color-tag picker (Phase 5.8.1). Plain DTO — the
+/// <summary>One swatch in the drawer's color-tag picker (Phase 5.8.1). Plain DTO - the
 /// button command lives on <see cref="CuePlayerViewModel"/>; this VM just supplies the
 /// fill/border colors and the tag index.</summary>
 public sealed class CueColorSwatchViewModel
@@ -151,7 +151,7 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
 
     partial void OnOutputLineIdChanged(Guid value) => LineRef = _resolveLine?.Invoke(value);
 
-    /// <summary>Output mapping (warp sections) for this binding — edited by the mapping editor
+    /// <summary>Output mapping (warp sections) for this binding - edited by the mapping editor
     /// dialog, persisted with the cue list. Null = no mapping stage. Geometry is retained while
     /// <see cref="MappingEnabled"/> is false so disabling then re-enabling restores the slice.</summary>
     [ObservableProperty]

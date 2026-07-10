@@ -4,7 +4,7 @@ namespace S.Media.Time;
 public enum RebasePolicy
 {
     /// <summary>Source PTS is authoritative; a frame is due when <c>master ≥ pts + offset</c>. Files and
-    /// exact-rate live senders — gives perfect lip-sync.</summary>
+    /// exact-rate live senders - gives perfect lip-sync.</summary>
     Scheduled,
 
     /// <summary>Keep a bounded jitter buffer and present the frame whose rebased PTS brackets master.
@@ -18,8 +18,8 @@ public enum RebasePolicy
 
 /// <summary>
 /// Maps one source's presentation timestamps onto the session master timeline (Doc 03). It owns the
-/// timing math — a fixed signed <see cref="Offset"/> plus an optional anchor that ties a source PTS to a
-/// master instant — but not the frame buffer: the player holds frames and asks the timeline <em>when</em>
+/// timing math - a fixed signed <see cref="Offset"/> plus an optional anchor that ties a source PTS to a
+/// master instant - but not the frame buffer: the player holds frames and asks the timeline <em>when</em>
 /// each is due (<see cref="DueTime"/>) or <em>which</em> source time corresponds to now
 /// (<see cref="SourceTimeAt"/>). The <see cref="Policy"/> tells the consumer how to drive anchoring.
 /// </summary>
@@ -28,7 +28,7 @@ public enum RebasePolicy
 /// timeline, so leaving the timeline un-anchored gives <c>DueTime(pts) = pts + Offset</c>.</para>
 /// <para>Live (<see cref="RebasePolicy.Holdback"/> / <see cref="RebasePolicy.RebaseToLatest"/>): the
 /// sender clock is unrelated to master, so <see cref="Anchor"/> ties a sender PTS to master-now; on
-/// over/underflow, RebaseToLatest re-anchors the newest frame. Not thread-safe — driven from one
+/// over/underflow, RebaseToLatest re-anchors the newest frame. Not thread-safe - driven from one
 /// player/router thread.</para>
 /// </remarks>
 public sealed class SourceTimeline(RebasePolicy policy, TimeSpan offset = default)

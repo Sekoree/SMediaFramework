@@ -69,7 +69,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private EventHandler<VideoOutputPumpPressureEventArgs>? _pumpPressure;
 
     // Optional branch conversion performed on THIS pump's drain thread instead of the router submit thread
-    // (P2-7): the router hands a slow converting branch — e.g. NDI's yuv422p10le→UYVY at 4K60 — a zero-copy
+    // (P2-7): the router hands a slow converting branch - e.g. NDI's yuv422p10le→UYVY at 4K60 - a zero-copy
     // raw view via VideoFrame.TryCreateCpuFanOutViews and lets the heavy swscale run here, off the player's
     // per-frame budget. _branchConverter is touched only by the drain thread; SetBranchConverter stages a
     // swap under _gate that the drain thread adopts BETWEEN frames, so a reconfigure can never dispose a
@@ -129,7 +129,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             if (_configured)
             {
                 // VideoRouter.ApplyConfigureLocked re-Configures the primary every time a branch route is
-                // added even though the format is unchanged — a cheap pass-through. But a REAL format
+                // added even though the format is unchanged - a cheap pass-through. But a REAL format
                 // change must not leave old-format frames queued for the reconfigured inner output, so
                 // drop them first. (A frame already in-flight on the drainer thread can still race; full
                 // format-versioned queues would close that residual window.)
@@ -243,7 +243,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         }
 
         // ROUTE-01: raise pump pressure AFTER releasing _gate. The subscriber is arbitrary external code
-        // that may query router/pump metrics (taking the router lock) or remove this output — invoking it
+        // that may query router/pump metrics (taking the router lock) or remove this output - invoking it
         // while holding _gate creates a callback/re-entrancy hazard and an ABBA lock path against the
         // router. The event payload is a monotonic running total, so collapsing the (possibly several)
         // drops in one Submit into a single post-lock raise carrying the final total is equivalent.
@@ -328,7 +328,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             {
                 var total = Interlocked.Read(ref _dropped);
                 MediaDiagnostics.LogWarning(
-                    $"VideoOutputPump '{_name}': queue full — dropped oldest frame(s); total DroppedFrames={total}. " +
+                    $"VideoOutputPump '{_name}': queue full - dropped oldest frame(s); total DroppedFrames={total}. " +
                     "Increase MaxQueuedFrames on VideoOutputPumpAttachOptions or reduce output Submit latency.");
                 if (_log is { } l && l.IsEnabled(LogLevel.Warning))
                     l.LogWarning("VideoOutputPump {Name}: queue full drops (total {Total})", _name, total);
@@ -389,8 +389,8 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                         }
                         catch (Exception cex)
                         {
-                            _log?.LogError(cex, "VideoOutputPump {Name}: branch convert failed — frame dropped", _name);
-                            Trace.LogError(cex, $"{_name}: branch convert failed — frame dropped");
+                            _log?.LogError(cex, "VideoOutputPump {Name}: branch convert failed - frame dropped", _name);
+                            Trace.LogError(cex, $"{_name}: branch convert failed - frame dropped");
                             next.Dispose();
                             Interlocked.Increment(ref _dropped);
                             continue;
@@ -398,7 +398,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                     }
 
                     // Format-versioned queue: a real reconfigure since this frame was enqueued makes it
-                    // stale for the now-reconfigured inner output — drop it rather than submit a
+                    // stale for the now-reconfigured inner output - drop it rather than submit a
                     // wrong-format frame. Closes the "frame already dequeued before a format change"
                     // window the queue-drop in Configure cannot reach.
                     bool staleFormat;
@@ -468,19 +468,19 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             cts?.Cancel();
             _pending.Set();
             // Ask a cooperative inner output to abandon any in-flight Submit so the drainer returns
-            // promptly — otherwise a slow blocking Submit forces the join cap to expire and we leak pump
+            // promptly - otherwise a slow blocking Submit forces the join cap to expire and we leak pump
             // state below. Outputs that don't implement this keep the prior leak-avoidance fallback.
             //
             // Only signal this when THIS pump owns the inner (disposeInner): the abort is terminal on the
             // inner, and a borrowed inner outlives the pump. A shared, long-lived NDIVideoSender (owned by
             // the NDI carrier and reused across every cue/deck acquisition) must NOT be permanently disabled
-            // by a transient pump's teardown — doing so turned the whole NDI output black until app restart.
+            // by a transient pump's teardown - doing so turned the whole NDI output black until app restart.
             if (_disposeInner)
                 (_inner as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
             if (thread is { } t)
             {
                 // Drainer is parked at most one SDK-paced Submit (typically ≤33 ms at the negotiated frame
-                // rate). A 2 s cap covers slow outputs while keeping Pause / Stop / unload responsive — the
+                // rate). A 2 s cap covers slow outputs while keeping Pause / Stop / unload responsive - the
                 // previous 30 s cap could stack into multi-second freezes when the drainer was held up
                 // inside a paced send (most visible with attached_pic streams that declared 1 FPS).
                 CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(2), CancellationToken.None);
@@ -491,7 +491,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         if (!threadExited)
         {
             // The drainer is still blocked inside a slow inner Submit after the join cap. Disposing
-            // _pending / _cts / the inner output now would pull state out from under it — an
+            // _pending / _cts / the inner output now would pull state out from under it - an
             // ObjectDisposedException on the drainer's _pending.Wait, or use-after-dispose inside the
             // inner output. Leak those deliberately rather than crash: it's a background thread that
             // will exit on its own once the inner Submit finally returns (it re-checks cancellation).

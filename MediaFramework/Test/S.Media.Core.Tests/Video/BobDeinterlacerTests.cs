@@ -44,7 +44,7 @@ public sealed class BobDeinterlacerTests
             Assert.Equal(2, n);
             Assert.NotNull(outs[0]);
             Assert.NotNull(outs[1]);
-            // First output should be from top field (red on rows 0,2). Sample pixel (0,0) — red.
+            // First output should be from top field (red on rows 0,2). Sample pixel (0,0) - red.
             var top = outs[0]!.Planes[0].Span;
             Assert.Equal(0, top[0]);   // B
             Assert.Equal(0, top[1]);   // G

@@ -1,4 +1,4 @@
-// AbiSmoke — the Phase-6 S.Abi gate. Compiles the native test_plugin.c (gcc) into a .so, loads it through the
+// AbiSmoke - the Phase-6 S.Abi gate. Compiles the native test_plugin.c (gcc) into a .so, loads it through the
 // S.Abi plugin host, and verifies a native C-ABI plugin loads + registers a source AND a control decoder.
 using System.Diagnostics;
 using OSCLib;
@@ -31,7 +31,7 @@ if (plugin.Id != "com.example.testplugin" || !hasSource || !hasDecoder)
     return 2;
 }
 
-// Exercise the registered control decoder through its managed adapter — proves the plugin's code actually RUNS
+// Exercise the registered control decoder through its managed adapter - proves the plugin's code actually RUNS
 // (not just that it registered): decode a one-byte blob and check the reading the plugin produced.
 var decoder = AbiPluginHost.BindControlDecoders(plugin).Single().Decoder;
 var controlArguments = new[] { OSCArgument.String("meters"), OSCArgument.Blob(new byte[] { 128 }) };
@@ -66,7 +66,7 @@ if (boundSampleCount != 8 || boundSamples[0] != 0.25f)
     return 5;
 }
 
-// (b) Register the plugin into a LIVE IMediaRegistry, route the URI through it, and read the frame — proves the
+// (b) Register the plugin into a LIVE IMediaRegistry, route the URI through it, and read the frame - proves the
 // end-to-end live path + the frame-union marshalling (pixels must match what the plugin wrote).
 var registry = MediaRegistry.Build(b => AbiPluginHost.RegisterInto(plugin, media: b));
 if (!registry.TryOpenVideo("testsrc://demo", null, out var source) || !source.TryReadNextFrame(out var vframe) || vframe is null)
@@ -178,7 +178,7 @@ if (sp[0] != 99 || sp[1] != 99 || sp[2] != 99 || sp[3] != 255)
 }
 
 // (g) PLUG-02: dispose a plugin while a native call is BLOCKED inside it. The per-adapter lease must keep the
-// library mapped until the in-flight call returns — unloading it out from under a running callback would crash.
+// library mapped until the in-flight call returns - unloading it out from under a running callback would crash.
 // This uses an ISOLATED copy of the .so so this plugin's unload actually unmaps ITS OWN library (the plugin
 // above is a different mapping), making it a real free-during-blocked-call race. The plugin's audio read blocks
 // on MFP_TEST_PLUGIN_SLOW_MS; we start a read on a thread, dispose the plugin mid-block, then release the adapter.
@@ -197,7 +197,7 @@ if (sp[0] != 99 || sp[1] != 99 || sp[2] != 99 || sp[3] != 255)
         var reader = new Thread(() => { var buf = new float[4]; readCount = slowAudio.ReadInto(buf); }) { IsBackground = true };
         reader.Start();
         Thread.Sleep(100);        // let the read enter the native usleep
-        slowPlugin.Dispose();     // request unload WHILE the read is blocked — the lease must defer NativeLibrary.Free
+        slowPlugin.Dispose();     // request unload WHILE the read is blocked - the lease must defer NativeLibrary.Free
 
         if (!reader.Join(TimeSpan.FromSeconds(5)))
         {
@@ -235,7 +235,7 @@ if (!plugin.IsUnloaded || AbiPluginHost.LastLogMessage != "unregister:ok")
     return 17;
 }
 
-Console.WriteLine("AbiSmoke OK — all six ABI capabilities run through managed adapters, including correlated A/V, audio clock/backpressure/input semantics, scoped registries, deferred plugin unload, and (PLUG-02) a plugin dispose safely deferred while a native call was blocked inside it.");
+Console.WriteLine("AbiSmoke OK - all six ABI capabilities run through managed adapters, including correlated A/V, audio clock/backpressure/input semantics, scoped registries, deferred plugin unload, and (PLUG-02) a plugin dispose safely deferred while a native call was blocked inside it.");
 return 0;
 
 static bool CompilePlugin(string cFile, string includeDir, string outSo)

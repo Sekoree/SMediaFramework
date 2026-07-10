@@ -6,7 +6,7 @@ using S.Media.Core.Video;
 namespace S.Media.Players;
 
 /// <summary>
-/// Registry-driven open builder for one media object (P2 — opens through <see cref="IMediaRegistry"/>, no
+/// Registry-driven open builder for one media object (P2 - opens through <see cref="IMediaRegistry"/>, no
 /// globals). The registry is injected at builder creation, so the cue/session layer keeps its
 /// <c>OpenFile(...).WithOptions(...).Build()</c> ergonomics without a concrete decoder dependency.
 /// </summary>
@@ -34,7 +34,7 @@ public abstract class MediaPlayerOpenBuilder
             : throw new InvalidOperationException(error ?? "MediaPlayer open failed.");
 }
 
-/// <summary>Opens a file path or URI through the registry (the provider selects on the URI scheme — D2).</summary>
+/// <summary>Opens a file path or URI through the registry (the provider selects on the URI scheme - D2).</summary>
 public sealed class MediaPlayerOpenFileBuilder : MediaPlayerOpenBuilder
 {
     private readonly IMediaRegistry _registry;
@@ -77,7 +77,7 @@ public sealed class MediaPlayerOpenFileBuilder : MediaPlayerOpenBuilder
 /// Builds a player from already-opened live/source objects (NDI/capture, or a host-owned container decoder's
 /// <see cref="IAudioSource"/>/<see cref="IVideoSource"/>). The registry-free counterpart to
 /// <see cref="MediaPlayerOpenFileBuilder"/>, for callers that manage their own decoders (e.g. a track-switch
-/// cache). The video source provided here is the negotiated/processed source — there is no separate override.
+/// cache). The video source provided here is the negotiated/processed source - there is no separate override.
 /// </summary>
 public sealed class MediaPlayerOpenLiveBuilder : MediaPlayerOpenBuilder
 {

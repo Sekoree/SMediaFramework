@@ -19,7 +19,7 @@ public static class NDILibraryResolver
     /// <summary>
     /// Installs the assembly-local DllImport resolver that probes the known NDI library names.
     /// Optionally configures the resolver's internal logger.
-    /// Safe to call multiple times — the resolver is only registered once, but the logger is
+    /// Safe to call multiple times - the resolver is only registered once, but the logger is
     /// updated on every call that supplies a non-null <paramref name="loggerFactory"/>.
     /// </summary>
     public static void Install(ILoggerFactory? loggerFactory = null)

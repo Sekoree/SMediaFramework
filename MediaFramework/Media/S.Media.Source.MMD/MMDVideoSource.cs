@@ -10,13 +10,13 @@ public sealed record MMDSourceRequest(
     string? CameraMotionPath,
     int Width,
     int Height,
-    // Manual camera override (used when no camera VMD is given — the HaPlay camera-placement controls).
+    // Manual camera override (used when no camera VMD is given - the HaPlay camera-placement controls).
     float? CameraDistance,
     Vector3? CameraTarget,
     Vector3? CameraRotationDegrees,
     float? CameraFovDegrees)
 {
-    /// <summary>MSAA for the GL renderer (URI <c>aa=0</c> disables — the operator toggle).</summary>
+    /// <summary>MSAA for the GL renderer (URI <c>aa=0</c> disables - the operator toggle).</summary>
     public bool Antialias { get; init; } = true;
 
     /// <summary>Stage-5 physics (hair/skirt secondary motion; URI <c>phys=0</c> disables).</summary>
@@ -129,10 +129,10 @@ public static class MMDSourceUri
 /// <summary>
 /// Pull-based BGRA video source rendering the animated MMD scene at 30 fps (the VMD timeline rate)
 /// through the software renderer. Finite when a motion is present (its duration), else a 1-hour
-/// hold of the bind pose for camera placement. Seekable — frames are pure functions of time, so a
+/// hold of the bind pose for camera placement. Seekable - frames are pure functions of time, so a
 /// seeks reset and re-simulate physics from the requested pose.
 ///
-/// <para>NXT-10: also an <see cref="S.Media.Compositor.ILayerSurfaceVideoSource"/> — on a surface-hosting
+/// <para>NXT-10: also an <see cref="S.Media.Compositor.ILayerSurfaceVideoSource"/> - on a surface-hosting
 /// (GL) compositor the session asks for an <see cref="MMDGlLayerSurface"/> and the scene renders GPU-side
 /// with real materials/toon/edges; this source then stops software-rasterizing (its frames become a cheap
 /// cached transparent buffer so priming/clock plumbing stays alive). On a CPU compositor the software
@@ -166,7 +166,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
         _animator = _motion is not null ? new MMDAnimator(_model, _motion) : null;
         _physics = request.Physics ? MMDPhysics.TryCreate(_model) : null;
 
-        // PRE-BAKED physics (the way MMD's own renders are produced — an offline forward simulation):
+        // PRE-BAKED physics (the way MMD's own renders are produced - an offline forward simulation):
         // a cached bake plays deterministically and seek-exactly; the first-ever open of this pair
         // starts one background bake and plays live physics meanwhile.
         if (_physics is not null && _motion is not null && _request.MotionPath is { Length: > 0 } motionPath)
@@ -218,7 +218,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
             return false;
 
         // Surface mode (NXT-10): the GL layer surface renders the scene; keep the frame stream alive for
-        // priming/clock plumbing without rasterizing — one cached transparent buffer, correct PTS cadence.
+        // priming/clock plumbing without rasterizing - one cached transparent buffer, correct PTS cadence.
         if (Volatile.Read(ref _surfaceModeFrame) is { } transparent)
         {
             _frameIndex++;
@@ -252,7 +252,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
         return true;
     }
 
-    /// <summary>NXT-10: mint the GL renderer for this scene (its own animator over the same documents —
+    /// <summary>NXT-10: mint the GL renderer for this scene (its own animator over the same documents -
     /// never shares this source's mutable animator across threads) and switch this source's frame stream
     /// to the cheap surface-mode path.</summary>
     public S.Media.Compositor.IVideoCompositorLayerSurface CreateLayerSurface()
@@ -276,7 +276,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
     }
 
     /// <summary>Elapsed simulation time since the previous rendered frame (negative/huge values make the
-    /// physics reset — the seek/jump contract).</summary>
+    /// physics reset - the seek/jump contract).</summary>
     private float PhysicsDelta(TimeSpan time)
     {
         var delta = _lastPhysicsTime == TimeSpan.MinValue ? -1f : (float)(time - _lastPhysicsTime).TotalSeconds;
@@ -285,7 +285,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
     }
 
     /// <summary>Loads the per-material diffuse textures for the CPU raster path once (preview dialog +
-    /// CPU-compositor fallback) — shares the GL renderer's case-insensitive path resolution.</summary>
+    /// CPU-compositor fallback) - shares the GL renderer's case-insensitive path resolution.</summary>
     private void EnsureCpuTextures()
     {
         if (_cpuTexturesLoaded)
@@ -319,7 +319,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
         }
         catch
         {
-            // texture loading is best-effort — the flat-shaded raster is still a valid preview
+            // texture loading is best-effort - the flat-shaded raster is still a valid preview
         }
     }
 
@@ -329,7 +329,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
             return MMDAnimator.SampleCamera(_cameraMotion, time);
 
         // Manual placement (HaPlay's rudimentary camera controls) or the MMD editor's default framing
-        // (distance 45, target (0,10,0), fov 30 — operator feedback: the old −35/(0,12,0) sat too close).
+        // (distance 45, target (0,10,0), fov 30 - operator feedback: the old −35/(0,12,0) sat too close).
         var rotation = _request.CameraRotationDegrees ?? Vector3.Zero;
         return new VMDCameraFrame(
             0,
@@ -366,7 +366,7 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
     }
 }
 
-/// <summary>Registers the <c>mmd://</c> provider (video-only; MMD audio is the show's own audio cue —
+/// <summary>Registers the <c>mmd://</c> provider (video-only; MMD audio is the show's own audio cue -
 /// the review's design keeps music as a normal source in the same transport group).</summary>
 public sealed class MMDSourceModule : IMediaModule
 {

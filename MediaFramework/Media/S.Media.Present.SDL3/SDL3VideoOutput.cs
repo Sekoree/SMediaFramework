@@ -14,7 +14,7 @@ namespace S.Media.Present.SDL3;
 ///   call from any thread (including <see cref="Core.Clock.MediaClock.VideoTick"/>).</item>
 ///   <item><b>Manual</b>: no internal thread. The host calls
 ///   <see cref="Configure"/>, <see cref="Submit"/>, <see cref="Pump"/>, and
-///   <see cref="Dispose"/> all from one thread of its choosing — required
+///   <see cref="Dispose"/> all from one thread of its choosing - required
 ///   on macOS (SDL pins window/event handling to the main thread) and
 ///   useful when sharing a thread with other host work.</item>
 /// </list>
@@ -22,7 +22,7 @@ namespace S.Media.Present.SDL3;
 /// <remarks>
 /// <para>
 /// Pixel formats: declares native SDL upload paths for BGRA32, I420, NV12,
-/// UYVY, and YUY2 — picking any of those means the output uploads the source's
+/// UYVY, and YUY2 - picking any of those means the output uploads the source's
 /// planes directly (no CPU conversion).
 /// </para>
 /// <para>
@@ -87,7 +87,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
 
     /// <summary>
     /// Raised when the user clicks the window's close button (or the OS asks
-    /// the window to close). The output does NOT auto-dispose — host code
+    /// the window to close). The output does NOT auto-dispose - host code
     /// decides whether to tear down. In auto mode fires on the render
     /// thread; in manual mode fires on the <see cref="Pump"/> caller.
     /// </summary>
@@ -102,7 +102,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
     /// <param name="ownsThread">
     /// When <c>true</c> (default), the output starts a dedicated render thread
     /// in <see cref="Configure"/>. When <c>false</c>, the host owns the
-    /// thread — call <see cref="Pump"/> periodically (typically from a UI
+    /// thread - call <see cref="Pump"/> periodically (typically from a UI
     /// loop tick) to drain events and present pending frames.
     /// </param>
     public SDL3VideoOutput(string title = "SDL3 Video", int initialWidth = 1280, int initialHeight = 720,
@@ -124,7 +124,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_configured)
         {
-            // Same-format re-Configure is a no-op — matches SDL3GLVideoOutput and the VideoRouter
+            // Same-format re-Configure is a no-op - matches SDL3GLVideoOutput and the VideoRouter
             // primary re-Configure on branch-route changes (which would otherwise throw here but not
             // for the GL output). A real format change still requires a new output (single-format
             // lifetime for the non-GL SDL path).
@@ -200,7 +200,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
             Interlocked.Increment(ref _droppedNew);
         }
         if (_ownsThread) _wakeup.Set();
-        // Manual mode: no signal — the host pumps when ready.
+        // Manual mode: no signal - the host pumps when ready.
     }
 
     /// <summary>
@@ -211,7 +211,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
     public void Pump()
     {
         if (_ownsThread)
-            throw new InvalidOperationException("SDL3VideoOutput.Pump called on an auto-thread output — use ownsThread:false");
+            throw new InvalidOperationException("SDL3VideoOutput.Pump called on an auto-thread output - use ownsThread:false");
         if (_disposed) return;
         if (!_configured) return;
 
@@ -244,7 +244,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         else
         {
             // Manual mode: the host is the render thread. Tear down here
-            // — caller must invoke Dispose on the same thread that called
+            // - caller must invoke Dispose on the same thread that called
             // Configure (SDL's single-thread requirement).
             try { TeardownGraphics(); }
             finally { SDL3Runtime.Release(); }
@@ -256,7 +256,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
 
         if (threadStillRunning)
         {
-            // The render thread didn't stop within the join window — it may still be blocked in a
+            // The render thread didn't stop within the join window - it may still be blocked in a
             // native present and could touch _wakeup / _ready / the cts token's WaitHandle. Deliberately
             // leak those rather than dispose them under the live thread (which would risk
             // ObjectDisposedException or a handle-reuse race on the render thread). Same policy as
@@ -327,7 +327,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
     private void InitGraphics()
     {
         // NotFocusable: a video-output window needs no keyboard focus, and Wayland delivers the clipboard /
-        // primary-selection data offer only to the focused surface — so a focus-less window dodges SDL3 3.4.x's
+        // primary-selection data offer only to the focused surface - so a focus-less window dodges SDL3 3.4.x's
         // null-deref in Wayland_data_offer_add_mime (uncatchable crash on a middle-click primary paste).
         if (!SDL.CreateWindowAndRenderer(_title, _initialWindowWidth, _initialWindowHeight,
                 SDL.WindowFlags.Resizable | SDL.WindowFlags.NotFocusable, out _window, out _renderer))
@@ -353,7 +353,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         SDL.PumpEvents();
         while (SDL.PollEvent(out var ev))
         {
-            // Filter to events that target our window — multi-window apps
+            // Filter to events that target our window - multi-window apps
             // shouldn't get cross-fired because of us.
             switch ((SDL.EventType)ev.Type)
             {
@@ -370,7 +370,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
                     }
                     break;
                 case SDL.EventType.Quit:
-                    // App-level quit (e.g. last window closed) — surface as
+                    // App-level quit (e.g. last window closed) - surface as
                     // close request so the host can react uniformly.
                     SafeRaise(CloseRequested);
                     break;

@@ -17,7 +17,7 @@ namespace HaPlay.Views.Controls;
 /// Visual editor for a cue's video placements. Draws the composition canvas (aspect-correct) with each
 /// placement as a draggable, resizable box positioned from its normalized destination rectangle. Dragging
 /// the body moves it; the bottom-right handle resizes it; clicking selects it. All state lives on the
-/// bound <see cref="CueVideoPlacementViewModel"/>s — this control only edits their DestX/Y/Width/Height.
+/// bound <see cref="CueVideoPlacementViewModel"/>s - this control only edits their DestX/Y/Width/Height.
 /// </summary>
 public sealed class CompositionPlacementCanvas : Control
 {

@@ -49,7 +49,7 @@ internal readonly struct PassThroughRentHandle
 /// The fixed-pool free lists are Treiber stacks (no mutex on pop/push). Optional profiling via <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c>
 /// (<see cref="PassThroughArenaProfiling.TreiberCasRetries"/> / wall timers). If contention persists, set
 /// <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c> to take a per-arena mutex around rent/return/dispose ordering
-/// (<see cref="PassThroughArenaSerialization"/>) — trades throughput for determinism.
+/// (<see cref="PassThroughArenaSerialization"/>) - trades throughput for determinism.
 /// </para>
 /// </remarks>
 internal sealed class PassThroughDescriptorArena : IDisposable

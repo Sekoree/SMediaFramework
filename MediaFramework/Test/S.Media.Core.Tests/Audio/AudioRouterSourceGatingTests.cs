@@ -11,7 +11,7 @@ public sealed class AudioRouterSourceGatingTests
     public void RunLoop_UnroutedSource_IsNotConsumedUntilRouted()
     {
         // Regression for the source-drain bug: registering a source must not consume it. The router
-        // only reads a source once a route targets it — so a cue/soundboard can load a clip and not
+        // only reads a source once a route targets it - so a cue/soundboard can load a clip and not
         // lose its audio before firing/routing it.
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new CountingSource(Stereo);

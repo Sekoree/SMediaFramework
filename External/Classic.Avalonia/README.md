@@ -50,7 +50,7 @@ RequestedThemeVariant="{x:Static ClassicTheme.Brick}"
 
 ### Font Usage
 
-While Windows 9x used the bitmap font MS Sans Serif for its distinctive appearance, bitmap fonts have compatibility issues. Instead, the Classic.Avalonia theme uses Tahoma (introduced in Windows XP) without anti-aliasing for a similar look. Though it’s not perfect—letters may sometimes appear too close together, especially on macOS—it’s the closest match for now.
+While Windows 9x used the bitmap font MS Sans Serif for its distinctive appearance, bitmap fonts have compatibility issues. Instead, the Classic.Avalonia theme uses Tahoma (introduced in Windows XP) without anti-aliasing for a similar look. Though it’s not perfect-letters may sometimes appear too close together, especially on macOS-it’s the closest match for now.
 
 Tahoma is available on Windows and macOS, but not Linux. A free alternative, 'Wine Tahoma Regular,' is distributed under the GNU Lesser General Public License, but I’m unsure if it’s compatible with the MIT license. Any insights would be appreciated.
 

@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Decode.FFmpeg — demux + audio/video decode (hw decode, swscale converter, yadif),
+    <!-- S.Media.Decode.FFmpeg - demux + audio/video decode (hw decode, swscale converter, yadif),
          source-side resample, the FFmpeg-backed audio output wrappers (AdaptiveRateAudioOutput /
          ResamplingAudioOutput), and the FFmpegModule + FFmpegDecoderProvider that register these through
          the media registry (replacing the old global slots, P2). References S.Media.Time for IPlaybackClock

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <!--
-      LibAssLib is the dedicated P/Invoke binding for libass (ass_*) — the analogue of MALib (miniaudio) and
+      LibAssLib is the dedicated P/Invoke binding for libass (ass_*) - the analogue of MALib (miniaudio) and
       NDILib (NDI). It binds libass's own C ABI directly; there is NO custom C wrapper/shim and no native build
       step in this project. Native provisioning: on Linux the libraries are USER-PROVIDED (the system libass.so
       plus its FreeType/FriBidi/HarfBuzz/fontconfig deps, via the distro package manager) on the normal search

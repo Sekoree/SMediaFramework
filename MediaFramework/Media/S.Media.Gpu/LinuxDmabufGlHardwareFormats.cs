@@ -31,7 +31,7 @@ public static class LinuxDmabufGlHardwareFormats
             S.Media.Core.Video.PixelFormat.Gray8 or S.Media.Core.Video.PixelFormat.Gray16
                 => "Single-plane luma DRM PRIME → EGL/GL is not implemented; use NV12/P010/P016 decode or a CPU path.",
             S.Media.Core.Video.PixelFormat.Unknown
-                => "Unknown pixel layout — cannot use shipped PRIME EGL dma-buf import (NV12, P010, P016).",
+                => "Unknown pixel layout - cannot use shipped PRIME EGL dma-buf import (NV12, P010, P016).",
             _ => "EGL dma-buf hardware upload supports DRM PRIME semi-planar NV12, P010, and P016 in this build; use CPU decode or extend LinuxDmabufGlHardwareFormats / Nv12DmabufGpuUploader.",
         };
     }

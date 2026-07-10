@@ -34,7 +34,7 @@ public sealed class CueVideoPlacementViewModelTests
     [Fact]
     public void DefaultPlacement_HasNoRotation()
     {
-        // Existing cues (and freshly added placements) must stay upright — rotation is purely additive.
+        // Existing cues (and freshly added placements) must stay upright - rotation is purely additive.
         Assert.Equal(0, new CueVideoPlacement().RotationDegrees, 6);
         Assert.Equal(0, new CueVideoPlacementViewModel().ToModel().RotationDegrees, 6);
     }

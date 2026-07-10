@@ -6,8 +6,8 @@ namespace S.Media.Present.SDL3;
 /// <summary>
 /// One hidden-window OpenGL context shared by every <see cref="SDL3GLVideoCompositor"/> that runs on
 /// the same thread. GL contexts are thread-affine and only one can be current per thread, so several
-/// compositors sharing a pump thread — a canvas mixer plus its composition-FX and per-output mapping
-/// stages — must share a single context. Giving each its own private context made them overwrite one
+/// compositors sharing a pump thread - a canvas mixer plus its composition-FX and per-output mapping
+/// stages - must share a single context. Giving each its own private context made them overwrite one
 /// another's "current" binding, so a compositor would render and read back through the wrong context
 /// (the "red / flipped / flickering" corruption). One shared context removes that class of bug and the
 /// per-stage window/context churn.
@@ -60,7 +60,7 @@ internal sealed class SharedSDLGlContext
         return ctx;
     }
 
-    /// <summary>Makes this context current on the calling (owner) thread. Cheap and idempotent — used
+    /// <summary>Makes this context current on the calling (owner) thread. Cheap and idempotent - used
     /// as defence-in-depth in case an unrelated GL user (e.g. a probe) displaced the binding.</summary>
     public void MakeCurrent()
     {
@@ -83,7 +83,7 @@ internal sealed class SharedSDLGlContext
         if (_threadCurrent == this)
             _threadCurrent = null;
 
-        // Teardown runs against this context — make it current in case a probe displaced the binding.
+        // Teardown runs against this context - make it current in case a probe displaced the binding.
         if (_window != nint.Zero && _glContext != nint.Zero)
         {
             try { SDL.GLMakeCurrent(_window, _glContext); }

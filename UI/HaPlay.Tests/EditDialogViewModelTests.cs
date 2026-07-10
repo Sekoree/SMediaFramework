@@ -121,8 +121,8 @@ public sealed class EditDialogViewModelTests
         vm.SelectedScreen = vm.Screens[0];
         vm.InitializeCloneParents(Array.Empty<LocalVideoOutputDefinition>());
 
-        // Project file references a parent that no longer exists — dialog should degrade gracefully to
-        // "None — independent output" so the user can either pick another parent or save as standalone.
+        // Project file references a parent that no longer exists - dialog should degrade gracefully to
+        // "None - independent output" so the user can either pick another parent or save as standalone.
         var saved = new LocalVideoOutputDefinition(
             Guid.NewGuid(), "OrphanedClone", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
             ScreenIndex: 0, WindowWidth: 320, WindowHeight: 240, CloneOfId: Guid.NewGuid());
@@ -155,14 +155,14 @@ public sealed class EditDialogViewModelTests
         Assert.NotNull(committed);
         Assert.Equal(id, committed!.Id);
         Assert.Equal("Studio (Cam2)", committed.SourceName);
-        // Forward-compat locks must survive the edit even though the dialog doesn't expose them yet —
+        // Forward-compat locks must survive the edit even though the dialog doesn't expose them yet -
         // otherwise the first edit silently strips the lock.
         Assert.Equal(PixelFormat.Uyvy, committed.PixelFormatLock);
         Assert.Equal(1280, committed.ResolutionLockWidth);
         Assert.Equal(720, committed.ResolutionLockHeight);
     }
 
-    /// <summary>Phase C polish (§4.3.5) — the dialog now exposes editable pixel-format and resolution
+    /// <summary>Phase C polish (§4.3.5) - the dialog now exposes editable pixel-format and resolution
     /// locks. Selecting an entry on a fresh "Add NDI" flow must round-trip onto the produced
     /// <see cref="NDIOutputDefinition"/>, otherwise the runtime <see cref="LockedFormatVideoOutput"/>
     /// wrapper has nothing to act on.</summary>
@@ -251,7 +251,7 @@ public sealed class EditDialogViewModelTests
             DisplayName = "NDI Custom",
             SourceName = "Studio (Cam1)",
             SelectedResolution = NDIResolutionChoice.Custom,
-            CustomResolutionWidth = 1921, // odd — NDI senders require even dimensions
+            CustomResolutionWidth = 1921, // odd - NDI senders require even dimensions
             CustomResolutionHeight = 1080,
         };
 

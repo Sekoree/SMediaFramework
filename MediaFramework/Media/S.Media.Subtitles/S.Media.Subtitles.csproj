@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Subtitles — subtitle overlay layer source ([Core] + LibAssLib). Subtitles render through libass:
+    <!-- S.Media.Subtitles - subtitle overlay layer source ([Core] + LibAssLib). Subtitles render through libass:
          sidecar ASS/SSA directly, and every other format (SRT/VTT/MicroDVD/SAMI/…) + in-container streams via
          FFmpeg-decoded ASS events (the FFmpeg path lives in the host). Output is Bgra32-premultiplied overlay
          frames aligned to the master clock; bitmap (PGS/DVB via Decode.FFmpeg) lands later in the phase. -->

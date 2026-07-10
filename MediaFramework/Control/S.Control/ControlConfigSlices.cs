@@ -3,7 +3,7 @@ namespace S.Control;
 /// <summary>
 /// Layer-level slices of a <see cref="ControlSystemConfig"/> (save/load rework 2026-06-10):
 /// "export one layer / import a layer into another show". A slice is itself a plain
-/// <see cref="ControlSystemConfig"/> carrying only the layers and their scripts — same file
+/// <see cref="ControlSystemConfig"/> carrying only the layers and their scripts - same file
 /// format as a full control config, so any consumer that can read configs can read slices.
 /// </summary>
 public static class ControlConfigSlices
@@ -12,7 +12,7 @@ public static class ControlConfigSlices
     /// Extracts <paramref name="layerIds"/> with every script that belongs to them (listed in
     /// <see cref="ControlLayerConfig.ScriptIds"/> or layer-scoped via
     /// <see cref="ControlScriptConfig.LayerId"/>). Everything else (devices, listeners, monitor
-    /// options) is left at defaults — a slice describes the layer, not the rig.
+    /// options) is left at defaults - a slice describes the layer, not the rig.
     /// </summary>
     public static ControlSystemConfig ExtractLayers(ControlSystemConfig config, IReadOnlyCollection<Guid> layerIds)
     {

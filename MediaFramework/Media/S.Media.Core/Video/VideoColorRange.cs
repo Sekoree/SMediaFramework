@@ -1,7 +1,7 @@
 namespace S.Media.Core.Video;
 
 /// <summary>
-/// YUV value-range hint — limited (TV / 16–235) vs full (PC / 0–255). Lets renderers pair the
+/// YUV value-range hint - limited (TV / 16–235) vs full (PC / 0–255). Lets renderers pair the
 /// right offset + scale with their <see cref="VideoColorSpace"/> matrix.
 /// </summary>
 public enum VideoColorRange : byte

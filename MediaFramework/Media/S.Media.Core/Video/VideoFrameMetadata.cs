@@ -18,7 +18,7 @@ namespace S.Media.Core.Video;
 /// unspecified.
 /// </para>
 /// <para>
-/// As a <see langword="readonly record struct"/> this is allocation-free at every layer — pass by
+/// As a <see langword="readonly record struct"/> this is allocation-free at every layer - pass by
 /// value, copy freely.
 /// </para>
 /// </remarks>

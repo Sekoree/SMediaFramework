@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 3: verifies CompositeMulti's typed targets on real GL — zero-copy GlCompositeTarget (blit into
+    <!-- Phase 3: verifies CompositeMulti's typed targets on real GL - zero-copy GlCompositeTarget (blit into
          a caller-owned FBO) and CpuFrameCompositeTarget (readback) from one composite. Owns its SDL GL
          context and drives GlVideoCompositor directly. No FFmpeg. -->
 

@@ -14,7 +14,7 @@ namespace S.Media.Gpu.Internal;
 /// </para>
 /// <para>
 /// <b>Contract (consumer side, this library):</b> call <see cref="TryAcquireForGpuRead"/> before any D3D11 or GL access
-/// to the texture. If the texture exposes a keyed mutex and acquire fails, the upload must abort — reading without the
+/// to the texture. If the texture exposes a keyed mutex and acquire fails, the upload must abort - reading without the
 /// mutex is undefined when the mutex exists. If the texture has no keyed mutex interface, acquire succeeds with a
 /// <see langword="null"/> scope and the caller may read immediately (subject to normal D3D11 ordering with the producer).
 /// </para>

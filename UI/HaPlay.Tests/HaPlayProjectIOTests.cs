@@ -24,7 +24,7 @@ public sealed class HaPlayProjectIOTests
         var project = new HaPlayProject { AutoSaveEnabled = true };
         var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
         Assert.True(roundTripped.AutoSaveEnabled);
-        // Additive field must not have bumped the schema — old builds still open the file.
+        // Additive field must not have bumped the schema - old builds still open the file.
         Assert.Equal(3, roundTripped.SchemaVersion);
     }
 
@@ -320,7 +320,7 @@ public sealed class HaPlayProjectIOTests
                 },
             },
             SelectedPlaylistTabIndex = 1,
-            // Legacy v1 fields — round-trip the value as-is to preserve back-compat readers.
+            // Legacy v1 fields - round-trip the value as-is to preserve back-compat readers.
             PlaylistPaths = { "/show/opener.mp4", "/show/main.mkv" },
             SelectedPlaylistPath = "/show/main.mkv",
             MediaFilePath = "/show/main.mkv",
@@ -377,7 +377,7 @@ public sealed class HaPlayProjectIOTests
     [Fact]
     public void OutputGainConfig_DefaultMixMode_IsStereo()
     {
-        // Phase C (§4.3.4) — older configs that pre-date AudioRouteMixMode must keep their behavior.
+        // Phase C (§4.3.4) - older configs that pre-date AudioRouteMixMode must keep their behavior.
         // Default is "Stereo" so a freshly-loaded MediaPlayerConfig.OutputGains entry reroutes via the
         // identity ChannelMap (no surprise reorder on load).
         var fresh = new OutputGainConfig { OutputDisplayName = "Any", GainDb = 0 };
@@ -388,7 +388,7 @@ public sealed class HaPlayProjectIOTests
     [Fact]
     public void RoundTrip_PlayerConfig_PreservesMatrixCells()
     {
-        // Phase C (§4.3.4) — per-cell matrix survives a project save/load cycle.
+        // Phase C (§4.3.4) - per-cell matrix survives a project save/load cycle.
         var player = new MediaPlayerConfig
         {
             Name = "Matrix Player",
@@ -431,7 +431,7 @@ public sealed class HaPlayProjectIOTests
     [Fact]
     public void AudioMatrixViewModel_Resize_StereoSource_StereoOutput_IsIdentity()
     {
-        // Phase C — Resize's identity default sets the diagonal to 0 dB unmuted and the off-diagonal to
+        // Phase C - Resize's identity default sets the diagonal to 0 dB unmuted and the off-diagonal to
         // -60 dB muted, matching the legacy stereo MixMode.
         var m = new HaPlay.ViewModels.AudioMatrixViewModel();
         m.Resize(2, 2);
@@ -658,7 +658,7 @@ public sealed class HaPlayProjectIOTests
     [Fact]
     public void Load_ProjectWithRemovedHeadphonesCueFields_IgnoresThemAndLoads()
     {
-        // The per-player headphones-cue send + shared buses were REMOVED (2026-07-02, operator decision —
+        // The per-player headphones-cue send + shared buses were REMOVED (2026-07-02, operator decision -
         // persisted but never had a playback consumer on the ShowSession path). Old projects carrying the
         // fields must still load; the unknown members are silently dropped.
         const string legacyJson = """
@@ -1171,7 +1171,7 @@ public sealed class HaPlayProjectIOTests
     public void CurrentSchemaVersion_IsThree()
     {
         // §9.4: schemaVersion = 3 adds the script-centric MIDI/OSC control system.
-        // This test exists so a future schema bump is intentional — bumping requires also adding the
+        // This test exists so a future schema bump is intentional - bumping requires also adding the
         // migration path; this guard makes sure that decision is conscious.
         Assert.Equal(3, HaPlayProject.CurrentSchemaVersion);
     }

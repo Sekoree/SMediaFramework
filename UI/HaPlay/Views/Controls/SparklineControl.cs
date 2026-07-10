@@ -7,7 +7,7 @@ using Avalonia.Media;
 namespace HaPlay.Views.Controls;
 
 /// <summary>
-/// Phase E (§8.1) — minimal line-chart for health throughput sparklines. Renders a single polyline
+/// Phase E (§8.1) - minimal line-chart for health throughput sparklines. Renders a single polyline
 /// scaled to <see cref="PeakSample"/> with the leftmost sample anchored at the left edge. Designed
 /// for compact, inline use in list rows; intentionally has no axes, labels, or hover affordances.
 /// </summary>
@@ -26,7 +26,7 @@ public sealed class SparklineControl : Control
     public static readonly StyledProperty<IBrush?> StrokeProperty =
         AvaloniaProperty.Register<SparklineControl, IBrush?>(nameof(Stroke));
 
-    /// <summary>Optional fill under the line — passes <see langword="null"/> to disable.</summary>
+    /// <summary>Optional fill under the line - passes <see langword="null"/> to disable.</summary>
     public static readonly StyledProperty<IBrush?> AreaFillProperty =
         AvaloniaProperty.Register<SparklineControl, IBrush?>(nameof(AreaFill));
 

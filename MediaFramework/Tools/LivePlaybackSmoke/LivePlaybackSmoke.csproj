@@ -2,7 +2,7 @@
 
     <!-- Phase 5 on-screen live smoke: receive a real NDI source and present it in an SDL3 GL window through
          VideoPlayer in SCHEDULED mode against a master clock, re-anchored via the ILiveVideoSource seam
-         (RebaseToLatest) — the P7 "live scheduled against the master" path on screen, replacing latest-on-tick.
+         (RebaseToLatest) - the P7 "live scheduled against the master" path on screen, replacing latest-on-tick.
          Needs a display + a live NDI sender. Pass an optional source-name substring + seconds. -->
 
     <PropertyGroup>

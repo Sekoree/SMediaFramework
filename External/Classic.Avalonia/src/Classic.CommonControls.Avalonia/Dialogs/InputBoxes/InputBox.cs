@@ -56,7 +56,7 @@ public class InputBox : TemplatedControl, ICommand
 
     public void Execute(object? parameter) => TextRequest?.Invoke(Text);
 
-    // CanExecute is constant (always true), so this ICommand event never needs to raise — empty accessors
+    // CanExecute is constant (always true), so this ICommand event never needs to raise - empty accessors
     // satisfy the interface without an unused backing field (CS0067).
     public event EventHandler? CanExecuteChanged { add { } remove { } }
 

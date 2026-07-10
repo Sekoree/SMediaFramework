@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- PMLib — PortMidi P/Invoke binding: MIDI I/O, message parsing, and SysEx accumulation.
+    <!-- PMLib - PortMidi P/Invoke binding: MIDI I/O, message parsing, and SysEx accumulation.
          The MIDI transport for S.Control (the analogue of OSCLib for OSC); framework trigger adaptation lives
          in S.Control. Native PortMidi is user-provided on the search path. Common build settings (incl.
          AllowUnsafeBlocks / IsAotCompatible) come from Directory.Build.props. -->

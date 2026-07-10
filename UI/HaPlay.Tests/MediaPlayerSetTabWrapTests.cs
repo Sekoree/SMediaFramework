@@ -15,7 +15,7 @@ using Xunit;
 namespace HaPlay.Tests;
 
 /// <summary>The playlist Set tab strip wraps onto extra lines when the tabs outgrow the toolbar row
-/// (WrapPanel items panel) — it must never fall back to the old horizontal scroller that hid Sets
+/// (WrapPanel items panel) - it must never fall back to the old horizontal scroller that hid Sets
 /// off-screen. Lays out the real MediaPlayerView so the header-only TabControl template, the shared
 /// toolbar DockPanel row, and the theme's TabItem containers are all in play.</summary>
 public sealed class MediaPlayerSetTabWrapTests

@@ -62,8 +62,8 @@ public sealed class AudioClipPlayer
 
     /// <summary>
     /// Like <see cref="Fire"/> but also yields the created <see cref="AudioClipVoice"/> and its router
-    /// source id, so a higher-level engine can build a voice handle (gain/stop/position). Returns false —
-    /// with <paramref name="voice"/> null and <paramref name="sourceId"/> empty — when the fire was
+    /// source id, so a higher-level engine can build a voice handle (gain/stop/position). Returns false -
+    /// with <paramref name="voice"/> null and <paramref name="sourceId"/> empty - when the fire was
     /// suppressed (OneShot already sounding) or only stopped a latched loop.
     /// </summary>
     public bool TryFire(

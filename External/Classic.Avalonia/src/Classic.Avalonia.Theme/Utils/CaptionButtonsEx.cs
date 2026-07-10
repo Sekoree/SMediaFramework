@@ -13,7 +13,7 @@ internal class CaptionButtonsEx : CaptionButtons
     {
         base.Attach(hostWindow);
 
-        // Avalonia 12 exposes the dialog state publicly — the old private-field reflection is gone.
+        // Avalonia 12 exposes the dialog state publicly - the old private-field reflection is gone.
         PseudoClasses.Set(":dialog", hostWindow.IsDialog);
 
         disposable = hostWindow.GetObservable(Window.CanResizeProperty).Subscribe(x =>

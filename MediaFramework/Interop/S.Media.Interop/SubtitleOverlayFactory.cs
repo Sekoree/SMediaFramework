@@ -5,8 +5,8 @@ using S.Media.Subtitles;
 namespace S.Media.Interop;
 
 /// <summary>
-/// The unified subtitle factory: builds an <see cref="IVideoOverlaySource"/> from any subtitle source — a sidecar
-/// file (SRT/VTT/MicroDVD/SAMI/SubViewer/ASS/…) or a media container carrying a subtitle stream — all rendered
+/// The unified subtitle factory: builds an <see cref="IVideoOverlaySource"/> from any subtitle source - a sidecar
+/// file (SRT/VTT/MicroDVD/SAMI/SubViewer/ASS/…) or a media container carrying a subtitle stream - all rendered
 /// through libass. Sidecar ASS/SSA goes straight to libass; every other text format and in-container stream is
 /// decoded to ASS events by FFmpeg first.
 /// </summary>
@@ -28,7 +28,7 @@ public static class SubtitleOverlayFactory
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return null;
 
-        // Sidecar ASS/SSA renders directly — no FFmpeg round-trip.
+        // Sidecar ASS/SSA renders directly - no FFmpeg round-trip.
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (streamIndex < 0 && ext is (".ass" or ".ssa"))
             return SubtitleSourceFactory.FromFile(path, width, height, style);

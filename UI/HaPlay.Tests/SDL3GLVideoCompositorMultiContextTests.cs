@@ -11,7 +11,7 @@ namespace HaPlay.Tests;
 // compositor) that runs two SDL3GLVideoCompositor instances on the SAME thread. Compositors on one
 // thread now share a single GL context (SharedSDLGlContext), so they can no longer displace each
 // other's "current" binding; before that fix the second instance left its private context current and
-// the first rendered/read back through the wrong (differently sized) context — producing corrupted
+// the first rendered/read back through the wrong (differently sized) context - producing corrupted
 // ("red/flipped/flickering") frames. This guards both the sharing and the per-Composite make-current.
 // Skips on pure-CPU CI.
 public sealed class SDL3GLVideoCompositorMultiContextTests
@@ -47,7 +47,7 @@ public sealed class SDL3GLVideoCompositorMultiContextTests
             return;
         }
 
-        // Different sizes — like a 1080p mixer/canvas next to a 720p mapping/FX compositor. Same-size
+        // Different sizes - like a 1080p mixer/canvas next to a 720p mapping/FX compositor. Same-size
         // contexts can mask the bug because their GL object names line up; mismatched sizes expose it.
         var fmtA = new VideoFormat(128, 64, PixelFormat.Bgra32, new Rational(30, 1));
         var fmtB = new VideoFormat(64, 128, PixelFormat.Bgra32, new Rational(30, 1));

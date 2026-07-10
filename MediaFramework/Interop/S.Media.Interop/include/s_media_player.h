@@ -1,12 +1,12 @@
 /*
- * s_media_player.h — MFPlayer outbound C ABI ("drive MFPlayer from any language").
+ * s_media_player.h - MFPlayer outbound C ABI ("drive MFPlayer from any language").
  *
  * The twin of include/mfp_plugin.h: where mfp_plugin lets other languages *extend* MFPlayer, this lets them
  * *drive* it. The managed side is a NativeAOT shared library (s_media_player.so / .dll) over the new headless
  * `ShowSession`: build a media registry (FFmpeg + audio backends + …), load a `ShowDocument` (JSON), then fire
- * cues / go / seek / stop and query transport — a whole show run with no managed host.
+ * cues / go / seek / stop and query transport - a whole show run with no managed host.
  *
- * ============================  PHASE 7 — FIRST SLICE (core lifecycle)  ============================
+ * ============================  PHASE 7 - FIRST SLICE (core lifecycle)  ============================
  * This header is the stable, append-only contract. Conventions (kept from the V1 ABI):
  *   - C ABI only; every entry point is `extern "C"`. Nothing throws/aborts across the boundary.
  *   - Functions returning `int` return MFP_OK (0) or a negative MFP_ERR_*. A human-readable message for the last
@@ -40,15 +40,15 @@ extern "C" {
 /* Transport state of a group, as returned by mfp_session_state().
  * The headless runner reports IDLE / PLAYING / PAUSED: a group holding a clip is PLAYING while its clock
  * advances, otherwise PAUSED (paused / frozen / held); no clip held is IDLE. ENDED and ERROR are RESERVED
- * — the headless transport snapshot does not distinguish a played-through cue from idle (it reports IDLE
+ * - the headless transport snapshot does not distinguish a played-through cue from idle (it reports IDLE
  * once the clip releases) and carries no error flag. Do not rely on ENDED/ERROR being produced. */
 #define MFP_STATE_IDLE     0
 #define MFP_STATE_PLAYING  1
 #define MFP_STATE_PAUSED   2
-#define MFP_STATE_ENDED    3   /* reserved — not currently emitted */
-#define MFP_STATE_ERROR    4   /* reserved — not currently emitted */
+#define MFP_STATE_ENDED    3   /* reserved - not currently emitted */
+#define MFP_STATE_ERROR    4   /* reserved - not currently emitted */
 
-/* An opaque show session — one running show (its registry + ShowSession + transport groups). */
+/* An opaque show session - one running show (its registry + ShowSession + transport groups). */
 typedef void* mfp_session;
 
 /* ------------------------------------------------------------------ global lifecycle ------------ */
@@ -68,7 +68,7 @@ const char* mfp_last_error(void);
 /*
  * Create a headless show session: builds the media registry (FFmpeg decode + the audio backend modules) and a
  * ShowSession over it. The session drives transport + composition but does NOT open an audio output device by
- * default (headless — CI-safe, no device dependency); audio-out on a real backend is a future create-with-audio
+ * default (headless - CI-safe, no device dependency); audio-out on a real backend is a future create-with-audio
  * variant. Returns an opaque handle, or NULL on failure (see mfp_last_error). Destroy with mfp_session_destroy.
  *
  * Concurrency: mfp_session_destroy() (and mfp_shutdown()) wait for any in-flight calls on the session to return

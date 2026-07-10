@@ -2,7 +2,7 @@
 
     <!-- Phase 3 gate: GL compositing with FFmpeg ABSENT. Composites synthetic StaticFrameSource layers
          through the SDL3 GL backend (the Present.SDL3.Compositor bridge) and verifies the readback.
-         Proves the moved Gpu+Compositor+bridge stack runs on real GL — no decoder anywhere. -->
+         Proves the moved Gpu+Compositor+bridge stack runs on real GL - no decoder anywhere. -->
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>

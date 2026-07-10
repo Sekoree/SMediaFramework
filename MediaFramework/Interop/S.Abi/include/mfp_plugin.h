@@ -1,28 +1,28 @@
 /*
- * mfp_plugin.h — MFPlayer native plugin ABI ("Tier B" / S.Abi).
+ * mfp_plugin.h - MFPlayer native plugin ABI ("Tier B" / S.Abi).
  *
- * ============================  DRAFT — ABI v1 NOT YET TAGGED  ============================
+ * ============================  DRAFT - ABI v1 NOT YET TAGGED  ============================
  * The inbound twin of the outbound s_media_player.h: where s_media_player lets other languages *drive*
  * MFPlayer, this lets other languages *extend* it. A plugin (NativeAOT C#, C, C++, Rust, Zig, …) is any
  * shared library that exports mfp_plugin_register() and fills capability vtables. The S.Abi host
  * dlopen()s it and adapts each vtable to the same managed registry interface a first-party module uses;
  * after registration the engine cannot tell a plugin backend from a built-in one. The host stays 100%
- * NativeAOT — NativeLibrary.Load + GetExport + delegate* unmanaged, no reflection. See
+ * NativeAOT - NativeLibrary.Load + GetExport + delegate* unmanaged, no reflection. See
  * Next/05-Plugin-Model.md and Next/09-Phase-Checklists.md (Phase 6).
  *
  * This struct set is the "forever-surface": review it hard before tagging ABI v1 (OQ1/D9). Open
  * questions surfaced inline: OQ1 (per-kind frame union), OQ2 (negotiated GPU sync).
  *
- * Conventions (ABI hygiene — keep all of these):
+ * Conventions (ABI hygiene - keep all of these):
  *   - C ABI only; every callable is `extern "C"`, no C++ types cross the boundary.
  *   - Versioning: every public struct/vtable begins with `abi_version` + `struct_size`; the host checks the *major* and
- *     ignores unknown trailing fields, so the ABI evolves *append-only* — never reorder/resize/remove an
+ *     ignores unknown trailing fields, so the ABI evolves *append-only* - never reorder/resize/remove an
  *     existing field; only append (incl. appending optional function pointers to a vtable's end). On a
  *     major mismatch the host rejects + logs, never crashes.
  *   - Optional capabilities = a NULL function pointer. A plugin leaves an optional vtable entry NULL when
  *     it doesn't support it; the host checks for NULL and falls back (e.g. an output with a NULL
  *     output_played_frames simply can't be a clock master). This keeps capabilities discoverable and the
- *     vtable append-only — new optional capabilities are added as new trailing function pointers.
+ *     vtable append-only - new optional capabilities are added as new trailing function pointers.
  *   - Errors: functions return `int` (an MfpStatus; 0 ok, negative error). Never throw/longjmp across the
  *     boundary. After a negative return the host may read a thread-local string via MfpHostApi.set_last_error.
  *   - Time: 100-ns ticks everywhere (matches s_media_player and the managed clock).
@@ -30,10 +30,10 @@
  *     the host calls that capability's release_frame. Output submit is synchronous; an output that queues a frame
  *     must copy/retain what it needs before returning. GPU-handle frames carry negotiated MfpSync metadata.
  *   - Threading: each vtable call documents its thread. Real-time calls (audio submit/read, output submit,
- *     layer render) run on the engine's clock/compositor thread and MUST return promptly — push slow work
+ *     layer render) run on the engine's clock/compositor thread and MUST return promptly - push slow work
  *     to the plugin's own thread. The (potentially slow) asset load for a layer happens in create/configure.
  *   - Trust: plugins run in-process with full rights (like any .so). Loading is opt-in from an explicit
- *     trusted directory/allowlist — "only load plugins you trust," same as VST/OBS.
+ *     trusted directory/allowlist - "only load plugins you trust," same as VST/OBS.
  *
  * ============================  NORMATIVE CONTRACT (PLUG-01)  ============================
  * The rules above are conventions; the rules below are REQUIREMENTS a conforming plugin and host both obey.
@@ -42,7 +42,7 @@
  *  1. Per-instance call serialization (concurrency).
  *       - The host MUST NOT invoke two methods of the SAME capability instance concurrently. Every vtable
  *         call on a given instance is serialized (happens-before the next), so a plugin needs no internal
- *         lock for its own per-instance state — EXCEPT the release_frame family and destroy, which observe
+ *         lock for its own per-instance state - EXCEPT the release_frame family and destroy, which observe
  *         the ordering rules in (4)/(5) below.
  *       - The host MAY call DIFFERENT instances (even of the same vtable) concurrently on different threads.
  *         Any state a plugin shares across instances (globals, caches) MUST be synchronized by the plugin.
@@ -56,7 +56,7 @@
  *         real-time path.
  *       - The host guarantees it will not re-enter a plugin instance from within that instance's own callback:
  *         a plugin method may assume it holds no host lock and may safely block on its own resources (but
- *         MUST still return promptly from real-time calls — offload slow work to its own thread).
+ *         MUST still return promptly from real-time calls - offload slow work to its own thread).
  *
  *  3. Pointer + buffer lifetime.
  *       - Pointers the host passes INTO a call (formats, option structs, control args, string arguments) are
@@ -64,7 +64,7 @@
  *       - Frames/handles a plugin returns are owned by the plugin and MUST stay valid until the host calls the
  *         owning capability's release_frame; the host MUST call release_frame exactly once per produced frame.
  *       - Strings a plugin returns to the host (names, error text) MUST remain valid until the next call on the
- *         same instance, or be copied by the host before then — the host copies immediately.
+ *         same instance, or be copied by the host before then - the host copies immediately.
  *
  *  4. release_frame ordering.
  *       - release_frame for a given instance MAY be called on a thread different from the producing call, but
@@ -107,7 +107,7 @@ typedef enum MfpStatus {
     MFP_ERR_UNSUPPORTED = -1,   /* capability/format/operation not provided */
     MFP_ERR_INVALID_ARG = -2,
     MFP_ERR_NOT_FOUND   = -3,   /* e.g. unknown device id */
-    MFP_ERR_AGAIN       = -4,   /* no data ready / no room yet (non-blocking) — not an error */
+    MFP_ERR_AGAIN       = -4,   /* no data ready / no room yet (non-blocking) - not an error */
     MFP_ERR_END         = -5,   /* source exhausted */
     MFP_ERR_INTERNAL    = -6,
     MFP_ERR_ABI_MISMATCH = -7
@@ -130,7 +130,7 @@ typedef enum MfpCapability {
 
 /* ------------------------------------------------------------------ formats ------------------- */
 
-/* Mirrors S.Media.Core.Video.PixelFormat — keep in sync (the managed adapter maps 1:1). GPU-backed
+/* Mirrors S.Media.Core.Video.PixelFormat - keep in sync (the managed adapter maps 1:1). GPU-backed
  * frames may report MFP_PF_UNKNOWN and carry a fourcc/dxgi_format in their kind struct. */
 typedef enum MfpPixelFormat {
     MFP_PF_UNKNOWN = 0,
@@ -187,13 +187,13 @@ typedef struct MfpSync {
 } MfpSync;
 
 /* --------------------------------------------------- frames: tagged union, one per kind (OQ1) -- */
-/* One uint64 "gpu handle" is not enough — each backing needs its own fields. These mirror the
+/* One uint64 "gpu handle" is not enough - each backing needs its own fields. These mirror the
  * S.Media.Core HW backings so the managed adapter is a near-direct map. CPU-only plugins use only
  * MFP_FRAME_CPU and may ignore the GPU kinds entirely. */
 typedef enum MfpFrameKind {
     MFP_FRAME_CPU = 0,
-    MFP_FRAME_DMABUF,            /* Linux  — mirrors Dmabuf{Nv12,P010,P016}Backing */
-    MFP_FRAME_D3D11,             /* Windows — mirrors Win32SharedNv12Backing */
+    MFP_FRAME_DMABUF,            /* Linux  - mirrors Dmabuf{Nv12,P010,P016}Backing */
+    MFP_FRAME_D3D11,             /* Windows - mirrors Win32SharedNv12Backing */
     MFP_FRAME_GL_TEXTURE         /* same-GL-context only (layer surfaces); never cross-process */
 } MfpFrameKind;
 
@@ -275,7 +275,7 @@ typedef struct MfpHostApi {
 /* ==================================================================== capability vtables ====== *
  * Each vtable shadows one managed interface. The first parameter (`self`/`handle`/`src`/`surface`) is
  * the plugin instance the matching add_* / open / create returned. Trailing function pointers marked
- * "optional" may be NULL — the host then uses a fallback. */
+ * "optional" may be NULL - the host then uses a fallback. */
 
 /* Audio backend ↔ IAudioBackend. submit/read_into run on the audio clock thread and MUST NOT block. */
 typedef struct MfpAudioBackendVTable {
@@ -289,7 +289,7 @@ typedef struct MfpAudioBackendVTable {
     void  (*close_handle)(void* handle);
     void  (*destroy)(void* self);
     /* --- optional capabilities (NULL if unsupported) --- */
-    int64_t (*output_played_frames)(void* handle);    /* total frames physically PLAYED — the master clock
+    int64_t (*output_played_frames)(void* handle);    /* total frames physically PLAYED - the master clock
                                                        * (↔ IAudioOutputPlaybackStats.PlayedSamples / IClockedOutput).
                                                        * NULL ⇒ this output cannot be the clock master. */
     int     (*output_writable_frames)(void* handle);  /* room (frames) before output_submit would block, for
@@ -323,7 +323,7 @@ typedef struct MfpVideoSourceVTable {
 
 /* What a provider's open() yields for a URI: a video and/or audio source, both valid only with the
  * provider's matching *_source_vtable. Either may be NULL. A single open() keeps any shared underlying
- * connection (e.g. NDI delivers correlated A/V over ONE receiver — open once, get both). */
+ * connection (e.g. NDI delivers correlated A/V over ONE receiver - open once, get both). */
 typedef struct MfpMediaSource {
     void* video;   /* → MfpVideoSourceVTable instance, or NULL */
     void* audio;   /* → MfpAudioSourceVTable instance, or NULL */
@@ -366,10 +366,10 @@ typedef struct MfpLayerSurfaceVTable {
  * FBO across the boundary so a native plugin renders straight into the canvas. */
 typedef struct MfpLayerSurfaceFactoryVTable {
     MFP_STRUCT_HEADER;
-    /* Create a surface instance configured by `config_json` — an opaque, plugin-defined blob taken
+    /* Create a surface instance configured by `config_json` - an opaque, plugin-defined blob taken
      * verbatim from the cue/composition layer spec, e.g. for an "mmd" layer:
      *   {"models":["miku.pmx","stage.pmx"],"motion":"rolling-girl.vmd","camera":"cam.vmd"}
-     * The (possibly slow) asset load happens here / in configure_gl — never in render. → instance or NULL. */
+     * The (possibly slow) asset load happens here / in configure_gl - never in render. → instance or NULL. */
     void* (*create)(void* self, const char* config_json);
     const MfpLayerSurfaceVTable* surface_vtable;              /* vtable for instances `create` returns */
     void  (*destroy)(void* self);                            /* destroy the factory itself */
@@ -393,9 +393,9 @@ typedef struct MfpSubtitleProviderVTable {
     void  (*destroy)(void* self);
 } MfpSubtitleProviderVTable;
 
-/* Control feedback decoder ↔ IControlFeedbackDecoder — the inbound twin of MeterBlobDecoder, for
+/* Control feedback decoder ↔ IControlFeedbackDecoder - the inbound twin of MeterBlobDecoder, for
  * device-profile entries like "decoder": "x32.meters". Decodes an OSC/MIDI/binary feedback payload
- * into numeric cache readings. (NOTE: this is the only control surface a plugin extends — the OSC/MIDI
+ * into numeric cache readings. (NOTE: this is the only control surface a plugin extends - the OSC/MIDI
  * transport and the Mond engine stay in the framework; a new device = a profile + maybe a decoder.) */
 typedef struct MfpControlReading {
     char   address[160];

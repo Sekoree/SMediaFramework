@@ -309,7 +309,7 @@ public struct NDIAudioInterleaved32f
 public readonly record struct NDIDiscoveredSource(string Name, string? UrlAddress);
 
 // ------------------------------------------------------------------
-// Discovery Server — Enumerations
+// Discovery Server - Enumerations
 // ------------------------------------------------------------------
 
 /// <summary>The types of streams that a receiver can receive from the source it's connected to.</summary>
@@ -332,7 +332,7 @@ public enum NDIReceiverCommand : int
 }
 
 // ------------------------------------------------------------------
-// Discovery Server — Structs
+// Discovery Server - Structs
 // ------------------------------------------------------------------
 
 /// <summary>Creation settings for <c>NDIlib_recv_advertiser_create</c>.</summary>
@@ -434,7 +434,7 @@ public struct NDIListenerEvent
 }
 
 // ------------------------------------------------------------------
-// Discovery Server — High-level records
+// Discovery Server - High-level records
 // ------------------------------------------------------------------
 
 /// <summary>A discovered receiver on the NDI Discovery Server.</summary>

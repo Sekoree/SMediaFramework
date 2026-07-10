@@ -24,7 +24,7 @@ public sealed partial class AudioRouter
     /// Reconciliation semantics per cell, applied in a single state swap under the router lock:
     /// an existing cell route whose gain changed fades to the new value over the next chunk
     /// (<see cref="RouteGainSlot"/> ramp, same as <see cref="SetRouteGain"/>); a newly non-zero
-    /// cell fades in from silence; a cell that became zero is removed (hard cut — set a small gain
+    /// cell fades in from silence; a cell that became zero is removed (hard cut - set a small gain
     /// instead when you need an audible fade-out first). Routes outside
     /// <paramref name="routeIdPrefix"/> are never touched, so a matrix can coexist with manually
     /// registered routes for the same pair.
@@ -61,7 +61,7 @@ public sealed partial class AudioRouter
             var builder = _state.Routes.ToBuilder();
             var matrixDst = gains.GetLength(1);
 
-            // Pass 1 — reconcile existing prefix-owned routes: update changed gains in place, drop
+            // Pass 1 - reconcile existing prefix-owned routes: update changed gains in place, drop
             // cells that are now zero/out of range, reject prefix collisions with foreign pairs.
             var coveredLen = Math.Max(1, srcChannels * matrixDst);
             Span<bool> covered = coveredLen <= 256
@@ -89,7 +89,7 @@ public sealed partial class AudioRouter
                 }
             }
 
-            // Pass 2 — add routes for non-zero cells that had none; fade in from silence.
+            // Pass 2 - add routes for non-zero cells that had none; fade in from silence.
             for (var s = 0; s < gains.GetLength(0); s++)
             {
                 for (var d = 0; d < gains.GetLength(1); d++)

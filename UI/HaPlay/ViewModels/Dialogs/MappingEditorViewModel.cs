@@ -8,7 +8,7 @@ namespace HaPlay.ViewModels.Dialogs;
 /// <summary>
 /// Editor for one binding's <see cref="CueOutputMapping"/> (warp sections). Every model-affecting
 /// change immediately invokes the apply callback, which persists the mapping into the binding VM
-/// and live-applies it to a running composition — calibration is done against live output.
+/// and live-applies it to a running composition - calibration is done against live output.
 /// See Doc/HaPlay-Output-Mapping-Plan.md.
 /// </summary>
 public sealed partial class MappingEditorViewModel : ObservableObject
@@ -36,7 +36,7 @@ public sealed partial class MappingEditorViewModel : ObservableObject
         bool canEditOutputSize = true)
     {
         OutputName = outputName;
-        DialogTitle = $"{(string.IsNullOrWhiteSpace(dialogTitlePrefix) ? "Output mapping" : dialogTitlePrefix)} — {outputName}";
+        DialogTitle = $"{(string.IsNullOrWhiteSpace(dialogTitlePrefix) ? "Output mapping" : dialogTitlePrefix)} - {outputName}";
         EnableLabel = string.IsNullOrWhiteSpace(enableLabel) ? "Enable mapping" : enableLabel;
         SizeLabel = string.IsNullOrWhiteSpace(sizeLabel) ? "Output size" : sizeLabel;
         TestPatternLabel = string.IsNullOrWhiteSpace(testPatternLabel)
@@ -120,7 +120,7 @@ public sealed partial class MappingEditorViewModel : ObservableObject
     partial void OnShowTestPatternChanged(bool value)
     {
         if (_setTestPattern?.Invoke(value) == false)
-            ShowTestPattern = false; // composition not available (no list/binding) — snap back
+            ShowTestPattern = false; // composition not available (no list/binding) - snap back
     }
 
     [RelayCommand]
@@ -168,7 +168,7 @@ public sealed partial class MappingEditorViewModel : ObservableObject
     private void MoveSectionDown() => MoveSelected(+1);
 
     /// <summary>Replaces all sections with an even SplitColumns×SplitRows grid (identity placement
-    /// in output space) — the fast path for multi-panel surfaces; the operator then nudges panels.</summary>
+    /// in output space) - the fast path for multi-panel surfaces; the operator then nudges panels.</summary>
     [RelayCommand]
     private void SplitIntoGrid()
     {
@@ -385,7 +385,7 @@ public sealed partial class MappingSectionViewModel : ObservableObject
     partial void OnMeshEnabledChanged(bool value)
     {
         if (Owner is null)
-            return; // model load — points are restored separately by FromModel
+            return; // model load - points are restored separately by FromModel
         if (value)
             EnsureMeshPointsShape();
         Owner.Apply();
@@ -395,7 +395,7 @@ public sealed partial class MappingSectionViewModel : ObservableObject
 
     partial void OnMeshRowsChanged(int value) => OnMeshGridSizeChanged();
 
-    /// <summary>Grid resize restarts from identity (no warp resampling in v1 — resizing is a
+    /// <summary>Grid resize restarts from identity (no warp resampling in v1 - resizing is a
     /// set-up-time action, not a calibration tweak).</summary>
     private void OnMeshGridSizeChanged()
     {

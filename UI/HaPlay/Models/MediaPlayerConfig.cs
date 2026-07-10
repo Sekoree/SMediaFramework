@@ -3,18 +3,18 @@ using System.Text.Json.Serialization;
 namespace HaPlay.Models;
 
 /// <summary>
-/// Persisted per-player state — playlist + transport flags + selected output lines (matched on load
+/// Persisted per-player state - playlist + transport flags + selected output lines (matched on load
 /// by <see cref="OutputDefinition.DisplayName"/>). Written via <see cref="MediaPlayerConfigJsonContext"/>
 /// so the path is NativeAOT-safe.
 /// </summary>
 public sealed record MediaPlayerConfig
 {
-    /// <summary>Schema tag — bump when the on-disk shape changes incompatibly.</summary>
+    /// <summary>Schema tag - bump when the on-disk shape changes incompatibly.</summary>
     public string Schema { get; init; } = "HaPlayPlayerConfig/v1";
 
     public string Name { get; init; } = "Player";
 
-    /// <summary>Phase C (§4.3.2) — all playlist tabs owned by this player.</summary>
+    /// <summary>Phase C (§4.3.2) - all playlist tabs owned by this player.</summary>
     public List<PlaylistConfig> PlaylistTabs { get; init; } = new();
 
     /// <summary>Index into <see cref="PlaylistTabs"/> that was visible when the player was saved.</summary>
@@ -49,12 +49,12 @@ public sealed record MediaPlayerConfig
 
     public int TransitionDurationMs { get; init; } = 500;
 
-    /// <summary>§4.3.5 — Custom preset width in pixels (only honored when <see cref="OutputPreset"/>
+    /// <summary>§4.3.5 - Custom preset width in pixels (only honored when <see cref="OutputPreset"/>
     /// is <see cref="PlayerOutputPreset.Custom"/>). Defaults to 1920 so an empty config produces a
     /// sensible Custom raster instead of zero.</summary>
     public int CustomOutputWidth { get; init; } = 1920;
 
-    /// <summary>§4.3.5 — Custom preset height in pixels (only honored when <see cref="OutputPreset"/>
+    /// <summary>§4.3.5 - Custom preset height in pixels (only honored when <see cref="OutputPreset"/>
     /// is <see cref="PlayerOutputPreset.Custom"/>). Defaults to 1080.</summary>
     public int CustomOutputHeight { get; init; } = 1080;
 
@@ -63,7 +63,7 @@ public sealed record MediaPlayerConfig
 
     public List<OutputGainConfig> OutputGains { get; init; } = new();
 
-    /// <summary>UI rewrite P5b — auto-preset rules: source channel count → downmix preset applied
+    /// <summary>UI rewrite P5b - auto-preset rules: source channel count → downmix preset applied
     /// to the routing matrix when media with that channel count loads.</summary>
     public List<ChannelPresetRule> ChannelPresetRules { get; init; } = new();
 
@@ -89,11 +89,11 @@ public sealed record PlaylistConfig
 
     public string Name { get; init; } = "Set A";
 
-    /// <summary>Phase C.5 (§6.8) — discriminated playlist entries. Canonical on write; on read, falls
+    /// <summary>Phase C.5 (§6.8) - discriminated playlist entries. Canonical on write; on read, falls
     /// back to <see cref="Paths"/> when this list is empty.</summary>
     public List<PlaylistItem> Items { get; init; } = new();
 
-    /// <summary>Phase C.5 (§6.8) — selected playlist item by <see cref="PlaylistItem.Id"/>. <see langword="null"/>
+    /// <summary>Phase C.5 (§6.8) - selected playlist item by <see cref="PlaylistItem.Id"/>. <see langword="null"/>
     /// means "use first item" or fall back to <see cref="SelectedPath"/> for v1 files.</summary>
     public Guid? SelectedItemId { get; init; }
 
@@ -125,12 +125,12 @@ public sealed record OutputGainConfig
 
     public bool Muted { get; init; }
 
-    /// <summary>Phase C (§4.3.4) — per-output channel-mix mode. Falls back to <see cref="AudioRouteMixMode.Stereo"/>
+    /// <summary>Phase C (§4.3.4) - per-output channel-mix mode. Falls back to <see cref="AudioRouteMixMode.Stereo"/>
     /// for older configs so a missing field doesn't surprise the loader. When <see cref="MatrixCells"/> is
     /// non-empty, the matrix takes precedence and <see cref="MixMode"/> is the "preset that was last applied".</summary>
     public AudioRouteMixMode MixMode { get; init; } = AudioRouteMixMode.Stereo;
 
-    /// <summary>Phase C (§4.3.4) — full N×M matrix cells. Empty means "fall back to <see cref="MixMode"/>".</summary>
+    /// <summary>Phase C (§4.3.4) - full N×M matrix cells. Empty means "fall back to <see cref="MixMode"/>".</summary>
     public List<AudioMatrixCellConfig> MatrixCells { get; init; } = new();
 }
 

@@ -20,7 +20,7 @@ public sealed class StatusLineControl : ContentControl
     public static readonly StyledProperty<ToastSeverity> SeverityProperty =
         AvaloniaProperty.Register<StatusLineControl, ToastSeverity>(nameof(Severity));
 
-    // Dark severity shades — the status line sits on the Classic theme's light-gray chrome
+    // Dark severity shades - the status line sits on the Classic theme's light-gray chrome
     // (must match the StatusInfoFg/StatusWarnFg/StatusErrorFg tokens in Styles/Tokens.axaml).
     private static readonly IBrush InfoBrush = new SolidColorBrush(Color.Parse("#37474F"));
     private static readonly IBrush WarnBrush = new SolidColorBrush(Color.Parse("#8A5A00"));
@@ -30,7 +30,7 @@ public sealed class StatusLineControl : ContentControl
 
     public StatusLineControl()
     {
-        // Reserved height even when Text is empty — never collapses out of layout.
+        // Reserved height even when Text is empty - never collapses out of layout.
         MinHeight = 22;
         VerticalContentAlignment = VerticalAlignment.Center;
         _text = new TextBlock

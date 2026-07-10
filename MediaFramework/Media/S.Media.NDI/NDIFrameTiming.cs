@@ -27,7 +27,7 @@ internal static class NDIFrameTiming
     /// Maps an NDI frame's egress timecode/timestamp to an <strong>absolute</strong> presentation time (the
     /// raw 100&nbsp;ns value as a <see cref="TimeSpan"/>), with no per-receiver session origin or rebase.
     /// Unlike <see cref="TryMapPresentationTime"/> (which is relative to the first frame this receiver saw),
-    /// this resolves the <em>same</em> frame to the <em>same</em> time on every receiver of one sender — so,
+    /// this resolves the <em>same</em> frame to the <em>same</em> time on every receiver of one sender - so,
     /// driven by a shared/synced reference clock, multiple receivers present a stitched wall in lock-step.
     /// Returns <c>false</c> when the frame carries neither a real timecode nor a timestamp (caller should
     /// continue a synthetic timeline).

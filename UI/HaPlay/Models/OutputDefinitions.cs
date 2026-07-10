@@ -58,9 +58,9 @@ public abstract record OutputDefinition(Guid Id, string DisplayName)
 
     /// <summary>
     /// Operator-given name (UI rewrite P2, plan §5): the single naming truth shown wherever this
-    /// output appears — I/O rows, player routing matrix columns, cue route pickers. Null/blank
+    /// output appears - I/O rows, player routing matrix columns, cue route pickers. Null/blank
     /// falls back to the device-derived <see cref="DisplayName"/>. Absent in pre-P2 project files
-    /// (deserializes as null — no migration needed).
+    /// (deserializes as null - no migration needed).
     /// </summary>
     public string? Alias { get; init; }
 
@@ -115,12 +115,12 @@ public sealed record LocalVideoOutputDefinition(
     // Runtime semantics land in Phase B; for now the field is persisted so a saved project survives.
     Guid? CloneOfId = null,
     // Optional background image shown as the idle frame when no media is routed to this output. Padded
-    // to the output's pixel format (letterboxed) — applies to both the SDL and Avalonia engines.
+    // to the output's pixel format (letterboxed) - applies to both the SDL and Avalonia engines.
     string? BackgroundImagePath = null,
     // Keep the output window above other windows. Honoured by the Avalonia (in-app preview) engine;
     // the SDL standalone-window engine ignores it (no always-on-top hook exposed by the framework).
     bool AlwaysOnTop = false,
-    // How this display fits the composited canvas (letterbox by default). Display-side only — the compositor
+    // How this display fits the composited canvas (letterbox by default). Display-side only - the compositor
     // and NDI outputs are unaffected. Absent in pre-fit project files (deserializes as Letterbox, the prior
     // hardcoded behaviour), so no schema migration is needed.
     LocalVideoFit VideoFit = LocalVideoFit.Letterbox) : OutputDefinition(Id, DisplayName)

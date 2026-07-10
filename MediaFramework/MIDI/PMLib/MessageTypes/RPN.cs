@@ -9,10 +9,10 @@ namespace PMLib.MessageTypes;
 /// <remarks>
 /// <b>Wire format:</b> <see cref="WriteTo"/> sends four consecutive CC messages:
 /// <list type="number">
-///   <item><description>CC 101 — RPN parameter MSB</description></item>
-///   <item><description>CC 100 — RPN parameter LSB</description></item>
-///   <item><description>CC 6   — Data Entry MSB</description></item>
-///   <item><description>CC 38  — Data Entry LSB</description></item>
+///   <item><description>CC 101 - RPN parameter MSB</description></item>
+///   <item><description>CC 100 - RPN parameter LSB</description></item>
+///   <item><description>CC 6   - Data Entry MSB</description></item>
+///   <item><description>CC 38  - Data Entry LSB</description></item>
 /// </list>
 ///
 /// <b>Receiving:</b> Use <see cref="PMLib.Accumulators.NRPNAccumulator"/> to automatically

@@ -8,13 +8,13 @@ namespace S.Abi;
 /// <summary>
 /// The dynamic plugin host's product surface (NXT-09): scans one directory for native plugin libraries,
 /// loads every library that exports <c>mfp_plugin_register</c> through <see cref="AbiPluginHost"/>, and
-/// registers their capabilities into the app's registries. Loading is fail-soft per file — a library that
+/// registers their capabilities into the app's registries. Loading is fail-soft per file - a library that
 /// is not a plugin (no register export) is skipped, and one that fails to load/register is recorded in
-/// <see cref="Failures"/> without stopping the scan — so a bad plugin degrades exactly like an unavailable
+/// <see cref="Failures"/> without stopping the scan - so a bad plugin degrades exactly like an unavailable
 /// module, never blocking startup.
 ///
 /// <para><b>Ownership:</b> the directory owns its <see cref="AbiLoadedPlugin"/>s. Dispose it at app
-/// shutdown AFTER the registries built from it — adapters hold reference-counted plugin leases, so a
+/// shutdown AFTER the registries built from it - adapters hold reference-counted plugin leases, so a
 /// library only truly unloads once every adapter created from it has been disposed (a still-referenced
 /// library simply stays loaded until process exit rather than risking an unload-while-referenced crash).</para>
 /// </summary>
@@ -37,7 +37,7 @@ public sealed class MediaPluginDirectory : IDisposable
     public IReadOnlyList<(string Path, string Error)> Failures { get; }
 
     /// <summary>Native libraries in the directory that are not plugins (no <c>mfp_plugin_register</c> export)
-    /// — dependency libraries shipped next to a plugin land here, silently.</summary>
+    /// - dependency libraries shipped next to a plugin land here, silently.</summary>
     public IReadOnlyList<string> Skipped { get; }
 
     /// <summary>The platform's native-library extension used by the scan.</summary>
@@ -99,7 +99,7 @@ public sealed class MediaPluginDirectory : IDisposable
     }
 
     /// <summary>
-    /// Registers every loaded plugin's capabilities into the given registries (each optional — pass what
+    /// Registers every loaded plugin's capabilities into the given registries (each optional - pass what
     /// the app actually composes). Call inside the registry's build/configure phase.
     /// </summary>
     public void RegisterInto(
@@ -113,7 +113,7 @@ public sealed class MediaPluginDirectory : IDisposable
     }
 
     /// <summary>Requests unload of every plugin (reverse load order). Libraries with outstanding adapter
-    /// leases stay loaded until those adapters dispose — never an unload-while-referenced.</summary>
+    /// leases stay loaded until those adapters dispose - never an unload-while-referenced.</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -127,7 +127,7 @@ public sealed class MediaPluginDirectory : IDisposable
             }
             catch
             {
-                // best-effort teardown — one plugin's failing unload must not block the rest
+                // best-effort teardown - one plugin's failing unload must not block the rest
             }
         }
     }

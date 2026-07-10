@@ -43,7 +43,7 @@ public sealed class CueStartOffsetCompositionTests
             var span = composite.Planes[0].Span;
             Assert.Equal(0, span[0]);    // B
             Assert.Equal(0, span[1]);    // G
-            Assert.Equal(255, span[2]);  // R — the clip frame is visible
+            Assert.Equal(255, span[2]);  // R - the clip frame is visible
             Assert.Equal(255, span[3]);  // A
         }
         finally { composite.Dispose(); }
@@ -69,7 +69,7 @@ public sealed class CueStartOffsetCompositionTests
         {
             var span = composite.Planes[0].Span;
             for (var i = 0; i < span.Length; i++)
-                Assert.Equal(0, span[i]); // nothing composited — black screen without rebasing
+                Assert.Equal(0, span[i]); // nothing composited - black screen without rebasing
         }
         finally { composite.Dispose(); }
     }

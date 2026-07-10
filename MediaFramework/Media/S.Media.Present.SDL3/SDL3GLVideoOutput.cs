@@ -110,7 +110,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => AcceptedFormats;
     public bool OwnsThread => _ownsThread;
 
-    /// <summary>The GL viewport (drawable pixels) the renderer currently draws into — diagnostic, for
+    /// <summary>The GL viewport (drawable pixels) the renderer currently draws into - diagnostic, for
     /// comparing against the source frame size to reason about scaling quality.</summary>
     public (int Width, int Height) ViewportPixelSize => (_viewportWidth, _viewportHeight);
     public long DisplayedCount => Volatile.Read(ref _displayed);
@@ -125,7 +125,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
     /// <summary>How the frame is mapped into the window's viewport. Default <see cref="VideoViewportFit.Contain"/>
     /// preserves the source aspect ratio, letterboxing/pillarboxing on resize (the bars are painted black before
-    /// each render) — and is identical to <see cref="VideoViewportFit.Stretch"/> when the window already matches
+    /// each render) - and is identical to <see cref="VideoViewportFit.Stretch"/> when the window already matches
     /// the frame aspect. Set to <see cref="VideoViewportFit.Stretch"/> to fill the window and ignore aspect.</summary>
     public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Contain;
 
@@ -304,13 +304,13 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             if (_format == format)
                 return;
 
-            // Mirrors share GL textures with the anchor's renderer — reconfiguring the anchor would
+            // Mirrors share GL textures with the anchor's renderer - reconfiguring the anchor would
             // invalidate them. Disallow reconfigure while any mirror is registered.
             lock (_textureMirrorLock)
             {
                 if (_registeredTextureMirrors.Count > 0)
                     throw new InvalidOperationException(
-                        "Cannot reconfigure an SDL3GLVideoOutput that has registered texture mirrors — dispose mirrors first.");
+                        "Cannot reconfigure an SDL3GLVideoOutput that has registered texture mirrors - dispose mirrors first.");
             }
 
             // Drop frames queued for the old format so Submit's format guard doesn't reject them after switch.
@@ -454,7 +454,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     public void Pump()
     {
         if (_ownsThread)
-            throw new InvalidOperationException("SDL3GLVideoOutput.Pump called on an auto-thread output — use ownsThread:false");
+            throw new InvalidOperationException("SDL3GLVideoOutput.Pump called on an auto-thread output - use ownsThread:false");
         if (_disposed) return;
         if (!_configured) return;
 
@@ -514,7 +514,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
         if (threadStillRunning)
         {
-            // Render thread didn't stop within the join window — it may still touch _wakeup / _ready /
+            // Render thread didn't stop within the join window - it may still touch _wakeup / _ready /
             // the cts token / the D3D11 device. Leak them rather than dispose under the live thread
             // (use-after-dispose / handle-reuse race). Same policy as VideoOutputPump.Dispose (P2-4).
             MediaDiagnostics.LogWarning(
@@ -640,7 +640,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                     MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_GL_SetAttribute(ShareWithCurrentContext) failed: {0}", SDL.GetError());
 
                 // NotFocusable: a video-output window needs no keyboard focus, and on Wayland the clipboard /
-                // primary-selection data offer is delivered to the keyboard-focused surface — so a non-focusable
+                // primary-selection data offer is delivered to the keyboard-focused surface - so a non-focusable
                 // window never receives it, sidestepping SDL3 3.4.x's null-deref in Wayland_data_offer_add_mime
                 // (uncatchable SIGSEGV on a middle-click primary paste). Mouse events + WM resize/close still work.
                 _window = SDL.CreateWindow(_title, _initialWindowWidth, _initialWindowHeight,
@@ -695,7 +695,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             }
         }
 
-        // NotFocusable — see the mirror-window note above: a focus-less window never receives the Wayland
+        // NotFocusable - see the mirror-window note above: a focus-less window never receives the Wayland
         // clipboard/primary-selection data offer, avoiding SDL3's Wayland_data_offer_add_mime crash on middle-click.
         _window = SDL.CreateWindow(_title, _initialWindowWidth, _initialWindowHeight,
             SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.NotFocusable);
@@ -924,7 +924,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
     private void ClearForLetterboxIfNeeded()
     {
-        // Stretch already covers every pixel — skip the clear to avoid an unnecessary state change.
+        // Stretch already covers every pixel - skip the clear to avoid an unnecessary state change.
         if (ViewportFit == VideoViewportFit.Stretch || _gl is null)
             return;
         _gl.Viewport(0, 0, (uint)_viewportWidth, (uint)_viewportHeight);

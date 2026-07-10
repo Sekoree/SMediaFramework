@@ -24,7 +24,7 @@ public sealed class ShowDocumentTests
 
         var reloaded = ShowDocument.FromJson(doc.ToJson());
 
-        // Element-wise (Assert.Equal on IEnumerable) — proves a lossless D10 round-trip. Whole-record
+        // Element-wise (Assert.Equal on IEnumerable) - proves a lossless D10 round-trip. Whole-record
         // equality won't do: a record compares its list *properties* by reference (array vs List), not deep.
         Assert.Equal(doc.Version, reloaded.Version);
         Assert.Equal(doc.Cues, reloaded.Cues);
@@ -209,7 +209,7 @@ public sealed class ShowDocumentTests
 
         var reloaded = ShowDocument.FromJson(doc.ToJson());
 
-        Assert.Equal(doc.AudioOutputs, reloaded.AudioOutputs); // element-wise — proves the init property round-trips
+        Assert.Equal(doc.AudioOutputs, reloaded.AudioOutputs); // element-wise - proves the init property round-trips
         Assert.Equal("hw:1", reloaded.AudioOutputs[1].DeviceId);
         Assert.Equal("fx", reloaded.AudioOutputs[1].GroupId);
     }

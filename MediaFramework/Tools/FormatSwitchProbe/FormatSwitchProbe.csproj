@@ -2,7 +2,7 @@
 
     <!-- Phase 3 gate: mid-stream video format-change reconfig. Submits BGRA frames of one resolution
          through a VideoRouter, then switches resolution mid-stream, and asserts the downstream output
-         re-Configures (idempotent reconfigure path — memory: video_sink_pump_reconfigure). No FFmpeg. -->
+         re-Configures (idempotent reconfigure path - memory: video_sink_pump_reconfigure). No FFmpeg. -->
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>

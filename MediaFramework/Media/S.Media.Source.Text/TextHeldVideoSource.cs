@@ -8,7 +8,7 @@ namespace S.Media.Source.Text;
 /// A single rendered text frame held for the cue's duration. Wraps <see cref="HeldFrameVideoSource"/> (format
 /// negotiation + per-read owned clones) and adds a finite, seekable duration so the session can bound it like a
 /// normal clip: it emits <c>duration × fps</c> identical frames then exhausts. A zero/absent duration leaves it
-/// unbounded (holds until the cue is stopped or the next one fires — the same as a plain held source).
+/// unbounded (holds until the cue is stopped or the next one fires - the same as a plain held source).
 /// </summary>
 internal sealed class TextHeldVideoSource : IVideoSource, ISeekableSource, IReplaceableFrameSource, IDisposable
 {
@@ -32,7 +32,7 @@ internal sealed class TextHeldVideoSource : IVideoSource, ISeekableSource, IRepl
 
     public IReadOnlyList<PixelFormat> NativePixelFormats { get { lock (_gate) return _inner.NativePixelFormats; } }
 
-    // Deliberately UNBOUNDED — a held text frame never runs out. Ending is driven by the session's time-based
+    // Deliberately UNBOUNDED - a held text frame never runs out. Ending is driven by the session's time-based
     // end-monitor (against the reported Duration), NOT by read count: a resize or live-edit re-primes the pipeline
     // and re-reads a burst of frames, and a read-count bound would then hit EOF and stop the cue mid-playback.
     public bool IsExhausted => InnerExhausted();
@@ -79,7 +79,7 @@ internal sealed class TextHeldVideoSource : IVideoSource, ISeekableSource, IRepl
 
     /// <summary>Live-swap the rendered frame (a text/style edit on the playing cue). Re-selects the previously
     /// negotiated output format on the new frame so the pump keeps pulling in the same format, then disposes the
-    /// old one. Never advances the playhead — the cue keeps its duration/position, only its pixels change.</summary>
+    /// old one. Never advances the playhead - the cue keeps its duration/position, only its pixels change.</summary>
     public void ReplaceFrame(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);

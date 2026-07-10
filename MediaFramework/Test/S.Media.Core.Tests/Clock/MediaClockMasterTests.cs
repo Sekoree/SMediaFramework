@@ -67,7 +67,7 @@ public class MediaClockMasterTests
         Thread.Sleep(100);
 
         var preSwap = clock.CurrentPosition;
-        // Attach a master with a high elapsed value — naive math would jump
+        // Attach a master with a high elapsed value - naive math would jump
         // forward by years. The swap should re-anchor to keep continuity.
         var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromHours(1), IsAdvancing = true };
         clock.SetMaster(master);
@@ -89,7 +89,7 @@ public class MediaClockMasterTests
         Thread.Sleep(80);
         var afterSleep = clock.CurrentPosition;
 
-        // Stopwatch took over — position advanced even though master is frozen.
+        // Stopwatch took over - position advanced even though master is frozen.
         Assert.True(afterSleep > beforeSleep + TimeSpan.FromMilliseconds(40),
             $"position should advance via stopwatch after detach (before {beforeSleep}, after {afterSleep})");
     }

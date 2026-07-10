@@ -6,7 +6,7 @@ namespace Classic.Avalonia.Theme.Utils;
 
 /// <summary>
 /// Vendored replacement for Avalonia 11's <c>Avalonia.Controls.Chrome.TitleBar</c> (removed in
-/// Avalonia 12): the auto-attaching title bar plus the interactions the old chrome provided — drag to
+/// Avalonia 12): the auto-attaching title bar plus the interactions the old chrome provided - drag to
 /// move, double-click to maximize/restore.
 /// </summary>
 [PseudoClasses(":minimized", ":normal", ":maximized", ":fullscreen")]

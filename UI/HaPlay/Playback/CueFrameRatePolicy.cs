@@ -21,7 +21,7 @@ internal static class CueFrameRatePolicy
         num / (double)den;
 
     /// <summary>Returns true when the source and canvas rates are not simple integer multiples
-    /// of each other — visible pulldown / frame-drop risk on long runs.</summary>
+    /// of each other - visible pulldown / frame-drop risk on long runs.</summary>
     public static bool RatesMismatch(Rational source, Rational canvas)
     {
         if (!IsKnown(source) || !IsKnown(canvas))

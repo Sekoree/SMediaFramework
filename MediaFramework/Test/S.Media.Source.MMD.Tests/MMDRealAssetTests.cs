@@ -4,7 +4,7 @@ using Xunit;
 namespace S.Media.Source.MMD.Tests;
 
 /// <summary>
-/// Gated tests against the LOCAL reference assets (Reference/MMDTest — YYB Miku + Rolling Girl). Their
+/// Gated tests against the LOCAL reference assets (Reference/MMDTest - YYB Miku + Rolling Girl). Their
 /// licenses forbid redistribution, so these skip anywhere the assets aren't present (CI) and exist to
 /// prove the parsers/animator handle a real production model+motion, not just the tiny fixtures.
 /// </summary>
@@ -43,7 +43,7 @@ public sealed class MMDRealAssetTests
         public LocalAssetFactAttribute()
         {
             if (FindPMX() is null || FindVMD() is null)
-                Skip = "local MMD reference assets not present (non-redistributable — dev box only)";
+                Skip = "local MMD reference assets not present (non-redistributable - dev box only)";
         }
     }
 

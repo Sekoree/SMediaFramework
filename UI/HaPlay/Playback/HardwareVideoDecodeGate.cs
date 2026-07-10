@@ -45,7 +45,7 @@ internal static class HardwareVideoDecodeGate
         if (first)
             MediaDiagnostics.LogWarning(
                 "HardwareVideoDecodeGate: hardware video decode disabled for the rest of this process after a decode " +
-                "fault — file playback will use software decode (CPU upload). Restart HaPlay to re-enable hardware decode.");
+                "fault - file playback will use software decode (CPU upload). Restart HaPlay to re-enable hardware decode.");
         return first;
     }
 }

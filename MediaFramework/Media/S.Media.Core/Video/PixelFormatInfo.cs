@@ -49,7 +49,7 @@ public static class PixelFormatInfo
         // 4:2:0 YUVA: planes 1/2 chroma half-height; plane 3 alpha full-height (falls through).
         PixelFormat.Yuva420p or PixelFormat.Yuva420P10Le or PixelFormat.Yuva420P16Le
             when planeIndex is 1 or 2 => ChromaHeight420(frameHeight),
-        // 4:2:2 (with or without alpha) and 4:4:4 chroma are full-height — same as Y/alpha. Falls through to default.
+        // 4:2:2 (with or without alpha) and 4:4:4 chroma are full-height - same as Y/alpha. Falls through to default.
         _ => frameHeight,
     };
 
@@ -87,17 +87,17 @@ public static class PixelFormatInfo
         PixelFormat.Yuv420P10Le or PixelFormat.Yuv420P12Le when planeIndex == 0 => frameWidth * 2,
         PixelFormat.Yuv420P10Le or PixelFormat.Yuv420P12Le when planeIndex is 1 or 2 =>
             ChromaWidth420(frameWidth) * 2,
-        // YUVA 4:2:0 — 4 planes, Y / U / V / A. 8-bit storage for the base format, 16-bit for high-bit variants.
+        // YUVA 4:2:0 - 4 planes, Y / U / V / A. 8-bit storage for the base format, 16-bit for high-bit variants.
         PixelFormat.Yuva420p when planeIndex is 0 or 3 => frameWidth,
         PixelFormat.Yuva420p when planeIndex is 1 or 2 => ChromaWidth420(frameWidth),
         PixelFormat.Yuva420P10Le or PixelFormat.Yuva420P16Le when planeIndex is 0 or 3 => frameWidth * 2,
         PixelFormat.Yuva420P10Le or PixelFormat.Yuva420P16Le when planeIndex is 1 or 2 => ChromaWidth420(frameWidth) * 2,
-        // YUVA 4:2:2 — 4 planes, full-H chroma, half-W chroma.
+        // YUVA 4:2:2 - 4 planes, full-H chroma, half-W chroma.
         PixelFormat.Yuva422P when planeIndex is 0 or 3 => frameWidth,
         PixelFormat.Yuva422P when planeIndex is 1 or 2 => ChromaWidth422(frameWidth),
         PixelFormat.Yuva422P10Le or PixelFormat.Yuva422P12Le or PixelFormat.Yuva422P16Le when planeIndex is 0 or 3 => frameWidth * 2,
         PixelFormat.Yuva422P10Le or PixelFormat.Yuva422P12Le or PixelFormat.Yuva422P16Le when planeIndex is 1 or 2 => ChromaWidth422(frameWidth) * 2,
-        // YUVA 4:4:4 — 4 planes, all full-size.
+        // YUVA 4:4:4 - 4 planes, all full-size.
         PixelFormat.Yuva444P => frameWidth,
         PixelFormat.Yuva444P10Le or PixelFormat.Yuva444P12Le or PixelFormat.Yuva444P16Le => frameWidth * 2,
         // Packed RGB / RGBA

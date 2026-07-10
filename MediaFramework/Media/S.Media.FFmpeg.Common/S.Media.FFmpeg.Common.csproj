@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.FFmpeg.Common — shared FFmpeg runtime/binding glue used by the Decode/Encode/Subtitle
+    <!-- S.Media.FFmpeg.Common - shared FFmpeg runtime/binding glue used by the Decode/Encode/Subtitle
          FFmpeg modules: native init, error helpers, stream<->AVIO bridge, pixel-format mapping, memory
          helpers. No decoders/encoders here, so those modules don't depend on each other (plan §2). -->
 

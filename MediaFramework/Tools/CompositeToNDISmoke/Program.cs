@@ -1,7 +1,7 @@
 // Phase 5 compositor→NDI egress smoke. A GL compositor composites a red layer onto a canvas; the composite
-// is delivered to a CpuFrameCompositeTarget (readback to a CPU VideoFrame — OQ3, NDI SDK send is CPU p_data),
+// is delivered to a CpuFrameCompositeTarget (readback to a CPU VideoFrame - OQ3, NDI SDK send is CPU p_data),
 // and its OnFrameReady submits each frame to an NDIOutput. A loopback receiver discovers the sender and
-// confirms the composited frames arrive over NDI as non-black content — proving the
+// confirms the composited frames arrive over NDI as non-black content - proving the
 // CpuFrameCompositeTarget → NDIOutput.Video.Submit egress end-to-end. Needs real GL + libndi.
 using System.Diagnostics;
 using S.Media.Compositor;
@@ -95,7 +95,7 @@ if (received < 10 || !nonBlack)
     return 1;
 }
 
-Console.WriteLine("CompositeToNDISmoke OK — a composition was sent out as NDI (CpuFrameCompositeTarget → NDIOutput.Video) and received back.");
+Console.WriteLine("CompositeToNDISmoke OK - a composition was sent out as NDI (CpuFrameCompositeTarget → NDIOutput.Video) and received back.");
 return 0;
 
 static VideoFrame SolidBgra(int w, int h, byte b, byte g, byte r)

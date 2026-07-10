@@ -33,10 +33,10 @@ namespace S.Media.Compositor.OpenGL;
 /// Abgr32 / Gray8 / Gray16, plus the full YUVA family at 8 / 10 / 12 / 16 bit). BGRA32 layers run a direct
 /// upload to an RGBA8 texture; every other format runs a per-layer YUV → RGB pre-pass into a cached RGBA16F
 /// intermediate texture so 10 / 12 / 16-bit precision survives through blending. The composite shader samples
-/// the intermediate identically to a BGRA32 layer — transform, opacity, and blend mode are unchanged.
+/// the intermediate identically to a BGRA32 layer - transform, opacity, and blend mode are unchanged.
 /// </para>
 /// <para>
-/// <strong>Output:</strong> BGRA32 via <c>glReadPixels</c>. A single 8-bit truncation lands at the very end —
+/// <strong>Output:</strong> BGRA32 via <c>glReadPixels</c>. A single 8-bit truncation lands at the very end -
 /// the intermediate working space stays 16-bit per channel until the final readback. GPU-resident output is
 /// not in this batch.
 /// </para>
@@ -58,7 +58,7 @@ namespace S.Media.Compositor.OpenGL;
 public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost
 {
     // Surfaces this compositor has ConfigureGl'd, stamped with the canvas format they were configured
-    // for — CompositeWithSurfaces (re)configures a surface on first sight and after a canvas change,
+    // for - CompositeWithSurfaces (re)configures a surface on first sight and after a canvas change,
     // always on the GL thread (NXT-10: the host owns the configure contract, not the caller). Weak so
     // an abandoned surface never pins.
     private readonly ConditionalWeakTable<IVideoCompositorLayerSurface, StrongBox<VideoFormat>> _configuredSurfaces = new();
@@ -149,7 +149,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     private readonly Dictionary<(CorePixelFormat Fmt, int W, int H), YuvVideoRenderer> _yuvRenderers = new();
     /// <summary>Per-(W, H) RGBA16F intermediate texture + FBO that holds the YUV-converted layer.</summary>
     private readonly Dictionary<(int W, int H), (uint Tex, uint Fbo)> _yuvIntermediates = new();
-    /// <summary>Cached accepted-formats array — mirrors <see cref="YuvVideoRenderer.SupportedPixelFormats"/>.</summary>
+    /// <summary>Cached accepted-formats array - mirrors <see cref="YuvVideoRenderer.SupportedPixelFormats"/>.</summary>
     private static readonly CorePixelFormat[] AcceptedFormatsArr = YuvVideoRenderer.SupportedPixelFormats.ToArray();
     private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
     private readonly ConcurrentQueue<Action> _deferredExternalImageReleases = new();
@@ -250,7 +250,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             }
             else if (_meshDraws.Count > 0)
             {
-                // Warp cleared since the last frame — free the stale mesh buffers here, on the GL
+                // Warp cleared since the last frame - free the stale mesh buffers here, on the GL
                 // thread (SetWarpPass may run on any thread and must not touch GL objects).
                 ReleaseMeshBuffers();
             }
@@ -262,7 +262,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             // --- Restore host state. ---
             _gl.PixelStore(PixelStoreParameter.UnpackAlignment, savedUnpackAlignment);
             _gl.PixelStore(PixelStoreParameter.UnpackRowLength, savedUnpackRowLength);
-            // glReadPixels above mutated GL_PACK_* — restore so embedding the compositor
+            // glReadPixels above mutated GL_PACK_* - restore so embedding the compositor
             // in another GL renderer can't corrupt that renderer's later readbacks.
             _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
             _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
@@ -547,7 +547,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                     continue;
 
                 // First sight (or the canvas changed since): configure here, on the GL thread with the
-                // context current — the IVideoCompositorSurfaceHost contract.
+                // context current - the IVideoCompositorSurfaceHost contract.
                 var configured = _configuredSurfaces.GetOrCreateValue(surfaceLayer.Surface);
                 if (configured.Value != _output)
                 {
@@ -787,7 +787,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             var fmt = layer.Frame.Format.PixelFormat;
             if (!GlVideoFormatSupport.TryGetRecipe(fmt, out _))
                 throw new InvalidOperationException(
-                    $"GlVideoCompositor layer {i}: pixel format {fmt} has no GL recipe — accepted set is YuvVideoRenderer.SupportedPixelFormats.");
+                    $"GlVideoCompositor layer {i}: pixel format {fmt} has no GL recipe - accepted set is YuvVideoRenderer.SupportedPixelFormats.");
             var opacity = Math.Clamp(layer.Opacity, 0f, 1f);
             if (opacity <= 0f) continue;
             DrawLayer(layer, opacity);
@@ -1039,7 +1039,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     /// source-pixels → dest-NDC transform and issues the draw with the bound texture-unit-0 source.</summary>
     /// <param name="mirrorDestY">The layer pass paints the framebuffer vertically MIRRORED (Y flip
     /// in the bake, paired with the sampling V-flip) so bottom-up glReadPixels yields a top-down
-    /// buffer. The warp pass samples the canvas FBO texture, which is already stored top-down —
+    /// buffer. The warp pass samples the canvas FBO texture, which is already stored top-down -
     /// it must paint unmirrored (false) with no sampling flip, or the output arrives upside down.</param>
     private void DrawQuad(
         int srcW, int srcH, int destW, int destH,
@@ -1053,15 +1053,15 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         // by laying out per-column. Easier: assemble the 9-float array explicitly.
         // m[col,row]: column-major storage.
         Span<float> m = stackalloc float[9];
-        // Col 0: derivative w.r.t. uv.x — (M11*srcW)*(2/outW), ±(M21*srcW)*(2/outH), 0
+        // Col 0: derivative w.r.t. uv.x - (M11*srcW)*(2/outW), ±(M21*srcW)*(2/outH), 0
         m[0] = (t.M11 * srcW) * (2f / outW);
         m[1] = ySign * (t.M21 * srcW) * (2f / outH);
         m[2] = 0f;
-        // Col 1: derivative w.r.t. uv.y — (M12*srcH)*(2/outW), ±(M22*srcH)*(2/outH), 0
+        // Col 1: derivative w.r.t. uv.y - (M12*srcH)*(2/outW), ±(M22*srcH)*(2/outH), 0
         m[3] = (t.M12 * srcH) * (2f / outW);
         m[4] = ySign * (t.M22 * srcH) * (2f / outH);
         m[5] = 0f;
-        // Col 2: translation — (2*Tx/outW) - 1, ∓(1 - (2*Ty/outH)), 1
+        // Col 2: translation - (2*Tx/outW) - 1, ∓(1 - (2*Ty/outH)), 1
         m[6] = (2f * t.Tx / outW) - 1f;
         m[7] = mirrorDestY ? 1f - (2f * t.Ty / outH) : (2f * t.Ty / outH) - 1f;
         m[8] = 1f;
@@ -1156,7 +1156,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
 
         // Pre-pass: bind the intermediate FBO, set viewport to source size, clear, upload + render YUV → RGB.
-        // YuvVideoRenderer's Render() changes program / VAO / viewport — we restore them below.
+        // YuvVideoRenderer's Render() changes program / VAO / viewport - we restore them below.
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, intermediate.Fbo);
         _gl.Viewport(0, 0, (uint)srcW, (uint)srcH);
         _gl.Disable(EnableCap.Blend);
@@ -1304,14 +1304,14 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             if (hasMesh)
             {
                 DrawMeshSection(_meshDraws[meshIdx], section, warp.Output.Width, warp.Output.Height, opacity);
-                // The mesh draw switched program + VAO — restore the layer pipeline for any affine
+                // The mesh draw switched program + VAO - restore the layer pipeline for any affine
                 // sections that follow (and for state-restore symmetry at the end of Composite).
                 _gl.UseProgram(_program);
                 _gl.BindVertexArray(_vao);
             }
             else
             {
-                // Canvas texture is stored top-down (it IS the readback content) — no sampling flip and
+                // Canvas texture is stored top-down (it IS the readback content) - no sampling flip and
                 // no dest mirroring, unlike the layer pass (see DrawQuad's mirrorDestY remarks).
                 DrawQuad(_output.Width, _output.Height, warp.Output.Width, warp.Output.Height,
                     section.Transform, section.SourceCrop, opacity, flipV: false, BlendMode.SourceOver,
@@ -1357,7 +1357,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             _meshDraws.Add(new MeshDraw(i, vao, vbo, ebo, indices.Length));
         }
 
-        // Mesh-buffer setup unbound the VAO — restore the layer-pass binding the caller expects.
+        // Mesh-buffer setup unbound the VAO - restore the layer-pass binding the caller expects.
         _gl.BindVertexArray(_vao);
         _meshBuffersSections = warp.Sections;
     }
@@ -1367,7 +1367,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         _gl.UseProgram(_meshProgram);
         _gl.BindVertexArray(draw.Vao);
 
-        // Output pixels → NDC, no Y mirror — identical convention to the affine warp draw
+        // Output pixels → NDC, no Y mirror - identical convention to the affine warp draw
         // (mirrorDestY: false); the mesh positions are already absolute output pixels.
         Span<float> m = stackalloc float[9];
         m[0] = 2f / destW; m[1] = 0f; m[2] = 0f;

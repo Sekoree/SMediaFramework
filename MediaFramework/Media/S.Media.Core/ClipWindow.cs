@@ -4,7 +4,7 @@ namespace S.Media.Core;
 /// A trim window over a source timeline: a <see cref="Start"/> offset, an optional <see cref="End"/>,
 /// the effective playable <see cref="Duration"/>, and conversions between source-timeline and
 /// clip-relative positions. Generalizes the clip/trim logic previously duplicated across cue/clip
-/// players, soundboards, and output wrappers — pair it with
+/// players, soundboards, and output wrappers - pair it with
 /// <see cref="S.Media.Core.Video.RetimingVideoOutput"/> to rebase a clip's frames to a zero-based
 /// timeline.
 /// </summary>

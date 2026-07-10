@@ -3,7 +3,7 @@ using Xunit;
 
 namespace S.Media.Source.MMD.Tests;
 
-/// <summary>MMD-03: pins the native <c>mmd_bullet</c> shim's ABI contract — the version handshake, the
+/// <summary>MMD-03: pins the native <c>mmd_bullet</c> shim's ABI contract - the version handshake, the
 /// create → add → step → read → destroy lifecycle, and safe rejection of invalid handles/args across the
 /// boundary. Requires the native shim staged next to the test binary (build.sh).</summary>
 public sealed unsafe class MMDShimContractTests

@@ -22,7 +22,7 @@ public partial class OutputLineViewModel : ViewModelBase
 
     public OutputDefinition Definition { get; private set; }
 
-    /// <summary>Phase A — swaps the definition in place after the runtime is reconfigured (§9.6).
+    /// <summary>Phase A - swaps the definition in place after the runtime is reconfigured (§9.6).
     /// Notifies derived UI bindings (kind label / summary / VM-derived booleans) so the line refreshes.
     /// Only the management VM calls this; everything else treats <see cref="Definition"/> as read-only.</summary>
     internal void ReplaceDefinition(OutputDefinition newDefinition)
@@ -49,7 +49,7 @@ public partial class OutputLineViewModel : ViewModelBase
 
     /// <summary>
     /// Editable name cell. Shows <see cref="EffectiveName"/>; committing a different value stores it
-    /// as the alias. Committing blank — or the original device name — clears the alias (falls back
+    /// as the alias. Committing blank - or the original device name - clears the alias (falls back
     /// to <see cref="OutputDefinition.DisplayName"/>).
     /// </summary>
     public string NameEdit
@@ -109,7 +109,7 @@ public partial class OutputLineViewModel : ViewModelBase
     [ObservableProperty]
     private string? _healthDetail;
 
-    /// <summary>Phase E (§8.1) — rolling ring of recent throughput samples (frames + audio chunks
+    /// <summary>Phase E (§8.1) - rolling ring of recent throughput samples (frames + audio chunks
     /// per refresh tick). 60 entries × 1 s ticks = 1 minute window. The view binds to this list to
     /// render an inline sparkline; <see cref="SparklinePeakSample"/> auto-scales the Y axis.</summary>
     public const int SparklineCapacity = 60;
@@ -120,7 +120,7 @@ public partial class OutputLineViewModel : ViewModelBase
     private long _lastVideoSubmittedTotal;
     private long _lastAudioEnqueuedTotal;
 
-    /// <summary>Current sparkline snapshot in oldest→newest order. Cheap to materialize — the buffer
+    /// <summary>Current sparkline snapshot in oldest→newest order. Cheap to materialize - the buffer
     /// is small and the view re-binds whenever <see cref="SparklineRevision"/> changes.</summary>
     public IReadOnlyList<double> SparklineSamples
     {
@@ -135,7 +135,7 @@ public partial class OutputLineViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Peak observed sample within the current window — used as the Y-axis scale.</summary>
+    /// <summary>Peak observed sample within the current window - used as the Y-axis scale.</summary>
     [ObservableProperty]
     private double _sparklinePeakSample;
 
@@ -148,7 +148,7 @@ public partial class OutputLineViewModel : ViewModelBase
     [ObservableProperty]
     private double _sparklineLastSample;
 
-    /// <summary>Phase E (§8.1) — push one tick's worth of pump deltas into the ring. Caller passes
+    /// <summary>Phase E (§8.1) - push one tick's worth of pump deltas into the ring. Caller passes
     /// the raw cumulative counters; the line VM subtracts the previous values so the ring stores
     /// per-second deltas (with a refresh-tick wall of 1 s the value is samples-per-second too).</summary>
     public void RecordSparklineSample(long videoSubmittedTotal, long audioEnqueuedTotal)
@@ -214,7 +214,7 @@ public partial class OutputLineViewModel : ViewModelBase
 
     partial void OnHealthDetailChanged(string? value) => OnPropertyChanged(nameof(HealthToolTip));
 
-    /// <summary>UI rewrite P2 (plan §5): compact live throughput numbers next to the sparkline —
+    /// <summary>UI rewrite P2 (plan §5): compact live throughput numbers next to the sparkline -
     /// cumulative video frames + audio chunks delivered through this line. Empty while unwired.</summary>
     [ObservableProperty]
     private string? _statsSummary;
@@ -292,7 +292,7 @@ public partial class OutputLineViewModel : ViewModelBase
             _requestRemove(this);
     }
 
-    /// <summary>Phase B (§3.2) — open the Edit dialog. Delegates to the management VM so the dialog
+    /// <summary>Phase B (§3.2) - open the Edit dialog. Delegates to the management VM so the dialog
     /// can be opened with the correct owner window and the right per-kind form.</summary>
     [RelayCommand]
     private Task EditAsync(CancellationToken cancellationToken) =>

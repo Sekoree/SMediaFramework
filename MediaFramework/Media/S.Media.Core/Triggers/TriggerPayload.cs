@@ -1,7 +1,7 @@
 namespace S.Media.Core.Triggers;
 
 /// <summary>
-/// Tagged-union trigger argument — allocation-free for numeric OSC/MIDI control;
+/// Tagged-union trigger argument - allocation-free for numeric OSC/MIDI control;
 /// optional short text tail for addresses or note names.
 /// </summary>
 public readonly record struct TriggerPayload(

@@ -316,7 +316,7 @@ internal static partial class Native
     {
         lock (PmNativeGate.SyncRoot)
         {
-            // Note: Pm_Read is hot-path — only log at Trace level with guard.
+            // Note: Pm_Read is hot-path - only log at Trace level with guard.
             if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, length={Length})", nameof(Pm_Read), PMLibLogging.PtrMeta(stream), length);
             return Pm_Read_Import(stream, buffer, length);
         }
@@ -370,7 +370,7 @@ internal static partial class Native
         }
     }
 
-    // ── Lock-free queue — pmutil ─────────────────────────────────────────────────
+    // ── Lock-free queue - pmutil ─────────────────────────────────────────────────
 
     /// <summary>Creates a lock-free, single-reader / single-writer queue.</summary>
     [LibraryImport(LibraryName)]

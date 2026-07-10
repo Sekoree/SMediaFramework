@@ -1,7 +1,7 @@
 namespace LibAssLib;
 
 /// <summary>
-/// Composites a libass <see cref="AssImage"/> layer list onto a <strong>premultiplied BGRA32</strong> buffer —
+/// Composites a libass <see cref="AssImage"/> layer list onto a <strong>premultiplied BGRA32</strong> buffer -
 /// the format the compositor consumes. Each layer is a 1-byte coverage bitmap tinted by its <c>0xRRGGBBAA</c>
 /// color (where <c>AA</c> is transparency: 0 opaque, 255 clear), drawn source-over in list order (shadow →
 /// outline → fill, which libass already emits back-to-front).
@@ -11,7 +11,7 @@ public static unsafe class AssImageBlender
     /// <summary>
     /// Blend <paramref name="head"/>'s layer list onto <paramref name="bgra"/> (a <paramref name="width"/>×
     /// <paramref name="height"/> BGRA32 buffer, <paramref name="stride"/> bytes per row). The buffer is NOT
-    /// cleared first — zero it for a transparent overlay. Returns the number of pixels touched.
+    /// cleared first - zero it for a transparent overlay. Returns the number of pixels touched.
     /// </summary>
     public static long Blend(AssImage* head, Span<byte> bgra, int width, int height, int stride)
     {

@@ -7,13 +7,13 @@ namespace HaPlay;
 /// Font family names offered in the text-cue font dropdown: the installed system fonts (via Avalonia's
 /// <see cref="Avalonia.Media.FontManager"/>) plus, on demand, whatever family a cue currently uses. Avalonia's
 /// bundled default ("Inter") and any app-registered/embedded family are NOT in the OS system-font list, so a
-/// plain dropdown would show blank for the default — <see cref="WithCurrent"/> pins the current value at the top
+/// plain dropdown would show blank for the default - <see cref="WithCurrent"/> pins the current value at the top
 /// so it always displays and stays selectable.
 /// </summary>
 internal static class FontCatalog
 {
     /// <summary>Installed system font family names, sorted. Empty when the font manager isn't available (headless
-    /// tests). Loaded once — enumeration is not free.</summary>
+    /// tests). Loaded once - enumeration is not free.</summary>
     public static IReadOnlyList<string> SystemFamilies { get; } = Load();
 
     /// <summary>The system families with <paramref name="current"/> pinned at the front when it isn't already an

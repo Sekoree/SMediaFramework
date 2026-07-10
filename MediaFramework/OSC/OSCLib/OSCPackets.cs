@@ -90,7 +90,7 @@ public sealed class OSCMessage
     /// <summary>
     /// Returns <see langword="true"/> if <paramref name="address"/> is a valid OSC address.
     /// A valid address starts with <c>/</c> and no path component contains the characters
-    /// <c>space # * , ? [ ] { }</c> — the characters reserved for OSC address patterns.
+    /// <c>space # * , ? [ ] { }</c> - the characters reserved for OSC address patterns.
     /// </summary>
     public static bool IsValidAddress(string address)
     {

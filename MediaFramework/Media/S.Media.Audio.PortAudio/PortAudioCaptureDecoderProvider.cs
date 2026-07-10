@@ -6,7 +6,7 @@ using S.Media.Core.Video;
 namespace S.Media.Audio.PortAudio;
 
 /// <summary>
-/// Opens <c>padev:</c> URIs as live PortAudio capture sources (D2) — a microphone / line-in / loopback input
+/// Opens <c>padev:</c> URIs as live PortAudio capture sources (D2) - a microphone / line-in / loopback input
 /// device as a media source, so a cue or deck can play a live capture the same way it plays a file. The host
 /// addresses a device by name: <c>padev://&lt;device-name&gt;</c> (or <c>padev:&lt;device-name&gt;</c>); an
 /// empty name selects the system default input. Audio-only and live (no seek/duration); the capture streams at
@@ -74,7 +74,7 @@ internal sealed class PortAudioCaptureDecoderProvider : IMediaDecoderProvider
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Lowercased scheme up to the first ':' — <c>true</c> only for an exact <c>padev</c> scheme.</summary>
+    /// <summary>Lowercased scheme up to the first ':' - <c>true</c> only for an exact <c>padev</c> scheme.</summary>
     internal static bool IsPaDevScheme(string? uri)
     {
         if (string.IsNullOrEmpty(uri))

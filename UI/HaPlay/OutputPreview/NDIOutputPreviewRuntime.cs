@@ -16,7 +16,7 @@ namespace HaPlay.OutputPreview;
 /// Holds an <see cref="NDIOutput"/> open for the lifetime of an NDI <see cref="OutputLineViewModel"/>,
 /// continuously emitting black video and silent audio so receivers stay locked on across idle ↔ playback
 /// transitions. Playback temporarily acquires part of the underlying <see cref="NDIOutput"/> via
-/// <see cref="AcquireForPlayback"/> — only the side that's actually being wired pauses, so e.g. an
+/// <see cref="AcquireForPlayback"/> - only the side that's actually being wired pauses, so e.g. an
 /// audio-only file on a VideoAndAudio NDI keeps the carrier's black video going while playback drives audio.
 /// </summary>
 internal sealed class NDIOutputPreviewRuntime : IDisposable
@@ -65,7 +65,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     /// <summary>
     /// Raised after <see cref="ReconfigureAsync"/> rebuilds the underlying <see cref="NDIOutput"/>. Active
     /// playback sessions should release + re-acquire to pick up the new sender. Phase A wires the event
-    /// but does not orchestrate the re-acquire (§3.6 hot semantics — Phase B handles UX policy).
+    /// but does not orchestrate the re-acquire (§3.6 hot semantics - Phase B handles UX policy).
     /// </summary>
     public event EventHandler? Reconfigured;
 
@@ -114,7 +114,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     }
 
     /// <summary>
-    /// Replaces the carrier's video template — when <paramref name="logoFrame"/> is non-null the carrier
+    /// Replaces the carrier's video template - when <paramref name="logoFrame"/> is non-null the carrier
     /// emits the supplied still instead of black. Pass <c>null</c> to revert to black. The runtime takes
     /// ownership of <paramref name="logoFrame"/>.
     /// </summary>
@@ -220,7 +220,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 {
                     // Playback may have left the NDI sender configured for a different size / pixel format.
                     // Phase 2A: skip the reconfigure when the sender's current format already matches the
-                    // carrier — saves an unnecessary format flip (which receivers can see as a glitch).
+                    // carrier - saves an unnecessary format flip (which receivers can see as a glitch).
                     try
                     {
                         if (!CurrentOutputFormatMatchesCarrier(_output.Video))
@@ -298,7 +298,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     private void OnVideoTick(object? _)
     {
-        // Skip this fire if a prior video tick is still running (see _videoTickActive) — overlapping ticks
+        // Skip this fire if a prior video tick is still running (see _videoTickActive) - overlapping ticks
         // would otherwise stack up on _gate behind the in-flight clockVideo-paced Submit and exhaust the pool.
         if (Interlocked.CompareExchange(ref _videoTickActive, 1, 0) != 0)
             return;
@@ -321,7 +321,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                     _output.Video.Submit(frame);
                     var dur = Environment.TickCount64 - tickStart;
                     // ~33ms is one frame period. NDI SDK's clockVideo:true can pace the send internally,
-                    // so a slow tick here just means the SDK was throttling — only worth reading at Trace.
+                    // so a slow tick here just means the SDK was throttling - only worth reading at Trace.
                     if (dur > 100 && Trace.IsEnabled(LogLevel.Trace))
                         Trace.LogTrace("OnVideoTick: '{Name}' ran for {Ms}ms while holding gate",
                             _definition.SourceName, dur);
@@ -345,7 +345,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     private void OnAudioTick(object? _)
     {
-        // Skip this fire if a prior audio tick is still running (see _audioTickActive) — overlapping ticks
+        // Skip this fire if a prior audio tick is still running (see _audioTickActive) - overlapping ticks
         // would otherwise stack up on _gate behind the in-flight video tick's Submit and exhaust the pool.
         if (Interlocked.CompareExchange(ref _audioTickActive, 1, 0) != 0)
             return;
@@ -404,15 +404,15 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private AudioFormat CarrierAudioFormat => new(_definition.AudioSampleRate, Math.Max(1, _definition.AudioChannelCount));
 
     /// <summary>
-    /// Phase A (§9.6) — swaps the underlying carrier for one started from <paramref name="newDefinition"/>.
+    /// Phase A (§9.6) - swaps the underlying carrier for one started from <paramref name="newDefinition"/>.
     /// Implements the "always restart" form: source-name, groups, stream-mode, and audio-format changes
     /// all share one code path. Phase B can optimize specific in-place transitions (e.g. audio sample-rate)
     /// once a clear UX cost is established.
     /// </summary>
     /// <remarks>
-    /// <para>Id must match — callers can't rebind a runtime to a different line. Other fields are free.</para>
+    /// <para>Id must match - callers can't rebind a runtime to a different line. Other fields are free.</para>
     /// <para>If playback currently holds a side of the carrier, the runtime waits for release before tearing
-    /// down the old sender (mirroring the existing Dispose semantics — the carrier defers teardown so the
+    /// down the old sender (mirroring the existing Dispose semantics - the carrier defers teardown so the
     /// player isn't yanked mid-stream). The wait is unbounded; callers wanting a hard upper bound pass a
     /// cancellation token.</para>
     /// </remarks>
@@ -429,7 +429,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
 
             // Wait for any playback acquire to release; the existing Dispose path uses _disposeOnRelease,
-            // but for reconfigure we want the swap to land synchronously. Poll cheaply — reconfigure is
+            // but for reconfigure we want the swap to land synchronously. Poll cheaply - reconfigure is
             // a user-initiated operation, not a hot loop.
             while (true)
             {
@@ -478,7 +478,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
                 _definition = newDefinition;
 
-                // Reset stream ordinals so the new carrier's timestamps start at zero — receivers see a
+                // Reset stream ordinals so the new carrier's timestamps start at zero - receivers see a
                 // single clean reconnect instead of a confused jump in timecodes.
                 _videoOrdinal = 0;
                 _audioSamplePosition = 0;
@@ -507,7 +507,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 return;
             if (_videoAcquired || _audioAcquired)
             {
-                // Playback still owns part of the sender — defer teardown so we don't yank it mid-stream.
+                // Playback still owns part of the sender - defer teardown so we don't yank it mid-stream.
                 _disposeOnRelease = true;
                 return;
             }

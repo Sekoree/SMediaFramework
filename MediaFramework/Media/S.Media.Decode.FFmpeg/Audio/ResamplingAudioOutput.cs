@@ -6,7 +6,7 @@ namespace S.Media.Decode.FFmpeg.Audio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Does not own <see cref="IAudioOutput"/> — the host disposes the inner output (for example an
+/// Does not own <see cref="IAudioOutput"/> - the host disposes the inner output (for example an
 /// <c>NDIAudioOutput</c> owned by <c>NDIOutput</c>) on its own schedule.
 /// </para>
 /// <para>

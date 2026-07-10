@@ -2,7 +2,7 @@
 
     <!-- Phase 5 Avalonia present-path runtime smoke. Hosts the real VideoOpenGlControl in an Avalonia window and
          plays a video into it through MediaPlayer, verifying on-screen presentation and (with HW decode) the
-         dma-buf EGL zero-copy import — the same shared YuvVideoRenderer the SDL3 presenter uses. Needs a
+         dma-buf EGL zero-copy import - the same shared YuvVideoRenderer the SDL3 presenter uses. Needs a
          GL-capable display + libav. Auto-closes after a few seconds. -->
 
     <PropertyGroup>

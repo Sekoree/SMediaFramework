@@ -7,7 +7,7 @@ namespace S.Media.Core.Audio;
 /// Core owns the resident-PCM container and voice minting only. Decoding a file/stream into a clip is a
 /// decoder concern, so the <c>open a URI → AudioClip</c> convenience lives at the registry/Session layer
 /// (it calls <see cref="LoadFromSource"/> with a source from <c>IMediaRegistry.TryOpenAudio</c> and, for
-/// resampling, the registry's resampler factory) — Core never references a decoder (P2/P3).
+/// resampling, the registry's resampler factory) - Core never references a decoder (P2/P3).
 /// </remarks>
 public sealed class AudioClip
 {
@@ -46,7 +46,7 @@ public sealed class AudioClip
         new(this, options ?? AudioClipVoiceOptions.Default);
 
     /// <summary>
-    /// Drains <paramref name="source"/> (caller-owned — not disposed here) into a resident PCM clip,
+    /// Drains <paramref name="source"/> (caller-owned - not disposed here) into a resident PCM clip,
     /// optionally mixing down and resampling. Resampling to <paramref name="targetSampleRate"/> needs a
     /// <paramref name="resamplerFactory"/> (wire <c>IMediaRegistry.CreateResampler</c>); Core has no decoder.
     /// </summary>

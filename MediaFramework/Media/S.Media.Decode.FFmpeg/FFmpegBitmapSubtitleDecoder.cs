@@ -8,7 +8,7 @@ namespace S.Media.Decode.FFmpeg;
 /// <see cref="Y"/>), sized <see cref="W"/>×<see cref="H"/>, in the subtitle's authored frame.</summary>
 public readonly record struct BitmapSubtitleImage(byte[] Bgra, int X, int Y, int W, int H);
 
-/// <summary>A bitmap-subtitle cue shown over <c>[StartMs, EndMs)</c> — one or more placed images.</summary>
+/// <summary>A bitmap-subtitle cue shown over <c>[StartMs, EndMs)</c> - one or more placed images.</summary>
 public sealed record BitmapSubtitleCue(long StartMs, long EndMs, IReadOnlyList<BitmapSubtitleImage> Images);
 
 /// <summary>A decoded bitmap subtitle (PGS / DVB / DVD-VobSub): the authored frame size the images sit in, plus
@@ -17,7 +17,7 @@ public sealed record DecodedBitmapSubtitle(int Width, int Height, IReadOnlyList<
 
 /// <summary>
 /// Decodes a bitmap subtitle stream (PGS / DVB / DVD-VobSub) via libav into placed, premultiplied-BGRA images with
-/// timing. Bitmap subtitles are images — composited directly, with no libass. Each presentation's bitmap shows
+/// timing. Bitmap subtitles are images - composited directly, with no libass. Each presentation's bitmap shows
 /// until the next packet replaces or clears it, so a cue's end time is the next presentation's start.
 /// </summary>
 public static unsafe class FFmpegBitmapSubtitleDecoder

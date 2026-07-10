@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- OSCLib — Open Sound Control over UDP: client/server, address-pattern matching, bundle/time-tag scheduling,
+    <!-- OSCLib - Open Sound Control over UDP: client/server, address-pattern matching, bundle/time-tag scheduling,
          packet codec. The OSC transport for S.Control (the analogue of PMLib for MIDI); framework trigger
          adaptation lives in S.Control. Pure managed; common build settings come from Directory.Build.props. -->
 

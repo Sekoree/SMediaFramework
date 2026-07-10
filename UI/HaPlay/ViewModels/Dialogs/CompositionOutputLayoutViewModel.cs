@@ -39,7 +39,7 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
         ExistingMapping = mapping;
     }
 
-    /// <summary>The output raster this region is sent at — editable, so an output can render its canvas
+    /// <summary>The output raster this region is sent at - editable, so an output can render its canvas
     /// slice at a chosen resolution (e.g. a 1920×1080 slice of a 1920×2160 stacked canvas) instead of
     /// inheriting the canvas size. Stored back into the binding's <see cref="CueOutputMapping.OutputWidth"/>.</summary>
     [ObservableProperty]
@@ -177,7 +177,7 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
 }
 
 /// <summary>
-/// Editor model for arranging a composition's bound physical outputs over its canvas — the multi-output /
+/// Editor model for arranging a composition's bound physical outputs over its canvas - the multi-output /
 /// video-wall layout. Each <see cref="OutputLayoutItemViewModel"/> is one output's canvas slice; the canvas
 /// is drawn aspect-correct. Round-trips to each binding's <see cref="CueOutputMapping"/>: a single section
 /// whose normalized source slice is the item's rectangle, displayed across the full reported output raster.

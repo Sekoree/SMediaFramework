@@ -25,7 +25,7 @@ public static class VideoFormatNegotiator
 
     /// <summary>
     /// Returns the pixel format both ends will use after <see cref="Connect"/>.
-    /// Does not touch either component — pure decision.
+    /// Does not touch either component - pure decision.
     /// </summary>
     /// <param name="formatFilter">When non-null, only formats for which this returns true may be negotiated.</param>
     public static PixelFormat Negotiate(IVideoSource source, IVideoOutput output, Func<PixelFormat, bool>? formatFilter)
@@ -43,7 +43,7 @@ public static class VideoFormatNegotiator
         {
             if (sourceNative.Count == 0)
                 throw new InvalidOperationException(
-                    "neither source nor output declared any pixel formats — cannot negotiate");
+                    "neither source nor output declared any pixel formats - cannot negotiate");
 
             for (var i = 0; i < sourceNative.Count; i++)
             {

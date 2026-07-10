@@ -104,11 +104,11 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     private long _hardwareFrames;
     private volatile bool _dmabufImportAvailable;
 
-    /// <summary>Diagnostic: frames uploaded + rendered on the GL thread — i.e. actually presented on screen.</summary>
+    /// <summary>Diagnostic: frames uploaded + rendered on the GL thread - i.e. actually presented on screen.</summary>
     public long RenderedFrameCount => Volatile.Read(ref _renderedFrames);
 
     /// <summary>Diagnostic: of <see cref="RenderedFrameCount"/>, how many carried a hardware (dma-buf / Win32
-    /// D3D11) backing — uploaded zero-copy through the interop rather than CPU-reuploaded.</summary>
+    /// D3D11) backing - uploaded zero-copy through the interop rather than CPU-reuploaded.</summary>
     public long HardwareFrameCount => Volatile.Read(ref _hardwareFrames);
 
     /// <summary>Diagnostic: true once the Linux dma-buf EGL import is wired (EGL display present); dma-buf-backed

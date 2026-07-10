@@ -81,8 +81,8 @@ public sealed partial class AudioRouter
     {
         // An AdaptiveRateAudioOutput implements IClockedOutput unconditionally but only forwards real
         // capacity waits when its inner is clocked (otherwise WaitForCapacity returns "always ready").
-        // Promoting such a wrapper to primary would slave the router to a fake clock — and adaptive
-        // wrappers are only applied to NON-master outputs anyway — so never promote one.
+        // Promoting such a wrapper to primary would slave the router to a fake clock - and adaptive
+        // wrappers are only applied to NON-master outputs anyway - so never promote one.
         if (!AutoWirePrimary || _primaryOutputId is not null
             || output is not IClockedOutput || output is IAdaptiveRateWrappedOutput)
             return;
@@ -92,12 +92,12 @@ public sealed partial class AudioRouter
         // mid-stream throws ("cannot slave clock while router is running") and would snap the visible
         // playhead back to the freshly-started device clock, desyncing A/V. A clocked output hot-wired
         // into a running router therefore stays a non-primary slave (wall-clock paced, and adaptive-rate
-        // wrapped when drift correction is enabled — see MaybeWrapAdaptiveRateOutputLocked) rather than
+        // wrapped when drift correction is enabled - see MaybeWrapAdaptiveRateOutputLocked) rather than
         // becoming the master. This is what makes live "hot-wiring" of an audio device work.
         if (_isRunning)
         {
             MediaDiagnostics.LogDebug(
-                "AddOutput: clocked output {0} joined a running router — left as a non-primary slave (no mid-stream re-clock).",
+                "AddOutput: clocked output {0} joined a running router - left as a non-primary slave (no mid-stream re-clock).",
                 outputId);
             return;
         }

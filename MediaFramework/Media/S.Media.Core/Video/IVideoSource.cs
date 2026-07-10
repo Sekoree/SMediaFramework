@@ -7,7 +7,7 @@ namespace S.Media.Core.Video;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Implementations are not required to be thread-safe — a single consumer
+/// Implementations are not required to be thread-safe - a single consumer
 /// pulls frames serially.
 /// </para>
 /// <para>
@@ -39,7 +39,7 @@ public interface IVideoSource
     /// Configures the source to emit subsequent frames in <paramref name="format"/>.
     /// If the format is in <see cref="NativePixelFormats"/> the source operates
     /// pass-through; otherwise it inserts an internal converter (e.g. sws_scale)
-    /// — callers should prefer one of <see cref="NativePixelFormats"/> when the
+    /// - callers should prefer one of <see cref="NativePixelFormats"/> when the
     /// output accepts it.
     /// </summary>
     void SelectOutputFormat(PixelFormat format);

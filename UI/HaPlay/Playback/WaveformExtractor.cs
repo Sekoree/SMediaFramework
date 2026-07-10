@@ -5,8 +5,8 @@ namespace HaPlay.Playback;
 /// <summary>
 /// Extracts a low-resolution peak waveform from an audio file on a background thread.
 /// Returns an array of normalized peak values (0..1) for rendering on the scrubber.
-/// <paramref name="onPartial"/> (optional) receives throttled snapshots of the buckets analysed so far —
-/// normalized against the running peak, zeros beyond the analysed prefix — so the host can render the
+/// <paramref name="onPartial"/> (optional) receives throttled snapshots of the buckets analysed so far -
+/// normalized against the running peak, zeros beyond the analysed prefix - so the host can render the
 /// waveform filling in left-to-right instead of popping in when the whole file is done.
 /// </summary>
 internal static class WaveformExtractor

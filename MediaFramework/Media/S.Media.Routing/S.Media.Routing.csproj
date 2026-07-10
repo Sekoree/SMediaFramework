@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Routing — N->M audio matrix + video fan-out (backend-neutral). Salvaged AudioRouter/
+    <!-- S.Media.Routing - N->M audio matrix + video fan-out (backend-neutral). Salvaged AudioRouter/
          VideoRouter/pumps/router-clocks. Common build settings from Directory.Build.props. -->
 
     <ItemGroup>

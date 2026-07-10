@@ -3,7 +3,7 @@ using Xunit;
 
 namespace S.Media.PortAudio.Tests;
 
-/// <summary>Covers the pure parsing/resolution logic of <c>PortAudioCaptureDecoderProvider</c> — the
+/// <summary>Covers the pure parsing/resolution logic of <c>PortAudioCaptureDecoderProvider</c> - the
 /// <c>padev://</c> live-capture source provider added for the NXT-06 cutover (so a ShowSession cue can open a
 /// PortAudio input device the same way it opens an NDI input). The actual capture-stream open is a hardware path
 /// verified on a real device; these tests pin the scheme/name/format contract.</summary>

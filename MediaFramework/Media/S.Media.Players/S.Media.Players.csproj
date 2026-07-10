@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Players — single-stream playback. Phase 2 is audio-first: a registry-driven MediaPlayer
+    <!-- S.Media.Players - single-stream playback. Phase 2 is audio-first: a registry-driven MediaPlayer
          (open URI → AudioRouter → master output → MediaClock). VideoPlayer + AvPlaybackCoordinator
          (the video-centric A/V coordinator) are salvaged in Phase 3 alongside the GPU/present tier. -->
 

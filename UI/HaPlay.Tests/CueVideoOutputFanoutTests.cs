@@ -101,7 +101,7 @@ public sealed class CueVideoOutputFanoutTests
 
         // The counting output stands in for an NDI/SDL/local line; the factory keys on the composition id EXACTLY
         // as MainViewModel.ReloadCueShowSession wires _cueVideoOutputs → leases (borrowed host outputs, so the
-        // lease declares DisposeOutputOnRuntimeDispose=false — the session must not dispose them, NXT-01).
+        // lease declares DisposeOutputOnRuntimeDispose=false - the session must not dispose them, NXT-01).
         var screen = new CountingVideoOutput();
         var cueVideoOutputs = new Dictionary<string, IVideoOutput[]> { [compId.ToString()] = [screen] };
         await using var session = new ShowSession(

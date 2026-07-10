@@ -1,7 +1,7 @@
 /*
- * test_plugin.c — a minimal native MFPlayer plugin (the Phase-6 gate fixture). Compiled to a .so by AbiSmoke and
+ * test_plugin.c - a minimal native MFPlayer plugin (the Phase-6 gate fixture). Compiled to a .so by AbiSmoke and
  * loaded through S.Abi.AbiPluginHost. It exports mfp_plugin_register and registers a media-source provider AND a
- * control decoder. The capability vtables are stubs here — this gate proves the *load + registration* path (the
+ * control decoder. The capability vtables are stubs here - this gate proves the *load + registration* path (the
  * host records the vtable pointers); the managed adapters that actually call the vtables are the next layer.
  *
  * Build: gcc -shared -fPIC -I<S.Abi/include> test_plugin.c -o mfp_test_plugin.so

@@ -9,7 +9,7 @@
   <!-- The bundled TreeDataGrid Fluent theme (below) and the app-wide AvaloniaEdit Fluent theme both resolve
        Fluent-palette keys the SimpleTheme doesn't define; without them the Cue player's TreeDataGrid and the
        script editor's TextEditor crash under Simple ("Static resource '…' not found"). FluentCompatResources
-       supplies them at bundle scope — see that file for the full rationale (incl. why bundle scope, not
+       supplies them at bundle scope - see that file for the full rationale (incl. why bundle scope, not
        app-wide). -->
   <Styles.Resources>
     <ResourceDictionary>

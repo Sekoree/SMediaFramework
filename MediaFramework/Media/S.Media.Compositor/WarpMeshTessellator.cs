@@ -5,17 +5,17 @@ namespace S.Media.Compositor;
 /// <summary>
 /// Pure math for <see cref="WarpMesh"/>: evaluates the interpolating Catmull-Rom surface and
 /// tessellates it into an indexed triangle grid for the GL warp pass. CPU-side and allocation-only
-/// on (re)build — per frame the GPU just draws the uploaded buffers.
+/// on (re)build - per frame the GPU just draws the uploaded buffers.
 /// </summary>
 /// <remarks>
 /// Border segments use mirror-extrapolated virtual control points (<c>P(-1) = 2·P(0) − P(1)</c>),
-/// which cancels the cubic terms on a single-segment axis — a 2×2 mesh is therefore exactly
+/// which cancels the cubic terms on a single-segment axis - a 2×2 mesh is therefore exactly
 /// bilinear, so corner-pin behaves linearly instead of eased. Inner segments are standard uniform
 /// Catmull-Rom and pass through every control point.
 /// </remarks>
 public static class WarpMeshTessellator
 {
-    /// <summary>Sub-segments per control-point cell per axis — fine enough that the piecewise-linear
+    /// <summary>Sub-segments per control-point cell per axis - fine enough that the piecewise-linear
     /// triangles are visually indistinguishable from the smooth surface at projection scales.</summary>
     public const int DefaultSubdivisionsPerCell = 8;
 
@@ -55,7 +55,7 @@ public static class WarpMeshTessellator
 
     /// <summary>
     /// Tessellates the surface into an indexed triangle grid. <paramref name="vertices"/> is
-    /// interleaved <c>(s, t, x, y)</c> per vertex — <c>(s,t)</c> the section-normalized parameter
+    /// interleaved <c>(s, t, x, y)</c> per vertex - <c>(s,t)</c> the section-normalized parameter
     /// (drives source UV via the crop), <c>(x,y)</c> the warped position in output pixels.
     /// </summary>
     public static void Tessellate(

@@ -12,14 +12,14 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
 
     public NDIOutputStreamMode[] StreamModes { get; } = Enum.GetValues<NDIOutputStreamMode>();
 
-    /// <summary>Phase C polish (§4.3.5) — pixel-format lock choices presented in the dialog. "Auto"
-    /// (the <see cref="NDIPixelFormatChoice.Auto"/> entry) means "no lock — let the negotiator pick";
+    /// <summary>Phase C polish (§4.3.5) - pixel-format lock choices presented in the dialog. "Auto"
+    /// (the <see cref="NDIPixelFormatChoice.Auto"/> entry) means "no lock - let the negotiator pick";
     /// every other entry is one of <see cref="NDIVideoSender.AcceptedFormats"/> (UYVY / BGRA32 / RGBA32
     /// / NV12 / I420). Other framework <see cref="PixelFormat"/> values aren't reachable for NDI senders
     /// so the dialog leaves them out.</summary>
     public NDIPixelFormatChoice[] PixelFormatChoices { get; } = NDIPixelFormatChoice.All;
 
-    /// <summary>Phase C polish — resolution-lock presets. "Auto" means no lock; the rest are fixed
+    /// <summary>Phase C polish - resolution-lock presets. "Auto" means no lock; the rest are fixed
     /// (W, H) pairs receivers will see regardless of source dimensions.</summary>
     public NDIResolutionChoice[] ResolutionChoices { get; } = NDIResolutionChoice.All;
 

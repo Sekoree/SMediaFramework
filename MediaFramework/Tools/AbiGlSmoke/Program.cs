@@ -1,4 +1,4 @@
-// AbiGlSmoke — verifies the GL layer-surface adapter end-to-end on a real (SDL) GL context: the plugin's layer
+// AbiGlSmoke - verifies the GL layer-surface adapter end-to-end on a real (SDL) GL context: the plugin's layer
 // surface, created from a config blob + registered into an ICompositorRegistry, renders into a canvas FBO; readback
 // confirms the config-driven clear colour. Headless: run under xvfb.
 using System.Diagnostics;
@@ -83,7 +83,7 @@ if (rgba[0] != 40 || rgba[1] != 0 || rgba[2] != 0 || rgba[3] != 255)
     return 3;
 }
 
-Console.WriteLine("AbiGlSmoke OK — a native plugin GL layer surface, created from a config blob + registered into the compositor registry, rendered into the canvas FBO on a real GL context (config drove the colour).");
+Console.WriteLine("AbiGlSmoke OK - a native plugin GL layer surface, created from a config blob + registered into the compositor registry, rendered into the canvas FBO on a real GL context (config drove the colour).");
 return 0;
 
 static bool CompilePlugin(string cFile, string includeDir, string outSo)

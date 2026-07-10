@@ -36,7 +36,7 @@ public partial class CuePlayerViewModel
         StatusMessage = null;
     }
 
-    /// <summary>Phase 5.8.2 — central hook for "just-added" cues. Stamps the cue list's
+    /// <summary>Phase 5.8.2 - central hook for "just-added" cues. Stamps the cue list's
     /// configured default trigger mode and (if the per-list flag is set) re-runs the renumber
     /// pass so numbering stays sequential.</summary>
     private void FinalizeAddedCue(CueNodeViewModel node)
@@ -47,7 +47,7 @@ public partial class CuePlayerViewModel
             RenumberFlat(SelectedCueList.Nodes, start: 1, step: 1);
     }
 
-    /// <summary>"+ Media" — cancel-safe: the picker runs FIRST and a cue row is only created per
+    /// <summary>"+ Media" - cancel-safe: the picker runs FIRST and a cue row is only created per
     /// successfully picked file. A dismissed picker leaves the cue list untouched (the old flow
     /// seeded an empty placeholder cue that survived the cancel and had to be removed by hand).</summary>
     [RelayCommand]
@@ -87,7 +87,7 @@ public partial class CuePlayerViewModel
             : null;
     }
 
-    /// <summary>Adds an empty media cue row (no source yet). Kept for programmatic/test fixture use —
+    /// <summary>Adds an empty media cue row (no source yet). Kept for programmatic/test fixture use -
     /// the "+ Media" command itself is cancel-safe and never creates placeholder cues.</summary>
     internal CueNodeViewModel? AddEmptyMediaCue()
     {
@@ -130,7 +130,7 @@ public partial class CuePlayerViewModel
 
     private bool CanAddNDIInputCue() => IsNDIAvailable;
 
-    /// <summary>Gate 6 — adds an MMD scene cue through the camera-placement dialog. The scene renders
+    /// <summary>Gate 6 - adds an MMD scene cue through the camera-placement dialog. The scene renders
     /// like any video cue on its composition; audio pairs as a separate cue in the same group. The
     /// cue's duration comes from the motion VMD (0 = bind pose, holds until stopped) and the physics
     /// bake starts in the background immediately ("always pre-bake if possible").</summary>
@@ -159,7 +159,7 @@ public partial class CuePlayerViewModel
         }
     }
 
-    /// <summary>Gate 5 — adds a YouTube media cue through the same stream-selection dialog the deck uses
+    /// <summary>Gate 5 - adds a YouTube media cue through the same stream-selection dialog the deck uses
     /// (selectable video/audio/subtitle tracks + caching of the selected pair). The produced cue carries
     /// the prepared caption sidecar as its subtitle selection, so it renders like any sidecar subtitle.</summary>
     [RelayCommand]
@@ -191,7 +191,7 @@ public partial class CuePlayerViewModel
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
 
-        // Reliable mode means the selected streams are already in the local cache — probe that asset
+        // Reliable mode means the selected streams are already in the local cache - probe that asset
         // like any file so the drawer gets exact duration/channels/fps/resolution (and audio-only
         // items correctly drop the Video tab). The item-metadata duration is the fallback.
         var assetPath = YouTubeRuntime.Preparer.AssetPathFor(
@@ -296,7 +296,7 @@ public partial class CuePlayerViewModel
         SelectedCueNode = row;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
-        StatusMessage = "Subtitle cue added — place it on a composition in the Video tab.";
+        StatusMessage = "Subtitle cue added - place it on a composition in the Video tab.";
     }
 
     private static async Task<string?> PickSubtitleFilePathAsync()
@@ -379,7 +379,7 @@ public partial class CuePlayerViewModel
 
     /// <summary>Open the file once, probe duration + audio/video stream info + audio channel
     /// count, and write the lot onto the cue VM. The drawer's Audio + Video tab visibility and
-    /// hints depend on these — landing them right away (before <c>StatusMessage</c> resets)
+    /// hints depend on these - landing them right away (before <c>StatusMessage</c> resets)
     /// keeps the UI accurate even for the cancel-leaves-empty-cue case.</summary>
     private static async Task ProbeAndAssignDurationAsync(CueNodeViewModel row, string path)
     {
@@ -419,7 +419,7 @@ public partial class CuePlayerViewModel
     private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
 
     /// <summary>Fills the audio-track picker for cues that were loaded from disk (no probe yet).
-    /// Stream-table probe only — cheap enough to run on first selection.</summary>
+    /// Stream-table probe only - cheap enough to run on first selection.</summary>
     private static async Task EnsureAudioTrackChoicesAsync(CueNodeViewModel node)
     {
         if (node.MediaSourceItem is not FilePlaylistItem file)

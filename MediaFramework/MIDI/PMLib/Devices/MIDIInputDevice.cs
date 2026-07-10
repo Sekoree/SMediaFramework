@@ -36,7 +36,7 @@ public class MIDIInputDevice : MIDIDevice
     /// <summary>
     /// Raised on the polling thread whenever one or more decoded MIDI messages are received.
     /// <para>
-    /// Handlers run on a background thread — marshal to the UI thread if needed.
+    /// Handlers run on a background thread - marshal to the UI thread if needed.
     /// </para>
     /// </summary>
     public event EventHandler<IMIDIMessage>? MessageReceived;

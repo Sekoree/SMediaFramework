@@ -6,7 +6,7 @@ namespace S.Media.Gpu.Internal;
 /// <summary>Minimal loader for <see href="https://registry.khronos.org/OpenGL/extensions/NV/WGL_NV_DX_interop.txt">WGL_NV_DX_interop</see> entry points.</summary>
 internal sealed unsafe class WglNvDxInterop
 {
-    /// <summary><c>WGL_TEXTURE_2D_ARB</c> — passed as <c>GLenum type</c> to <c>wglDXRegisterObjectNV</c>.</summary>
+    /// <summary><c>WGL_TEXTURE_2D_ARB</c> - passed as <c>GLenum type</c> to <c>wglDXRegisterObjectNV</c>.</summary>
     internal const uint Texture2DArb = 0x207A;
 
     internal const uint AccessReadOnlyNv = 0;

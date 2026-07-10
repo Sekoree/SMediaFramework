@@ -2,11 +2,11 @@ namespace S.Media.Compositor;
 
 /// <summary>
 /// Plays <see cref="SourceA"/> until the first emitted frame whose PTS is at or past
-/// <see cref="CutAt"/>, then switches to <see cref="SourceB"/>. Hard cut — no blending.
+/// <see cref="CutAt"/>, then switches to <see cref="SourceB"/>. Hard cut - no blending.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Output format equals A's format (verified at construction to equal B's format — same dimensions,
+/// Output format equals A's format (verified at construction to equal B's format - same dimensions,
 /// pixel format, frame rate). A's frame at the cut boundary is disposed; B's first frame's PTS is
 /// rewritten to <see cref="CutAt"/> for continuity (downstream players compare PTS to a clock and
 /// expect monotonic progress).
@@ -32,7 +32,7 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
         ArgumentNullException.ThrowIfNull(sourceB);
         if (sourceA.Format != sourceB.Format)
             throw new ArgumentException(
-                $"CutVideoSource requires matching formats — sourceA={sourceA.Format} sourceB={sourceB.Format}.",
+                $"CutVideoSource requires matching formats - sourceA={sourceA.Format} sourceB={sourceB.Format}.",
                 nameof(sourceB));
         if (cutAt < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(cutAt), "must be >= 0");
@@ -97,7 +97,7 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
             _bFirstEmitted = true;
             // Rewrite the first B frame's PTS to the cut boundary for clean continuity.
             // Construct a new VideoFrame sharing the same backing but with adjusted PTS. The original
-            // frame's release callback is transferred — the wrapping VideoFrame owns disposal now.
+            // frame's release callback is transferred - the wrapping VideoFrame owns disposal now.
             var rewritten = RewritePts(bFrame, _cutAt);
             frame = rewritten;
             return true;
@@ -169,7 +169,7 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
                 DisposableRelease.Wrap(dup.Dispose));
         }
 
-        // CPU path — share the planes and forward dispose to the original.
+        // CPU path - share the planes and forward dispose to the original.
         var capturedOriginal = original;
         return new VideoFrame(
             newPts,

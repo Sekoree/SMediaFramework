@@ -6,7 +6,7 @@ using Xunit;
 namespace S.Media.Gpu.Tests;
 
 /// <summary>
-/// Validates GL recipe tuning (P010 is high-bit normalization in ushort — no rescale versus 1023).
+/// Validates GL recipe tuning (P010 is high-bit normalization in ushort - no rescale versus 1023).
 /// </summary>
 public sealed class GlVideoFormatSupportTests
 {
@@ -45,7 +45,7 @@ public sealed class GlVideoFormatSupportTests
         // Full-scale 10-bit pattern in Microsoft's / FFmpeg LE P010 packing.
         ushort yWord = unchecked((ushort)(0xFFC0));
         float expected = yWord / 65535f;
-        float shaderInput = expected * 1f; // recipe bitScale now 1.0 — same as planar R16 10-bit in high bits
+        float shaderInput = expected * 1f; // recipe bitScale now 1.0 - same as planar R16 10-bit in high bits
         Assert.InRange(shaderInput, 0.994f, 1.001f);
 
         ushort midWord = unchecked((ushort)(512 << 6));

@@ -16,7 +16,7 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
         Column = column;
     }
 
-    /// <summary>Stable id — also the engine's sound key while the tile plays.</summary>
+    /// <summary>Stable id - also the engine's sound key while the tile plays.</summary>
     public Guid Id { get; private set; } = Guid.NewGuid();
 
     public int Row { get; }
@@ -78,7 +78,7 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowsDropHint), nameof(ShowsGridIndex))]
     private bool _isEditing;
 
-    /// <summary>1-based row-major position on the board — the tile number remote API URLs use
+    /// <summary>1-based row-major position on the board - the tile number remote API URLs use
     /// (/soundboards/{board}/{tile}/…). Maintained by the owning board's grid reconciliation.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowsGridIndex))]
@@ -102,7 +102,7 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
         ? Label
         : IsBound ? Path.GetFileNameWithoutExtension(FilePath!) : string.Empty;
 
-    /// <summary>Actual filename (with extension) for the editor's file row — stays truthful even
+    /// <summary>Actual filename (with extension) for the editor's file row - stays truthful even
     /// when an alias hides it on the grid.</summary>
     public string FileNameDisplay => IsBound ? Path.GetFileName(FilePath!) : string.Empty;
 
@@ -122,7 +122,7 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
                 return string.Empty;
             if (IsPlaying && DurationMs > 0)
                 return "-" + FormatMs(Math.Max(0, DurationMs - PositionMs));
-            return DurationMs > 0 ? FormatMs(DurationMs) : Resources.Strings.EmDash;
+            return DurationMs > 0 ? FormatMs(DurationMs) : Resources.Strings.Dash;
         }
     }
 

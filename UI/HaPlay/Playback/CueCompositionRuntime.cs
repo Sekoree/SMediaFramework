@@ -346,7 +346,7 @@ internal readonly record struct CueCompositionDriftWarning(
     long FramesBehindMaster,
     TimeSpan LagFromMaster);
 
-/// <summary>NDI output pump dropped frames — receiver/network can't keep up.</summary>
+/// <summary>NDI output pump dropped frames - receiver/network can't keep up.</summary>
 internal readonly record struct CueCompositionPumpPressureWarning(
     Guid CompositionId,
     string CompositionName,

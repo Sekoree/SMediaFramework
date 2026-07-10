@@ -23,7 +23,7 @@ public sealed class OSCClientReceiveTests
         });
 
         // The peer waits for the address-only query, then replies with the "current value" to the
-        // query's source endpoint — i.e. the client's own connected socket.
+        // query's source endpoint - i.e. the client's own connected socket.
         var peerTask = Task.Run(async () =>
         {
             var query = await peer.ReceiveAsync();

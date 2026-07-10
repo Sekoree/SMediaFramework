@@ -4,7 +4,7 @@ using HaPlay.ViewModels.Dialogs;
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Maps a GUI <see cref="CueList"/> onto the framework's headless <see cref="ShowDocument"/> — the bridge
+/// Maps a GUI <see cref="CueList"/> onto the framework's headless <see cref="ShowDocument"/> - the bridge
 /// that runs the cue workspace on <see cref="S.Media.Session.ShowSession"/> (Phase 8 "full superset"
 /// convergence; the ported <c>CuePlaybackEngine</c> it replaced is deleted).
 /// </summary>
@@ -16,7 +16,7 @@ namespace HaPlay.Playback;
 /// out at play time); and each <see cref="CueComposition"/> maps to a <see cref="ShowComposition"/> including its
 /// output-mapping warp sections (affine + mesh).
 /// <para>Deferred (tracked, surfaced inline where they bite): action/comment cues; group fire modes are resolved
-/// by the VM trigger plan, not the document; corner-pin (the framework section is affine + mesh only —
+/// by the VM trigger plan, not the document; corner-pin (the framework section is affine + mesh only -
 /// <see cref="CueOutputMappingSection.Corners"/> is dropped); and the GUI string cue number (cues are renumbered
 /// 1..N by document order).</para>
 /// </remarks>
@@ -101,7 +101,7 @@ public static class HaPlayShowMapper
                         // (so they seek/pause together and, when fired simultaneously, stay phase-locked).
                         // Nested subgroups collapse into their OUTERMOST ancestor (first non-null wins) so
                         // the whole tree moves as one unit rather than splitting across per-subgroup clocks.
-                        // WHICH cues fire on GO — including per-subgroup fire modes (FirstCueOnly / …) — is
+                        // WHICH cues fire on GO - including per-subgroup fire modes (FirstCueOnly / …) - is
                         // resolved by the VM's trigger plan and fired by explicit cue id, so it needs no
                         // representation in the ShowDocument.
                         Walk(group.Children, groupId ?? group.Id.ToString());
@@ -146,12 +146,12 @@ public static class HaPlayShowMapper
             ? S.Media.Source.Text.TextSourceUri.Encode(text.ToSpec(media.DurationMs))
             : ResolveMediaPath(media.Source);
         if (mediaPath is null)
-            return null; // media cue with no resolvable source (unbound) — nothing to play yet.
+            return null; // media cue with no resolvable source (unbound) - nothing to play yet.
 
         // A cue may place its one decoded source onto several composition layers at once (PiP, the same feed in
         // two regions, or mirrored to a second canvas). Bound placements only (empty composition id = unbound),
         // ordered by layer index like the legacy engine. The first fills the binding's primary fields; the rest
-        // become ExtraPlacements — ShowSession fans the video out to every one.
+        // become ExtraPlacements - ShowSession fans the video out to every one.
         var placements = media.VideoPlacements
             .Where(p => p.CompositionId != Guid.Empty)
             .OrderBy(p => p.LayerIndex)
@@ -177,7 +177,7 @@ public static class HaPlayShowMapper
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
             EndBehavior = MapEndBehavior(media.EndBehavior),
             // A text cue plays a held frame that never signals EOF, so end it at its duration via the time-based
-            // monitor (EndAtDuration) rather than by source exhaustion — otherwise a resize/live-edit re-read ends
+            // monitor (EndAtDuration) rather than by source exhaustion - otherwise a resize/live-edit re-read ends
             // it early. Only when a positive duration is set; a 0-duration text cue holds until the next cue.
             EndAtDuration = media.Source is TextPlaylistItem && media.DurationMs > 0,
             // A real FILE cue must fire cue auto-follow when it plays through, even as a bare plain-Stop clip
@@ -187,7 +187,7 @@ public static class HaPlayShowMapper
             // scene renders indefinitely).
             NotifyNaturalEnd = media.Source is FilePlaylistItem or YouTubePlaylistItem
                 or MMDPlaylistItem { MotionPath.Length: > 0 },
-            // The cue's picked subtitle tracks (embedded stream indices or sidecar paths — including a
+            // The cue's picked subtitle tracks (embedded stream indices or sidecar paths - including a
             // prepared YouTube caption sidecar). Only when the cue is placed on a composition: subtitles
             // need a canvas. Same mapping as the deck's MediaPlayerShowMapper.MapSubtitles.
             Subtitles = MapCueSubtitles(media.Subtitles, hasCanvas: primary is not null),
@@ -236,7 +236,7 @@ public static class HaPlayShowMapper
             // a three-channel [-1, L, R] output. PortAudio then rejected that format on a 2-channel
             // device, so the ShowSession cue faulted as soon as it was fired.
             var matrix = new int[lineRoutes.Max(r => r.OutputChannel)];
-            Array.Fill(matrix, -1); // ChannelMap.Silence — channels with no route stay silent
+            Array.Fill(matrix, -1); // ChannelMap.Silence - channels with no route stay silent
             foreach (var r in lineRoutes)
                 if (r.SourceChannel >= 0)
                     matrix[r.OutputChannel - 1] = r.SourceChannel;
@@ -268,7 +268,7 @@ public static class HaPlayShowMapper
         // rate / latency) instead of silently opening with provider defaults.
         NDIInputPlaylistItem n => HaPlayPlaybackHelpers.BuildNDIInputUri(n),
         PortAudioInputPlaylistItem p => HaPlayPlaybackHelpers.BuildPortAudioInputUri(p),
-        // Prepared-cache youtube asset behind its canonical URI (reliable mode — see the provider).
+        // Prepared-cache youtube asset behind its canonical URI (reliable mode - see the provider).
         YouTubePlaylistItem y => HaPlayPlaybackHelpers.BuildYouTubeUri(y),
         MMDPlaylistItem mmd => HaPlayPlaybackHelpers.BuildMMDUri(mmd),
         _ => null,
@@ -342,8 +342,8 @@ public static class HaPlayShowMapper
         MeshColumns: section.MeshColumns,
         MeshRows: section.MeshRows,
         // section.Corners is Phase-3-reserved corner-pin (CueList: "ignored in Phase 1"): no editor produces it
-        // and no compositor consumes it — the shipping path drops it too, so omitting it here is exact parity, not
+        // and no compositor consumes it - the shipping path drops it too, so omitting it here is exact parity, not
         // a ShowSession regression. When Phase 3 lands, corners will bake to a fine MeshPoints grid (the GL warp is
-        // already perspective-correct), so no framework change is needed — only this mapper + the editor.
+        // already perspective-correct), so no framework change is needed - only this mapper + the editor.
         MeshPoints: section.MeshPoints?.Select(p => new ClipMeshPoint(p.X, p.Y)).ToArray());
 }

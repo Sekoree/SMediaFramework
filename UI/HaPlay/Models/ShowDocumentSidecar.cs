@@ -8,7 +8,7 @@ namespace HaPlay.Models;
 /// framework <see cref="ShowDocument"/> for each cue list next to the project file, so a saved show is
 /// directly runnable headless or through the C ABI (<c>s_media_player</c>) without HaPlay. The project
 /// file stays the app's editing source of truth (decks, soundboards, control graphs and endpoints are
-/// app-domain, not show-execution data); these sidecars are the execution/interchange artifact — the
+/// app-domain, not show-execution data); these sidecars are the execution/interchange artifact - the
 /// exact document the in-app cue ShowSession loads, produced by the same mapper.
 /// </summary>
 public static class ShowDocumentSidecar
@@ -25,7 +25,7 @@ public static class ShowDocumentSidecar
     /// <summary>
     /// Writes one validated show document per cue list and removes stale
     /// <c>&lt;projectbase&gt;.show.*.json</c> siblings first (the list count can shrink between saves).
-    /// A list that fails to map or validate is skipped and reported via <paramref name="errors"/> —
+    /// A list that fails to map or validate is skipped and reported via <paramref name="errors"/> -
     /// a sidecar problem must never fail the project save itself.
     /// </summary>
     public static async Task<IReadOnlyList<string>> WriteAllAsync(
@@ -50,7 +50,7 @@ public static class ShowDocumentSidecar
             try
             {
                 var document = HaPlayShowMapper.ToShowDocument(list, project.Outputs);
-                // The same gate ShowSession.LoadDocument applies — never publish a sidecar a headless
+                // The same gate ShowSession.LoadDocument applies - never publish a sidecar a headless
                 // host would reject at load.
                 ShowDocumentValidator.ThrowIfInvalid(document);
                 var path = PathFor(projectPath, i + 1);

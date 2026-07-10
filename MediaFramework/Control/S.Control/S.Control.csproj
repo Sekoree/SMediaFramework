@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Control — scriptable MIDI/OSC control runtime: data-driven device profiles (JSON, embedded + copied to
+    <!-- S.Control - scriptable MIDI/OSC control runtime: data-driven device profiles (JSON, embedded + copied to
          output), control config, event queue, monitor/value-cache, live MIDI/OSC routing, and a Mond script host.
          Devices are DATA (Profiles/*.json), not code. Moved to next/ (Phase 6 Control); common build settings from
          Directory.Build.props, package versions from Directory.Packages.props. -->

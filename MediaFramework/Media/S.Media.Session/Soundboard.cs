@@ -6,7 +6,7 @@ namespace S.Media.Session;
 
 /// <summary>
 /// High-level cue / soundboard engine over an <see cref="AudioRouter"/>. Owns named cues (a clip plus
-/// how it plays — mode, choke group, output, gain) and triggers them with <see cref="Fire"/>, which
+/// how it plays - mode, choke group, output, gain) and triggers them with <see cref="Fire"/>, which
 /// returns a <see cref="CueVoice"/> handle. The low-level router source / route / choke-group / reaping
 /// bookkeeping is an implementation detail.
 /// </summary>
@@ -156,7 +156,7 @@ public sealed class Soundboard : IDisposable
     }
 
     /// <summary>
-    /// Reaps finished voices — removes their router sources and raises <see cref="CueVoice.Completed"/>.
+    /// Reaps finished voices - removes their router sources and raises <see cref="CueVoice.Completed"/>.
     /// Runs on every <see cref="Fire"/>; call it from a UI tick when firing rarely. Returns the count of
     /// router sources removed.
     /// </summary>
@@ -202,7 +202,7 @@ public sealed class Soundboard : IDisposable
         }
 
         // Hard-stop every cue (dispose voices = instant exhaust) then reap so the router sources / choke
-        // registrations are removed immediately — important when the router is borrowed (no later reap).
+        // registrations are removed immediately - important when the router is borrowed (no later reap).
         foreach (var entry in entries)
             HardStop(entry.Player);
 

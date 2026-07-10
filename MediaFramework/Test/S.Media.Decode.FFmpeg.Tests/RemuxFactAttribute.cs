@@ -8,7 +8,7 @@ namespace S.Media.Decode.FFmpeg.Tests;
 /// <summary>
 /// Skips (rather than fails) when either dependency of the remux end-to-end tests is missing: usable
 /// FFmpeg natives (the <see cref="FFmpegNativeFactAttribute"/> probe) or the host <c>ffmpeg</c> CLI
-/// (used only to GENERATE the lavfi test inputs — the remuxer itself is in-process libavformat).
+/// (used only to GENERATE the lavfi test inputs - the remuxer itself is in-process libavformat).
 /// </summary>
 public sealed class RemuxFactAttribute : FactAttribute
 {

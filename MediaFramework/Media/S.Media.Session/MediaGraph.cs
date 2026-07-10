@@ -125,7 +125,7 @@ public sealed class MediaGraphFileBuilder(string filePath)
     }
 
     /// <summary>Builds the graph and returns false instead of throwing on open/wiring failure. Opens
-    /// through <paramref name="registry"/> (P2 — no globals).</summary>
+    /// through <paramref name="registry"/> (P2 - no globals).</summary>
     public bool TryBuild(IMediaRegistry registry, [NotNullWhen(true)] out MediaGraph? graph, out string? error)
     {
         ArgumentNullException.ThrowIfNull(registry);

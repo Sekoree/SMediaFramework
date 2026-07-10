@@ -49,7 +49,7 @@ public partial class CuePlayerViewModel
         }
 
         // Resolution order: explicit Standby (operator pressed the Standby button) → currently
-        // selected cue (the operator's cursor — natural intent when they pressed Go directly) →
+        // selected cue (the operator's cursor - natural intent when they pressed Go directly) →
         // first cue in the list. Without the SelectedCueNode tier, pressing Go after clicking
         // anywhere in the tree fires cue 1, which is surprising.
         var fire = StandbyCueNode

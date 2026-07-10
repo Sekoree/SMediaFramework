@@ -11,7 +11,7 @@ using Xunit;
 namespace HaPlay.Tests;
 
 /// <summary>A11Y-02 acceptance smoke: soundboard tiles must be real, keyboard-focusable Buttons that a
-/// screen reader can name — not pointer-only Borders.</summary>
+/// screen reader can name - not pointer-only Borders.</summary>
 public sealed class SoundboardAccessibilityTests
 {
     [Fact]

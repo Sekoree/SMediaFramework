@@ -32,7 +32,7 @@ public sealed partial class MediaCacheViewModel : ObservableObject
     public string Hint { get; }
 
     [ObservableProperty]
-    private string _sizeText = "—";
+    private string _sizeText = "-";
 
     [ObservableProperty]
     private string? _statusText;
@@ -126,7 +126,7 @@ public sealed partial class MediaCacheViewModel : ObservableObject
             }
             catch
             {
-                // racing a concurrent delete/rename — the entry just doesn't count
+                // racing a concurrent delete/rename - the entry just doesn't count
             }
         }
         return (bytes, files);
@@ -148,7 +148,7 @@ public sealed partial class MediaCacheViewModel : ObservableObject
             }
             catch
             {
-                skipped++; // in use (playing right now) or permission — keep it, the user sees the count
+                skipped++; // in use (playing right now) or permission - keep it, the user sees the count
             }
         }
         // Prune now-empty subdirectories; the root itself stays for the next download.

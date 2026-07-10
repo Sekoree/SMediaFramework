@@ -35,7 +35,7 @@ public sealed class ControlMIDIDeviceResolverTests
                     IsEnabled = true,
                     Binding = new ControlDeviceBindingConfig { MIDIInputDeviceName = "Solo Controller" },
                 },
-                // disabled MIDI device — skipped
+                // disabled MIDI device - skipped
                 new ControlDeviceInstanceConfig
                 {
                     Name = "Off",
@@ -43,7 +43,7 @@ public sealed class ControlMIDIDeviceResolverTests
                     IsEnabled = false,
                     Binding = new ControlDeviceBindingConfig { MIDIInputDeviceName = "Off" },
                 },
-                // OSC device — skipped
+                // OSC device - skipped
                 new ControlDeviceInstanceConfig { Name = "X32", Protocol = ControlDeviceProtocol.OSC, IsEnabled = true },
             ],
         };

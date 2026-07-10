@@ -9,7 +9,7 @@ namespace HaPlay.OutputPreview;
 /// <summary>
 /// Owns one persistent audio output for the lifetime of an audio <see cref="OutputDefinition"/> line.
 /// The device is opened once (at the line's declared sample rate / channel count) and stays open
-/// across playback sessions — receivers don't see Pa_OpenStream cost on every track change, and the
+/// across playback sessions - receivers don't see Pa_OpenStream cost on every track change, and the
 /// device callback keeps draining silence between sessions so the OS doesn't release the device.
 /// Sessions acquire the output via <see cref="AcquireForPlayback"/> and release it on Dispose; the
 /// stream is only closed when the line is removed.
@@ -33,14 +33,14 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         get { lock (_gate) return _definition; }
     }
 
-    /// <summary>Format the persistent stream is opened at — sessions resample upstream when their source differs.</summary>
+    /// <summary>Format the persistent stream is opened at - sessions resample upstream when their source differs.</summary>
     public AudioFormat Format => new(Definition.SampleRate, Definition.ChannelCount);
 
     /// <summary>
     /// Raised after <see cref="ReconfigureAsync"/> swaps the underlying audio output.
     /// Any prior reference handed out by <see cref="AcquireForPlayback"/> is now stale; subscribers
     /// holding an in-flight playback lease should release + re-acquire to pick up the new
-    /// stream. Phase A wires the event but does not orchestrate the re-acquire — that's Phase B's job.
+    /// stream. Phase A wires the event but does not orchestrate the re-acquire - that's Phase B's job.
     /// </summary>
     public event EventHandler? Reconfigured;
 
@@ -350,12 +350,12 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     }
 
     /// <summary>
-    /// Phase A foundations (§9.6) — swaps the underlying audio output for one opened at
+    /// Phase A foundations (§9.6) - swaps the underlying audio output for one opened at
     /// <paramref name="newDefinition"/>'s sample rate / channel count / device. Hot semantics per §3.6:
     /// no policy enforcement here, callers see a brief silence/glitch window and react to <see cref="Reconfigured"/>.
     /// </summary>
     /// <remarks>
-    /// <para>The Id field MUST match the existing definition — re-binding to a different line is the wrong
+    /// <para>The Id field MUST match the existing definition - re-binding to a different line is the wrong
     /// operation (use a fresh runtime). Other fields are free to change.</para>
     /// <para>Existing <see cref="AcquireForPlayback"/> holders see their audio output
     /// reference go stale; once they release, the next acquire returns the new output.</para>
@@ -380,7 +380,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 toDispose = _output;
                 // Build the new output before dropping the old reference so any failure leaves the line
                 // in the "no current output" state rather than half-reconfigured. Hot semantics still hold
-                // — acquirers will see null until the new stream comes up.
+                // - acquirers will see null until the new stream comes up.
                 _output = null;
             }
 
@@ -410,7 +410,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             {
                 if (_disposed)
                 {
-                    // Concurrent Dispose during reconfigure — drop the just-built output rather than leaking.
+                    // Concurrent Dispose during reconfigure - drop the just-built output rather than leaking.
                     try { DisposeOutput(newOutput); }
                     catch { /* best effort */ }
                     throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));

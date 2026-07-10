@@ -67,7 +67,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
     }
 
     /// <summary>UX-10: a first-run call-to-action shown over an empty board (no tiles bound yet) while not
-    /// in edit mode — mirrors the I/O workspace's empty state instead of presenting a blank grid.</summary>
+    /// in edit mode - mirrors the I/O workspace's empty state instead of presenting a blank grid.</summary>
     public bool ShowEmptyBoardHint =>
         !IsEditMode && SelectedBoard is { } board && board.Tiles.All(t => !t.IsBound);
 
@@ -97,7 +97,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
         }
     }
 
-    // ----- Host (engine) callbacks — null in tests ----------------------------------------------
+    // ----- Host (engine) callbacks - null in tests ----------------------------------------------
 
     public Func<SoundboardPlayRequest, Task<string?>>? PlaySoundCallback { get; set; }
 
@@ -131,7 +131,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
 
         // MERGE, never Clear(): these collections are live ItemsSources of ComboBoxes whose
         // SelectedValue binds TwoWay into board/tile output ids. Emptying the collection makes the
-        // ComboBox drop its selection and write Guid.Empty back through the binding — which silently
+        // ComboBox drop its selection and write Guid.Empty back through the binding - which silently
         // WIPED the board default output (and tile overrides) every time this ran: on entering edit
         // mode, and on every output-list change during project load ("board settings not retained").
         MergeOptions(TileOutputOptions,
@@ -174,7 +174,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
         return TriggerTileAsync(tile);
     }
 
-    /// <summary>The tap state machine without the edit-mode select branch — also the remote API
+    /// <summary>The tap state machine without the edit-mode select branch - also the remote API
     /// entry point (a remote trigger means "play it", even while the operator is editing).</summary>
     public async Task TriggerTileAsync(SoundboardTileViewModel tile)
     {
@@ -296,7 +296,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
 
     public void OnSoundEnded(Guid tileId) => FindTile(tileId)?.ResetPlaybackState();
 
-    /// <summary>Resets every tile's playback state — explicit stop-all, or the host's voice poll saw
+    /// <summary>Resets every tile's playback state - explicit stop-all, or the host's voice poll saw
     /// the engine go silent (fade-outs release their voice without a VoiceEnded event).</summary>
     public void OnAllSoundsEnded()
     {
@@ -315,7 +315,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
         SelectedBoard = board;
     }
 
-    /// <summary>Removes the selected board (the last board only resets instead — the workspace
+    /// <summary>Removes the selected board (the last board only resets instead - the workspace
     /// always shows at least one grid).</summary>
     [RelayCommand]
     private void RemoveSelectedBoard()
@@ -435,7 +435,7 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
         }
     }
 
-    /// <summary>Appends imported boards as new tabs. Board and tile ids are regenerated — tile ids
+    /// <summary>Appends imported boards as new tabs. Board and tile ids are regenerated - tile ids
     /// key active engine sounds and the Now-Playing lookups, so re-importing a file that's already
     /// loaded must not alias the live tiles.</summary>
     public void ImportBoards(IReadOnlyList<SoundboardConfig> configs)

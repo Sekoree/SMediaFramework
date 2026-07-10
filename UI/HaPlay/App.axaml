@@ -8,13 +8,13 @@
              RequestedThemeVariant="Light">
   <!-- Forced Light: the Classic theme is a light theme. Following the system variant ("Default") made
        every remaining variant-aware resource (AvaloniaEdit, validation, fallbacks) resolve DARK values
-       on dark-mode systems — white text on classic light-gray surfaces. -->
+       on dark-mode systems - white text on classic light-gray surfaces. -->
 
   <Application.DataTemplates>
     <DataTemplate DataType="vm:MediaPlayerViewModel">
       <views:MediaPlayerView />
     </DataTemplate>
-    <!-- The Control workspace dock panes are mapped to their views in code (App.RegisterDockPaneTemplates) —
+    <!-- The Control workspace dock panes are mapped to their views in code (App.RegisterDockPaneTemplates) -
          see the comment there for why they can't be compiled-binding XAML templates. -->
   </Application.DataTemplates>
 
@@ -27,7 +27,7 @@
              don't define these keys. Harmlessly duplicates the values the Classic bundle also brings. -->
         <ResourceInclude Source="avares://Classic.Avalonia.Theme/Colors/Colors.axaml"/>
       </ResourceDictionary.MergedDictionaries>
-      <!-- Script editor (AvaloniaEdit) surface colours — variant-aware so the editor follows light/dark
+      <!-- Script editor (AvaloniaEdit) surface colours - variant-aware so the editor follows light/dark
            instead of staying a bright white box under the Simple/Fluent dark variant. Classic is pinned
            Light, so it always gets the light values; Simple/Fluent honour the chosen variant. -->
       <ResourceDictionary.ThemeDictionaries>
@@ -65,7 +65,7 @@
     <Style Selector="Expander.dense">
       <Setter Property="Padding" Value="0"/>
     </Style>
-    <!-- NOTE: the AppIcons PathIcon foreground styling is deliberately NOT here — it's pinned to the Classic
+    <!-- NOTE: the AppIcons PathIcon foreground styling is deliberately NOT here - it's pinned to the Classic
          Win32 text colour, which is dark and would vanish on the Simple/Fluent dark variants. It lives in
          ClassicThemeBundle so only Classic applies it; under Simple/Fluent PathIcons inherit the theme's
          (variant-aware) foreground and stay visible in dark mode. -->

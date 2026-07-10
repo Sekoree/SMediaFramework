@@ -6,7 +6,7 @@ namespace PMLib;
 
 /// <summary>
 /// Static utility helpers for common PortMIDI operations.
-/// These are the primary public API surface for PortMIDI — <c>Native</c> is internal.
+/// These are the primary public API surface for PortMIDI - <c>Native</c> is internal.
 /// </summary>
 public static class PMUtil
 {
@@ -53,7 +53,7 @@ public static class PMUtil
 
     /// <summary>
     /// Returns all known MIDI devices as an eagerly-materialised, fully managed list.
-    /// String fields are copied from native memory immediately — safe to access after
+    /// String fields are copied from native memory immediately - safe to access after
     /// <see cref="Terminate"/>.
     /// </summary>
     public static IReadOnlyList<PmDeviceEntry> GetAllDevices()

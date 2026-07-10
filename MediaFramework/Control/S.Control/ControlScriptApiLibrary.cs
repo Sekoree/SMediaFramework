@@ -27,7 +27,7 @@ public sealed class ControlScriptRuntimeServices
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
         Layers = layers ?? [];
         // Default to the built-in device profiles so their embedded helpers (e.g. x32) and command data are
-        // available to scripts out of the box — the old always-on C# x32 module behaved this way. The session
+        // available to scripts out of the box - the old always-on C# x32 module behaved this way. The session
         // passes an explicit resolved set (built-ins + config overrides).
         Profiles = profiles ?? BuiltInProfileLoader.Load();
         ShowActions = showActions;
@@ -203,7 +203,7 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
     }
 
     // The `show` bridge: lets a control trigger (a MIDI button / OSC message) drive the running show through the
-    // host-wired IControlShowActions — GO, fire a cue, seek, stop. No-ops when no show is bound. Fire-and-forget.
+    // host-wired IControlShowActions - GO, fire a cue, seek, stop. No-ops when no show is bound. Fire-and-forget.
     private MondValue CreateShowApi(MondState state)
     {
         var show = MondValue.Object(state);
@@ -323,7 +323,7 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
             var device = ResolveDevice((string)args[offset]);
             return device is null ? "Unknown" : HealthStateName(device.Id);
         });
-        // Look up a profile command by its (globally-unique) id and expose its data — address, value kind, cache
+        // Look up a profile command by its (globally-unique) id and expose its data - address, value kind, cache
         // key, range. Profile-embedded helper scripts call this instead of re-deriving device-specific addresses,
         // so the address string lives once in the profile's command data and the runtime stays device-agnostic.
         devices["command"] = (MondFunction)((s, args) =>

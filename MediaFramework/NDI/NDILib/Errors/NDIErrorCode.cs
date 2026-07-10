@@ -3,7 +3,7 @@ namespace NDILib.Errors;
 /// <summary>Error codes specific to NDILib creation and initialisation failures.</summary>
 public enum NDIErrorCode
 {
-    /// <summary>NDI runtime initialisation failed — CPU may not support SSE4.2, or the NDI runtime is not installed.</summary>
+    /// <summary>NDI runtime initialisation failed - CPU may not support SSE4.2, or the NDI runtime is not installed.</summary>
     NDIRuntimeInitFailed = 1,
 
     /// <summary>Failed to create an <see cref="NDIFinder"/> instance.</summary>

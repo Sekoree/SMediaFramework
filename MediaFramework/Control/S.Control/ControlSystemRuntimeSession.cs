@@ -48,7 +48,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         MIDIDevices = new ControlMIDIDeviceManager(config, EventQueue, Monitor);
         PeriodicOSCSends = new ControlPeriodicOSCSendManager(config, oscSender, Monitor);
 
-        // The X32 (OSC server) replies to the source port of our requests — i.e. the OSC client's own
+        // The X32 (OSC server) replies to the source port of our requests - i.e. the OSC client's own
         // connected socket, not a separate listener. Route those replies into the same dispatch the
         // listener uses (cache update, triggers, monitor) so requested/streamed values are received.
         if (oscSender is IControlOSCReceiver receiver)
@@ -85,7 +85,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             // Fire LayerEnabled for the initially-active layer so layer-scoped scripts' LayerEnabled
             // handlers run on arm. The active layer is seeded in the runtime constructor without an event,
             // so without this a layer surface couldn't load the console's state until the operator switched
-            // layers — which is why setups previously needed a periodic re-sync. Runs after the OSC/MIDI
+            // layers - which is why setups previously needed a periodic re-sync. Runs after the OSC/MIDI
             // sessions are up so the handler can request values and drive feedback. Script faults are
             // captured in the dispatch result (not thrown), so they won't abort the arm.
             if (ScriptSession.ActiveLayerId is { } activeLayerId)
@@ -121,7 +121,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             return;
 
         // Resolve which device this reply belongs to (by the host/port we sent to) and dispatch it
-        // directly — replies arrive on the client's own socket, so no app-level listener is required.
+        // directly - replies arrive on the client's own socket, so no app-level listener is required.
         var device = _config.Devices.FirstOrDefault(d =>
             d.Protocol == ControlDeviceProtocol.OSC
             && d.IsEnabled

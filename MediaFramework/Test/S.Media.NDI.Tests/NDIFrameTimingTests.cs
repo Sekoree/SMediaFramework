@@ -5,7 +5,7 @@ using Xunit;
 namespace S.Media.NDI.Tests;
 
 /// <summary>
-/// NDI-01: unit tests for <see cref="NDIFrameTiming"/> — the pure timestamp-correlation logic that maps an NDI
+/// NDI-01: unit tests for <see cref="NDIFrameTiming"/> - the pure timestamp-correlation logic that maps an NDI
 /// frame's timecode/timestamp fields onto a presentation timeline. This is the receiver's most subtle behaviour
 /// (which field wins, session-relative rebase, backward-frame clamping) and it runs with no native NDI, so it is
 /// fully unit-testable off hardware.

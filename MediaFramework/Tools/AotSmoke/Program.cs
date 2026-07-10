@@ -1,11 +1,11 @@
 // AOT gate. Proves the next/ toolchain NativeAOT-publishes the framework keystone (S.Media.Core) AND the Phase-6
-// surfaces that carry real AOT risk — the Mond script engine + STJ profile load + the subtitle host glue — by
+// surfaces that carry real AOT risk - the Mond script engine + STJ profile load + the subtitle host glue - by
 // exercising them so the toolchain actually compiles those code paths (not just references the assemblies).
 using S.Control;
 using S.Media.Interop;
 
 // S.Control: STJ source-gen profile load, then Mond compile + run a script that uses a profile HelperScript
-// (`x32`, loaded as a module global) and the `show` bridge — the whole control hot path under NativeAOT.
+// (`x32`, loaded as a module global) and the `show` bridge - the whole control hot path under NativeAOT.
 var profileCount = BuiltInControlDeviceProfileRepository.Instance.Profiles.Count;
 
 var host = new ControlScriptFileHost(
@@ -13,7 +13,7 @@ var host = new ControlScriptFileHost(
     {
         ["aot.mnd"] = "return { run: fun() { show.go(); return x32.channelFaderAddress(1); } };",
         // AOT-01: a script that raises a Mond runtime error. Building the resulting exception makes Mond walk
-        // its call stack via System.Diagnostics.StackFrame — the exact path the accepted `IL2026` trim warning
+        // its call stack via System.Diagnostics.StackFrame - the exact path the accepted `IL2026` trim warning
         // flags (see AotSmoke.csproj). Exercising it here proves the error path RUNS correctly under NativeAOT;
         // the warning only concerns trimming stack-frame detail, not correctness.
         ["aot_err.mnd"] = "return { boom: fun() { error('intentional AOT error-path probe'); } };",
@@ -27,7 +27,7 @@ string errorPathResult;
 try
 {
     host.Invoke("aot_err.mnd", "boom");
-    errorPathResult = "NO-THROW (unexpected — the error path did not run)";
+    errorPathResult = "NO-THROW (unexpected - the error path did not run)";
     Environment.ExitCode = 3;
 }
 catch (Exception ex)
@@ -42,5 +42,5 @@ catch (Exception ex)
 var subtitle = SubtitleOverlayFactory.FromFile("aot-nonexistent.srt", 1280, 720);
 
 Console.WriteLine(
-    $"MFPlayer.Next AOT smoke OK — control profiles={profileCount}, mond+helper={faderAddress}, " +
+    $"MFPlayer.Next AOT smoke OK - control profiles={profileCount}, mond+helper={faderAddress}, " +
     $"mond error path={errorPathResult}, subtitle factory reachable={(subtitle is null)}");

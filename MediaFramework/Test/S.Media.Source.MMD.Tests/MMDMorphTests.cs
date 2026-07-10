@@ -4,7 +4,7 @@ using Xunit;
 
 namespace S.Media.Source.MMD.Tests;
 
-/// <summary>Bone morphs (PMX type 2) and group morphs (type 0) — the two morph kinds beyond plain
+/// <summary>Bone morphs (PMX type 2) and group morphs (type 0) - the two morph kinds beyond plain
 /// vertex morphs that motions actually drive.</summary>
 public sealed class MMDMorphTests
 {

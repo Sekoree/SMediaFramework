@@ -61,7 +61,7 @@ public partial class ControlWorkspaceViewModel
             ? SaveControlConfigToPathAsync(_configFilePath)
             : SaveControlConfigAsAsync();
 
-    /// <summary>Save/load rework — export one layer (+ its scripts) as a standalone control-config
+    /// <summary>Save/load rework - export one layer (+ its scripts) as a standalone control-config
     /// slice (same file format as a full config; see <see cref="ControlConfigSlices"/>).</summary>
     private async Task ExportLayerAsync(ControlStructureRowViewModel row)
     {
@@ -106,7 +106,7 @@ public partial class ControlWorkspaceViewModel
         }
     }
 
-    /// <summary>Save/load rework — merge a layer slice (or any control config's layers) into the
+    /// <summary>Save/load rework - merge a layer slice (or any control config's layers) into the
     /// current system. Layers replace by name; everything else in the running config is kept.</summary>
     [RelayCommand]
     private async Task ImportLayerAsync()

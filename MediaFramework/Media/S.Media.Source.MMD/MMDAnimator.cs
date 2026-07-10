@@ -2,9 +2,9 @@ namespace S.Media.Source.MMD;
 
 /// <summary>
 /// Evaluates a PMX model's pose at a point in time from a VMD motion: bone tracks sampled with the
-/// MMD Bezier curves, then bones processed ONE AT A TIME in MMD's transform order — stable-sorted by
-/// (deform layer, index), split into before-/after-physics groups — where each bone folds fixed-axis
-/// projection and append/inherit FROM THE DONOR'S CURRENT STATE (including its IK rotation — the
+/// MMD Bezier curves, then bones processed ONE AT A TIME in MMD's transform order - stable-sorted by
+/// (deform layer, index), split into before-/after-physics groups - where each bone folds fixed-axis
+/// projection and append/inherit FROM THE DONOR'S CURRENT STATE (including its IK rotation - the
 /// D-bone rigs that carry the leg skin weights inherit from IK-solved bones), chains its world matrix,
 /// and runs its IK solve in place when it is an IK bone. The IK solver is a faithful port of
 /// babylon-mmd's <c>ikSolver.ts</c> (Saba lineage): per-link step scaling, limit-adaptive Euler order,
@@ -18,7 +18,7 @@ public sealed class MMDAnimator
     private readonly int[] _beforePhysics;        // (layer, index)-sorted bones evaluated before physics
     private readonly int[] _afterPhysics;         // ... and the TransformAfterPhysics group
     private readonly Matrix4x4[] _world;          // per-bone world transform (bind-relative animation applied)
-    private readonly Matrix4x4[] _skin;           // world * inverse-bind — what vertices multiply by
+    private readonly Matrix4x4[] _skin;           // world * inverse-bind - what vertices multiply by
     private readonly Vector3[] _morphedPositions; // bind positions + active vertex-morph offsets
     private readonly Vector2[] _morphedUvs;
     private readonly Vector4[] _morphedAdditionalUv1;
@@ -60,7 +60,7 @@ public sealed class MMDAnimator
         _animRotations = new Quaternion[count];
         _animTranslations = new Vector3[count];
 
-        // MMD transform order: stable sort by (deform layer, file index) — NOT a parent-topological
+        // MMD transform order: stable sort by (deform layer, file index) - NOT a parent-topological
         // order. Append donors and world parents are expected to precede their dependents in this
         // order in any PMXEditor-produced file; a malformed forward reference degrades to reading the
         // donor's previous state, exactly as the reference runtimes do.
@@ -131,7 +131,7 @@ public sealed class MMDAnimator
     public void Evaluate(TimeSpan time, Vector3[] positions) => Evaluate(time, positions, normals: null);
 
     /// <summary>Evaluates like <see cref="Evaluate(TimeSpan, Vector3[])"/> and ALSO skins vertex normals
-    /// (same blended bone transform, linear part only, renormalized) — the GL renderer's lighting/edge
+    /// (same blended bone transform, linear part only, renormalized) - the GL renderer's lighting/edge
     /// input. Pass <c>null</c> to skip the normal work.</summary>
     public void Evaluate(TimeSpan time, Vector3[] positions, Vector3[]? normals) =>
         Evaluate(time, positions, normals, physics: null, physicsDeltaSeconds: 0f);
@@ -310,19 +310,19 @@ public sealed class MMDAnimator
     }
 
     /// <summary>One bone's turn in transform order: sample FK, project onto a fixed axis, fold append
-    /// from the donor's CURRENT state (its folded rotation AND its IK delta — babylon-mmd
+    /// from the donor's CURRENT state (its folded rotation AND its IK delta - babylon-mmd
     /// appendTransformSolver semantics), chain the world matrix, and solve IK if this is an IK bone.</summary>
     /// <summary>The shared pose pipeline (morph weights → before-physics bones → physics → re-chain →
     /// after-physics bones), without the skinning tail.</summary>
     private void EvaluatePose(float frame, MMDPhysics? physics, float physicsDeltaSeconds)
     {
-        // Morph weights first — bone morphs feed the transform passes below, vertex morphs the skinning.
+        // Morph weights first - bone morphs feed the transform passes below, vertex morphs the skinning.
         SampleMorphWeights(frame);
         AccumulateUvAndMaterialMorphs();
         if (_hasBoneMorphs)
             AccumulateBoneMorphs();
 
-        // IK deltas reset every evaluation — the pose stays a pure function of time (seek-back determinism).
+        // IK deltas reset every evaluation - the pose stays a pure function of time (seek-back determinism).
         Array.Fill(_ikRotations, Quaternion.Identity);
 
         for (var p = 0; p < _beforePhysics.Length; p++)
@@ -334,7 +334,7 @@ public sealed class MMDAnimator
                 _bonePhysicsEnabled[i] = PhysicsEnabledAt(_model.Bones[i].Name, frame);
             physics.SetBonePhysicsEnabled(_bonePhysicsEnabled);
             physics.Step(_world, physicsDeltaSeconds);
-            // Re-chain the non-physics bones under their (possibly physics-moved) parents — tip/hem
+            // Re-chain the non-physics bones under their (possibly physics-moved) parents - tip/hem
             // bones carry skin weights and would otherwise stay at the rigid FK pose where a chain ends.
             foreach (var i in _beforePhysics)
                 if (!physics.DrivesBone(i))
@@ -347,7 +347,7 @@ public sealed class MMDAnimator
 
     /// <summary>Evaluation with PRE-BAKED physics (see <see cref="MMDBakedPhysics"/>): the FK/IK pass
     /// runs as usual, then every physics-driven bone chains its baked parent-relative transform in one
-    /// transform-order sweep — a pure function of time, immune to render cadence, seeks and stalls.</summary>
+    /// transform-order sweep - a pure function of time, immune to render cadence, seeks and stalls.</summary>
     public void Evaluate(TimeSpan time, Vector3[] positions, Vector3[]? normals, MMDBakedPhysics baked)
     {
         ArgumentNullException.ThrowIfNull(positions);
@@ -385,12 +385,12 @@ public sealed class MMDAnimator
         FinishSkinning(positions, normals);
     }
 
-    /// <summary>Pose-only evaluation for the offline physics baker — the full transform pipeline
+    /// <summary>Pose-only evaluation for the offline physics baker - the full transform pipeline
     /// including the live physics step, without the vertex-morph/skinning tail.</summary>
     internal void EvaluatePoseForBake(TimeSpan time, MMDPhysics physics, float physicsDeltaSeconds) =>
         EvaluatePose((float)(time.TotalSeconds * VMDDocument.FramesPerSecond), physics, physicsDeltaSeconds);
 
-    /// <summary>FK/IK-only pose (no physics step) for offline probes — the rigid pose a bone would have
+    /// <summary>FK/IK-only pose (no physics step) for offline probes - the rigid pose a bone would have
     /// if physics never ran, used as the "driven by the animation only" reference.</summary>
     internal void EvaluatePoseFKOnly(TimeSpan time) =>
         EvaluatePose((float)(time.TotalSeconds * VMDDocument.FramesPerSecond), physics: null, physicsDeltaSeconds: 0f);
@@ -424,7 +424,7 @@ public sealed class MMDAnimator
             if (bone.AppendRotation)
             {
                 // Donor's effective local rotation: its folded animation (which already contains the
-                // donor's OWN append — the recursion) with its IK delta composed on top. This is what
+                // donor's OWN append - the recursion) with its IK delta composed on top. This is what
                 // makes the D-bone legs follow the IK solve. LOCAL append (0x0080) reads the donor's
                 // WORLD deformation instead (babylon's isLocal branch).
                 var source = bone.LocalAppend
@@ -643,7 +643,7 @@ public sealed class MMDAnimator
     internal static Quaternion ProjectToAxis(Quaternion rotation, Vector3 axis)
     {
         if (axis == Vector3.Zero)
-            return Quaternion.Identity; // authored zero axis — MMD treats the bone as rotation-less
+            return Quaternion.Identity; // authored zero axis - MMD treats the bone as rotation-less
 
         rotation = Quaternion.Normalize(rotation);
         var w = Math.Clamp(rotation.W, -1f, 1f);
@@ -731,7 +731,7 @@ public sealed class MMDAnimator
             Links = [.. bone.IkLinks.Select(l => new IkLinkSetup(l))];
 
             // The worlds that move during a solve: every link plus the effector's ancestor path up to
-            // the outermost link — a chain-only refresh per adjustment instead of a full skeleton pass.
+            // the outermost link - a chain-only refresh per adjustment instead of a full skeleton pass.
             var set = new HashSet<int>(Links.Length + 4);
             foreach (var link in Links)
                 set.Add(link.BoneIndex);
@@ -752,7 +752,7 @@ public sealed class MMDAnimator
     /// <summary>CCD IK for one IK bone: each link chases the IK bone's own world position (the goal the
     /// motion animates) with the effector (<see cref="PMXBone.IkTargetIndex"/>, e.g. the ankle). Fixed
     /// links are skipped; limited links clamp their combined rotation per-axis in the limit-adaptive
-    /// Euler order, REFLECTING past-limit angles during the first half of the iterations — the
+    /// Euler order, REFLECTING past-limit angles during the first half of the iterations - the
     /// straight-leg knee bootstrap. Mutates only <see cref="_ikRotations"/> plus the chain worlds.</summary>
     private void SolveIk(IkSetup ik)
     {
@@ -847,7 +847,7 @@ public sealed class MMDAnimator
 
     /// <summary>Clamps the link's COMBINED local rotation (IK delta ∘ folded animation) per-axis in the
     /// link's Euler order and stores the surviving delta. Past-limit angles REFLECT off the limit while
-    /// <paramref name="useAxis"/> holds (first half of the iterations) — MMD's knee-bend bootstrap.</summary>
+    /// <paramref name="useAxis"/> holds (first half of the iterations) - MMD's knee-bend bootstrap.</summary>
     private void ClampLinkRotation(in IkLinkSetup link, int linkIndex, bool useAxis)
     {
         var combined = Quaternion.Normalize(_ikRotations[linkIndex] * _animRotations[linkIndex]);
@@ -908,7 +908,7 @@ public sealed class MMDAnimator
     }
 
     /// <summary>The angle clamp with MMD's reflection: an angle past a limit bounces to its mirror image
-    /// inside the range while <paramref name="useAxis"/> holds (and the mirror is itself in range) —
+    /// inside the range while <paramref name="useAxis"/> holds (and the mirror is itself in range) -
     /// this is what starts a knee bending when CCD first pushes it the wrong way off a straight leg.</summary>
     internal static float LimitAngle(float angle, float min, float max, bool useAxis)
     {
@@ -927,7 +927,7 @@ public sealed class MMDAnimator
         return angle;
     }
 
-    /// <summary>Recomputes world matrices for the solve chain only (transform-ordered, parents first —
+    /// <summary>Recomputes world matrices for the solve chain only (transform-ordered, parents first -
     /// each member's parent world is either untouched or refreshed earlier in the same array).</summary>
     private void RefreshChainWorlds(IkSetup ik)
     {
@@ -944,7 +944,7 @@ public sealed class MMDAnimator
 
         // Decompose R = Rx·Ry·Rz (System.Numerics row-vector convention: v' = v·Rx·Ry·Rz, so Rx acts
         // first). Expanding that product: M13 = −sinY, M23 = sinX·cosY, M33 = cosX·cosY,
-        // M12 = cosY·sinZ, M11 = cosY·cosZ — the extraction below inverts it.
+        // M12 = cosY·sinZ, M11 = cosY·cosZ - the extraction below inverts it.
         float x, y, z;
         var sinY = Math.Clamp(-m.M13, -1f, 1f);
         y = MathF.Asin(sinY);

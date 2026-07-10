@@ -6,7 +6,7 @@ using Avalonia.Media;
 namespace HaPlay.ViewModels;
 
 /// <summary>
-/// Phase E (§8.1) — small one-way converter that takes a hex color string (e.g. <c>"#4CAF50"</c>)
+/// Phase E (§8.1) - small one-way converter that takes a hex color string (e.g. <c>"#4CAF50"</c>)
 /// and yields an <see cref="IBrush"/>. The line VM's <c>HealthColor</c> is exposed as a string so the
 /// XAML can also bind it to <c>Fill</c> on an <c>Ellipse</c>; this converter lets the sparkline reuse
 /// the same source as its stroke / area fill without having a duplicate brush-typed property.

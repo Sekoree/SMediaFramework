@@ -1,8 +1,8 @@
-// Phase 4 SessionSmoke — a full show runs headless (the Phase-4 exit gate). Builds a ShowDocument, round-
+// Phase 4 SessionSmoke - a full show runs headless (the Phase-4 exit gate). Builds a ShowDocument, round-
 // trips it through JSON (D10 persistence), loads it into a ShowSession, then drives the dispatcher:
 //   GO → cue 1 (audio) plays on the master output; seek jumps the playhead;
 //   GO → cue 2 (video) plays onto a composition canvas → the CPU compositor composites it headless.
-// No Avalonia, no GL — proves the cue → clip → audio-master and cue → clip → video-layer → composite paths.
+// No Avalonia, no GL - proves the cue → clip → audio-master and cue → clip → video-layer → composite paths.
 using S.Media.Audio.PortAudio;
 using S.Media.Core.Registry;
 using S.Media.Core.Video;
@@ -20,16 +20,16 @@ var audioFile = args[0];
 var videoFile = args.Length > 1 ? args[1] : args[0];
 
 // NXT-11/14: the steady-playback allocation budget (KiB per 1.5 s quiet window). Healthy baseline measured
-// 2026-07-02 (dev box, three runs, two files): 59-60 KiB / window, gen0Collections=0 — essentially just the
+// 2026-07-02 (dev box, three runs, two files): 59-60 KiB / window, gen0Collections=0 - essentially just the
 // 100 ms monitor ticks' dispatcher Task machinery. Pinned at ~8× that so environment noise never trips it,
 // while a per-audio-chunk buffer regression (≥ 4 KiB × ~100 chunks/s ≈ 600 KiB / window) or any per-video-
 // frame canvas allocation (MiB-scale) always does.
 const double AllocBudgetKiB = 512;
 
-// Debug builds composite markedly slower (unoptimized CPU compositor + libass — ~7 fps at 720p on the
+// Debug builds composite markedly slower (unoptimized CPU compositor + libass - ~7 fps at 720p on the
 // reference box vs the declared 24), so the sync-gate SAMPLE WINDOWS scale up to keep the minimum-count
 // clauses meaningful; the skew tolerances themselves are identical across configs. Without this a Debug
-// run false-fails purely on sample count (n<10/n<8) — especially on a loaded box.
+// run false-fails purely on sample count (n<10/n<8) - especially on a loaded box.
 // Non-const on purpose: as a const, the Release value (1.0) makes `SyncWindowScale > 1.0` a compile-time-false
 // branch and the compiler flags the reachable-only-in-Debug log line as CS0162 unreachable code (BUILD-03).
 #if DEBUG
@@ -38,7 +38,7 @@ double SyncWindowScale = 3.0;
 double SyncWindowScale = 1.0;
 #endif
 
-// A sidecar SRT shown over the video cue's composition — a non-ASS format, so it exercises the full
+// A sidecar SRT shown over the video cue's composition - a non-ASS format, so it exercises the full
 // FFmpeg-decode → ASS events → libass path through the unified factory, end-to-end.
 var subPath = Path.Combine(Path.GetTempPath(), "sessionsmoke-subs.srt");
 File.WriteAllText(subPath, "1\n00:00:00,000 --> 02:46:39,000\nSessionSmoke subtitle layer\n");
@@ -64,7 +64,7 @@ if (backend is null)
     return 3;
 }
 
-// Author a two-cue show — an audio cue and a video cue on a composition — then prove D10: serialize → JSON
+// Author a two-cue show - an audio cue and a video cue on a composition - then prove D10: serialize → JSON
 // → deserialize and drive the reloaded copy.
 var document = new ShowDocument(
     Version: 1,
@@ -80,7 +80,7 @@ var document = new ShowDocument(
     ],
     Compositions:
     [
-        // The composition carries an affine output mapping (projector tiling / keystone) — the composited
+        // The composition carries an affine output mapping (projector tiling / keystone) - the composited
         // canvas is cut into placed sections drawn onto the output. Affine sections composite headless on
         // the CPU backend (mesh warp is GL-only); here a single full-canvas section exercises the path.
         new ShowComposition("screen", "Main Screen", 1280, 720, 24, 1,
@@ -100,7 +100,7 @@ var reloaded = ShowDocument.FromJson(json);
 Console.WriteLine($"decoders: {string.Join(", ", registry.Decoders.Select(d => d.Name))}; backend: {backend.Name}");
 Console.WriteLine($"show: {reloaded.Cues.Count} cues, {reloaded.Clips.Count} clips, {reloaded.Compositions.Count} compositions (JSON {json.Length} B round-tripped)");
 
-// A counting video output proves the composition fans composited frames out to a host-provided output —
+// A counting video output proves the composition fans composited frames out to a host-provided output -
 // the IShowVideoOutputFactory seam the GUI uses to surface video onto its NDI/SDL/local lines.
 var screenOutput = new RecordingVideoOutput();
 await using var session = new ShowSession(
@@ -154,7 +154,7 @@ if (afterSeek.ClipPosition < afterFire.ClipPosition + TimeSpan.FromSeconds(3))
 
 // A seek while playing must KEEP playing. SeekCoordinated pauses+seeks (no resume), so ShowSession.SeekAsync
 // must restore the pre-seek play state. Without it the clip is frozen after every seek and the media-player
-// deck's poll reads the non-running clip as "ended" and tears the deck down — seek "stops playback".
+// deck's poll reads the non-running clip as "ended" and tears the deck down - seek "stops playback".
 if (!afterSeek.IsRunning)
 {
     Console.Error.WriteLine("FAIL: clip stopped running after a seek (ShowSession.SeekAsync did not resume playback)");
@@ -169,11 +169,11 @@ if (go2 != CueExecutionStatus.Fired)
 
 if (comp is not { FramesSubmitted: > 0, FramesComposited: > 0 })
 {
-    Console.Error.WriteLine($"FAIL: video did not composite (submitted={comp?.FramesSubmitted}, composited={comp?.FramesComposited}) — pass a video file as arg 2");
+    Console.Error.WriteLine($"FAIL: video did not composite (submitted={comp?.FramesSubmitted}, composited={comp?.FramesComposited}) - pass a video file as arg 2");
     return 6;
 }
 
-// The composited frames must also reach the host factory's output — the IShowVideoOutputFactory seam the
+// The composited frames must also reach the host factory's output - the IShowVideoOutputFactory seam the
 // GUI uses to surface composited video onto a real NDI/SDL/local line.
 if (screenOutput.Submitted == 0)
 {
@@ -182,7 +182,7 @@ if (screenOutput.Submitted == 0)
 }
 Console.WriteLine($"VIDEO-FACTORY output received {screenOutput.Submitted} composited frames");
 
-// The composition must carry TWO layers — the clip's video + the auto-attached subtitle — and still composite.
+// The composition must carry TWO layers - the clip's video + the auto-attached subtitle - and still composite.
 if (comp.Value.LayerCount < 2)
 {
     Console.Error.WriteLine($"FAIL: subtitle layer not attached (LayerCount={comp.Value.LayerCount}, expected 2: video + subtitle)");
@@ -210,23 +210,23 @@ if (log.Count != 2 || log.Any(e => e.Status != CueExecutionStatus.Fired))
 // --- NXT-04 measured A/V sync gates -------------------------------------------------------------------
 // Every composited frame the host output receives carries the SELECTED video frame's media PTS (the mixer
 // canvas takes layer 0's master-aligned frame time), and the lock-free transport snapshot's ClipPosition is
-// the same clip's audio-paced playhead — both in media time. skew = framePts − playhead therefore measures
+// the same clip's audio-paced playhead - both in media time. skew = framePts − playhead therefore measures
 // the video selection against the master clock quantitatively ("assert tolerances, not that frames
 // appeared"). A constant bias (container start_time, buffering lead) is tolerated loosely; the TIGHT gates
-// are jitter (selection instability) and the seek-induced SHIFT of the bias — the audio-ahead-after-seek
+// are jitter (selection instability) and the seek-induced SHIFT of the bias - the audio-ahead-after-seek
 // regression class ships as a measured gate here.
 var syncBefore = (await session.SnapshotAsync())[0];
 if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + TimeSpan.FromSeconds(14))
 {
     if (SyncWindowScale > 1.0)
-        Console.WriteLine($"SYNC windows ×{SyncWindowScale:F0} (Debug build — slower CPU compositing needs longer windows for the same sample counts)");
+        Console.WriteLine($"SYNC windows ×{SyncWindowScale:F0} (Debug build - slower CPU compositing needs longer windows for the same sample counts)");
     var steady = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.5 * SyncWindowScale));
     Console.WriteLine(
         $"SYNC steady: n={steady.Count} median={steady.MedianMs:F0}ms p95(|skew|)={steady.P95AbsMs:F0}ms jitter={steady.JitterMs:F0}ms");
     if (steady.Count < 10 || Math.Abs(steady.MedianMs) > 250 || steady.JitterMs > 120)
     {
         Console.Error.WriteLine(
-            "FAIL: steady-state A/V skew gate — " + FailedClauses(
+            "FAIL: steady-state A/V skew gate - " + FailedClauses(
                 (steady.Count < 10, $"n={steady.Count} < 10 samples"),
                 (Math.Abs(steady.MedianMs) > 250, $"|median|={Math.Abs(steady.MedianMs):F0}ms > 250ms"),
                 (steady.JitterMs > 120, $"jitter={steady.JitterMs:F0}ms > 120ms")));
@@ -234,7 +234,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     }
 
     // Coordinated A/V seek: the post-seek skew must MATCH the steady baseline (a shift = one side seeked
-    // to a different effective position — the long-GOP HW-frame PTS desync class), and no stale pre-seek
+    // to a different effective position - the long-GOP HW-frame PTS desync class), and no stale pre-seek
     // frame may surface after the settle window.
     var target = (await session.SnapshotAsync())[0].ClipPosition + TimeSpan.FromSeconds(6);
     await session.SeekAsync(target);
@@ -245,7 +245,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     if (postSeek.Count < 8 || Math.Abs(postSeek.MedianMs - steady.MedianMs) > 150 || postSeek.JitterMs > 150)
     {
         Console.Error.WriteLine(
-            "FAIL: post-seek A/V skew gate — " + FailedClauses(
+            "FAIL: post-seek A/V skew gate - " + FailedClauses(
                 (postSeek.Count < 8, $"n={postSeek.Count} < 8 samples"),
                 (Math.Abs(postSeek.MedianMs - steady.MedianMs) > 150, $"shift={postSeek.MedianMs - steady.MedianMs:F0}ms > 150ms"),
                 (postSeek.JitterMs > 150, $"jitter={postSeek.JitterMs:F0}ms > 150ms")));
@@ -259,7 +259,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
         return 19;
     }
 
-    // Pause: the playhead freezes (clock contract) and the presented frame must HOLD — either no new
+    // Pause: the playhead freezes (clock contract) and the presented frame must HOLD - either no new
     // submissions, or re-sent frames whose PTS no longer advances.
     await session.SetPausedAsync(true);
     await Task.Delay(300); // let the pause transient drain
@@ -272,7 +272,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
         return 20;
     }
 
-    // Resume: frames advance again and the skew returns to the steady baseline (no pause-induced shift —
+    // Resume: frames advance again and the skew returns to the steady baseline (no pause-induced shift -
     // the pause/resume desync class of the playback-clock freeze contract).
     await session.SetPausedAsync(false);
     await Task.Delay(400);
@@ -283,7 +283,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     if (resumed.Count < 8 || Math.Abs(resumed.MedianMs - steady.MedianMs) > 150 || resumed.PtsSpreadMs < minPtsAdvanceMs)
     {
         Console.Error.WriteLine(
-            "FAIL: post-resume playback gate — " + FailedClauses(
+            "FAIL: post-resume playback gate - " + FailedClauses(
                 (resumed.Count < 8, $"n={resumed.Count} < 8 samples"),
                 (Math.Abs(resumed.MedianMs - steady.MedianMs) > 150, $"shift={resumed.MedianMs - steady.MedianMs:F0}ms > 150ms"),
                 (resumed.PtsSpreadMs < minPtsAdvanceMs, $"ptsAdvance={resumed.PtsSpreadMs:F0}ms < {minPtsAdvanceMs:F0}ms")));
@@ -292,7 +292,7 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
 
     // --- NXT-11/14 allocation budget gate --------------------------------------------------------------
     // Steady A/V playback (decode → route → composite → fan-out, all pumps live) measured over a QUIET
-    // window — no skew capture running, so the sampling itself doesn't pollute the number. The budget pins
+    // window - no skew capture running, so the sampling itself doesn't pollute the number. The budget pins
     // CURRENT behavior with headroom; a per-chunk/per-frame allocation regression in the hot paths (the
     // AOT-GC-audio-drops class) multiplies the rate and trips it. The printed number is the tracked metric.
     GC.Collect(2, GCCollectionMode.Forced, blocking: true);
@@ -305,13 +305,13 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
     if (allocKiB > AllocBudgetKiB)
     {
         Console.Error.WriteLine(
-            $"FAIL: steady-playback allocation over budget ({allocKiB:F0} KiB > {AllocBudgetKiB} KiB per 1.5s) — a hot path grew a per-chunk/per-frame allocation");
+            $"FAIL: steady-playback allocation over budget ({allocKiB:F0} KiB > {AllocBudgetKiB} KiB per 1.5s) - a hot path grew a per-chunk/per-frame allocation");
         return 22;
     }
 }
 else
 {
-    Console.WriteLine("SYNC gates SKIPPED — clip too short (pass a ≥20s A/V file to exercise the measured sync gates)");
+    Console.WriteLine("SYNC gates SKIPPED - clip too short (pass a ≥20s A/V file to exercise the measured sync gates)");
 }
 
 // --- 8b trim-in: a clip with a StartOffset starts at the trim point (forward play) -----------------
@@ -353,7 +353,7 @@ await using (var loopSession = new ShowSession(registry, backend))
     await loopSession.GoAsync();
     await Task.Delay(300);
     var dur = (await loopSession.SnapshotAsync())[0].ClipDuration;
-    await Task.Delay(2800); // past the out-point — a non-looping clip would sit beyond it (or have ended)
+    await Task.Delay(2800); // past the out-point - a non-looping clip would sit beyond it (or have ended)
     var looped = (await loopSession.SnapshotAsync())[0];
     var outPoint = dur - TimeSpan.FromSeconds(4);
     Console.WriteLine($"LOOP pos={looped.ClipPosition.TotalSeconds:F2}s dur={dur.TotalSeconds:F2}s running={looped.IsRunning} (out-point {outPoint.TotalSeconds:F2}s)");
@@ -377,9 +377,9 @@ await using (var fadeSession = new ShowSession(registry, backend))
     await fadeSession.GoAsync();
     await Task.Delay(1500); // past the 1s fade ramp
     var faded = (await fadeSession.SnapshotAsync())[0];
-    Console.WriteLine($"FADE-IN pos={faded.ClipPosition.TotalSeconds:F2}s running={faded.IsRunning} (1s gain ramp — verify audibly on HW)");
+    Console.WriteLine($"FADE-IN pos={faded.ClipPosition.TotalSeconds:F2}s running={faded.IsRunning} (1s gain ramp - verify audibly on HW)");
 
-    // The ramp only touches gain, not transport — so position must still advance; a stall = the background
+    // The ramp only touches gain, not transport - so position must still advance; a stall = the background
     // ramp broke the session. (The audible 0→1 fade itself isn't observable headless; that's a HW check.)
     if (faded.ClipPosition < TimeSpan.FromSeconds(0.3))
     {
@@ -388,16 +388,16 @@ await using (var fadeSession = new ShowSession(registry, backend))
     }
 }
 
-Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in + host video-output fan-out).");
+Console.WriteLine("SessionSmoke OK - a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in + host video-output fan-out).");
 return 0;
 
-// Names exactly the clause(s) that tripped a multi-clause gate — a FAIL that prints thresholds the run
+// Names exactly the clause(s) that tripped a multi-clause gate - a FAIL that prints thresholds the run
 // actually met (e.g. blaming jitter when the sample COUNT was short) sends the reader down the wrong path.
 static string FailedClauses(params (bool Failed, string Text)[] clauses) =>
     string.Join(" and ", clauses.Where(c => c.Failed).Select(c => c.Text));
 
-// Counts the composited frames a composition fans out to a host-provided video-output lease, and — for the
-// NXT-04 measured sync gates — captures (frame media PTS, playhead at submit) pairs over a sample window.
+// Counts the composited frames a composition fans out to a host-provided video-output lease, and - for the
+// NXT-04 measured sync gates - captures (frame media PTS, playhead at submit) pairs over a sample window.
 sealed class RecordingVideoOutput : IVideoOutput
 {
     private VideoFormat _format;
@@ -423,7 +423,7 @@ sealed class RecordingVideoOutput : IVideoOutput
 
     /// <summary>Samples every submitted frame's (media PTS, lock-free snapshot playhead) for
     /// <paramref name="window"/> and reduces them to skew statistics. The probe reads
-    /// <see cref="ShowSession.Snapshot"/> — no dispatcher marshaling on the submit path.</summary>
+    /// <see cref="ShowSession.Snapshot"/> - no dispatcher marshaling on the submit path.</summary>
     public async Task<SkewStats> CaptureSkewAsync(ShowSession session, TimeSpan window)
     {
         lock (_gate)
@@ -445,7 +445,7 @@ sealed class RecordingVideoOutput : IVideoOutput
     }
 }
 
-/// <summary>Reduced skew samples: median signed skew (bias — start_time offsets/buffer lead land here),
+/// <summary>Reduced skew samples: median signed skew (bias - start_time offsets/buffer lead land here),
 /// p95 of |skew|, jitter (p95 of |skew − median|, the selection-instability signal), the smallest PTS seen
 /// (stale-frame detection after a seek), and the PTS span (advance/hold detection around pause).</summary>
 readonly record struct SkewStats(int Count, double MedianMs, double P95AbsMs, double JitterMs, TimeSpan MinPts, double PtsSpreadMs)

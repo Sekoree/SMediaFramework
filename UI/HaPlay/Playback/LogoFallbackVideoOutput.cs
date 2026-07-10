@@ -11,7 +11,7 @@ namespace HaPlay.Playback;
 /// When hold is on and a template is set, decoded frames are dropped and the UI pumps
 /// <see cref="SubmitTemplateFrame"/> so outputs stay live from the play clock alone.
 /// Also keeps a deep-copied cache of the most recent real frame so <see cref="ResubmitLastCachedAt"/>
-/// can restore the source after the user toggles hold off — important for single-frame sources
+/// can restore the source after the user toggles hold off - important for single-frame sources
 /// (audio with cover art) where the decoder doesn't produce more frames on its own.
 /// </summary>
 internal sealed class LogoFallbackVideoOutput : IVideoOutput, IVideoOutputQueueControl, IDisposable
@@ -76,7 +76,7 @@ internal sealed class LogoFallbackVideoOutput : IVideoOutput, IVideoOutputQueueC
 
     /// <summary>
     /// Tells <see cref="Submit"/> to keep the cached "last real frame" refreshed so a later hold-toggle-off
-    /// can re-show the source. Enable only for single-frame sources (attached_pic cover art, still images) —
+    /// can re-show the source. Enable only for single-frame sources (attached_pic cover art, still images) -
     /// the cache is a per-frame ~8 MB deep-copy at 1080p BGRA and would cost ~500 MB/s for regular video.
     /// </summary>
     public void SetSingleFrameSourceMode(bool isSingleFrameSource) =>
@@ -155,7 +155,7 @@ internal sealed class LogoFallbackVideoOutput : IVideoOutput, IVideoOutputQueueC
         // Cache strategy: snapshot the FIRST pass-through frame so single-frame sources (cover art,
         // still images) survive a future hold toggle. For sources that opt into single-frame mode,
         // also refresh the cache on every submit after hold has engaged once. For regular video,
-        // skip the per-frame deep-copy entirely — the live decode loop will produce a current frame
+        // skip the per-frame deep-copy entirely - the live decode loop will produce a current frame
         // on the next tick anyway, and 8 MB × frame-rate is too expensive (~500 MB/s at 1080p60).
         var shouldCache = _holdEverEngaged && _singleFrameSourceMode;
         if (!shouldCache)
@@ -178,7 +178,7 @@ internal sealed class LogoFallbackVideoOutput : IVideoOutput, IVideoOutputQueueC
             catch
             {
                 // GPU-backed frames (DRM PRIME / D3D11 shared) can't be CPU-duplicated. The toggle-off
-                // re-submit won't fire for those — real video paths refresh on the next decode tick.
+                // re-submit won't fire for those - real video paths refresh on the next decode tick.
             }
         }
 
@@ -350,7 +350,7 @@ internal sealed class LogoFallbackVideoOutput : IVideoOutput, IVideoOutputQueueC
         if (cache is null)
             return;
 
-        // Alias the cached planes (release: null) — the cache stays alive and owns the buffers; the
+        // Alias the cached planes (release: null) - the cache stays alive and owns the buffers; the
         // alias is consumed by inner (NDI deep-copies into staging, then Dispose runs the no-op release).
         var alias = new VideoFrame(
             presentationTime,

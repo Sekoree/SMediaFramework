@@ -319,7 +319,7 @@ public sealed class ControlWorkspaceViewModelTests
     {
         await using var vm = new ControlWorkspaceViewModel();
 
-        // The structure must be present from construction — no project loaded, no MIDI/OSC device — so an
+        // The structure must be present from construction - no project loaded, no MIDI/OSC device - so an
         // OSC-only or scripts/layers-only setup can be prepared straight away.
         Assert.Contains(vm.StructureRows, r => r.IsGroup && r.Name == "MIDI devices");
         Assert.Contains(vm.StructureRows, r => r.IsGroup && r.Name == "OSC devices");
@@ -351,7 +351,7 @@ public sealed class ControlWorkspaceViewModelTests
             vm.AddScriptCommand.Execute(null);
             vm.SelectedScriptText = "export fun run() { return 1; }";
 
-            // Saves immediately to the scratch cache — no "save the project first" dead-end, no prompt.
+            // Saves immediately to the scratch cache - no "save the project first" dead-end, no prompt.
             vm.SaveSelectedScriptCommand.Execute(null);
             Assert.False(vm.IsSelectedScriptDirty);
             Assert.True(vm.HasUnsavedScratchScripts);
@@ -1168,7 +1168,7 @@ public sealed class ControlWorkspaceViewModelTests
     public async Task ResolveMIDIDevices_AppliesUserSelectionToBinding()
     {
         await using var vm = new ControlWorkspaceViewModel();
-        vm.MIDIAvailabilityProbe = static () => true; // resolution is pure over the injected catalog — no native portmidi needed
+        vm.MIDIAvailabilityProbe = static () => true; // resolution is pure over the injected catalog - no native portmidi needed
         var deviceId = Guid.NewGuid();
         vm.LoadConfig(new ControlSystemConfig
         {
@@ -1214,7 +1214,7 @@ public sealed class ControlWorkspaceViewModelTests
     public async Task ResolveMIDIDevices_WhenAllMatch_DoesNotPrompt()
     {
         await using var vm = new ControlWorkspaceViewModel();
-        vm.MIDIAvailabilityProbe = static () => true; // see above — the flow under test never touches the runtime
+        vm.MIDIAvailabilityProbe = static () => true; // see above - the flow under test never touches the runtime
         vm.LoadConfig(new ControlSystemConfig
         {
             Devices =
@@ -1251,7 +1251,7 @@ public sealed class ControlWorkspaceViewModelTests
         var since = DateTimeOffset.Parse("2026-06-05T10:00:00Z");
         var records = new[]
         {
-            // before baseline — ignored
+            // before baseline - ignored
             new ControlMonitorRecord
             {
                 TimestampUtc = since.AddSeconds(-1),
@@ -1260,7 +1260,7 @@ public sealed class ControlWorkspaceViewModelTests
                 MIDIChannel = 1,
                 MIDIController = 99,
             },
-            // OSC — ignored
+            // OSC - ignored
             new ControlMonitorRecord
             {
                 TimestampUtc = since.AddSeconds(1),
@@ -1268,7 +1268,7 @@ public sealed class ControlWorkspaceViewModelTests
                 Protocol = ControlMonitorProtocol.OSC,
                 Address = "/ch/01/mix/fader",
             },
-            // output MIDI — ignored
+            // output MIDI - ignored
             new ControlMonitorRecord
             {
                 TimestampUtc = since.AddSeconds(2),
@@ -1276,7 +1276,7 @@ public sealed class ControlWorkspaceViewModelTests
                 Protocol = ControlMonitorProtocol.MIDI,
                 MIDIController = 16,
             },
-            // first matching input — captured
+            // first matching input - captured
             new ControlMonitorRecord
             {
                 TimestampUtc = since.AddSeconds(3),

@@ -116,7 +116,7 @@ public sealed class OSCServer : IOSCServer
                 continue;
             }
 
-            // Capture the receive timestamp immediately — before any decoding or dispatch —
+            // Capture the receive timestamp immediately - before any decoding or dispatch -
             // to give handlers the most accurate network arrival time.
             var receivedAt = DateTimeOffset.UtcNow;
 
@@ -162,7 +162,7 @@ public sealed class OSCServer : IOSCServer
 
         if (depth >= MaxBundleDepth)
         {
-            _logger.LogWarning("OSC bundle nesting depth {Depth} exceeds limit {Max} — dropping bundle from {Remote}.", depth, MaxBundleDepth, remote);
+            _logger.LogWarning("OSC bundle nesting depth {Depth} exceeds limit {Max} - dropping bundle from {Remote}.", depth, MaxBundleDepth, remote);
             return;
         }
 
@@ -207,7 +207,7 @@ public sealed class OSCServer : IOSCServer
     }
 
     /// <remarks>
-    /// Cooperative task shutdown uses sliced <c>Wait</c> calls — intentional duplication versus the media stack so
+    /// Cooperative task shutdown uses sliced <c>Wait</c> calls - intentional duplication versus the media stack so
     /// OSCLib stays free of any <c>S.Media.Core</c> dependency for thread joins.
     /// </remarks>
     public void Dispose()

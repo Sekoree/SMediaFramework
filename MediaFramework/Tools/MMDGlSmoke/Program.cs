@@ -1,4 +1,4 @@
-// MMDGlSmoke — the NXT-10 MMD GL renderer gate on real GL. Opens an mmd:// scene exactly like the
+// MMDGlSmoke - the NXT-10 MMD GL renderer gate on real GL. Opens an mmd:// scene exactly like the
 // session does (MMDVideoSource → ILayerSurfaceVideoSource.CreateLayerSurface), composites it through
 // GlVideoCompositor.CompositeWithSurfaces at a few timeline instants, asserts the model actually covers
 // pixels (and that time moves the pose when a motion is present), and dumps the middle frame as a BMP so
@@ -90,7 +90,7 @@ compositor.Configure(canvas);
 // --diag: channel-order probes for the surface path (2026-07-03 "colors are wrong" report).
 if (args.Contains("--diag", StringComparer.OrdinalIgnoreCase))
 {
-    // Stage 1 — texture upload: RGBA red up, glGetTexImage RGBA back. Expect R=255.
+    // Stage 1 - texture upload: RGBA red up, glGetTexImage RGBA back. Expect R=255.
     var tex = gl.GenTexture();
     gl.BindTexture(SilkGL.TextureTarget.Texture2D, tex);
     unsafe
@@ -100,17 +100,17 @@ if (args.Contains("--diag", StringComparer.OrdinalIgnoreCase))
             SilkGL.GLEnum.Rgba, SilkGL.GLEnum.UnsignedByte, red);
         var back = stackalloc byte[4];
         gl.GetTexImage(SilkGL.TextureTarget.Texture2D, 0, SilkGL.GLEnum.Rgba, SilkGL.GLEnum.UnsignedByte, back);
-        Console.WriteLine($"diag upload/readback RGBA: ({back[0]},{back[1]},{back[2]},{back[3]}) — expect (255,0,0,255)");
+        Console.WriteLine($"diag upload/readback RGBA: ({back[0]},{back[1]},{back[2]},{back[3]}) - expect (255,0,0,255)");
     }
 
-    // Stage 2 — a surface that clears the canvas FBO to RED, through CompositeWithSurfaces + frame
+    // Stage 2 - a surface that clears the canvas FBO to RED, through CompositeWithSurfaces + frame
     // readback (the compositor labels the frame Bgra32). Expect the FRAME's BGRA bytes = (0,0,255,255).
     var redSurface = new SolidClearSurface(1f, 0f, 0f);
     var diagFrame = compositor.CompositeWithSurfaces(
         [], [new CompositorSurfaceLayer(redSurface, LayerTransform2D.Identity, 1f)], TimeSpan.Zero);
     var s = diagFrame.Planes[0].Span;
     var c = (H / 2) * diagFrame.Strides[0] + (W / 2) * 4;
-    Console.WriteLine($"diag surface-red frame BGRA bytes: ({s[c]},{s[c + 1]},{s[c + 2]},{s[c + 3]}) — expect (0,0,255,255)");
+    Console.WriteLine($"diag surface-red frame BGRA bytes: ({s[c]},{s[c + 1]},{s[c + 2]},{s[c + 3]}) - expect (0,0,255,255)");
     diagFrame.Dispose();
     redSurface.Dispose();
     return 0;
@@ -181,7 +181,7 @@ if (args.Contains("--keys", StringComparer.OrdinalIgnoreCase) && motionPath is n
 }
 
 // --tracks: which VMD bone tracks bind to PMX bones by name (encoding/name mismatches leave bones
-// at bind pose — the "wrong intro stance" diagnosis).
+// at bind pose - the "wrong intro stance" diagnosis).
 if (args.Contains("--tracks", StringComparer.OrdinalIgnoreCase) && motionPath is not null)
 {
     var doc = S.Media.Source.MMD.PMXDocument.Load(modelPath);
@@ -288,11 +288,11 @@ surface.Dispose();
 
 if (coverage.Any(c => c < 0.005))
 {
-    Console.Error.WriteLine("FAIL: the model covered <0.5% of the frame at some instant — nothing rendered");
+    Console.Error.WriteLine("FAIL: the model covered <0.5% of the frame at some instant - nothing rendered");
     return 17;
 }
 
-Console.WriteLine("MMDGlSmoke OK — the GL layer surface rendered the model on real GL.");
+Console.WriteLine("MMDGlSmoke OK - the GL layer surface rendered the model on real GL.");
 return 0;
 
 // Mirror of MMDGlLayerSurface.ResolveTexturePath (internal there): exact path, then a case-insensitive

@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Media.Session — cues, soundboard, output mapping, show orchestration (headless).
+    <!-- Phase 0 skeleton: S.Media.Session - cues, soundboard, output mapping, show orchestration (headless).
          NuGet/native refs are added in the phase noted above. Common build settings come
          from Directory.Build.props; versions from Directory.Packages.props. -->
 

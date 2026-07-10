@@ -926,7 +926,7 @@ public readonly partial struct ChannelMap
     }
 
     /// <summary>
-    /// Stereo interleaved → N outputs with <c>map[i] = 1 - (i &amp; 1)</c> (R,L,R,L,… — swapped <see cref="StereoToN"/>).
+    /// Stereo interleaved → N outputs with <c>map[i] = 1 - (i &amp; 1)</c> (R,L,R,L,… - swapped <see cref="StereoToN"/>).
     /// For <c>N == 4</c> and <c>[1,0,1,0]</c>, prefer <see cref="TryAccumulateStereoDuplexWideSwappedInterleaved"/> (call it first).
     /// </summary>
     internal static bool TryAccumulateStereoToNInterleavedSwapped(
@@ -1402,7 +1402,7 @@ public readonly partial struct ChannelMap
         return true;
     }
 
-    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[0,0,1,1]</c> — L,L,R,R per frame), uniform gain.</summary>
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[0,0,1,1]</c> - L,L,R,R per frame), uniform gain.</summary>
     internal static unsafe bool TryAccumulateStereoDuplexGroupedInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
@@ -1533,7 +1533,7 @@ public readonly partial struct ChannelMap
         return true;
     }
 
-    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[1,1,0,0]</c> — R,R,L,L per frame), uniform gain.</summary>
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[1,1,0,0]</c> - R,R,L,L per frame), uniform gain.</summary>
     internal static unsafe bool TryAccumulateStereoDuplexGroupedSwappedInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
@@ -1665,7 +1665,7 @@ public readonly partial struct ChannelMap
         return true;
     }
 
-    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[1,0,1,0]</c> — R,L,R,L), uniform gain.</summary>
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[1,0,1,0]</c> - R,L,R,L), uniform gain.</summary>
     internal static unsafe bool TryAccumulateStereoDuplexWideSwappedInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,

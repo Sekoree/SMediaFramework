@@ -42,7 +42,7 @@
 
     <ItemGroup>
         <!-- Versions come from the solution's central package management (Directory.Packages.props),
-             matching every other project — Avalonia 12 + Dock.Avalonia 12.0.0.2. -->
+             matching every other project - Avalonia 12 + Dock.Avalonia 12.0.0.2. -->
         <PackageReference Include="Avalonia" />
         <PackageReference Include="Dock.Avalonia" />
     </ItemGroup>

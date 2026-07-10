@@ -31,7 +31,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
     private PlaylistItem _current;
     private bool _suppressTrackApply;
 
-    /// <summary>Probe hooks — injectable so VM tests run without FFmpeg natives.</summary>
+    /// <summary>Probe hooks - injectable so VM tests run without FFmpeg natives.</summary>
     internal Func<string, MediaContainerInfo> ProbeContainer { get; init; } = MediaContainerDecoder.ProbeContainer;
     internal Func<string, bool> FileExists { get; init; } = File.Exists;
     internal YouTubePreparer Preparer { get; init; } = Playback.YouTubeRuntime.Preparer;
@@ -141,12 +141,12 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasMultipleAudioTracks;
 
-    /// <summary>True when the file has embedded subtitle streams (or already-configured subtitles) — gates the
+    /// <summary>True when the file has embedded subtitle streams (or already-configured subtitles) - gates the
     /// subtitle picker in the dialog, which is embedded-track-based (nothing to offer otherwise).</summary>
     [ObservableProperty]
     private bool _hasSubtitleTracks;
 
-    /// <summary>True for a file item with neither a multi-track audio choice nor subtitles — the Tracks tab
+    /// <summary>True for a file item with neither a multi-track audio choice nor subtitles - the Tracks tab
     /// would otherwise be blank, so it shows an explanatory hint instead.</summary>
     public bool HasNoSelectableTracks => IsFileItem && !HasMultipleAudioTracks && !HasSubtitleTracks;
 

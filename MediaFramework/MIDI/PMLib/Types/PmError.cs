@@ -15,7 +15,7 @@ public enum PmError : int
     InvalidDeviceId = -9999,
     InsufficientMemory = -9998,
     BufferTooSmall = -9997,
-    /// <summary>Buffer overflow — data was lost. See <see cref="Native.Pm_Read"/>.</summary>
+    /// <summary>Buffer overflow - data was lost. See <see cref="Native.Pm_Read"/>.</summary>
     BufferOverflow = -9996,
     /// <summary>Stream is NULL, not opened, or wrong direction.</summary>
     BadPtr = -9995,

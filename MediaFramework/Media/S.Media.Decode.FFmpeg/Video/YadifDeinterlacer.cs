@@ -5,7 +5,7 @@ using CorePixelFormat = S.Media.Core.Video.PixelFormat;
 namespace S.Media.Decode.FFmpeg.Video;
 
 /// <summary>
-/// FFmpeg-based deinterlacer using libavfilter's <c>yadif</c> filter (mode 0 — send_frame, frame-rate
+/// FFmpeg-based deinterlacer using libavfilter's <c>yadif</c> filter (mode 0 - send_frame, frame-rate
 /// preserving). Builds a graph of <c>buffer → yadif → buffersink</c> per <see cref="Configure"/> and
 /// pushes/pulls frames via <c>av_buffersrc_add_frame</c> / <c>av_buffersink_get_frame</c>.
 /// </summary>
@@ -16,14 +16,14 @@ namespace S.Media.Decode.FFmpeg.Video;
 /// <c>S.Media.FFmpeg</c>; consumers that don't fall back to <see cref="BobDeinterlacer"/>.
 /// </para>
 /// <para>
-/// Supported input pixel formats: I420 (yuv420p) — DV, MPEG-2, broadcast HD interlaced;
-/// Yuv422P — 4:2:2 broadcast / ProRes-style content; Yuv444P — 4:4:4 broadcast; NV12 is
+/// Supported input pixel formats: I420 (yuv420p) - DV, MPEG-2, broadcast HD interlaced;
+/// Yuv422P - 4:2:2 broadcast / ProRes-style content; Yuv444P - 4:4:4 broadcast; NV12 is
 /// converted to I420 internally on input and back to NV12 on output (yadif's in-tree NV12
 /// support is incomplete on some FFmpeg builds; the round-trip is robust). All other formats
-/// throw at <see cref="Configure"/> — callers fall through to <see cref="BobDeinterlacer"/>.
+/// throw at <see cref="Configure"/> - callers fall through to <see cref="BobDeinterlacer"/>.
 /// </para>
 /// <para>
-/// Progressive input bypasses the filter graph — <see cref="Process"/> returns the original frame
+/// Progressive input bypasses the filter graph - <see cref="Process"/> returns the original frame
 /// as a single output (caller still owns disposal).
 /// </para>
 /// </remarks>
@@ -102,7 +102,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
 
     private void BuildGraph()
     {
-        // Graph is always built around yuv420p internally — yadif's most reliable accepted format.
+        // Graph is always built around yuv420p internally - yadif's most reliable accepted format.
         var width = _input.Width;
         var height = _input.Height;
         var rate = _input.FrameRate;
@@ -118,11 +118,11 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
             var sinkFilter = avfilter_get_by_name("buffersink");
             if (bufferFilter == null || sinkFilter == null)
                 throw new InvalidOperationException(
-                    "libavfilter 'buffer' / 'buffersink' filters unavailable — link with libavfilter.");
+                    "libavfilter 'buffer' / 'buffersink' filters unavailable - link with libavfilter.");
             var yadifFilter = avfilter_get_by_name("yadif");
             if (yadifFilter == null)
                 throw new InvalidOperationException(
-                    "libavfilter 'yadif' filter unavailable — FFmpeg build is missing --enable-filter=yadif.");
+                    "libavfilter 'yadif' filter unavailable - FFmpeg build is missing --enable-filter=yadif.");
 
             // Internal format mirrors input subsampling (per Configure): yuv420p for I420 / NV12, yuv422p for
             // Yuv422P, yuv444p for Yuv444P. NV12 inputs round-trip through yuv420p because yadif's in-tree
@@ -244,7 +244,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
         }
         else
         {
-            // I420 / Yuv422P / Yuv444P — three-plane planar layout; copy each plane straight through.
+            // I420 / Yuv422P / Yuv444P - three-plane planar layout; copy each plane straight through.
             CopyPlane(frame.Planes[0].Span, frame.Strides[0], _scratchIn->data[0], _scratchIn->linesize[0], w, h);
             CopyPlane(frame.Planes[1].Span, frame.Strides[1], _scratchIn->data[1], _scratchIn->linesize[1], cW, cH);
             CopyPlane(frame.Planes[2].Span, frame.Strides[2], _scratchIn->data[2], _scratchIn->linesize[2], cW, cH);
@@ -300,7 +300,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
         }
         else
         {
-            // I420 / Yuv422P / Yuv444P — three planes back out at the input's chroma layout.
+            // I420 / Yuv422P / Yuv444P - three planes back out at the input's chroma layout.
             var yStride = w;
             var cStride = cW;
             var yBytes = yStride * h;
@@ -411,7 +411,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
         TearDownGraph();
     }
 
-    // FFmpeg.AutoGen 8.x exposes these as int consts via ffmpeg.* — declare locally so we don't depend on
+    // FFmpeg.AutoGen 8.x exposes these as int consts via ffmpeg.* - declare locally so we don't depend on
     // bindings to surface them by the same name.
     private const int AV_FRAME_FLAG_INTERLACED = 1 << 3;
     private const int AV_FRAME_FLAG_TOP_FIELD_FIRST = 1 << 4;

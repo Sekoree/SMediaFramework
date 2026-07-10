@@ -59,8 +59,8 @@ foreach (var p in procs)
 
 Console.WriteLine();
 Console.WriteLine(allPresent
-    ? ">>> WGL_NV_DX_interop AVAILABLE — zero-copy D3D11->GL is possible on this SDL context."
-    : ">>> WGL_NV_DX_interop UNAVAILABLE — must use CPU upload (or an ANGLE/EGL import path).");
+    ? ">>> WGL_NV_DX_interop AVAILABLE - zero-copy D3D11->GL is possible on this SDL context."
+    : ">>> WGL_NV_DX_interop UNAVAILABLE - must use CPU upload (or an ANGLE/EGL import path).");
 
 // Also probe PBO support indicator + max texture size for the CPU-upload optimisation angle.
 Console.WriteLine();

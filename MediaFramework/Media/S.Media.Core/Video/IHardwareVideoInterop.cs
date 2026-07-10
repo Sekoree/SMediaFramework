@@ -8,7 +8,7 @@ namespace S.Media.Core.Video;
 /// </summary>
 public interface IHardwareVideoInterop
 {
-    /// <summary>Often zero — reserved for handles such as Vulkan instance/device.</summary>
+    /// <summary>Often zero - reserved for handles such as Vulkan instance/device.</summary>
     nint PlatformContextHandle => 0;
 
     /// <summary>True once a backing implementation exposes importable textures/buffers.</summary>

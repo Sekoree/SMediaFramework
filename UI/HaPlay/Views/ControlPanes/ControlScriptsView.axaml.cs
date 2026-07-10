@@ -7,7 +7,7 @@ namespace HaPlay.Views.ControlPanes;
 
 public partial class ControlScriptsView : UserControl
 {
-    // One editor window PER SCRIPT (keyed by row) — editing two scripts side by side is two windows, and
+    // One editor window PER SCRIPT (keyed by row) - editing two scripts side by side is two windows, and
     // selecting another script in the list never hijacks an already-open editor.
     private readonly Dictionary<ControlScriptRowViewModel, ScriptEditorWindow> _scriptEditorWindows = new();
 

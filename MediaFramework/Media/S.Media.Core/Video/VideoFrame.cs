@@ -11,7 +11,7 @@ namespace S.Media.Core.Video;
 /// <para>
 /// Unlike <see cref="Audio.AudioFrame"/>, video frames are large enough that
 /// per-frame allocation isn't viable (1080p BGRA32 ≈ 8 MB). Producers pass an
-/// optional <see cref="IDisposable"/> <c>release</c> to free the underlying buffer — refcount
+/// optional <see cref="IDisposable"/> <c>release</c> to free the underlying buffer - refcount
 /// decrement (NDI), <c>av_frame_unref</c> (FFmpeg), <c>ArrayPool.Return</c>,
 /// etc. The frame is one-shot disposable; calling <see cref="Dispose"/> twice
 /// is safe and only the first call invokes the release.
@@ -33,7 +33,7 @@ public sealed partial class VideoFrame : IDisposable
     public TimeSpan PresentationTime { get; }
     public VideoFormat Format { get; }
 
-    /// <summary>Per-frame metadata bundle — see <see cref="VideoFrameMetadata"/>.</summary>
+    /// <summary>Per-frame metadata bundle - see <see cref="VideoFrameMetadata"/>.</summary>
     public VideoFrameMetadata Metadata { get; }
 
     /// <inheritdoc cref="VideoFrameMetadata.ColorTransferHint" />
@@ -66,14 +66,14 @@ public sealed partial class VideoFrame : IDisposable
     /// Plane bytes, in pixel-format order. <see cref="PixelFormat.I420"/> is
     /// Y, U, V; <see cref="PixelFormat.Nv12"/> is Y, UV; etc. Exposed as a
     /// concrete array so hot-path consumers can index without interface
-    /// dispatch — do not mutate.
+    /// dispatch - do not mutate.
     /// </summary>
     public ReadOnlyMemory<byte>[] Planes => _planes;
 
     /// <summary>
-    /// Stride (pitch) in bytes for each plane — may exceed the visible row
+    /// Stride (pitch) in bytes for each plane - may exceed the visible row
     /// width for alignment padding. Exposed as a concrete array (and a
-    /// <see cref="ReadOnlySpan{Int32}"/> via <see cref="StrideSpan"/>) — do
+    /// <see cref="ReadOnlySpan{Int32}"/> via <see cref="StrideSpan"/>) - do
     /// not mutate.
     /// </summary>
     public int[] Strides => _strides;
@@ -84,7 +84,7 @@ public sealed partial class VideoFrame : IDisposable
     /// <summary>Number of byte planes. Same as <c>Planes.Length</c>.</summary>
     public int PlaneCount => _planes.Length;
 
-    /// <summary>Canonical constructor — at most one <paramref name="backing"/>.</summary>
+    /// <summary>Canonical constructor - at most one <paramref name="backing"/>.</summary>
     public VideoFrame(
         TimeSpan presentationTime,
         VideoFormat format,

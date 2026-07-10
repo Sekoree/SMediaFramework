@@ -67,7 +67,7 @@ public sealed record PMXMaterial(
     public PMXSphereMode SphereMode { get; init; }
 
     /// <summary>Per-material toon texture index into <see cref="PMXDocument.Textures"/> (−1 when the
-    /// material uses a SHARED toon — see <see cref="SharedToonIndex"/> — or none).</summary>
+    /// material uses a SHARED toon - see <see cref="SharedToonIndex"/> - or none).</summary>
     public int ToonTextureIndex { get; init; } = -1;
 
     /// <summary>Shared toon slot 0–9 (the classic toon01–toon10 ramps), or −1 when a per-material
@@ -93,19 +93,19 @@ public sealed record PMXBone(
     float IkLimitRadians,
     IReadOnlyList<PMXIkLink> IkLinks)
 {
-    /// <summary>PMX deform layer — MMD evaluates bones sorted by (layer, index). The D-bone rigs that
+    /// <summary>PMX deform layer - MMD evaluates bones sorted by (layer, index). The D-bone rigs that
     /// carry the leg skin weights sit on a later layer than the IK bones whose result they inherit.</summary>
     public int DeformLayer { get; init; }
 
     /// <summary>Bone evaluates AFTER the physics step (PMX flag 0x1000).</summary>
     public bool TransformAfterPhysics { get; init; }
 
-    /// <summary>Fixed rotation axis (PMX flag 0x0400 — the 腕捩/手捩 twist bones): sampled rotation is
+    /// <summary>Fixed rotation axis (PMX flag 0x0400 - the 腕捩/手捩 twist bones): sampled rotation is
     /// projected onto this axis. Null when the bone rotates freely.</summary>
     public Vector3? FixedAxis { get; init; }
 
     /// <summary>Append reads the donor's LOCAL (world-deformation) state instead of its animated local
-    /// pose (PMX flag 0x0080) — rare, but authored on some accessory rigs.</summary>
+    /// pose (PMX flag 0x0080) - rare, but authored on some accessory rigs.</summary>
     public bool LocalAppend { get; init; }
 }
 
@@ -149,7 +149,7 @@ public sealed record PMXRigidBody(
     float Friction,
     PMXPhysicsMode Mode);
 
-/// <summary>One PMX joint (spring six-DOF, type 0 — the only kind MMD emits) connecting two rigid
+/// <summary>One PMX joint (spring six-DOF, type 0 - the only kind MMD emits) connecting two rigid
 /// bodies with per-axis linear/angular limits and spring constants.</summary>
 public sealed record PMXJoint(
     string Name,
@@ -239,7 +239,7 @@ public sealed record PMXMorph(string Name, int Panel, IReadOnlyList<PMXVertexMor
 /// Parsed PMX 2.0/2.1 model. Faithfully parses the sections this renderer evaluates (vertices +
 /// skinning, faces, materials, bones including IK, vertex/group/bone/UV/material morphs, rigid bodies
 /// and joints). Cosmetic display frames and MMD-unsupported PMX 2.1 impulse payloads are structurally
-/// skipped; PMX 2.1 soft bodies remain outside MMD playback parity. All reads are bounds-checked — a malformed count/index throws
+/// skipped; PMX 2.1 soft bodies remain outside MMD playback parity. All reads are bounds-checked - a malformed count/index throws
 /// <see cref="PMXFormatException"/> instead of corrupting memory.
 /// </summary>
 public sealed class PMXDocument
@@ -485,7 +485,7 @@ public sealed class PMXDocument
             };
         }
 
-        // Morphs — vertex (and group→vertex) offsets are evaluated; other types are structurally skipped.
+        // Morphs - vertex (and group→vertex) offsets are evaluated; other types are structurally skipped.
         var morphCount = reader.Count("morph");
         var morphs = new List<PMXMorph>(morphCount);
         for (var i = 0; i < morphCount; i++)
@@ -572,7 +572,7 @@ public sealed class PMXDocument
             }
         }
 
-        // Display frames (cosmetic — skipped), then rigid bodies + joints (stage-5 physics). A file that
+        // Display frames (cosmetic - skipped), then rigid bodies + joints (stage-5 physics). A file that
         // ends after the morphs (our tiny test fixtures) simply carries no physics. Soft bodies (2.1,
         // rare) remain unread.
         var rigidBodies = Array.Empty<PMXRigidBody>();
@@ -681,7 +681,7 @@ public sealed class PMXDocument
 
         public void Skip(int count) => Bytes(count);
 
-        /// <summary>Whether any bytes remain — trailing sections (rigid bodies/joints) are optional for
+        /// <summary>Whether any bytes remain - trailing sections (rigid bodies/joints) are optional for
         /// minimal files (test fixtures end after the morphs).</summary>
         public bool HasMore => stream.Position < stream.Length;
 

@@ -44,7 +44,7 @@ public class VideoPresentSyncGroupTests
         Assert.False(result.Presented);
         Assert.True(result.HeldForLaggingMember);
         Assert.Equal(1, result.LaggingMembers);
-        Assert.Equal(0, ready.PresentCalls);     // ready member held — no present issued at all
+        Assert.Equal(0, ready.PresentCalls);     // ready member held - no present issued at all
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class VideoPresentSyncGroupTests
         var result = group.Tick();
 
         Assert.False(result.Presented);
-        Assert.False(result.HeldForLaggingMember);   // nobody due to advance — normal between-frames, not a lag hold
+        Assert.False(result.HeldForLaggingMember);   // nobody due to advance - normal between-frames, not a lag hold
         Assert.Equal(0, result.LaggingMembers);
         Assert.Equal(0, a.PresentCalls);
     }
@@ -97,7 +97,7 @@ public class VideoPresentSyncGroupTests
 
         Assert.True(group.Tick().HeldForLaggingMember);   // 1 hold accrued
 
-        // Both go quiet (no new frames due) — resets the counter, so the budget starts fresh afterwards.
+        // Both go quiet (no new frames due) - resets the counter, so the budget starts fresh afterwards.
         ready.ReadyPts = null;
         Assert.False(group.Tick().HeldForLaggingMember);
 
@@ -132,7 +132,7 @@ public class VideoPresentSyncGroupTests
 
         var result = group.Tick();
 
-        // The offline member doesn't count as "behind" — the live member presents normally.
+        // The offline member doesn't count as "behind" - the live member presents normally.
         Assert.True(result.Presented);
         Assert.Equal([Ms(100)], live.Presented);
         Assert.Equal(0, result.LaggingMembers);

@@ -6,9 +6,9 @@ namespace S.Media.Core.Registry;
 
 /// <summary>
 /// Immutable, queryable snapshot of registered capabilities, injected into players/sessions. The
-/// capability set is frozen at build time (D6 — AOT-clean); device enumeration <em>within</em> a backend
+/// capability set is frozen at build time (D6 - AOT-clean); device enumeration <em>within</em> a backend
 /// stays dynamic (see <see cref="IDeviceChangeNotifier"/>). A <c>false</c>/<c>null</c> result means no
-/// registered module provides the capability — which is how "no audio module ⇒ no audio output" falls
+/// registered module provides the capability - which is how "no audio module ⇒ no audio output" falls
 /// out without special-casing.
 /// </summary>
 /// <remarks>
@@ -33,7 +33,7 @@ public interface IMediaRegistry
     /// <summary>Opens the video track of <paramref name="uri"/> via the highest-confidence decoder (D3). The
     /// boolean is decoder <em>selection</em>, not open success: it returns <c>false</c> when no registered
     /// provider claims the URI, and <c>true</c> once a provider is chosen. A provider that claims the URI but
-    /// then cannot open it (e.g. the container has no video stream) <strong>throws</strong> — that is a genuine
+    /// then cannot open it (e.g. the container has no video stream) <strong>throws</strong> - that is a genuine
     /// open failure, distinct from "nothing here can play this".</summary>
     bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, [MaybeNullWhen(false)] out IVideoSource source);
 
@@ -45,11 +45,11 @@ public interface IMediaRegistry
     /// <summary>The decoder provider registered under <paramref name="name"/> (case-insensitive), or <c>null</c>.</summary>
     IMediaDecoderProvider? FindDecoder(string name);
 
-    /// <summary>Opens video via an explicitly <strong>pinned</strong> provider (D3 — bypasses confidence
+    /// <summary>Opens video via an explicitly <strong>pinned</strong> provider (D3 - bypasses confidence
     /// selection). Returns <c>false</c> if no provider named <paramref name="providerName"/> is registered.</summary>
     bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IVideoSource source);
 
-    /// <summary>Opens audio via an explicitly <strong>pinned</strong> provider (D3 — bypasses confidence selection).</summary>
+    /// <summary>Opens audio via an explicitly <strong>pinned</strong> provider (D3 - bypasses confidence selection).</summary>
     bool TryOpenAudio(string uri, AudioSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IAudioSource source);
 
     /// <summary>Opens a still image by file extension (an image source registered by a module).</summary>
@@ -105,7 +105,7 @@ public interface IMediaRegistry
     /// <summary>Wraps <paramref name="source"/> to resample to <paramref name="targetSampleRate"/>, or <c>null</c> if unavailable.</summary>
     IAudioSource? CreateResampler(IAudioSource source, int targetSampleRate);
 
-    /// <summary>True when a module registered an adaptive-rate output factory (FFmpeg) — i.e. the router can
+    /// <summary>True when a module registered an adaptive-rate output factory (FFmpeg) - i.e. the router can
     /// drift-correct non-master audio outputs.</summary>
     bool SupportsAdaptiveRateOutput { get; }
 

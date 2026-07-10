@@ -6,7 +6,7 @@ namespace S.Media.Source.Text;
 /// <summary>
 /// Encodes / decodes a <see cref="TextSourceSpec"/> as a <c>text:&lt;base64-json&gt;</c> URI. The whole render
 /// spec travels through a <see cref="S.Media.Session"/> clip's single <c>MediaPath</c> string, so a text cue is a
-/// normal source to the session — no special-casing in the show document. Source-generated JSON (AOT-safe).
+/// normal source to the session - no special-casing in the show document. Source-generated JSON (AOT-safe).
 /// </summary>
 public static class TextSourceUri
 {

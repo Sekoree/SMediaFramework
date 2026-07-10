@@ -13,7 +13,7 @@ namespace S.Media.Decode.FFmpeg.Diagnostics;
 /// When enabled, failed <c>CompareExchange</c> attempts on the Treiber stacks increment
 /// <see cref="TreiberCasRetries"/> (lab signal for whether an outer lock / structural change is worth pursuing).
 /// For a deterministic per-arena mutex (no Treiber contention on a single arena), set <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c>
-/// — see <see cref="PassThroughArenaSerialization"/>.
+/// - see <see cref="PassThroughArenaSerialization"/>.
 /// </summary>
 public static class PassThroughArenaProfiling
 {

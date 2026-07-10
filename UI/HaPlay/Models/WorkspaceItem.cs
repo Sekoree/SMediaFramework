@@ -12,7 +12,7 @@ namespace HaPlay.Models;
 /// </summary>
 public sealed record WorkspaceItem(string Id, string Label, Func<StreamGeometry> IconFactory)
 {
-    /// <summary>The sidebar icon — evaluated at bind time on the UI thread (platform present).</summary>
+    /// <summary>The sidebar icon - evaluated at bind time on the UI thread (platform present).</summary>
     public StreamGeometry Icon => IconFactory();
 
     public static readonly WorkspaceItem Players = new("players", "Players", static () => AppIcons.Play);

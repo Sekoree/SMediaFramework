@@ -13,9 +13,9 @@ namespace HaPlay.Playback;
 /// </summary>
 /// <remarks>
 /// The router handles every pixel-format-to-BGRA32 conversion FFmpeg's swscale supports
-/// (NV12, YUV420P, YUV422P10LE, YUVA444P12LE — including the alpha-carrying variants the
+/// (NV12, YUV420P, YUV422P10LE, YUVA444P12LE - including the alpha-carrying variants the
 /// operator needs for PiP). Declaring an empty <see cref="AcceptedPixelFormats"/> list reads to
-/// the negotiator as "no formats accepted" and throws — the correct way to say "give me BGRA32"
+/// the negotiator as "no formats accepted" and throws - the correct way to say "give me BGRA32"
 /// is to list it explicitly.
 /// </remarks>
 internal sealed class BgraConvertingVideoOutput : IVideoOutput, IVideoOutputQueueControl, IDisposable

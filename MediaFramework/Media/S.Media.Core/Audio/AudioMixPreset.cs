@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace S.Media.Core.Audio;
 
 /// <summary>
-/// A named, file-persistable gain matrix for <see cref="AudioRouter.ApplyMatrix"/> — the shareable
+/// A named, file-persistable gain matrix for <see cref="AudioRouter.ApplyMatrix"/> - the shareable
 /// form of a routing-matrix layout ("5.1 → stereo broadcast fold", "stems to monitors", …).
 /// </summary>
 /// <remarks>

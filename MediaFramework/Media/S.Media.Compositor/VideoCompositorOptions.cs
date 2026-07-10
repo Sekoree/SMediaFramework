@@ -27,7 +27,7 @@ public sealed class VideoCompositorOptions
 
     /// <summary>
     /// Factory for the CPU pixel converter used to bring non-BGRA layer frames into the compositor's
-    /// BGRA working format. Wire from <c>IMediaRegistry.CreateCpuConverter</c> (P3 — the compositor never
+    /// BGRA working format. Wire from <c>IMediaRegistry.CreateCpuConverter</c> (P3 - the compositor never
     /// references a decoder directly). When <see langword="null"/>, non-BGRA layers are skipped on the CPU
     /// path and the compositor runs GPU/BGRA-only.
     /// </summary>

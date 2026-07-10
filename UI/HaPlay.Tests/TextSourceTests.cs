@@ -49,7 +49,7 @@ public class TextSourceTests
         Assert.Equal(48, frame.Format.Height);
         frame.Dispose();
 
-        // UNBOUNDED: reads never exhaust it — the time-based end-monitor stops the cue, not read count. A resize /
+        // UNBOUNDED: reads never exhaust it - the time-based end-monitor stops the cue, not read count. A resize /
         // live-edit that re-primes the pipeline (a burst of reads) must NOT end the cue.
         for (var i = 0; i < 1000; i++)
             if (src.TryReadNextFrame(out var f))
@@ -113,7 +113,7 @@ public class TextSourceTests
     [Fact]
     public void TextFrameRenderer_MeasureNormalizedBounds_IsAnInsetSubRect()
     {
-        // Placement outline: the text extent as fractions of the canvas — inset (default center/middle alignment).
+        // Placement outline: the text extent as fractions of the canvas - inset (default center/middle alignment).
         var bounds = TextFrameRenderer.MeasureNormalizedBounds(
             new TextPlaylistItem { Text = "Hi", CanvasWidth = 1920, CanvasHeight = 1080, FontSizePx = 96 }.ToSpec());
 

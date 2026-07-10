@@ -246,14 +246,14 @@ public enum ControlMIDIMessageType
 /// A single decoded OSC message routed to the control runtime. One datagram becomes one or more of these:
 /// a bundle is expanded to one <see cref="OSCControlEvent"/> per contained message (bundle time-tags are
 /// honoured by <c>OSCBundleScheduler</c> before dispatch), so <strong>bundle atomicity is not preserved</strong>
-/// once messages enter the dispatch queue — each message is handled independently.
+/// once messages enter the dispatch queue - each message is handled independently.
 /// </summary>
 /// <remarks>
 /// <para><strong>Coalesce/drop policy (OSC-01, relative to CTRL-01).</strong> Unlike absolute continuous MIDI
 /// controls, an OSC message is <em>never coalesced</em> (<c>ControlEventQueue.CoalesceKeyFor</c> returns
 /// <c>null</c> for it): OSC addresses carry semantics the queue cannot assume are idempotent, so every message
 /// is preserved in order under normal load. Under sustained overflow of the bounded queue, OSC messages are
-/// treated as non-coalescable "edges" — the queue first sheds the oldest coalescable continuous item, and only
+/// treated as non-coalescable "edges" - the queue first sheds the oldest coalescable continuous item, and only
 /// drops an OSC message (counted in <c>DroppedCount</c>) when the buffer holds nothing but edges. So OSC delivery
 /// is lossless except under extreme, sustained flooding, and even then the loss is bounded and counted rather
 /// than allowed to grow memory/latency without limit. The malformed-datagram, flood, and ordering behaviours are

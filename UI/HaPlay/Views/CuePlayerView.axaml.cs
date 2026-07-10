@@ -30,20 +30,20 @@ public partial class CuePlayerView : UserControl
         CueDrawerTabs.SelectionChanged += OnDrawerTabSelectionChanged;
         DragDrop.SetAllowDrop(this, true);
         // DragDrop.DragOver/Drop are Bubble-only routed events (no tunnel route). Registering them as
-        // Tunnel meant the handlers never fired, so DragEffects was never set and every drop — internal
-        // cue reorder AND external file drop — was rejected. Bubble + handledEventsToo catches the drop as
+        // Tunnel meant the handlers never fired, so DragEffects was never set and every drop - internal
+        // cue reorder AND external file drop - was rejected. Bubble + handledEventsToo catches the drop as
         // it bubbles up from the row/cell under the pointer.
         AddHandler(DragDrop.DragOverEvent, OnExternalFileDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DropEvent, OnExternalFileDrop, RoutingStrategies.Bubble, handledEventsToo: true);
         CueTreeGrid.RowDragStarted += OnCueTreeRowDragStarted;
         CueTreeGrid.RowDrop += OnCueTreeRowDrop;
-        // Phase 5.2 — F2 on the tree opens the rename popup. Phase 5.6 added Del / Ctrl+D /
+        // Phase 5.2 - F2 on the tree opens the rename popup. Phase 5.6 added Del / Ctrl+D /
         // Ctrl+↑↓ on this same handler. Transport keys live on the UserControl below so they
         // fire whether the tree or anything else inside the cue tab has focus.
         CueTreeGrid.KeyDown += OnCueTreeKeyDown;
         KeyDown += OnUserControlKeyDown;
         // The Preview tab's scrubber is the deck's ONLY scrub surface (the General tab used to
-        // carry a second slider — and it was the only one wired to commit the seek).
+        // carry a second slider - and it was the only one wired to commit the seek).
         CuePreviewScrubber.AddHandler(PointerReleasedEvent, OnCueScrubberPointerReleased, RoutingStrategies.Bubble);
         CuePreviewScrubber.AddHandler(KeyUpEvent, OnCueScrubberKeyUp, RoutingStrategies.Bubble);
     }
@@ -111,7 +111,7 @@ public partial class CuePlayerView : UserControl
         // Edit-cues gate as the toolbar buttons and row drag-drop.
         if (!vm.IsCueEditMode) return;
 
-        // Tree-scoped editing keys — these fire when the tree (or a tree row) has focus.
+        // Tree-scoped editing keys - these fire when the tree (or a tree row) has focus.
         // Transport keys (Space/Esc/Enter/Backspace) are bound at the UserControl level via
         // KeyBindings in XAML so they fire from anywhere except text-edit focus.
         switch (e.Key)
@@ -194,7 +194,7 @@ public partial class CuePlayerView : UserControl
     {
         _ = sender;
         if (!IsOverCueTree(e)) return;
-        // File drops author media cues — locked down with the rest of the editing surface.
+        // File drops author media cues - locked down with the rest of the editing surface.
         var editMode = DataContext is CuePlayerViewModel { IsCueEditMode: true };
         if (editMode && e.DataTransfer.Contains(DataFormat.File))
             e.DragEffects = DragDropEffects.Copy;
@@ -247,7 +247,7 @@ public partial class CuePlayerView : UserControl
     }
 
     /// <summary>
-    /// UI rewrite P4 — stale-drawer fix: the property tabs are visibility-filtered per cue type, and
+    /// UI rewrite P4 - stale-drawer fix: the property tabs are visibility-filtered per cue type, and
     /// switching e.g. from a media cue (Audio tab selected) to a group cue left the now-hidden tab
     /// selected, showing a blank/stale drawer. After every cue switch, snap selection to the first
     /// visible tab whenever the current one no longer applies. Posted at Loaded priority so the
@@ -288,7 +288,7 @@ public partial class CuePlayerView : UserControl
             _drawerTabMemory[node.Kind] = CueDrawerTabs.SelectedIndex;
     }
 
-    /// <summary>P4 — tap-to-seek on a group aggregate bar: every child seeks to the same fraction
+    /// <summary>P4 - tap-to-seek on a group aggregate bar: every child seeks to the same fraction
     /// of its own duration. Same padlock gate as the single rows.</summary>
     private void OnNowPlayingGroupProgressPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -300,7 +300,7 @@ public partial class CuePlayerView : UserControl
         _ = vm.SeekActiveGroupToFractionAsync(group, fraction);
     }
 
-    /// <summary>P4 — tap-to-seek on a Now Playing progress bar. The VM gates on the padlock
+    /// <summary>P4 - tap-to-seek on a Now Playing progress bar. The VM gates on the padlock
     /// (locked default) and on a known duration.</summary>
     private void OnNowPlayingProgressPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -377,7 +377,7 @@ public partial class CuePlayerView : UserControl
 
     /// <summary>Status indicator dot. Re-subscribes to the row's <c>RowStatus</c> notifications
     /// when the cell is recycled to a different row (which happens routinely under
-    /// <c>supportsRecycling: true</c>) — the previous design captured the row reference at
+    /// <c>supportsRecycling: true</c>) - the previous design captured the row reference at
     /// construction and stayed bound to the old row forever.</summary>
     private static Control BuildStatusBadge(CueNodeViewModel _)
     {
@@ -416,15 +416,15 @@ public partial class CuePlayerView : UserControl
             {
                 var (stroke, thickness) = preRoll switch
                 {
-                    // ready — light blue
+                    // ready - light blue
                     PreparedCueState.Ready => (Avalonia.Media.Color.FromArgb(220, 80, 170, 255), 2.0),
-                    // preparing — amber
+                    // preparing - amber
                     PreparedCueState.Preparing => (Avalonia.Media.Color.FromArgb(200, 230, 170, 60), 1.5),
-                    // stale — desaturated grey-blue (was ready, cue config changed; re-preparing)
+                    // stale - desaturated grey-blue (was ready, cue config changed; re-preparing)
                     PreparedCueState.Stale => (Avalonia.Media.Color.FromArgb(200, 150, 150, 165), 1.5),
-                    // failed — red
+                    // failed - red
                     PreparedCueState.Failed => (Avalonia.Media.Color.FromArgb(230, 229, 57, 53), 2.0),
-                    // idle — faint white
+                    // idle - faint white
                     _ => (Avalonia.Media.Color.FromArgb(96, 255, 255, 255), 1.0),
                 };
                 dot.Stroke = new Avalonia.Media.SolidColorBrush(stroke);

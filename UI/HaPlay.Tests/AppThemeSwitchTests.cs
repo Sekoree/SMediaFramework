@@ -10,11 +10,11 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Base-theme composition (§8.6): <see cref="AppearanceController.ApplyBaseTheme"/> — the routine the
-/// app runs at startup — puts the selected theme's bundle in <c>Styles[0]</c>, pins Light for the light-only
+/// <summary>Base-theme composition (§8.6): <see cref="AppearanceController.ApplyBaseTheme"/> - the routine the
+/// app runs at startup - puts the selected theme's bundle in <c>Styles[0]</c>, pins Light for the light-only
 /// Classic theme, honours Light/Dark for the variant-aware themes, and routes density to Fluent only. (In the
 /// app this only runs at launch: a live control-theme swap isn't reliable in Avalonia, so the UI defers a base
-/// change to restart — see <see cref="MainViewModel.AppearanceChangePending"/>.) Each test restores Classic +
+/// change to restart - see <see cref="MainViewModel.AppearanceChangePending"/>.) Each test restores Classic +
 /// Light in a finally so it doesn't leak into the other view tests (the headless app is shared per-assembly).</summary>
 public sealed class AppThemeSwitchTests
 {
@@ -101,7 +101,7 @@ public sealed class AppThemeSwitchTests
                 vm.BaseTheme = target;
 
                 Assert.True(vm.AppearanceChangePending);
-                // The running control theme must be untouched — no live Styles[0] swap (that path crashed).
+                // The running control theme must be untouched - no live Styles[0] swap (that path crashed).
                 Assert.Equal(startupBundle, Application.Current!.Styles[0].GetType());
             }
             finally

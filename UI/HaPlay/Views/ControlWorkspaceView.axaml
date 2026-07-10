@@ -13,7 +13,7 @@
        (app-wide so Dock's recycling presenter and floated windows always resolve the right view). -->
 
   <!-- UI rewrite: the four tabs (Surfaces / Scripts / Monitor / Tools) became a Dock.Avalonia docking
-       layout so they can be split, floated, or re-docked — watch the Monitor while editing Scripts. The
+       layout so they can be split, floated, or re-docked - watch the Monitor while editing Scripts. The
        arm bar + counts stay above the dock: global state must be visible from every pane. -->
   <Grid Margin="16" RowDefinitions="Auto,Auto,*">
 
@@ -45,7 +45,7 @@
                       Command="{Binding ImportLayerCommand}" />
           </MenuItem>
         </Menu>
-        <!-- Add-script lives only on the Scripts tab now (next to the list). Tab pop-out is gone too — the
+        <!-- Add-script lives only on the Scripts tab now (next to the list). Tab pop-out is gone too - the
              Dock.Avalonia layout below floats/splits panes natively (drag a tab out of the dock). Reset layout
              brings every pane back to the default tabbed arrangement (the way back from a closed/floated pane). -->
         <Button Grid.Row="0" Grid.Column="6"
@@ -70,7 +70,7 @@
 
     <!-- The four Control panes as a dockable layout (ControlDockFactory builds it on the VM). Drag a
          tab to split the pane or float it into its own window. ControlRecycling keys the pane views by
-         dockable Id — without it the shared content presenter reuses one recycled view for every tab, so
+         dockable Id - without it the shared content presenter reuses one recycled view for every tab, so
          every pane rendered as Surfaces. -->
     <dock:DockControl Grid.Row="2" Layout="{Binding DockLayout}" />
   </Grid>

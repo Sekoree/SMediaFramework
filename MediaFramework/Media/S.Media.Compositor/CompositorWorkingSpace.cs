@@ -4,10 +4,10 @@ namespace S.Media.Compositor;
 /// linear-light RGBA16F when any HDR / wide-gamut content is present.</summary>
 public enum CompositorWorkingSpace
 {
-    /// <summary>8-bit BT.709 — every input and output is SDR.</summary>
+    /// <summary>8-bit BT.709 - every input and output is SDR.</summary>
     Sdr8 = 0,
 
-    /// <summary>Linear-light RGBA16F — some HDR / wide-gamut content is present.</summary>
+    /// <summary>Linear-light RGBA16F - some HDR / wide-gamut content is present.</summary>
     Hdr16F = 1,
 }
 
@@ -43,7 +43,7 @@ public sealed class CompositorWorkingSpaceController
         || space is VideoColorSpace.Bt2020 or VideoColorSpace.Bt2020Cl;
 
     /// <summary>
-    /// Promote-eager step — call when the active layer/output color set changes. Promotes SDR→HDR16F the
+    /// Promote-eager step - call when the active layer/output color set changes. Promotes SDR→HDR16F the
     /// instant any HDR/wide-gamut content is present and returns <c>true</c> (rebuild FBOs). Never demotes,
     /// so a transient SDR gap can't tear down the HDR pipeline mid-show.
     /// </summary>
@@ -59,7 +59,7 @@ public sealed class CompositorWorkingSpaceController
     }
 
     /// <summary>
-    /// Demote step — call ONLY at a cue/idle boundary (the hysteresis point). Drops HDR16F→SDR8 when no
+    /// Demote step - call ONLY at a cue/idle boundary (the hysteresis point). Drops HDR16F→SDR8 when no
     /// HDR/wide-gamut content remains and returns <c>true</c> (rebuild FBOs); a no-op otherwise.
     /// </summary>
     public bool DemoteAtBoundary(bool anyHdrOrWideGamut)

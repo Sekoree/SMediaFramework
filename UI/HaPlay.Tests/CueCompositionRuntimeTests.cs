@@ -10,7 +10,7 @@ public sealed class CueCompositionRuntimeTests
     [Fact]
     public void SetClockMaster_ThenEnsurePumpStarted_StartsExactlyOnce()
     {
-        // Regression for the Phase 5.4 double-start bug — when the engine called
+        // Regression for the Phase 5.4 double-start bug - when the engine called
         // SetClockMaster (which started a slaved MediaClock) and then AddLayer
         // (which called EnsurePumpStarted), a second MediaClock + driver thread
         // would spawn because EnsurePumpStarted only checked the (always-null)
@@ -31,7 +31,7 @@ public sealed class CueCompositionRuntimeTests
     [Fact]
     public void EnsurePumpStarted_BeforeSetClockMaster_StaysSingleStart()
     {
-        // The "no master yet" path also has to stay single-shot — the runtime
+        // The "no master yet" path also has to stay single-shot - the runtime
         // creates one MediaClock with master=null and later swaps the master
         // in via MediaClock.SetMaster (same driver thread, same GL context).
         var outputs = new OutputManagementViewModel();

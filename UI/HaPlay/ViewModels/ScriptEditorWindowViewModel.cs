@@ -5,12 +5,12 @@ using CommunityToolkit.Mvvm.ComponentModel;
 namespace HaPlay.ViewModels;
 
 /// <summary>
-/// One script-editor window's view-model: PINS a single script row (one script per window — the old
+/// One script-editor window's view-model: PINS a single script row (one script per window - the old
 /// shared window followed the workspace list selection, which silently switched the open editor).
 /// The heavy editing machinery (text buffer, save, learn, diagnostics) still lives on
 /// <see cref="ControlWorkspaceViewModel"/> keyed to its selected row, so this shim keeps the
 /// workspace selection on the pinned row while the window is in use (the view re-asserts it on
-/// window activation) and forwards the selection-scoped members under their existing names —
+/// window activation) and forwards the selection-scoped members under their existing names -
 /// the editor XAML binds to the same properties it always did.
 /// </summary>
 public sealed partial class ScriptEditorWindowViewModel : ObservableObject
@@ -28,7 +28,7 @@ public sealed partial class ScriptEditorWindowViewModel : ObservableObject
 
     public ControlWorkspaceViewModel Workspace { get; }
 
-    /// <summary>The pinned row — named like the workspace property so the editor XAML is unchanged.</summary>
+    /// <summary>The pinned row - named like the workspace property so the editor XAML is unchanged.</summary>
     public ControlScriptRowViewModel SelectedScriptRow { get; }
 
     public bool HasSelectedScript => true;
@@ -39,7 +39,7 @@ public sealed partial class ScriptEditorWindowViewModel : ObservableObject
     public bool IsSelectedScriptDirty => IsPinnedSelected && Workspace.IsSelectedScriptDirty;
 
     /// <summary>Re-selects the pinned script in the workspace (called on window activation and before
-    /// edits) so the selection-scoped machinery — buffer, save, learn, diagnostics — targets it.</summary>
+    /// edits) so the selection-scoped machinery - buffer, save, learn, diagnostics - targets it.</summary>
     public void PinSelection()
     {
         if (!ReferenceEquals(Workspace.SelectedScriptRow, SelectedScriptRow))
@@ -61,7 +61,7 @@ public sealed partial class ScriptEditorWindowViewModel : ObservableObject
         }
     }
 
-    // Selection-scoped pass-throughs (valid whenever the pinned row is selected — always the case
+    // Selection-scoped pass-throughs (valid whenever the pinned row is selected - always the case
     // while the user interacts with this window).
     public IReadOnlyList<S.Control.ControlScriptScope> ScriptScopeOptions => Workspace.ScriptScopeOptions;
     public IReadOnlyList<S.Control.ControlScriptFailureMode> ScriptFailureModeOptions => Workspace.ScriptFailureModeOptions;

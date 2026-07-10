@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Time — clocks / sync. Salvaged MediaClock/CompositePlaybackClock/VideoPtsClock/
+    <!-- S.Media.Time - clocks / sync. Salvaged MediaClock/CompositePlaybackClock/VideoPtsClock/
          OutputSyncGroup/VideoPresentSyncGroup + new SessionClock/SourceTimeline/SourceSyncGroup (D4/Doc 03). -->
 
     <ItemGroup>

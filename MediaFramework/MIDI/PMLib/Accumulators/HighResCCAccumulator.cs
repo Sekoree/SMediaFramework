@@ -55,14 +55,14 @@ public sealed class HighResCCAccumulator
 
         if (controller < 32)
         {
-            // Coarse CC (MSB) — store and wait for the fine counterpart.
+            // Coarse CC (MSB) - store and wait for the fine counterpart.
             _coarse[channel * 32 + controller] = (byte)(cc.Value & 0x7F);
             return true;
         }
 
         if (controller < 64)
         {
-            // Fine CC (LSB) — pair with stored coarse value.
+            // Fine CC (LSB) - pair with stored coarse value.
             byte coarseController = (byte)(controller - 32);
             int  idx              = channel * 32 + coarseController;
             byte? coarse          = _coarse[idx];
@@ -75,7 +75,7 @@ public sealed class HighResCCAccumulator
                 return true;
             }
 
-            // No coarse stored — not consumed as 14-bit.
+            // No coarse stored - not consumed as 14-bit.
             return false;
         }
 

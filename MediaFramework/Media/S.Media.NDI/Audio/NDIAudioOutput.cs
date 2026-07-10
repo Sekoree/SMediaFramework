@@ -13,7 +13,7 @@ namespace S.Media.NDI.Audio;
 /// <see cref="NDISender"/>. Constructed only via <see cref="NDIOutput.EnableAudio"/>.
 /// </summary>
 /// <remarks>
-/// Send path — hands packed float samples directly to
+/// Send path - hands packed float samples directly to
 /// <c>NDIlib_util_send_send_audio_interleaved_32f</c> (the SDK does the
 /// deinterleave + send in optimized native code). Lifetime is owned by
 /// <see cref="NDIOutput"/>; callers do not dispose this output directly.
@@ -92,7 +92,7 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
         var samplesPerChannel = packedSamples.Length / channels;
         if (samplesPerChannel == 0) return;
 
-        // NDI timecode is 100 ns units — same as TimeSpan.Ticks.
+        // NDI timecode is 100 ns units - same as TimeSpan.Ticks.
         var timecode100Ns = _samplesSentPerChannel * 10_000_000L / _format.SampleRate;
         SubmitCore(packedSamples, timecode100Ns);
     }
@@ -154,7 +154,7 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
             _packedBuffer = null;
             _packedCapacityBytes = 0;
         }
-        // The NDISender is owned by NDIOutput — do NOT dispose it here.
+        // The NDISender is owned by NDIOutput - do NOT dispose it here.
         timing?.SetOutcome($"format={_format} sentFrames={_samplesSentPerChannel}");
     }
 

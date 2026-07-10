@@ -8,7 +8,7 @@ using Silk.NET.OpenGL;
 namespace S.Abi;
 
 /// <summary>
-/// Adapts a native plugin's <c>MfpLayerSurfaceFactoryVTable</c> — creates a configured surface instance from the
+/// Adapts a native plugin's <c>MfpLayerSurfaceFactoryVTable</c> - creates a configured surface instance from the
 /// opaque <c>config_json</c> blob and wraps it as a managed <see cref="IVideoCompositorLayerSurface"/> via
 /// <see cref="NativeLayerSurface"/>. Registered into an <see cref="ICompositorRegistryBuilder"/> by kind.
 /// </summary>

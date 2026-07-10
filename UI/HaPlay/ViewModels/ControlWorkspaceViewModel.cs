@@ -48,7 +48,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private bool _busy;
     private DateTimeOffset _learnSinceUtc;
 
-    // Fallback MIDI device resolution — injectable so unit tests can supply a fake catalog/prompt
+    // Fallback MIDI device resolution - injectable so unit tests can supply a fake catalog/prompt
     // without touching PortMIDI or showing a real dialog.
     internal Func<ControlMIDIPortCatalog?> MIDICatalogProvider { get; set; } = EnumerateMIDIPorts;
 
@@ -64,8 +64,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         _refreshTimer.Tick += (_, _) => RefreshMonitor();
         _refreshTimer.Start();
 
-        // Build the structure for the default (empty) config so the workspace shows its groups — OSC
-        // devices, layers, scripts, periodic sends — before any project is loaded or any MIDI/OSC device
+        // Build the structure for the default (empty) config so the workspace shows its groups - OSC
+        // devices, layers, scripts, periodic sends - before any project is loaded or any MIDI/OSC device
         // exists. That lets you prepare an OSC-only or scripts/layers-only setup straight away.
         RebuildScriptRows();
         RebuildStructureRows();
@@ -73,7 +73,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildProfileRows();
         MonitorEntries.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoMonitorEntries));
 
-        // Docking layout for the four Control panes (Surfaces / Scripts / Monitor / Tools) — see
+        // Docking layout for the four Control panes (Surfaces / Scripts / Monitor / Tools) - see
         // ControlDockFactory. The DockControl in ControlWorkspaceView binds to DockLayout.
         BuildDockLayout();
     }
@@ -84,7 +84,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private Dock.Model.Controls.IRootDock _dockLayout = null!;
 
-    /// <summary>Restores the default docking arrangement (all four panes, tabbed) — the way back after a pane
+    /// <summary>Restores the default docking arrangement (all four panes, tabbed) - the way back after a pane
     /// is accidentally closed or dragged into a floating window.</summary>
     [RelayCommand]
     private void ResetDockLayout() => BuildDockLayout();
@@ -115,7 +115,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<string> ProfileWarnings { get; } = new();
 
     // Test seam (like MIDICatalogProvider): the device-RESOLUTION flows are pure over an injected catalog,
-    // so tests on runners without a native portmidi override this probe — production always asks the runtime.
+    // so tests on runners without a native portmidi override this probe - production always asks the runtime.
     internal Func<bool> MIDIAvailabilityProbe { get; set; } = static () => RuntimeModules.IsMIDIAvailable;
 
     public bool IsMIDIAvailable => MIDIAvailabilityProbe();
@@ -239,10 +239,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private string _exportedFunctionsSummary = "(no exports)";
 
     // The selected script's on-disk (or last-saved) text. The editor buffer is <see cref="SelectedScriptText"/>;
-    // when the two differ the script has unsaved edits — see <see cref="IsSelectedScriptDirty"/>.
+    // when the two differ the script has unsaved edits - see <see cref="IsSelectedScriptDirty"/>.
     private string _savedScriptBaseline = string.Empty;
 
-    /// <summary>True when the editor buffer differs from what's on disk for the selected script — drives the
+    /// <summary>True when the editor buffer differs from what's on disk for the selected script - drives the
     /// script editor's "unsaved changes" bar. Set the baseline via <see cref="LoadSelectedScriptText"/> (load)
     /// and after a successful save.</summary>
     public bool IsSelectedScriptDirty =>
@@ -339,7 +339,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private string _testOSCArgs = string.Empty;
 
     /// <summary>Loads a project's control configuration. CTRL-04 safety: this always leaves the system
-    /// DISARMED — a freshly-opened project never runs its (trusted-code) scripts until the operator explicitly
+    /// DISARMED - a freshly-opened project never runs its (trusted-code) scripts until the operator explicitly
     /// arms it. <see cref="BuildSnapshot"/> likewise persists <c>IsArmed = false</c>, so an armed state is
     /// never saved into a project and can never auto-run on open.</summary>
     public void LoadConfig(ControlSystemConfig config, string? configFilePath = null)
@@ -361,7 +361,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     /// <summary>Sets the directory that project-relative script files resolve against (the project folder).
     /// When a project gains a home on disk for the first time, any scripts the operator authored while the
-    /// project was unsaved (kept under the scratch cache — see <see cref="EffectiveScriptRoot"/>) are migrated
+    /// project was unsaved (kept under the scratch cache - see <see cref="EffectiveScriptRoot"/>) are migrated
     /// into the project so they're saved alongside it.</summary>
     public void SetProjectRoot(string? projectRoot)
     {
@@ -735,7 +735,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         var contents = SelectedScriptText;
 
         // Scripts write to the project folder, or to the scratch cache while the project is unsaved (they
-        // migrate into the project on its first save — see SetProjectRoot). Either way the operator can
+        // migrate into the project on its first save - see SetProjectRoot). Either way the operator can
         // author scripts immediately instead of dead-ending on "save the project first".
         var path = ResolveScriptPath(SelectedScriptRow.Script.ScriptPath);
         if (path is null)
@@ -752,7 +752,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             OnPropertyChanged(nameof(IsSelectedScriptDirty));
             OnPropertyChanged(nameof(HasUnsavedScratchScripts));
             ScriptEditorStatus = string.IsNullOrWhiteSpace(_projectRoot)
-                ? $"Saved {SelectedScriptRow.Script.ScriptPath} to the scratch cache — save the project to keep it."
+                ? $"Saved {SelectedScriptRow.Script.ScriptPath} to the scratch cache - save the project to keep it."
                 : $"Saved {SelectedScriptRow.Script.ScriptPath}.";
             RefreshScriptAnalysis(SelectedScriptRow);
         }
@@ -1121,7 +1121,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
 
         // A dangling endpoint id simply makes any endpoint-scoped script inert (no event will match it),
-        // so there's nothing unsafe to clean up here — just drop the listener.
+        // so there's nothing unsafe to clean up here - just drop the listener.
         _config = _config with { OSCListeners = _config.OSCListeners.Where(l => l.Id != listenerId).ToList() };
         RefreshAfterListenerChange();
         StatusMessage = $"Removed OSC listener '{existing.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
@@ -2534,7 +2534,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             pendingSession = null;
             pendingOSC = null;
             _lastRenderedCount = -1;
-            StatusMessage = $"Armed — {ListenerCount} listener(s), {DeviceCount} device(s), {ScriptCount} script(s).";
+            StatusMessage = $"Armed - {ListenerCount} listener(s), {DeviceCount} device(s), {ScriptCount} script(s).";
         }
         catch (Exception ex)
         {

@@ -66,7 +66,7 @@ public sealed class PlaylistConfigTests
         }
     }
 
-    /// <summary>v1 fallback — a saved playlist with the legacy <c>Paths</c> list (no <c>Items</c>) still
+    /// <summary>v1 fallback - a saved playlist with the legacy <c>Paths</c> list (no <c>Items</c>) still
     /// loads via the FilePlaylistItem projection.</summary>
     [Fact]
     public void PlaylistTabViewModel_FromConfig_PromotesV1Paths()

@@ -32,7 +32,7 @@ public sealed record ControlMIDIResolutionRequest(
 /// <summary>
 /// Pure helpers for the fallback device-selection flow: figure out which configured MIDI bindings need
 /// the user to pick a current port, and write those picks back into the project config. No I/O, no
-/// PortMIDI, no UI — the caller supplies the live port catalog and the chosen ports.
+/// PortMIDI, no UI - the caller supplies the live port catalog and the chosen ports.
 /// </summary>
 public static class ControlMIDIDeviceResolver
 {

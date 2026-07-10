@@ -60,7 +60,7 @@ public sealed class UdpControlOSCSender : IControlOSCSender, IControlOSCReceiver
 
             var client = new OSCClient(new IPEndPoint(ResolveAddress(host), port), localPort: ResolveLocalPort(host, port));
             // Receive replies on this client's own socket and surface them to the host. The X32 replies
-            // to the source port of the request, which is this connected socket — not a separate listener.
+            // to the source port of the request, which is this connected socket - not a separate listener.
             client.RegisterHandler("//", (context, _) =>
             {
                 MessageReceived?.Invoke(new ControlOSCReceivedMessage(host, port, context));

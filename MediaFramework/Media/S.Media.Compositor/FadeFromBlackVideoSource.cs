@@ -6,7 +6,7 @@ namespace S.Media.Compositor;
 /// <summary>
 /// Wraps an <see cref="IVideoSource"/> so its first <see cref="Duration"/> worth of frames fades
 /// from black to full-brightness pass-through. After the duration elapses (measured from the first
-/// emitted frame's PTS), every subsequent frame is passed through unmodified — the wrapper goes
+/// emitted frame's PTS), every subsequent frame is passed through unmodified - the wrapper goes
 /// out of the way completely.
 /// </summary>
 /// <remarks>
@@ -16,7 +16,7 @@ namespace S.Media.Compositor;
 /// during the fade in unexpected ways.
 /// </para>
 /// <para>
-/// Hardware-backed frames (DMA-BUF, Win32 NV12) are not supported — the wrapper needs CPU plane
+/// Hardware-backed frames (DMA-BUF, Win32 NV12) are not supported - the wrapper needs CPU plane
 /// access to apply the ramp. For hardware paths use <see cref="LayerOpacityTween"/> on a
 /// <see cref="VideoCompositorSource.Slot"/> instead.
 /// </para>
@@ -134,7 +134,7 @@ public class FadeFromBlackVideoSource : IVideoSource, ICooperativeVideoReadInter
 
     private static VideoFrame ApplyRamp(VideoFrame src, float ramp)
     {
-        // Single-plane CPU formats only — validated in ctor / SelectOutputFormat.
+        // Single-plane CPU formats only - validated in ctor / SelectOutputFormat.
         var srcSpan = src.Planes[0].Span;
         var stride = src.Strides[0];
         var byteCount = stride * src.Format.Height;

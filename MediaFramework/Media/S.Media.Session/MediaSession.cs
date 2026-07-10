@@ -7,7 +7,7 @@ namespace S.Media.Session;
 /// <summary>
 /// A single owning handle around a <see cref="MediaPlayer"/> and the resources wired around it
 /// (outputs, companion hosts, app-scoped disposables). Dispose the session and everything it owns is
-/// torn down in a safe order — the player first (which stops its routers/decoder so nothing is still
+/// torn down in a safe order - the player first (which stops its routers/decoder so nothing is still
 /// pushing to an output), then the registered resources in reverse registration order.
 /// </summary>
 /// <remarks>
@@ -18,7 +18,7 @@ namespace S.Media.Session;
 /// </para>
 /// <para>
 /// Implements <see cref="IAsyncDisposable"/> (which <see cref="MediaPlayer"/> alone does not) so a
-/// registered resource that needs a native drain — an encoder/file output, a router flush — can be
+/// registered resource that needs a native drain - an encoder/file output, a router flush - can be
 /// awaited rather than blocked. <see cref="Dispose"/> remains available for synchronous hosts.
 /// </para>
 /// </remarks>
@@ -49,7 +49,7 @@ public sealed class MediaSession : IDisposable, IAsyncDisposable
     public static MediaSession Borrowing(MediaPlayer player) => new(player, ownsPlayer: false);
 
     /// <summary>
-    /// Registers <paramref name="resource"/> for disposal with the session — after the player, and before
+    /// Registers <paramref name="resource"/> for disposal with the session - after the player, and before
     /// any resource registered earlier (reverse order). Returns it so the call can be assigned/chained.
     /// <see cref="IAsyncDisposable"/> resources are awaited on <see cref="DisposeAsync"/> and disposed
     /// synchronously on <see cref="Dispose"/>.

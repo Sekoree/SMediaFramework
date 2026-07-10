@@ -5,7 +5,7 @@ using Xunit;
 namespace S.Media.Source.MMD.Tests;
 
 /// <summary>
-/// CCD IK solver tests (Gate-6 stage 6 — the dance-feet artifact source) on a purpose-built 2-link leg:
+/// CCD IK solver tests (Gate-6 stage 6 - the dance-feet artifact source) on a purpose-built 2-link leg:
 /// hip (0,2,0) → knee (0,1,0) → ankle (0,0,0), plus an IK goal bone the motion animates. The chain
 /// geometry keeps expectations hand-computable; the real-asset render test covers full-model behavior.
 /// </summary>
@@ -52,7 +52,7 @@ public sealed class MMDIkTests
         Morphs = [],
     };
 
-    /// <summary>Motion that moves ONLY the IK goal bone to <paramref name="goal"/> (single keyframe —
+    /// <summary>Motion that moves ONLY the IK goal bone to <paramref name="goal"/> (single keyframe -
     /// no interpolation in play). <paramref name="ikEnabled"/> adds a frame-0 IK on/off key.</summary>
     private static VMDDocument GoalAt(Vector3 goal, bool? ikEnabled = null) => new()
     {
@@ -116,7 +116,7 @@ public sealed class MMDIkTests
     [Fact]
     public void KneeHingeLimit_KeepsTheBendOnItsAxis()
     {
-        // Hip fixed (knee is the only link). An X-hinged knee moves the ankle strictly in the YZ plane —
+        // Hip fixed (knee is the only link). An X-hinged knee moves the ankle strictly in the YZ plane -
         // a goal displaced in X must NOT pull the ankle off X=0 (the limit clamps the solve).
         var goal = new Vector3(0.8f, 1.0f, 0f);
         var ankle = AnkleAfterSolve(Leg([KneeHinge]), goal);
@@ -169,7 +169,7 @@ public sealed class MMDIkTests
 
     /// <summary>The YYB-style D-bone rig: a parallel chain on a LATER deform layer whose bones inherit
     /// rotation (ratio 1) from the IK-solved chain and carry the skin weights. The append fold must see
-    /// the donors' IK rotations — the "knees don't bend" regression.</summary>
+    /// the donors' IK rotations - the "knees don't bend" regression.</summary>
     [Fact]
     public void AppendBones_InheritIkRotation_DChainTracksTheSolvedChain()
     {
@@ -209,7 +209,7 @@ public sealed class MMDIkTests
             $"skinned vertex {positions[0]} detached from ankleD {ankleD}");
     }
 
-    /// <summary>VMD show/IK keys can switch a solver off — the chain must then hold its FK pose even
+    /// <summary>VMD show/IK keys can switch a solver off - the chain must then hold its FK pose even
     /// though the goal bone is animated elsewhere.</summary>
     [Fact]
     public void IkToggle_DisabledSolver_LeavesTheChainAtItsFkPose()
@@ -272,7 +272,7 @@ public sealed class MMDIkTests
         AssertSameRotation(q, wide);
 
         // Y/Z clamped to zero: the result must rotate the Y axis only within the XY... i.e. act as a pure
-        // X rotation — it maps unit-Z onto the YZ plane and keeps unit-X fixed.
+        // X rotation - it maps unit-Z onto the YZ plane and keeps unit-X fixed.
         var clamped = MMDAnimator.ClampEulerXyz(q, new Vector3(-MathF.PI, 0, 0), Vector3.Zero);
         var xAxis = Vector3.Transform(Vector3.UnitX, clamped);
         Assert.True(Vector3.Distance(xAxis, Vector3.UnitX) < 1e-4f,

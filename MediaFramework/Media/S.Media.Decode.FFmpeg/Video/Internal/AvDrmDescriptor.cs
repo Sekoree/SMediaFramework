@@ -57,7 +57,7 @@ internal struct AvDrmFrameDescriptorInterop
         if (Interlocked.CompareExchange(ref _loggedLayoutMismatch, 1, 0) != 0)
             return;
         MediaDiagnostics.LogWarning(
-            "DRM PRIME: AvDrmFrameDescriptorInterop CLR size ({Actual} bytes) != ExpectedSizeBytes ({Expected}) — libavutil hwcontext_drm.h may have drifted from this build; DRM metadata parsing offsets may be wrong.",
+            "DRM PRIME: AvDrmFrameDescriptorInterop CLR size ({Actual} bytes) != ExpectedSizeBytes ({Expected}) - libavutil hwcontext_drm.h may have drifted from this build; DRM metadata parsing offsets may be wrong.",
             n, ExpectedSizeBytes);
     }
 

@@ -6,7 +6,7 @@ namespace S.Media.FFmpeg.Common;
 /// Narrowly scoped libavformat stream-copy remuxer (no transcode): combines a video-only and an
 /// audio-only input file into one local container, or passes a single input through. Built for the
 /// YouTube prepare path (separate best-quality A/V streams → one asset the normal FFmpeg open path
-/// plays), deliberately NOT a general encoder — see the old tree's <c>S.Media.FFmpeg.Encode</c> for
+/// plays), deliberately NOT a general encoder - see the old tree's <c>S.Media.FFmpeg.Encode</c> for
 /// raw-frame encoding. In-process libavformat, no shelled <c>ffmpeg</c> binary (review: cue logic must
 /// not spawn untracked processes).
 /// </summary>
@@ -15,14 +15,14 @@ public static class FFmpegStreamCopyRemuxer
     /// <summary>
     /// Remuxes the first video stream of <paramref name="videoPath"/> and/or the first audio stream of
     /// <paramref name="audioPath"/> into <paramref name="outputPath"/> (container chosen by the output
-    /// extension — use <c>.mkv</c> for codec-agnostic storage). Either input may be null (single-stream
+    /// extension - use <c>.mkv</c> for codec-agnostic storage). Either input may be null (single-stream
     /// pass-through), not both. Packet timestamps are rescaled; packets are written in dts order across
-    /// inputs. Cancellation deletes nothing — the caller owns partial-file semantics (write to a
+    /// inputs. Cancellation deletes nothing - the caller owns partial-file semantics (write to a
     /// <c>.partial</c> path and rename on success).
     /// </summary>
     /// <param name="progress">Coarse 0..1 progress from packet timestamps against the longest input duration.</param>
     /// <param name="containerFormat">Explicit libav muxer name (e.g. <c>"matroska"</c>). Required when the
-    /// output path's extension doesn't name the container — e.g. atomic-commit <c>.partial</c> temp paths.</param>
+    /// output path's extension doesn't name the container - e.g. atomic-commit <c>.partial</c> temp paths.</param>
     public static unsafe void Remux(
         string? videoPath,
         string? audioPath,
@@ -75,7 +75,7 @@ public static class FFmpegStreamCopyRemuxer
 
             var totalDuration = inputs.Max(l => l.DurationSeconds);
             // Prime one pending packet per leg, then always write the leg whose packet is earliest in
-            // stream time — av_interleaved_write_frame then only has to buffer small reorder windows.
+            // stream time - av_interleaved_write_frame then only has to buffer small reorder windows.
             foreach (var leg in inputs)
                 leg.Advance();
 

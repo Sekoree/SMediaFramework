@@ -7,7 +7,7 @@ namespace S.Media.Core.Audio;
 /// return a partial fill.
 /// </summary>
 /// <remarks>
-/// Implementations are not required to be thread-safe — the router serialises
+/// Implementations are not required to be thread-safe - the router serialises
 /// reads from a single thread.
 /// </remarks>
 public interface IAudioSource
@@ -27,7 +27,7 @@ public interface IAudioSource
     /// <see cref="AudioFrame.Dispose"/> exactly once after the consuming output's <c>Submit</c>
     /// returns. Outputs like <see cref="IAudioOutput.Submit(System.ReadOnlySpan{float})"/> and
     /// <c>NDIAudioOutput.Submit(in AudioFrame)</c> read the samples synchronously and do not
-    /// retain the buffer — failing to dispose leaks the producer's pooled backing buffer.
+    /// retain the buffer - failing to dispose leaks the producer's pooled backing buffer.
     /// Implementations that lease buffers from a pool guarantee single-shot Release, so
     /// double-Dispose is safe.
     /// </remarks>
@@ -39,12 +39,12 @@ public interface IAudioSource
 
     /// <summary>
     /// Fill <paramref name="destination"/> with packed (interleaved) float
-    /// samples — channel-count must match <see cref="Format"/>'s and
+    /// samples - channel-count must match <see cref="Format"/>'s and
     /// <c>destination.Length</c> must be a multiple of it. Returns the number
     /// of floats actually written; a value less than <c>destination.Length</c>
     /// means the source couldn't supply a full chunk (live source not yet
     /// warmed up, or near EOF). The unfilled tail of <paramref name="destination"/>
-    /// is left untouched — the caller decides whether to treat it as silence.
+    /// is left untouched - the caller decides whether to treat it as silence.
     /// </summary>
     int ReadInto(Span<float> destination);
 }

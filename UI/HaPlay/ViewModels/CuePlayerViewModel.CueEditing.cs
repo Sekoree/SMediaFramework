@@ -78,7 +78,7 @@ public partial class CuePlayerViewModel
     private bool CanOpenCueOutputSetup() => SelectedCueList is not null;
 
     /// <summary>Move the selected cue up one slot within its parent collection. Ctrl+↑ binds
-    /// here. No-op at the top of the parent (operator's expected behaviour — they get to feel
+    /// here. No-op at the top of the parent (operator's expected behaviour - they get to feel
     /// the boundary).</summary>
     [RelayCommand(CanExecute = nameof(CanMoveSelectedCue))]
     private void MoveSelectedCueUp() => MoveSelectedCue(-1);
@@ -196,7 +196,7 @@ public partial class CuePlayerViewModel
         // Deep-copy via the model layer. `ToModel()` projects through fresh `.Select(...).ToList()`
         // collections for routes / placements / children, so the snapshot doesn't share list
         // references with the original VM. `CloneCueNodeWithNewIds` then rotates ids (a `with` on
-        // a record only does a shallow copy — we'd otherwise share AudioRoutes / VideoPlacements
+        // a record only does a shallow copy - we'd otherwise share AudioRoutes / VideoPlacements
         // lists between original and copy). `FromModel` rebuilds fresh VM collections from the
         // cloned snapshot, so no list reference is shared with the original cue.
         var snapshot = SelectedCueNode.ToModel();
@@ -210,7 +210,7 @@ public partial class CuePlayerViewModel
 
     private bool CanDuplicateSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
 
-    /// <summary>Phase 5.8.1 — clicking a color swatch sets the tag on every selected cue
+    /// <summary>Phase 5.8.1 - clicking a color swatch sets the tag on every selected cue
     /// (so multi-select tagging works out of the box). Tag 0 clears.</summary>
     [RelayCommand(CanExecute = nameof(CanSetSelectedCueColorTag))]
     private void SetSelectedCueColorTag(int tag)
@@ -248,7 +248,7 @@ public partial class CuePlayerViewModel
 
     /// <summary>Bulk renumber. Walks the chosen scope (all / root only / current selection) in
     /// tree order, assigning <c>start</c>, <c>start+step</c>, … Nested groups recurse with a
-    /// sub-numbering scheme — `1`, `1.1`, `1.2`, `2`, … — preserving the visible cue hierarchy.</summary>
+    /// sub-numbering scheme - `1`, `1.1`, `1.2`, `2`, … - preserving the visible cue hierarchy.</summary>
     [RelayCommand(CanExecute = nameof(CanRenumber))]
     private async Task RenumberAsync()
     {

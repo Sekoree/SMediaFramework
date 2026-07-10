@@ -9,7 +9,7 @@ namespace S.Media.Session;
 /// Output-mapping specification for one composition output lease: the composited canvas is cut
 /// into <see cref="Sections"/> that are drawn back-to-front onto an output canvas of
 /// <see cref="OutputWidth"/>×<see cref="OutputHeight"/> (defaults to the composition size).
-/// Unmapped output area stays black — physical gaps (e.g. panel frames in a multi-panel rear
+/// Unmapped output area stays black - physical gaps (e.g. panel frames in a multi-panel rear
 /// projection) fall out of section placement naturally.
 /// </summary>
 public sealed record ClipOutputMappingSpec(
@@ -26,7 +26,7 @@ public sealed record ClipOutputMappingSpec(
 /// <param name="RotationDegrees">Rotation around the destination rect center, clockwise (Y-down).</param>
 /// <param name="Opacity">Per-section alpha multiplier [0,1].</param>
 /// <param name="Brightness">Per-section brightness [0,1] for panel matching. Folded into the layer
-/// opacity — over the black output background that equals an RGB multiply; with overlapping
+/// opacity - over the black output background that equals an RGB multiply; with overlapping
 /// sections the lower section shows through instead (acceptable for v1).</param>
 /// <param name="MeshColumns">Mesh warp control grid columns; 0 (with <paramref name="MeshRows"/>)
 /// = no mesh (pure affine). Phase 4, see Doc/HaPlay-Output-Mapping-Plan.md.</param>
@@ -52,7 +52,7 @@ public sealed record ClipMeshPoint(double X, double Y);
 
 /// <summary>A mapping section resolved against a concrete canvas: ready to become a
 /// <see cref="CompositorLayer"/> whose source frame is the composited canvas. <paramref name="Mesh"/>
-/// (control points in absolute output pixels) is non-null only for warp-capable GL backends — the
+/// (control points in absolute output pixels) is non-null only for warp-capable GL backends - the
 /// CPU chained stage ignores it and falls back to the affine transform.</summary>
 public readonly record struct ResolvedMappingSection(
     RectNormalized SourceCrop,
@@ -72,7 +72,7 @@ public readonly record struct ResolvedMappingSection(
 /// </remarks>
 public static class OutputMappingResolver
 {
-    /// <summary>Output canvas format for <paramref name="spec"/> over <paramref name="canvas"/> —
+    /// <summary>Output canvas format for <paramref name="spec"/> over <paramref name="canvas"/> -
     /// the spec's explicit size when set, else the canvas size (same pixel format / rate).</summary>
     public static VideoFormat ResolveOutputFormat(ClipOutputMappingSpec spec, VideoFormat canvas) =>
         new(
@@ -114,7 +114,7 @@ public static class OutputMappingResolver
     {
         resolved = default;
 
-        // Degeneracy on the raw model values — Clamped() below nudges zero-area rects to a sliver
+        // Degeneracy on the raw model values - Clamped() below nudges zero-area rects to a sliver
         // (a slot-mailbox affordance), which would let an empty slice slip through.
         if (s.SrcWidth <= 0 || s.SrcHeight <= 0)
             return false;
@@ -158,17 +158,17 @@ public static class OutputMappingResolver
         return true;
     }
 
-    /// <summary>Max mesh control points per axis — matches the editor's cap; anything bigger is
+    /// <summary>Max mesh control points per axis - matches the editor's cap; anything bigger is
     /// treated as malformed and ignored (affine fallback) rather than tessellated unbounded.</summary>
     private const int MaxMeshPointsPerAxis = 65;
 
-    /// <summary>Identity tolerance in normalized dest-rect units (~1/20 px at 1080p) — a mesh whose
+    /// <summary>Identity tolerance in normalized dest-rect units (~1/20 px at 1080p) - a mesh whose
     /// points all sit on the identity grid resolves to null, keeping the zero-cost affine path.</summary>
     private const double MeshIdentityEpsilon = 5e-5;
 
     /// <summary>
     /// Bakes the section's normalized mesh control points to absolute output pixels: unnormalize
-    /// over the dest rect, then rotate about the dest center — the same placement the affine
+    /// over the dest rect, then rotate about the dest center - the same placement the affine
     /// transform applies. (Catmull-Rom interpolation commutes with affine maps, so transforming the
     /// control points equals transforming the evaluated surface.) Malformed grids resolve to null.
     /// </summary>

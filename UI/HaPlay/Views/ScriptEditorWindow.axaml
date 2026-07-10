@@ -6,7 +6,7 @@
         xmlns:vm="using:HaPlay.ViewModels"
         x:Class="HaPlay.Views.ScriptEditorWindow"
         x:DataType="vm:ScriptEditorWindowViewModel"
-        Title="{Binding SelectedScriptRow.DisplayName, StringFormat='Script — {0}'}"
+        Title="{Binding SelectedScriptRow.DisplayName, StringFormat='Script - {0}'}"
         Width="1000" Height="700"
         MinWidth="640" MinHeight="460"
         WindowStartupLocation="CenterOwner">
@@ -17,7 +17,7 @@
   </Window.Styles>
 
   <Panel Margin="12">
-    <!-- One script per window: this window pins its script row for its whole lifetime — selecting a
+    <!-- One script per window: this window pins its script row for its whole lifetime - selecting a
          different script in the Control workspace opens ANOTHER editor window instead of silently
          switching this one. -->
     <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="10">
@@ -98,7 +98,7 @@
       <Border Grid.Row="1" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
         <!-- Variant-aware editor surface (ScriptEditor*Brush, App.axaml): light under Classic (pinned Light)
              and the Simple/Fluent light variant, dark under their dark variant. The syntax highlighting
-             swaps to a dark-friendly palette to match — see ApplyMondSyntaxHighlighting. -->
+             swaps to a dark-friendly palette to match - see ApplyMondSyntaxHighlighting. -->
         <ae:TextEditor x:Name="ScriptEditor"
                        ShowLineNumbers="True"
                        FontFamily="Cascadia Code, Consolas, monospace"

@@ -25,13 +25,13 @@
     <value>Use this player's matrix above to choose which input channels feed the cue bus.</value>
   </data>
   <data name="NoOutputsConfiguredHint" xml:space="preserve">
-    <value>No outputs configured yet — add one above. Click Play with nothing selected to auto-route.</value>
+    <value>No outputs configured yet - add one above. Click Play with nothing selected to auto-route.</value>
   </data>
   <data name="TransitionLabel" xml:space="preserve">
     <value>Transition</value>
   </data>
   <data name="TransitionTooltip" xml:space="preserve">
-    <value>Fade: the incoming clip fades up from black over the duration below, on load and on auto-advance (video only — this is a per-clip fade-in, not a cross-fade between tracks; the outgoing clip and audio are not faded). Cut: start instantly. IdleImage: reserved, currently behaves like Cut.</value>
+    <value>Fade: the incoming clip fades up from black over the duration below, on load and on auto-advance (video only - this is a per-clip fade-in, not a cross-fade between tracks; the outgoing clip and audio are not faded). Cut: start instantly. IdleImage: reserved, currently behaves like Cut.</value>
   </data>
   <data name="MillisecondsShort" xml:space="preserve">
     <value>ms</value>
@@ -40,7 +40,7 @@
     <value>Idle image</value>
   </data>
   <data name="IdleImageHeaderTooltip" xml:space="preserve">
-    <value>Show a still image on every video output instead of decoded pixels — image content is letterboxed into each output's active format.</value>
+    <value>Show a still image on every video output instead of decoded pixels - image content is letterboxed into each output's active format.</value>
   </data>
   <data name="FallbackPathPlaceholder" xml:space="preserve">
     <value>PNG / JPEG path…</value>
@@ -116,7 +116,7 @@
     <value>Fire the next cue (Cues workspace)</value>
   </data>
   <data name="ShortcutPanic" xml:space="preserve">
-    <value>Panic — stop everything (Cues workspace)</value>
+    <value>Panic - stop everything (Cues workspace)</value>
   </data>
   <data name="ShortcutPlayPause" xml:space="preserve">
     <value>Play / pause the focused player or cue</value>
@@ -140,7 +140,7 @@
     <value>Project</value>
   </data>
   <data name="ProjectPathFallback" xml:space="preserve">
-    <value>(Unsaved — choose Save Project As… to write to disk)</value>
+    <value>(Unsaved - choose Save Project As… to write to disk)</value>
   </data>
   <data name="NewButton" xml:space="preserve">
     <value>New</value>
@@ -158,13 +158,13 @@
     <value>Recent projects</value>
   </data>
   <data name="RecentProjectsEmptyHint" xml:space="preserve">
-    <value>(None yet — recent projects appear after the first Save or Open.)</value>
+    <value>(None yet - recent projects appear after the first Save or Open.)</value>
   </data>
   <data name="DisplayHeader" xml:space="preserve">
     <value>Display</value>
   </data>
   <data name="DisplaySettingsHint" xml:space="preserve">
-    <value>Style, theme and density apply to this machine and persist in app-settings.json — they are not saved in the project.</value>
+    <value>Style, theme and density apply to this machine and persist in app-settings.json - they are not saved in the project.</value>
   </data>
   <data name="StyleLabel" xml:space="preserve">
     <value>Style</value>
@@ -596,7 +596,7 @@
     <value>Configure named OSC/MIDI targets for action cues</value>
   </data>
   <data name="AudioTrackChangedStatusFormat" xml:space="preserve">
-    <value>Audio track changed for {0} — applies when the item is (re)opened.</value>
+    <value>Audio track changed for {0} - applies when the item is (re)opened.</value>
   </data>
   <data name="AudioChannelCountFormat" xml:space="preserve">
     <value>{0} ch</value>
@@ -605,10 +605,10 @@
     <value>(no audio stream)</value>
   </data>
   <data name="MultiSelectAudioBannerFormat" xml:space="preserve">
-    <value>{0} cues selected — "+ Route" adds a route to each.</value>
+    <value>{0} cues selected - "+ Route" adds a route to each.</value>
   </data>
   <data name="MultiSelectVideoBannerFormat" xml:space="preserve">
-    <value>{0} cues selected — "+ Placement" adds a placement to each.</value>
+    <value>{0} cues selected - "+ Placement" adds a placement to each.</value>
   </data>
   <data name="VideoTabAttachedPictureHint" xml:space="preserve">
     <value>This source's only video is an attached picture (e.g. album art). Placements use that still frame as a static layer.</value>
@@ -785,7 +785,7 @@
     <value>Output type</value>
   </data>
   <data name="OutputTypeLockedByEditHint" xml:space="preserve">
-    <value>(Output type cannot change on an existing output — remove and re-add.)</value>
+    <value>(Output type cannot change on an existing output - remove and re-add.)</value>
   </data>
   <data name="PresentationLabel" xml:space="preserve">
     <value>Presentation</value>
@@ -803,7 +803,7 @@
     <value>When set, this output mirrors the parent's video stream. Routing follows the parent automatically.</value>
   </data>
   <data name="NoneIndependentOutputLabel" xml:space="preserve">
-    <value>None — independent output</value>
+    <value>None - independent output</value>
   </data>
   <data name="NDISourceNameLabel" xml:space="preserve">
     <value>NDI source name</value>
@@ -851,7 +851,7 @@
     <value>MACHINE (Camera 1)</value>
   </data>
   <data name="ManualSourceNameHint" xml:space="preserve">
-    <value>Manual entries load even if the source is offline today — the playlist enters 'waiting for source' on Play until the sender appears.</value>
+    <value>Manual entries load even if the source is offline today - the playlist enters 'waiting for source' on Play until the sender appears.</value>
   </data>
   <data name="ConnectionHintsLabel" xml:space="preserve">
     <value>Connection hints</value>
@@ -920,7 +920,7 @@
     <value>Edit Action Cue</value>
   </data>
   <data name="EditActionCueDialogTitleWithLabel" xml:space="preserve">
-    <value>Edit Action — {0}</value>
+    <value>Edit Action - {0}</value>
   </data>
   <data name="MainSpeakersDefaultName" xml:space="preserve">
     <value>Main speakers</value>
@@ -941,19 +941,19 @@
     <value>NDI input</value>
   </data>
   <data name="NDILiveAudioResampleHint" xml:space="preserve">
-    <value>NDI sample rate differs from this output — resampling adds delay and may cause drops. Set the PortAudio device to 48 kHz if the NDI source is 48 kHz.</value>
+    <value>NDI sample rate differs from this output - resampling adds delay and may cause drops. Set the PortAudio device to 48 kHz if the NDI source is 48 kHz.</value>
   </data>
   <data name="EngineInAppPreviewLabel" xml:space="preserve">
     <value>UI Framework (Avalonia) Window</value>
   </data>
   <data name="EngineInAppPreviewSubtitle" xml:space="preserve">
-    <value>Avalonia — paints on the UI thread, lives inside the app shell</value>
+    <value>Avalonia - paints on the UI thread, lives inside the app shell</value>
   </data>
   <data name="EngineStandaloneWindowLabel" xml:space="preserve">
     <value>Standalone (SDL3) Window</value>
   </data>
   <data name="EngineStandaloneWindowSubtitle" xml:space="preserve">
-    <value>SDL3 — own thread, dedicated fullscreen-capable window</value>
+    <value>SDL3 - own thread, dedicated fullscreen-capable window</value>
   </data>
   <data name="NDIPixelFormatAutoLabel" xml:space="preserve">
     <value>Auto (match source)</value>
@@ -1049,7 +1049,7 @@
     <value>Scanning…</value>
   </data>
   <data name="NDIDiscoveryNoSourcesStatus" xml:space="preserve">
-    <value>No NDI sources visible yet — check sender power, network, and groups.</value>
+    <value>No NDI sources visible yet - check sender power, network, and groups.</value>
   </data>
   <data name="NDIDiscoverySourceCountStatus" xml:space="preserve">
     <value>{0} source(s) visible.</value>
@@ -1096,8 +1096,8 @@
   <data name="WindowedPreviewMenuHeader" xml:space="preserve">
     <value>Windowed</value>
   </data>
-  <data name="EmDash" xml:space="preserve">
-    <value>—</value>
+  <data name="Dash" xml:space="preserve">
+    <value>-</value>
   </data>
   <data name="OutputThroughputTooltip" xml:space="preserve">
     <value>Throughput over the last minute (frames + audio chunks per second).</value>
@@ -1115,7 +1115,7 @@
     <value>Sustained frame/chunk drops</value>
   </data>
   <data name="OutputIdleTooltip" xml:space="preserve">
-    <value>Idle — no active playback on this line</value>
+    <value>Idle - no active playback on this line</value>
   </data>
   <data name="MediaPlayerSettingsButtonLabel" xml:space="preserve">
     <value>Settings</value>
@@ -1139,7 +1139,7 @@
     <value>What the loaded source contains.</value>
   </data>
   <data name="NoMediaLoadedHint" xml:space="preserve">
-    <value>No media loaded — pick an item from the playlist below.</value>
+    <value>No media loaded - pick an item from the playlist below.</value>
   </data>
   <data name="SeekSliderTooltip" xml:space="preserve">
     <value>Drag to scrub. Keys: Space play/pause · [ ] prev/next · , . jog ±5 s · Home to start · + - volume.</value>
@@ -1193,7 +1193,7 @@
     <value>No audio output line available to apply a downmix preset to.</value>
   </data>
   <data name="DownmixNotApplicableStatusFormat" xml:space="preserve">
-    <value>Downmix '{0}' doesn't fit {1} source × {2} output channels — skipped.</value>
+    <value>Downmix '{0}' doesn't fit {1} source × {2} output channels - skipped.</value>
   </data>
   <data name="DownmixAppliedStatusFormat" xml:space="preserve">
     <value>Applied downmix '{0}' to {1}.</value>
@@ -1310,7 +1310,7 @@
     <value>Columns are source input channels. Rows are routed output device channels.</value>
   </data>
   <data name="MixPresetTooltip" xml:space="preserve">
-    <value>Preset that overwrites the matrix below for this device — Stereo identity, Swap L↔R, Mono-from-L, Mono-from-R, or Silence.</value>
+    <value>Preset that overwrites the matrix below for this device - Stereo identity, Swap L↔R, Mono-from-L, Mono-from-R, or Silence.</value>
   </data>
   <data name="DeviceOutputMuteTooltip" xml:space="preserve">
     <value>Mute this device output entirely.</value>
@@ -1328,7 +1328,7 @@
     <value>Active routes</value>
   </data>
   <data name="NoActiveRoutesHint" xml:space="preserve">
-    <value>No active routes — raise a matrix cell above -60 dB or unmute it.</value>
+    <value>No active routes - raise a matrix cell above -60 dB or unmute it.</value>
   </data>
   <data name="RoutingSummaryNoOutputs" xml:space="preserve">
     <value>(no outputs)</value>
@@ -1340,10 +1340,10 @@
     <value>(off)</value>
   </data>
   <data name="HoldImageSummaryOffImageSet" xml:space="preserve">
-    <value>(off — image set)</value>
+    <value>(off - image set)</value>
   </data>
   <data name="HoldImageSummaryOnNoImage" xml:space="preserve">
-    <value>(on — no image)</value>
+    <value>(on - no image)</value>
   </data>
   <data name="HoldImageSummaryOn" xml:space="preserve">
     <value>(on)</value>
@@ -1388,7 +1388,7 @@
     <value>↳</value>
   </data>
   <data name="AggregateSummaryIdle" xml:space="preserve">
-    <value>Idle — no active routes</value>
+    <value>Idle - no active routes</value>
   </data>
   <data name="AggregateSummaryActiveFormat" xml:space="preserve">
     <value>{0} active · {1} warning · {2} error</value>
@@ -1409,7 +1409,7 @@
     <value>Save &amp; continue (may glitch)</value>
   </data>
   <data name="OutputEditInUseDialogMessageFormat" xml:space="preserve">
-    <value>'{0}' is currently delivering audio/video to a running player. Save &amp; continue applies the change live under the running output — best for cosmetic changes like Always-on-top, usually with no interruption. Reconnect re-establishes the output for structural changes (a brief silence / black-frame).</value>
+    <value>'{0}' is currently delivering audio/video to a running player. Save &amp; continue applies the change live under the running output - best for cosmetic changes like Always-on-top, usually with no interruption. Reconnect re-establishes the output for structural changes (a brief silence / black-frame).</value>
   </data>
   <data name="OutputRemoveInUseDialogTitle" xml:space="preserve">
     <value>Remove output while in use?</value>
@@ -1460,7 +1460,7 @@
     <value>Auto-follow failed: {0}</value>
   </data>
   <data name="NDIPumpPressureStatusFormat" xml:space="preserve">
-    <value>NDI output '{0}' dropped {1} frames in the last 5 s (total {2}) — receiver may be slow.</value>
+    <value>NDI output '{0}' dropped {1} frames in the last 5 s (total {2}) - receiver may be slow.</value>
   </data>
   <data name="ColorTagLabel" xml:space="preserve">
     <value>Color tag</value>
@@ -1499,7 +1499,7 @@
     <value>Preview stopped.</value>
   </data>
   <data name="VideoFrameRateMismatchWarningFormat" xml:space="preserve">
-    <value>Source {0} fps → {1} fps canvas '{2}' — visible pulldown judder likely. Consider matching the composition frame rate to the source.</value>
+    <value>Source {0} fps → {1} fps canvas '{2}' - visible pulldown judder likely. Consider matching the composition frame rate to the source.</value>
   </data>
   <data name="CueExecuteNoSelectedPlayer" xml:space="preserve">
     <value>no selected player</value>
@@ -1550,10 +1550,10 @@
     <value>MIDI init failed: {0}</value>
   </data>
   <data name="ProjectTitleUntitled" xml:space="preserve">
-    <value>HaPlay — Untitled</value>
+    <value>HaPlay - Untitled</value>
   </data>
   <data name="ProjectTitleFormat" xml:space="preserve">
-    <value>HaPlay — {0}</value>
+    <value>HaPlay - {0}</value>
   </data>
   <data name="OpenProjectDialogTitle" xml:space="preserve">
     <value>Open HaPlay project</value>
@@ -1730,10 +1730,10 @@
     <value>Ready (cached)</value>
   </data>
   <data name="YouTubeAlreadyCachedStatus" xml:space="preserve">
-    <value>This selection is already cached — adding is instant.</value>
+    <value>This selection is already cached - adding is instant.</value>
   </data>
   <data name="YouTubeNotCachedStatus" xml:space="preserve">
-    <value>Not cached yet — the selected streams download when you add.</value>
+    <value>Not cached yet - the selected streams download when you add.</value>
   </data>
   <data name="AddYouTubeMenuItem" xml:space="preserve">
     <value>+ YouTube video…</value>
@@ -1754,7 +1754,7 @@
     <value>Motion (.vmd, optional)</value>
   </data>
   <data name="MMDCameraMotionPathLabel" xml:space="preserve">
-    <value>Camera motion (.vmd, optional — overrides manual camera)</value>
+    <value>Camera motion (.vmd, optional - overrides manual camera)</value>
   </data>
   <data name="MMDModelPathRequired" xml:space="preserve">
     <value>Pick an existing .pmx model file.</value>
@@ -1856,10 +1856,10 @@
     <value>Failed to open pre-connected PortAudio.</value>
   </data>
   <data name="WaitingForSourceWithRetryFormat" xml:space="preserve">
-    <value>WAITING: {0} — {1} (retry in {2}s).</value>
+    <value>WAITING: {0} - {1} (retry in {2}s).</value>
   </data>
   <data name="WaitingForSourceFormat" xml:space="preserve">
-    <value>WAITING: {0} — {1}.</value>
+    <value>WAITING: {0} - {1}.</value>
   </data>
   <data name="NegativeInfinityDbLabel" xml:space="preserve">
     <value>-inf dB</value>
@@ -1937,7 +1937,7 @@
     <value>File missing: {0}</value>
   </data>
   <data name="AutoRoutedStatusFormat" xml:space="preserve">
-    <value>Auto-routed to {0} — {1}. Change in Routing below.</value>
+    <value>Auto-routed to {0} - {1}. Change in Routing below.</value>
   </data>
   <data name="DefaultPlaylistTabName" xml:space="preserve">
     <value>Set A</value>
@@ -1967,13 +1967,13 @@
     <value>Not checked yet</value>
   </data>
   <data name="EndpointProbeOkHostPortFormat" xml:space="preserve">
-    <value>OK — {0}:{1}</value>
+    <value>OK - {0}:{1}</value>
   </data>
   <data name="OutputDeviceNotFound" xml:space="preserve">
     <value>Output device not found.</value>
   </data>
   <data name="EndpointProbeOkDeviceFormat" xml:space="preserve">
-    <value>OK — {0}</value>
+    <value>OK - {0}</value>
   </data>
   <data name="EndpointNoneOptionLabel" xml:space="preserve">
     <value>(none)</value>
@@ -2180,7 +2180,7 @@
     <value>Triggered {0}</value>
   </data>
   <data name="CueTriggeredWithDetailStatusFormat" xml:space="preserve">
-    <value>Triggered {0} — {1}</value>
+    <value>Triggered {0} - {1}</value>
   </data>
   <data name="CueExecutionFailedStatusFormat" xml:space="preserve">
     <value>Failed to start {0}</value>
@@ -2336,7 +2336,7 @@
     <value>Pop this player out into its own window</value>
   </data>
   <data name="DetachedPlayerTitleFormat" xml:space="preserve">
-    <value>{0} — HaPlay</value>
+    <value>{0} - HaPlay</value>
   </data>
   <data name="CuePreviewTabLabel" xml:space="preserve">
     <value>Preview</value>
@@ -2636,7 +2636,7 @@
     <value>Cut this output's composition into individually movable/warpable sections (multi-panel or uneven projection surfaces)</value>
   </data>
   <data name="MappingNeedsCompositionToast" xml:space="preserve">
-    <value>Pick a composition for this output first — the mapping cuts that composition's canvas into sections.</value>
+    <value>Pick a composition for this output first - the mapping cuts that composition's canvas into sections.</value>
   </data>
   <data name="SoundboardBoardDefaultOutputLabel" xml:space="preserve">
     <value>(Board default)</value>
@@ -2669,7 +2669,7 @@
     <value>Name</value>
   </data>
   <data name="SoundboardTileNameTooltip" xml:space="preserve">
-    <value>Optional alias shown on the tile — leave empty to show the filename</value>
+    <value>Optional alias shown on the tile - leave empty to show the filename</value>
   </data>
   <data name="SoundboardBrowseButton" xml:space="preserve">
     <value>Browse…</value>
@@ -2714,7 +2714,7 @@
     <value>Edit this board</value>
   </data>
   <data name="CueEmptyHint" xml:space="preserve">
-    <value>No cues yet. Add a media, image, or text cue — or drop media files here — to start building your show.</value>
+    <value>No cues yet. Add a media, image, or text cue - or drop media files here - to start building your show.</value>
   </data>
   <data name="CueEmptyAction" xml:space="preserve">
     <value>Add media cue</value>
@@ -2774,13 +2774,13 @@
     <value>Access token</value>
   </data>
   <data name="RemoteApiSecurityLoopback" xml:space="preserve">
-    <value>Loopback only — reachable from this machine.</value>
+    <value>Loopback only - reachable from this machine.</value>
   </data>
   <data name="RemoteApiSecurityLan" xml:space="preserve">
-    <value>LAN access enabled — reachable from your show network; use only on a trusted network.</value>
+    <value>LAN access enabled - reachable from your show network; use only on a trusted network.</value>
   </data>
   <data name="RemoteApiTokenRequired" xml:space="preserve">
-    <value>A token is set: every request must include it via the "X-HaPlay-Api-Key" header (or "Authorization: Bearer"). Copied URLs no longer embed the token — use Copy to grab it for your controller.</value>
+    <value>A token is set: every request must include it via the "X-HaPlay-Api-Key" header (or "Authorization: Bearer"). Copied URLs no longer embed the token - use Copy to grab it for your controller.</value>
   </data>
   <data name="RemoteApiTokenOptional" xml:space="preserve">
     <value>No token: any client that can reach the port can control HaPlay. Set a token to require authentication.</value>
@@ -2789,7 +2789,7 @@
     <value>(disabled)</value>
   </data>
   <data name="RemoteApiHint" xml:space="preserve">
-    <value>HTTP control for show controllers (e.g. Bitfocus Companion). GET reads status; commands use POST. All indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL. The access token is optional — set one to require authentication, then send it as the "X-HaPlay-Api-Key" header (copied URLs never contain the token).</value>
+    <value>HTTP control for show controllers (e.g. Bitfocus Companion). GET reads status; commands use POST. All indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL. The access token is optional - set one to require authentication, then send it as the "X-HaPlay-Api-Key" header (copied URLs never contain the token).</value>
   </data>
   <data name="RemoteApiGenerateTokenLabel" xml:space="preserve">
     <value>Generate token</value>
@@ -2855,10 +2855,10 @@
     <value>Outputs this player is routing to. Click for per-output health.</value>
   </data>
   <data name="DeckRoutingNoneHint" xml:space="preserve">
-    <value>This player isn't routed to any output — it won't be seen or heard.</value>
+    <value>This player isn't routed to any output - it won't be seen or heard.</value>
   </data>
   <data name="RemoteApiTokenNone" xml:space="preserve">
-    <value>(none — authentication disabled)</value>
+    <value>(none - authentication disabled)</value>
   </data>
   <data name="RemoteApiDocCues" xml:space="preserve">
     <value>Cue player transport (go fires the standby/selected cue)</value>
@@ -2870,13 +2870,13 @@
     <value>Master volume in dB (−60 … +12)</value>
   </data>
   <data name="RemoteApiDocPlayerHold" xml:space="preserve">
-    <value>Hold image on/off — without ?on it toggles</value>
+    <value>Hold image on/off - without ?on it toggles</value>
   </data>
   <data name="RemoteApiDocPlaylistItem" xml:space="preserve">
     <value>Play a playlist item (optional /play suffix)</value>
   </data>
   <data name="RemoteApiDocTile" xml:space="preserve">
-    <value>Soundboard tile — bare URL = tap (same as touching it)</value>
+    <value>Soundboard tile - bare URL = tap (same as touching it)</value>
   </data>
   <data name="RemoteApiDocSoundboardStop" xml:space="preserve">
     <value>Stop every playing soundboard sound</value>
@@ -2897,7 +2897,7 @@
     <value>Properties…</value>
   </data>
   <data name="MediaPropertiesAppliedStatusFormat" xml:space="preserve">
-    <value>Updated {0} — applies on next play.</value>
+    <value>Updated {0} - applies on next play.</value>
   </data>
   <data name="PlaylistRemoveButtonLabel" xml:space="preserve">
     <value>Remove</value>
@@ -2915,7 +2915,7 @@
     <value>Details, tracks and per-kind settings for the selected playlist item</value>
   </data>
   <data name="MediaPropertiesDialogTitleFormat" xml:space="preserve">
-    <value>Properties — {0}</value>
+    <value>Properties - {0}</value>
   </data>
   <data name="MediaPropertiesTabDetails" xml:space="preserve">
     <value>Details</value>
@@ -2969,16 +2969,16 @@
     <value>Baking physics…</value>
   </data>
   <data name="MediaPropertiesBakeDone" xml:space="preserve">
-    <value>Physics baked and cached — playback uses the pre-rendered simulation.</value>
+    <value>Physics baked and cached - playback uses the pre-rendered simulation.</value>
   </data>
   <data name="MediaPropertiesBakeFailedFormat" xml:space="preserve">
     <value>Bake failed: {0}</value>
   </data>
   <data name="MediaPropertiesBakeStatusCached" xml:space="preserve">
-    <value>Physics bake cached — playback uses the pre-rendered simulation.</value>
+    <value>Physics bake cached - playback uses the pre-rendered simulation.</value>
   </data>
   <data name="MediaPropertiesBakeStatusNotCached" xml:space="preserve">
-    <value>No physics bake cached yet — first playback bakes in the background.</value>
+    <value>No physics bake cached yet - first playback bakes in the background.</value>
   </data>
   <data name="MediaPropertiesBakeStatusNoMotion" xml:space="preserve">
     <value>Physics baking needs a motion (VMD).</value>
@@ -2990,7 +2990,7 @@
     <value>Downloaded and cached</value>
   </data>
   <data name="MediaPropertiesCacheStateNotCached" xml:space="preserve">
-    <value>Not cached — downloads before first play</value>
+    <value>Not cached - downloads before first play</value>
   </data>
   <data name="MediaPropertiesRowName" xml:space="preserve">
     <value>Name</value>
@@ -3122,7 +3122,7 @@
     <value>Freed {0}.</value>
   </data>
   <data name="CacheClearedWithSkipsStatusFormat" xml:space="preserve">
-    <value>Freed {0} — {1} file(s) in use were kept.</value>
+    <value>Freed {0} - {1} file(s) in use were kept.</value>
   </data>
   <data name="CacheOpenFolderButton" xml:space="preserve">
     <value>Open folder</value>
@@ -3140,7 +3140,7 @@
     <value>{0} / {1} · {2}/s</value>
   </data>
   <data name="ScriptEditorUnsavedBanner" xml:space="preserve">
-    <value>Unsaved changes — this script hasn't been written to disk yet.</value>
+    <value>Unsaved changes - this script hasn't been written to disk yet.</value>
   </data>
   <data name="ScriptEditorDiscardButton" xml:space="preserve">
     <value>Discard</value>
@@ -3167,7 +3167,7 @@
     <value>Reset layout</value>
   </data>
   <data name="ControlResetLayoutTooltip" xml:space="preserve">
-    <value>Restore the default docking layout — brings back any pane that was closed or floated out</value>
+    <value>Restore the default docking layout - brings back any pane that was closed or floated out</value>
   </data>
   <data name="MenuExitHeader" xml:space="preserve">
     <value>_Exit</value>
@@ -3176,10 +3176,10 @@
     <value>Fit</value>
   </data>
   <data name="VideoFitHint" xml:space="preserve">
-    <value>How this display fits the video: Letterbox keeps the whole frame (black bars); Cover fills the screen and crops the edges; Stretch fills and may distort. Only affects this local output — NDI outputs always send the full letterboxed frame.</value>
+    <value>How this display fits the video: Letterbox keeps the whole frame (black bars); Cover fills the screen and crops the edges; Stretch fills and may distort. Only affects this local output - NDI outputs always send the full letterboxed frame.</value>
   </data>
   <data name="PlayerTintTooltip" xml:space="preserve">
-    <value>Deck color — tints this player so you can tell decks apart</value>
+    <value>Deck color - tints this player so you can tell decks apart</value>
   </data>
   <data name="PlayerTintHeader" xml:space="preserve">
     <value>Deck color</value>
@@ -3188,10 +3188,10 @@
     <value>Custom</value>
   </data>
   <data name="LiveTimelineLabel" xml:space="preserve">
-    <value>LIVE — seeking unavailable</value>
+    <value>LIVE - seeking unavailable</value>
   </data>
   <data name="AddSubtitleCueButton" xml:space="preserve">
-    <value>Subtitle cue</value>
+    <value>+ Subtitle</value>
   </data>
   <data name="EditVideoFxButton" xml:space="preserve">
     <value>Video FX…</value>
@@ -3302,7 +3302,7 @@
     <value>Embedded subtitle tracks</value>
   </data>
   <data name="SubtitleTracksHint" xml:space="preserve">
-    <value>Tick the tracks to display over this cue's video — none, one, or several. (Sidecar files and font/placement options are coming.)</value>
+    <value>Tick the tracks to display over this cue's video - none, one, or several. (Sidecar files and font/placement options are coming.)</value>
   </data>
   <data name="SubtitleFontHeader" xml:space="preserve">
     <value>Font</value>

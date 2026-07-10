@@ -6,7 +6,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Save/load rework — the two remaining granular formats: composition sets (name-keyed
+/// <summary>Save/load rework - the two remaining granular formats: composition sets (name-keyed
 /// merge into a cue list) and control-layer slices (extract + replace-by-name merge).</summary>
 public sealed class SectionExportMergeTests
 {

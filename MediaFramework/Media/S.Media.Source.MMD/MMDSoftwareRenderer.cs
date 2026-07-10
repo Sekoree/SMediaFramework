@@ -20,7 +20,7 @@ public sealed class MMDSoftwareRenderer(int width, int height)
     private MMDCpuTexture?[]? _materialTextures;
 
     /// <summary>Per-material diffuse textures (index-aligned with the model's materials; null entries
-    /// render with the flat diffuse color). Loaded once by the host — the preview/CPU-fallback path
+    /// render with the flat diffuse color). Loaded once by the host - the preview/CPU-fallback path
     /// then shows the real model textures instead of a grayscale raster (operator request).</summary>
     public void SetTextures(MMDCpuTexture?[]? materialTextures) => _materialTextures = materialTextures;
 
@@ -45,7 +45,7 @@ public sealed class MMDSoftwareRenderer(int width, int height)
         // Camera: reuse the GL surface's exact view/projection so the placement PREVIEW frames the shot
         // identically to the final GL output (both flip Z per-vertex to right-handed below). This renderer
         // previously negated the eye offset (eye = target − back·|d| instead of target + back·|d|), which
-        // put the preview camera on the OPPOSITE side of the target — the preview showed the model's back
+        // put the preview camera on the OPPOSITE side of the target - the preview showed the model's back
         // while playback showed its front. One source of truth removes that whole class of drift.
         var view = MMDGlLayerSurface.SceneView(camera);
         var projection = MMDGlLayerSurface.SceneProjection(camera, (float)Width / Height);
@@ -148,7 +148,7 @@ public sealed class MMDSoftwareRenderer(int width, int height)
                 if (!inside)
                     continue;
 
-                // Barycentric depth (screen-space linear — adequate for a preview renderer).
+                // Barycentric depth (screen-space linear - adequate for a preview renderer).
                 var b1 = e2 * invArea;
                 var b2 = e0 * invArea;
                 var b0 = 1f - b1 - b2;
@@ -160,7 +160,7 @@ public sealed class MMDSoftwareRenderer(int width, int height)
                 var offset = index * 4;
                 if (texture is not null)
                 {
-                    // Nearest-neighbor texel (screen-space barycentric UV — adequate for the preview).
+                    // Nearest-neighbor texel (screen-space barycentric UV - adequate for the preview).
                     var u = b0 * uv0.X + b1 * uv1.X + b2 * uv2.X;
                     var v = b0 * uv0.Y + b1 * uv1.Y + b2 * uv2.Y;
                     var tx = Math.Clamp((int)(u * texture.Width), 0, texture.Width - 1);
@@ -174,7 +174,7 @@ public sealed class MMDSoftwareRenderer(int width, int height)
                         textureMultiply.W, textureAdd.Z, textureAdd.W);
                     var ta = texture.Rgba[t + 3] / 255f;
                     if (ta * diffuse.W < 8f / 255f)
-                        continue; // fully transparent texel — leave what is behind
+                        continue; // fully transparent texel - leave what is behind
                     bgra[offset] = ToByte(tb * diffuse.Z * intensity);
                     bgra[offset + 1] = ToByte(tg * diffuse.Y * intensity);
                     bgra[offset + 2] = ToByte(tr * diffuse.X * intensity);

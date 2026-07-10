@@ -3,7 +3,7 @@ using Xunit;
 namespace S.Media.Core.Tests.Next;
 
 /// <summary>
-/// NXT-05 (Gate 2): the single owning <see cref="MediaHost"/> — disposing it releases the registry's module
+/// NXT-05 (Gate 2): the single owning <see cref="MediaHost"/> - disposing it releases the registry's module
 /// native-runtime lifetimes deterministically, and reports plugin leases that outlived the host. These are the
 /// invariants HaPlay's shutdown and the C-ABI per-session teardown now depend on.
 /// </summary>
@@ -25,7 +25,7 @@ public class MediaHostTests
         Assert.Equal(1, releases);
         Assert.True(host.IsDisposed);
 
-        host.Dispose(); // idempotent — no second release of the module lifetime
+        host.Dispose(); // idempotent - no second release of the module lifetime
         Assert.Equal(1, releases);
     }
 
@@ -73,7 +73,7 @@ public class MediaHostTests
         lease.Dispose();
         Assert.Equal(0, host.OutstandingPluginLeases);
 
-        lease.Dispose(); // idempotent — releasing twice does not underflow the count
+        lease.Dispose(); // idempotent - releasing twice does not underflow the count
         Assert.Equal(0, host.OutstandingPluginLeases);
 
         host.Dispose();
@@ -89,7 +89,7 @@ public class MediaHostTests
             b => b.AddLifetime(new DisposeSpy(() => registryReleased = true)),
             onLeasesLeaked: l => leaked = l);
 
-        host.AcquirePluginLease("org.example.mmd"); // never released — simulates a plugin object outliving the host
+        host.AcquirePluginLease("org.example.mmd"); // never released - simulates a plugin object outliving the host
         host.AcquirePluginLease("org.example.mmd"); // same owner reported once (distinct)
         host.AcquirePluginLease("org.example.youtube");
         Assert.Equal(3, host.OutstandingPluginLeases);
@@ -100,7 +100,7 @@ public class MediaHostTests
         Assert.Equal(3, leaked!.Count); // all outstanding leases surfaced to the reporter
         Assert.Contains("org.example.mmd", leaked);
         Assert.Contains("org.example.youtube", leaked);
-        Assert.True(registryReleased); // a leak must NOT abort registry teardown — native runtimes still release
+        Assert.True(registryReleased); // a leak must NOT abort registry teardown - native runtimes still release
     }
 
     [Fact]

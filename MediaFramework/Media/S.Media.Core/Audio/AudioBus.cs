@@ -11,7 +11,7 @@ namespace S.Media.Core.Audio;
 /// <see cref="AudioRouter.AddOutput"/>) and a source (via <see cref="AudioRouter.AddSource"/>).
 /// Per chunk, the router pumps mixed audio into the bus (output side) and reads it back on the
 /// source side. The bus introduces approximately one router chunk of latency through the feedback
-/// path — the SPSC ring decouples the per-output pump thread (Submit) from the run loop thread
+/// path - the SPSC ring decouples the per-output pump thread (Submit) from the run loop thread
 /// (ReadInto) without an internal lock.
 /// </para>
 /// <para>
@@ -22,7 +22,7 @@ namespace S.Media.Core.Audio;
 /// fragment plus a counted-in-<see cref="UnderflowFloats"/> short read.
 /// </para>
 /// <para>
-/// <see cref="IsExhausted"/> is always <c>false</c> — the bus is a passive node. Hosts that need
+/// <see cref="IsExhausted"/> is always <c>false</c> - the bus is a passive node. Hosts that need
 /// natural completion semantics manage that at a higher level (e.g. remove the bus's routes when
 /// upstream sources exhaust).
 /// </para>

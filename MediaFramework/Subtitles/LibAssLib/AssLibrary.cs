@@ -3,7 +3,7 @@ using System.Text;
 namespace LibAssLib;
 
 /// <summary>
-/// Managed wrapper over an <c>ASS_Library</c> — the libass instance that owns font data and mints renderers and
+/// Managed wrapper over an <c>ASS_Library</c> - the libass instance that owns font data and mints renderers and
 /// tracks. Dispose it <strong>last</strong>, after every <see cref="AssRenderer"/> / <see cref="AssTrack"/> it
 /// created.
 /// </summary>
@@ -15,7 +15,7 @@ public sealed unsafe class AssLibrary : IDisposable
     {
         _handle = LibAssNative.ass_library_init();
         if (_handle == 0)
-            throw new InvalidOperationException("ass_library_init failed — is libass available on the search path?");
+            throw new InvalidOperationException("ass_library_init failed - is libass available on the search path?");
     }
 
     internal nint Handle => _handle;
@@ -35,8 +35,8 @@ public sealed unsafe class AssLibrary : IDisposable
         }
     });
 
-    /// <summary>True when native libass can be loaded on this machine (probed once). Lets callers — notably tests on
-    /// a runner without the package — skip gracefully instead of throwing <see cref="DllNotFoundException"/>.</summary>
+    /// <summary>True when native libass can be loaded on this machine (probed once). Lets callers - notably tests on
+    /// a runner without the package - skip gracefully instead of throwing <see cref="DllNotFoundException"/>.</summary>
     public static bool IsAvailable => AvailableProbe.Value;
 
     /// <summary>Enable extraction of fonts embedded in containers (then registered via <see cref="AddFont"/>).</summary>

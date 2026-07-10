@@ -15,7 +15,7 @@ public enum ClipEndBehavior
     FadeOutAndStop,
 }
 
-/// <summary>A clip's appearance on its composition canvas — where its video sits and how it fits. Defaults
+/// <summary>A clip's appearance on its composition canvas - where its video sits and how it fits. Defaults
 /// are full-canvas, opaque, Cover fit, upright (a clip with no placement composites exactly as before).
 /// <paramref name="Fit"/> is the fit mode within the dest rect (Cover/Contain/Letterbox/Center/Stretch/
 /// FillWidth/FillHeight; null = Cover). Maps to the compositor's <c>VideoPlacementSpec</c>.</summary>
@@ -35,15 +35,15 @@ public sealed record ShowVideoPlacement(
 
 /// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
 /// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).
-/// A cue may place the SAME decoded source onto several compositions/layers at once — picture-in-picture, the
-/// same feed in two regions, or mirrored to a second canvas — so <see cref="ShowClipBinding.GetPlacements"/>
+/// A cue may place the SAME decoded source onto several compositions/layers at once - picture-in-picture, the
+/// same feed in two regions, or mirrored to a second canvas - so <see cref="ShowClipBinding.GetPlacements"/>
 /// returns every placement and <c>PlayClipAsync</c> fans the one clip's video out to each (decoded once).</summary>
 public sealed record ShowClipPlacement(
     string CompositionId,
     int LayerIndex = 0,
     ShowVideoPlacement? Placement = null);
 
-/// <summary>One audio output a clip plays on (GUI per-cue audio routing — a group of <c>CueAudioRoute</c>s to
+/// <summary>One audio output a clip plays on (GUI per-cue audio routing - a group of <c>CueAudioRoute</c>s to
 /// the same output line). Unlike a per-group <see cref="ShowAudioOutput"/>, this is carried on the clip so a
 /// cue plays on exactly its routed outputs. <see cref="ChannelMatrix"/> is the N→M <see cref="ChannelMap"/>
 /// array (length = output channels, each entry = the source channel feeding it, -1 = silence); null = stereo.</summary>
@@ -90,7 +90,7 @@ public sealed record ShowAudioMatrixCell(int InputChannel, int OutputChannel, fl
 
 /// <summary>
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
-/// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI — D2) and played on the cue's group.
+/// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI - D2) and played on the cue's group.
 /// </summary>
 /// <param name="AudioStreamIndex">Audio track selection (03 §6 multi-track): <c>null</c> = automatic,
 /// <c>-1</c> (<see cref="S.Media.Players.MediaPlayerOpenOptions.DisabledStreamIndex"/>) = no audio, otherwise
@@ -149,7 +149,7 @@ public sealed record ShowClipBinding(
     public bool EndAtDuration { get; init; }
 
     /// <summary>Monitor a plain <see cref="ClipEndBehavior.Stop"/> file clip with no trim/fade/loop for its
-    /// natural end: release the clip and raise <c>ShowSession.ClipNaturallyEnded</c> when it plays through —
+    /// natural end: release the clip and raise <c>ShowSession.ClipNaturallyEnded</c> when it plays through -
     /// at the duration out-point, or when its (finite, audio-clocked) playback stalls at source EOF short of
     /// the metadata duration. Opt-in per clip: set it for real file cues that drive cue auto-follow; leave it
     /// off for held/live sources (their clock legitimately idles while the clip is up) and for hosts that
@@ -162,7 +162,7 @@ public sealed record ShowClipBinding(
 
     /// <summary>Composition placements <em>beyond</em> the primary (<see cref="CompositionId"/>/<see cref="LayerIndex"/>/
     /// <see cref="Placement"/>). When set, the clip's one decoded video is fanned to every placement here as well as
-    /// the primary — each its own composition layer. Empty/null ⇒ the clip appears only on the primary composition.
+    /// the primary - each its own composition layer. Empty/null ⇒ the clip appears only on the primary composition.
     /// Use <see cref="GetPlacements"/> for the layer-ordered effective set.</summary>
     public IReadOnlyList<ShowClipPlacement>? ExtraPlacements { get; init; }
 
@@ -194,7 +194,7 @@ public sealed record ShowSubtitleSelection(string? Path = null, int StreamIndex 
 
 /// <summary>A composition canvas a clip's video can be placed onto (maps to a <c>ClipCompositionRuntime</c>).
 /// <paramref name="OutputMapping"/> cuts the composited canvas into placed sections for the output (projector
-/// keystone / multi-panel tiling) — affine sections composite headless on the CPU backend; mesh warp is GL.</summary>
+/// keystone / multi-panel tiling) - affine sections composite headless on the CPU backend; mesh warp is GL.</summary>
 public sealed record ShowComposition(
     string Id,
     string Name,
@@ -215,7 +215,7 @@ public sealed record ShowAudioOutput(
     string GroupId = "main"); // = ShowSession.DefaultGroup
 
 /// <summary>
-/// The headless, serializable definition of a show — cues, the media each cue plays, and the output patch.
+/// The headless, serializable definition of a show - cues, the media each cue plays, and the output patch.
 /// Source-generated (<see cref="ShowDocumentJsonContext"/>) so it loads with no reflection (D10, AOT-safe),
 /// and carries no Avalonia/UI state (the UI persists view-state separately on top of this).
 /// </summary>
@@ -234,10 +234,10 @@ public sealed record ShowDocument(
     /// <summary>An empty version-1 show.</summary>
     public static ShowDocument Empty { get; } = new(1, [], [], [], []);
 
-    /// <summary>Serializes to indented JSON via the source-generated context (no reflection — D10).</summary>
+    /// <summary>Serializes to indented JSON via the source-generated context (no reflection - D10).</summary>
     public string ToJson() => JsonSerializer.Serialize(this, ShowDocumentJsonContext.Default.ShowDocument);
 
-    /// <summary>Loads a show from JSON via the source-generated context (headless, AOT-safe — D10).</summary>
+    /// <summary>Loads a show from JSON via the source-generated context (headless, AOT-safe - D10).</summary>
     public static ShowDocument FromJson(string json) =>
         JsonSerializer.Deserialize(json, ShowDocumentJsonContext.Default.ShowDocument)
         ?? throw new InvalidOperationException("show document JSON was empty or invalid.");

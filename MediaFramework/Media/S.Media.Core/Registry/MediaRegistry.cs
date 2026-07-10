@@ -87,7 +87,7 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
 
 /// <summary>
 /// Immutable capability registry (see <see cref="IMediaRegistry"/>). Build it once at the composition
-/// root and inject it. No process-wide mutable state — two registries with different capabilities can
+/// root and inject it. No process-wide mutable state - two registries with different capabilities can
 /// coexist in one process, and tests build a registry per case (replaces the old PreserveDefaults hack).
 /// </summary>
 public sealed class MediaRegistry : IMediaRegistry, IDisposable
@@ -119,7 +119,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
 
     /// <summary>Releases the native/runtime lifetimes registered by modules (NXT-05), in reverse registration
     /// order. Idempotent and thread-safe (CORE-01: an interlocked transition, so concurrent disposals release
-    /// each lifetime exactly once). Dispose only when no player/session still uses the registry — that is the
+    /// each lifetime exactly once). Dispose only when no player/session still uses the registry - that is the
     /// owning host's responsibility (a borrowing <c>ShowSession</c> must NOT dispose a registry it was handed;
     /// see <see cref="IMediaRegistry"/>). After disposal, capability operations throw
     /// <see cref="ObjectDisposedException"/> rather than touch released native runtime.</summary>
@@ -134,14 +134,14 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         }
     }
 
-    /// <summary>Rejects a capability operation issued after disposal (CORE-01) — the registry's native runtime
+    /// <summary>Rejects a capability operation issued after disposal (CORE-01) - the registry's native runtime
     /// has been released, so opening/creating against it would be use-after-free.</summary>
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
     /// <summary>Builds an immutable registry from a configuration callback (the composition root). If a module
     /// throws part-way through registration, the lifetimes already acquired are rolled back in reverse order
-    /// before the exception propagates (CORE-02) — a failed build must not leak native-runtime holds.</summary>
+    /// before the exception propagates (CORE-02) - a failed build must not leak native-runtime holds.</summary>
     public static MediaRegistry Build(Action<IMediaRegistryBuilder> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);

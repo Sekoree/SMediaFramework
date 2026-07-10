@@ -42,5 +42,5 @@ if (args.Length > 0)
     Console.WriteLine($"NDI discovery:  {found.Count} source(s) on the network: {string.Join(", ", found.Select(s => s.Name))}");
 }
 
-Console.WriteLine("BackendsSmoke OK — FFmpeg + PortAudio + MiniAudio + NDI registered; native libs loaded.");
+Console.WriteLine("BackendsSmoke OK - FFmpeg + PortAudio + MiniAudio + NDI registered; native libs loaded.");
 return 0;

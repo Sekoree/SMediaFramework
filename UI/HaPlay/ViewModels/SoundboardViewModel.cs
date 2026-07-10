@@ -6,7 +6,7 @@ namespace HaPlay.ViewModels;
 
 /// <summary>
 /// One soundboard tab: a fixed Rows×Columns grid of <see cref="SoundboardTileViewModel"/> in
-/// row-major order (every cell always has a tile VM — unbound ones render as blanks outside edit
+/// row-major order (every cell always has a tile VM - unbound ones render as blanks outside edit
 /// mode so bound tiles never shift cells), plus the per-board defaults that pre-fill tiles when a
 /// sound is bound.
 /// </summary>
@@ -116,7 +116,7 @@ public sealed partial class SoundboardViewModel : ObservableObject
             var tile = byCell.TryGetValue((row, column), out var existing)
                 ? existing
                 : new SoundboardTileViewModel(row, column) { IsEditing = IsEditing };
-            tile.GridIndex = Tiles.Count + 1; // 1-based row-major — the remote API tile number
+            tile.GridIndex = Tiles.Count + 1; // 1-based row-major - the remote API tile number
             Tiles.Add(tile);
         }
     }
@@ -131,7 +131,7 @@ public sealed partial class SoundboardViewModel : ObservableObject
         DefaultVolume = Math.Clamp(DefaultVolume, 0, 1),
         DefaultFadeOutMs = Math.Max(0, DefaultFadeOutMs),
         DefaultLoop = DefaultLoop,
-        // Only bound tiles persist — blanks are derivable from the grid size.
+        // Only bound tiles persist - blanks are derivable from the grid size.
         Tiles = Tiles.Where(t => t.IsBound).Select(t => t.ToConfig()).ToList(),
     };
 

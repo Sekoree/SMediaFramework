@@ -26,7 +26,7 @@ public readonly record struct DownmixContribution(int InputChannel, int OutputCh
 
 public static class AudioDownmixPresets
 {
-    /// <summary>−3.01 dB ≈ 0.7071 linear — the standard fold-down coefficient for C/surrounds.</summary>
+    /// <summary>−3.01 dB ≈ 0.7071 linear - the standard fold-down coefficient for C/surrounds.</summary>
     public const double Minus3Db = -3.0102999566398121;
 
     /// <summary>LFE channel index in SMPTE/ITU 5.1 order (0=L 1=R 2=C 3=LFE 4=Ls 5=Rs).</summary>
@@ -101,7 +101,7 @@ public static class AudioDownmixPresets
 }
 
 /// <summary>
-/// UI rewrite P5b: one per-player auto-preset rule — "when a source with
+/// UI rewrite P5b: one per-player auto-preset rule - "when a source with
 /// <see cref="SourceChannels"/> channels loads, apply <see cref="Preset"/> to the routing matrix".
 /// Stereo files typically need no rule (identity default); a 6-channel rule is how an operator
 /// predetermines that an occasional 5.1 file folds down (or passes through) instead of silently

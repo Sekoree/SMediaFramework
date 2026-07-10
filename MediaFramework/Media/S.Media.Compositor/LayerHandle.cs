@@ -58,7 +58,7 @@ public sealed class LayerHandle
     /// <summary>
     /// Advances this layer to <paramref name="masterTime"/>: catches the layer's decode timeline up to
     /// the master clock (bounded), selects the frame whose interval contains <paramref name="masterTime"/>
-    /// (the last frame with PTS ≤ master time), and submits it to the slot — but only when that frame
+    /// (the last frame with PTS ≤ master time), and submits it to the slot - but only when that frame
     /// changed since the previous advance, so a downstream consumer reading faster than the clock
     /// advances neither re-decodes the layer nor re-submits. Per-layer opacity / transform / blend are
     /// re-resolved every call so animated transitions stay smooth even while the frame is held.
@@ -68,7 +68,7 @@ public sealed class LayerHandle
         lock (_gate)
         {
             // The layer was removed/closed (RemoveLayer disposed the look-ahead and the slot). A composite
-            // iterating a pre-removal layer snapshot must not re-pull source frames into _lookahead here —
+            // iterating a pre-removal layer snapshot must not re-pull source frames into _lookahead here -
             // nothing would dispose them again, leaking the native backing.
             if (_closed)
                 return;
@@ -94,7 +94,7 @@ public sealed class LayerHandle
                 _lookahead.RemoveAt(0);
             }
 
-            // 2b. Drop frames superseded by a newer frame that is also ≤ master time — they'll never be the
+            // 2b. Drop frames superseded by a newer frame that is also ≤ master time - they'll never be the
             //     cover (the newer one is closer to / contains master time).
             while (_lookahead.Count >= 2 && _lookahead[1].PresentationTime <= masterTime)
             {
@@ -102,8 +102,8 @@ public sealed class LayerHandle
                 _lookahead.RemoveAt(0);
             }
 
-            // 3. The front is now the cover (last frame ≤ master time), or — before the master time has
-            //    reached any frame — the earliest future frame stands in as start-up pre-roll. Submit it
+            // 3. The front is now the cover (last frame ≤ master time), or - before the master time has
+            //    reached any frame - the earliest future frame stands in as start-up pre-roll. Submit it
             //    once; subsequent advances within its interval just re-resolve the slot params.
             if (_lookahead.Count > 0
                 && (_lookahead[0].PresentationTime <= masterTime || !_hasDisplayed))
@@ -117,7 +117,7 @@ public sealed class LayerHandle
                 return;
             }
 
-            // Frame unchanged (held in the slot) — refresh time-driven slot params only.
+            // Frame unchanged (held in the slot) - refresh time-driven slot params only.
             UpdateSlotParams(masterTime, canvasFormat);
         }
     }

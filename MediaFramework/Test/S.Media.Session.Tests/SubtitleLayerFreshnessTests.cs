@@ -7,7 +7,7 @@ namespace S.Media.Session.Tests;
 /// <summary>
 /// Regression guard for the subtitle-freeze bug: a subtitle overlay is pump-driven and re-rendered in place,
 /// so every frame it submits carries <see cref="VideoFrame.PresentationTime"/> = 0. The composition layer it
-/// lands on must therefore be <c>Latest</c>-wins — a <c>MasterAligned</c> slot treats every constant-PTS
+/// lands on must therefore be <c>Latest</c>-wins - a <c>MasterAligned</c> slot treats every constant-PTS
 /// frame as equidistant from the clock and freezes on the FIRST one, so only the first subtitle ever shows
 /// (its later text updates are silently dropped). This drives a real session and asserts the composited
 /// canvas actually TRACKS the overlay's changing content.
@@ -43,10 +43,10 @@ public sealed class SubtitleLayerFreshnessTests
             var bucket = (byte)Math.Clamp((int)masterTime.TotalSeconds, 0, 255);
             for (var i = 0; i < _buffer.Length; i += 4)
             {
-                _buffer[i] = bucket;   // B — the tick marker
+                _buffer[i] = bucket;   // B - the tick marker
                 _buffer[i + 1] = 0;    // G
                 _buffer[i + 2] = 0;    // R
-                _buffer[i + 3] = 255;  // A — opaque so it defines the canvas
+                _buffer[i + 3] = 255;  // A - opaque so it defines the canvas
             }
             return _frame;
         }

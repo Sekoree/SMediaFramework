@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Abi — inbound native C-ABI plugin host (Phase 6). Loads shared-library plugins (include/mfp_plugin.h)
+    <!-- S.Abi - inbound native C-ABI plugin host (Phase 6). Loads shared-library plugins (include/mfp_plugin.h)
          and adapts their vtables to the framework's managed interfaces. References the layers it adapts into:
          Core/Time (media + clocks), Compositor (layer surfaces), and Session-free Control.Abstractions. -->
 

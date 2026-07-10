@@ -15,7 +15,7 @@ namespace S.Media.NDI.Video;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Async path — uses <c>NDIlib_send_send_video_async_v2</c> with a
+/// Async path - uses <c>NDIlib_send_send_video_async_v2</c> with a
 /// double-buffered unmanaged staging area (<see cref="NativeMemory"/>): the
 /// previously-sent buffer stays alive until the next send completes (NDI's
 /// contract), so we ping-pong two natively-allocated frames.
@@ -27,9 +27,9 @@ namespace S.Media.NDI.Video;
 /// <see cref="NDIVideoTimecodeMode.MuxerPresentationTicks"/> uses absolute mux PTS ticks on every frame.
 /// </para>
 /// <para>
-/// Pixel-format support (negotiation order — higher chroma first when multiple
+/// Pixel-format support (negotiation order - higher chroma first when multiple
 /// paths exist): UYVY, BGRA32, RGBA32, NV12, I420. Planar (NV12 / I420)
-/// frames are packed into one contiguous staging buffer — Y plane first at
+/// frames are packed into one contiguous staging buffer - Y plane first at
 /// the visible-width stride NDI declares via <c>LineStrideInBytes</c>;
 /// chroma planes follow at the layout NDI's docs prescribe (UV interleaved
 /// at full Y stride for NV12; U-then-V at half Y stride for I420). Contiguous
@@ -38,14 +38,14 @@ namespace S.Media.NDI.Video;
 /// <para>
 /// <strong>Fan-out cost (SDL + NDI):</strong> when <c>VideoRouter</c> fans out negotiated CPU
 /// <see cref="PixelFormat.Nv12"/> without a per-branch <c>VideoCpuFrameConverter</c>, branches share one backing via
-/// <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> — the NDI path still packs into ping-pong staging here (one
+/// <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> - the NDI path still packs into ping-pong staging here (one
 /// memcpy from that shared view plus SDK upload), but the router no longer deep-copies NV12 for each branch.
 /// Contiguous NV12 planes use bulk copies when strides match the packed layout to reduce per-row overhead.
 /// </para>
 /// <para>
 /// <strong>SDK vs host pacing:</strong> when <see cref="NDIOutput"/> is constructed with <c>clockVideo:false</c>,
 /// the NDI runtime does not clock video sends; <see cref="PaceBeforePack"/> (optional <c>minimumVideoSubmitSpacing</c>)
-/// is then the primary wall-clock throttle. With <c>clockVideo:true</c>, both may apply — see field notes in
+/// is then the primary wall-clock throttle. With <c>clockVideo:true</c>, both may apply - see field notes in
 /// <c>VideoPlaybackSmoke --ndi-clock-video</c> / <c>--ndi-disable-wall-pace</c>.
 /// </para>
 /// <para>
@@ -77,7 +77,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     private readonly byte*[] _staging = new byte*[2];
     private readonly int[] _stagingCapacity = new int[2];
     private int _stagingIdx;
-    // True after the first SendVideoAsync — we owe a FlushAsync on dispose
+    // True after the first SendVideoAsync - we owe a FlushAsync on dispose
     // to release whichever staging buffer is currently in-flight.
     private bool _hasInFlight;
     /// <summary>Wall-clock spacing between submits; zero disables pacing.</summary>
@@ -91,8 +91,8 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     private long _lastSlowSubmitLogTicks;
     // Cooperative abort (S.Media.Core.Video.IVideoOutputCooperativeAbort): set on teardown so an in-flight
     // paced Submit bails out of its wall-clock spacing wait immediately instead of holding up the pump's
-    // dispose join (worst with low-FPS attached_pic streams). Terminal WITHIN a session — once set, Submit
-    // becomes a no-op — but cleared by Configure, which begins a fresh session. This sender is shared and
+    // dispose join (worst with low-FPS attached_pic streams). Terminal WITHIN a session - once set, Submit
+    // becomes a no-op - but cleared by Configure, which begins a fresh session. This sender is shared and
     // long-lived (the carrier reuses one instance across cue/deck acquisitions), so the abort must not be a
     // permanent kill-switch: a borrowed pump's teardown could otherwise black out the whole NDI output.
     private readonly ManualResetEventSlim _abortSignal = new(false);
@@ -149,7 +149,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
             if (wait > TimeSpan.Zero)
             {
                 // Interruptible pace wait (kernel-backed, not a busy spin): a cooperative abort on teardown
-                // sets _abortSignal so we return immediately rather than sleeping out the frame interval —
+                // sets _abortSignal so we return immediately rather than sleeping out the frame interval -
                 // which would otherwise hold up the pump's dispose join. Wait returns true only when aborted;
                 // a normal spacing timeout returns false.
                 if (_abortSignal.Wait(wait))
@@ -271,7 +271,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
 
     /// <summary>
     /// <see cref="IVideoOutputCooperativeAbort"/>: ask an in-flight (and any subsequent) <see cref="Submit"/>
-    /// to bail immediately — wakes the pace wait and turns further submits into no-ops. Idempotent; one-way.
+    /// to bail immediately - wakes the pace wait and turns further submits into no-ops. Idempotent; one-way.
     /// </summary>
     public void RequestSubmitAbort()
     {
@@ -298,7 +298,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
                     var ticks = tc.ToTicksAtRate();
                     return (ticks < 0 ? 0L : ticks, NDIConstants.TimestampUndefined);
                 }
-                // No SMPTE attached — fall back to presentation-relative ticks so downstream still has a sync source.
+                // No SMPTE attached - fall back to presentation-relative ticks so downstream still has a sync source.
                 return BuildPresentationRelativeTimecode(frame);
             default:
                 throw new InvalidOperationException($"unknown {nameof(NDIVideoTimecodeMode)} {_timecodeMode}");
@@ -385,7 +385,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     {
         // NDI: Y plane at LineStrideInBytes (=Width); UV interleaved plane
         // immediately after, also at LineStrideInBytes (Yres/2 rows × Width
-        // bytes — Width/2 chroma pairs × 2 bytes per pair).
+        // bytes - Width/2 chroma pairs × 2 bytes per pair).
         var width = _format.Width;
         var height = _format.Height;
         var ySrc = frame.Planes[0].Span;
@@ -526,7 +526,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     {
         if (_stagingCapacity[slot] >= neededBytes) return;
         if (_staging[slot] != null) NativeMemory.Free(_staging[slot]);
-        // Round to a power of two — re-allocations on slowly growing frames
+        // Round to a power of two - re-allocations on slowly growing frames
         // are rare, but we don't want every couple of frames to bounce.
         var capacity = 1;
         while (capacity < neededBytes) capacity <<= 1;

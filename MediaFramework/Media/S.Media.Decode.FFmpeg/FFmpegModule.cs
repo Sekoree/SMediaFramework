@@ -4,7 +4,7 @@ using S.Media.Decode.FFmpeg.Video;
 namespace S.Media.Decode.FFmpeg;
 
 /// <summary>
-/// Registers FFmpeg decode capabilities into the media registry — the AOT-pure replacement for the old
+/// Registers FFmpeg decode capabilities into the media registry - the AOT-pure replacement for the old
 /// static <c>MediaFrameworkPlugins</c> slots (P2). Contributes a URI decoder provider plus the swscale
 /// CPU converter, swresample source-resampler, yadif/Bob deinterlacer, and the swresample adaptive-rate
 /// output-wrapper factories.
@@ -70,7 +70,7 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
     /// <summary>
     /// NXT-02 atomic open: opens the requested audio + video tracks from <strong>one</strong>
     /// <see cref="MediaContainerDecoder"/> (a single shared demux), so an A/V file is opened/probed once with
-    /// one buffering/seek state — instead of the split <see cref="OpenVideo"/> + <see cref="OpenAudio"/> path
+    /// one buffering/seek state - instead of the split <see cref="OpenVideo"/> + <see cref="OpenAudio"/> path
     /// that built two independent demux contexts. Runs the (synchronous, native) open on a worker thread.
     /// </summary>
     public async ValueTask<MediaOpenResult> OpenAsync(
@@ -186,7 +186,7 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
 /// <summary>Owns a <see cref="MediaContainerDecoder"/> and exposes its video track as an
 /// <see cref="IVideoSource"/>. MUST forward <see cref="ISeekableSource"/>: <see cref="VideoPlayer"/>
 /// gates its seek on that interface, and a wrapper that hides it makes coordinated seeks move audio
-/// and the clock while the video keeps decoding from the old position (the "YouTube seek" defect —
+/// and the clock while the video keeps decoding from the old position (the "YouTube seek" defect -
 /// backward seeks froze video on stale future-PTS frames, forward seeks fast-forwarded through every
 /// late frame until the clock was caught).</summary>
 internal sealed class ContainerOwnedVideoSource : IVideoSource, ISeekableSource, IAttachedPictureSource, IDisposable
@@ -214,7 +214,7 @@ internal sealed class ContainerOwnedVideoSource : IVideoSource, ISeekableSource,
     public TimeSpan Duration => _inner is ISeekableSource seekable ? seekable.Duration : TimeSpan.Zero;
     public TimeSpan Position => _inner is ISeekableSource seekable ? seekable.Position : TimeSpan.Zero;
 
-    /// <summary>Coordinated container seek (same call the track's own Seek makes) — live streams throw,
+    /// <summary>Coordinated container seek (same call the track's own Seek makes) - live streams throw,
     /// matching the shared-demux track's behavior on the atomic open path.</summary>
     public void Seek(TimeSpan position) => _container.SeekPresentation(position);
 

@@ -39,7 +39,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     public IReadOnlyList<OutputDefinition> DefinitionsSnapshot => _definitionsSnapshot;
 
     /// <summary>Acquires the real <see cref="IVideoOutput"/> for an output line so a playback engine can render
-    /// onto it — the ShowSession cue re-back's video-output seam (mirrors how the cue engine acquires outputs).
+    /// onto it - the ShowSession cue re-back's video-output seam (mirrors how the cue engine acquires outputs).
     /// MUST be called on the UI thread (realizes the SDL window / NDI sender). Returns null for a non-video line
     /// or one with no realized runtime.</summary>
     public IVideoOutput? AcquireVideoOutputForLine(Guid lineId)
@@ -73,10 +73,10 @@ public partial class OutputManagementViewModel : ViewModelBase
                 ndi.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
     }
 
-    /// <summary>Acquires the AUDIO side of an NDI output line's carrier — the SAME sender that carries the
-    /// composition's video — so a ShowSession clip can route audio into that NDI stream (the ShowSession audio
+    /// <summary>Acquires the AUDIO side of an NDI output line's carrier - the SAME sender that carries the
+    /// composition's video - so a ShowSession clip can route audio into that NDI stream (the ShowSession audio
     /// re-back for NDI lines). Returns the carrier's audio sink at its configured audio format, or null for a
-    /// non-NDI / unknown line or an audio-less NDI mode. UI thread; single-holder like the video side — release
+    /// non-NDI / unknown line or an audio-less NDI mode. UI thread; single-holder like the video side - release
     /// with <see cref="ReleaseAudioOutputForLine"/>.</summary>
     public IAudioOutput? AcquireAudioOutputForLine(Guid lineId)
     {
@@ -109,7 +109,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     private readonly Lock _portAudioOutputsGate = new();
 
     /// <summary>
-    /// Phase B (§3.6) — set by <c>MainViewModel</c> so the Edit flow can ask whether *any* player is
+    /// Phase B (§3.6) - set by <c>MainViewModel</c> so the Edit flow can ask whether *any* player is
     /// currently playing audio/video *through* a given line. Returning <c>true</c> triggers the
     /// "applying will glitch your show" confirm prompt. Returning <c>false</c> (or leaving the probe
     /// unset) skips the prompt and applies the edit immediately. See §3.6 decision: hot semantics
@@ -132,7 +132,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     private DispatcherTimer? _healthTimer;
 
     /// <summary>
-    /// Phase B (§3.4) — every local-video line whose <see cref="LocalVideoOutputDefinition.CloneOfId"/>
+    /// Phase B (§3.4) - every local-video line whose <see cref="LocalVideoOutputDefinition.CloneOfId"/>
     /// matches <paramref name="parentId"/>. Used by <see cref="MediaPlayerViewModel.SelectedOutputLines"/>
     /// to expand parent-selection into parent+clones (PlayerRoutingMirror) and by the Outputs view to
     /// render clones nested under their parent.
@@ -141,9 +141,9 @@ public partial class OutputManagementViewModel : ViewModelBase
         Outputs.Where(o => o.Definition is LocalVideoOutputDefinition lv && lv.CloneOfId == parentId);
 
     /// <summary>
-    /// Phase B (§3.4) — local-video lines that can be promoted to a clone parent. Excludes the line
+    /// Phase B (§3.4) - local-video lines that can be promoted to a clone parent. Excludes the line
     /// passed in (a line cannot be its own parent) AND any line that's already a clone (no chained
-    /// clone-of-clones — keeps the routing mirror trivially 1-deep).
+    /// clone-of-clones - keeps the routing mirror trivially 1-deep).
     /// </summary>
     public IEnumerable<LocalVideoOutputDefinition> GetPotentialCloneParents(OutputLineViewModel? excluding = null) =>
         Outputs
@@ -153,7 +153,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             .Where(lv => lv.CloneOfId is null);
 
     /// <summary>
-    /// Phase B (§3.4) — raised when the shape of the routing graph changes: outputs added / removed, or
+    /// Phase B (§3.4) - raised when the shape of the routing graph changes: outputs added / removed, or
     /// a definition reconfigured in a way that affects clone-of relationships. Players listen to this
     /// rather than the raw <c>CollectionChanged</c> so a "make this a clone" edit triggers their routing
     /// list to drop the clone's checkbox.
@@ -175,7 +175,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     [ObservableProperty]
     private int _aggregateErrorCount;
 
-    /// <summary>True when any line is below healthy — drives the colour of the summary chip.</summary>
+    /// <summary>True when any line is below healthy - drives the colour of the summary chip.</summary>
     public bool HasAggregateIssues => AggregateWarningCount + AggregateErrorCount > 0;
     public bool HasOutputs => Outputs.Count > 0;
     public bool HasNoOutputs => Outputs.Count == 0;
@@ -187,7 +187,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         string.Join("    ", MediaRuntime.ModuleDiagnostics.Select(
             d => d.Available ? $"{d.Name} ✓" : $"{d.Name} ✗ ({d.Detail})"));
 
-    /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
+    /// <summary>One-line summary: "5 active · 1 warning · 0 errors" - bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
         ? Strings.AggregateSummaryIdle
         : Strings.Format(nameof(Strings.AggregateSummaryActiveFormat), AggregateActiveCount, AggregateWarningCount, AggregateErrorCount);
@@ -288,7 +288,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B follow-up — raised *before* a line's runtime is torn down so any active playback
+    /// Phase B follow-up - raised *before* a line's runtime is torn down so any active playback
     /// can detach its route to that line first and avoid Submit'ing to a disposed output.
     /// Subscribers must run synchronously: by the time the event returns, the runtime
     /// stop / dispose path is about to run.
@@ -306,7 +306,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private void Remove(OutputLineViewModel line)
     {
-        // Let sessions unwire their routes first — otherwise the AudioRouter pump keeps pushing chunks
+        // Let sessions unwire their routes first - otherwise the AudioRouter pump keeps pushing chunks
         // into a PortAudioOutput we're about to Dispose, producing the spammed ObjectDisposedException
         // observed when the user clicked Remove during active playback.
         OutputLineRemoving?.Invoke(this, line);
@@ -392,9 +392,9 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase A — replaces every output line with new <see cref="OutputLineViewModel"/>s for the supplied
+    /// Phase A - replaces every output line with new <see cref="OutputLineViewModel"/>s for the supplied
     /// definitions. Existing runtimes are stopped (matches the manual Remove path); the new lines do
-    /// <strong>not</strong> have their runtimes started — Phase B's project-load orchestration is
+    /// <strong>not</strong> have their runtimes started - Phase B's project-load orchestration is
     /// responsible for that. Exists so project save/load can roundtrip a definitions list without the
     /// caller having to script per-output runtime spin-up.
     /// </summary>
@@ -515,7 +515,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase A (§9.6) — reconfigure the runtime backing <paramref name="line"/> with
+    /// Phase A (§9.6) - reconfigure the runtime backing <paramref name="line"/> with
     /// <paramref name="newDefinition"/>. Per-kind delegation: PortAudio swaps the stream, local-video
     /// reapplies window placement, NDI restarts the sender. <see cref="OutputLineViewModel.Definition"/>
     /// is replaced on the line in place so existing references stay valid. Does nothing if no runtime
@@ -524,7 +524,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <remarks>
     /// Hot semantics per §3.6: the runtime swap proceeds even if a playback session currently holds the
     /// line. With <paramref name="detachRoutes"/> = true (default) the session detaches its route around the
-    /// swap (the OutputLineReconfiguring/Reconfigured events) — a brief silence/black-frame, but a
+    /// swap (the OutputLineReconfiguring/Reconfigured events) - a brief silence/black-frame, but a
     /// guaranteed-consistent route afterward. With <paramref name="detachRoutes"/> = false those events are
     /// skipped: the runtime applies the change in place under the still-attached route (cosmetic changes like
     /// Always-on-top apply with no interruption; a structural change may briefly glitch the live route).
@@ -541,7 +541,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 nameof(newDefinition));
         if (newDefinition.GetType() != line.Definition.GetType())
             throw new ArgumentException(
-                $"Cannot reconfigure {line.Definition.GetType().Name} with {newDefinition.GetType().Name} — output kind is immutable.",
+                $"Cannot reconfigure {line.Definition.GetType().Name} with {newDefinition.GetType().Name} - output kind is immutable.",
                 nameof(newDefinition));
 
         if (detachRoutes)
@@ -581,7 +581,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         // observe the new values.
         line.ReplaceDefinition(newDefinition);
 
-        // A clone-of change is the load-bearing topology change — fire the event so player VMs resync
+        // A clone-of change is the load-bearing topology change - fire the event so player VMs resync
         // their routing checkbox list (clones get hidden, parents get exposed).
         RaiseTopologyChanged();
         if (detachRoutes)
@@ -607,7 +607,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// A local video preview window stopped. <paramref name="userInitiated"/> is <see langword="true"/>
     /// only when the operator closed the OS window (clicked the title-bar X / quit), as opposed to our
     /// own programmatic teardown (Remove, reconfigure, shutdown). A user-closed window means the operator
-    /// is done with that output, so we drop the whole line from the I/O page — which also raises
+    /// is done with that output, so we drop the whole line from the I/O page - which also raises
     /// <see cref="OutputLineRemoving"/> so any active playback session unwires its route first.
     /// </summary>
     internal void NotifyLocalPreviewEnded(OutputLineViewModel line, bool userInitiated = false)
@@ -616,7 +616,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         line.IsPreviewRunning = false;
 
         // Removing the line re-enters StopLocalPreview, but _localPreviews no longer holds this line
-        // (removed just above) so that path is a no-op for the already-closed window — no double dispose.
+        // (removed just above) so that path is a no-op for the already-closed window - no double dispose.
         if (userInitiated && Outputs.Contains(line))
             Remove(line);
     }
@@ -693,7 +693,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     internal void StopPreviewsForPlayback(IEnumerable<OutputLineViewModel> lines)
     {
-        // Both NDI carriers and local-video previews now stay alive across playback — sessions acquire the
+        // Both NDI carriers and local-video previews now stay alive across playback - sessions acquire the
         // existing output via TryAcquireLocalVideoOutputForPlayback / TryAcquireNDICarrierForPlayback so the
         // window doesn't flash on each media change. Kept for API stability; intentional no-op.
         _ = lines;
@@ -844,7 +844,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B (§3.2) — opens the same dialog used to Add, pre-populated with the line's current
+    /// Phase B (§3.2) - opens the same dialog used to Add, pre-populated with the line's current
     /// definition. On Save: optionally prompts when playback is actively using the line, then calls
     /// <see cref="ReconfigureLineAsync"/> to apply the change hot.
     /// </summary>
@@ -869,7 +869,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return; // no changes
 
         // §3.6: confirm only when a player is *actively playing through* this line. The operator chooses
-        // whether to keep playing (apply live — no route teardown, best for cosmetic changes like
+        // whether to keep playing (apply live - no route teardown, best for cosmetic changes like
         // Always-on-top) or reconnect the output (brief black-frame, for structural changes).
         var detachRoutes = true;
         if (PlaybackUsageProbe?.Invoke(line) == true)
@@ -934,10 +934,10 @@ public partial class OutputManagementViewModel : ViewModelBase
         /// <summary>Abort the edit.</summary>
         Cancel,
 
-        /// <summary>Detach the route, reconfigure, re-attach — brief black-frame, consistent route.</summary>
+        /// <summary>Detach the route, reconfigure, re-attach - brief black-frame, consistent route.</summary>
         Reconnect,
 
-        /// <summary>Apply live under the still-attached route — no interruption for cosmetic changes.</summary>
+        /// <summary>Apply live under the still-attached route - no interruption for cosmetic changes.</summary>
         Live,
     }
 
@@ -953,7 +953,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             ShowInTaskbar = false,
         };
 
-        // "Save & continue" (apply live) is the default — most in-use edits are cosmetic (Always-on-top,
+        // "Save & continue" (apply live) is the default - most in-use edits are cosmetic (Always-on-top,
         // window placement) and shouldn't interrupt playback. "Reconnect" is the deliberate choice for a
         // structural change that needs the route re-established.
         var continueLive = new Button { Content = Strings.OutputEditInUseContinueButton, IsDefault = true };
@@ -1113,7 +1113,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     private void ClearHealth()
     {
         // The ShowSession health probes read cumulative session counters (composition stats / audio pumps);
-        // clearing here just resets the panel's displayed state — the counters re-accumulate on the next poll.
+        // clearing here just resets the panel's displayed state - the counters re-accumulate on the next poll.
         foreach (var line in Outputs)
         {
             line.Health = OutputLineHealthState.Unknown;
@@ -1133,7 +1133,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             var worst = OutputLineHealthState.Unknown;
             string? detail = null;
-            // §8.1 — sum throughput across all players driving this line. A line wired to two players
+            // §8.1 - sum throughput across all players driving this line. A line wired to two players
             // would otherwise miss the second player's contribution.
             long videoSubmittedTotal = 0;
             long audioEnqueuedTotal = 0;
@@ -1141,7 +1141,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             foreach (var player in players)
             {
                 // Each deck drives lines through its per-player ShowSession (the only runtime since the
-                // legacy engine was deleted) — read the session-side composition/audio-pump health.
+                // legacy engine was deleted) - read the session-side composition/audio-pump health.
                 if (player.TryGetShowSessionLineHealthMetrics(line.Definition.Id) is not { } metrics)
                     continue;
                 var metricsDetail = FormatShowSessionHealthDetail(metrics);
@@ -1159,7 +1159,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 }
             }
 
-            // Cue-engine playback drives lines outside any player session — without this the panel
+            // Cue-engine playback drives lines outside any player session - without this the panel
             // showed "Idle" (no LED, no stats) during cue playback.
             if (cueProbe?.Invoke(line.Definition.Id) is { State: not OutputLineHealthState.Unknown } cue)
             {
@@ -1179,7 +1179,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             {
                 line.RecordSparklineSample(videoSubmittedTotal, audioEnqueuedTotal);
                 // P2 stats line: cumulative delivery counters next to the sparkline. Same 1 Hz tick
-                // as the health poll — no extra polling cost.
+                // as the health poll - no extra polling cost.
                 line.StatsSummary = (videoSubmittedTotal, audioEnqueuedTotal) switch
                 {
                     (> 0, > 0) => $"{videoSubmittedTotal:N0} f · {audioEnqueuedTotal:N0} ch",

@@ -6,7 +6,7 @@ public enum VideoCompositorBackend
     /// <summary>Use the first registered host GPU backend when available; otherwise fall back to CPU.</summary>
     Auto = 0,
 
-    /// <summary><see cref="CpuVideoCompositor"/> — BGRA32 software reference.</summary>
+    /// <summary><see cref="CpuVideoCompositor"/> - BGRA32 software reference.</summary>
     Cpu = 1,
 
     /// <summary>

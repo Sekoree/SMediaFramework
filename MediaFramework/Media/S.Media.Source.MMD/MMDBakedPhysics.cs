@@ -5,16 +5,16 @@ namespace S.Media.Source.MMD;
 
 /// <summary>
 /// Pre-rendered ("baked") physics: the simulation run ONCE, offline, deterministically forward on the
-/// VMD 30 fps timeline — exactly how MMD produces its reference renders — and stored as
+/// VMD 30 fps timeline - exactly how MMD produces its reference renders - and stored as
 /// PARENT-RELATIVE transforms of every physics-driven bone per frame. Playback then just SAMPLES the
 /// bake (slerp between frames, chained onto the live FK parents): perfectly repeatable, seek-exact and
-/// immune to render cadence, stalls and resets — the live solver's entire failure surface. This is
+/// immune to render cadence, stalls and resets - the live solver's entire failure surface. This is
 /// what makes the skirt read "heavy" and the hair "wavy" the way the MMD reference videos do: those
 /// are offline forward simulations too, never a real-time solve.
 /// </summary>
 public sealed class MMDBakedPhysics
 {
-    /// <summary>Bump when the solver or the bake format changes — invalidates disk caches.</summary>
+    /// <summary>Bump when the solver or the bake format changes - invalidates disk caches.</summary>
     public const int Version = 5; // v5: real Bullet 3.25 solver (replaces the custom sequential-impulse one)
 
     private const string Magic = "MMDBAKE1";
@@ -95,7 +95,7 @@ public sealed class MMDBakedPhysics
         var translations = new Vector3[rotations.Length];
 
         // Settle: hold the first pose long enough for the post-reset fade to run out and the chains to
-        // find their hang — MMD's own play-from-start behaves the same way.
+        // find their hang - MMD's own play-from-start behaves the same way.
         const float settleSeconds = 1.5f;
         var step = 1f / FramesPerSecond;
         animator.EvaluatePoseForBake(TimeSpan.Zero, physics, -1f);
@@ -138,7 +138,7 @@ public sealed class MMDBakedPhysics
         // Optional temporal low-pass on the baked transforms. This was a band-aid for the OLD custom
         // solver, which rigidly transmitted the fast dance's head-shake down the spring-locked chains.
         // Real Bullet (with the additional-damping the file authors rely on) settles that inertia itself,
-        // so smoothing is OFF by default (SmoothingPasses = 0) — the bake is the raw Bullet result, exactly
+        // so smoothing is OFF by default (SmoothingPasses = 0) - the bake is the raw Bullet result, exactly
         // like MMD's own render. The kernel is retained (probe/opt-in only) behind the field.
         SmoothTemporally(rotations, translations, slots, frames, SmoothingPasses);
 
@@ -147,7 +147,7 @@ public sealed class MMDBakedPhysics
     }
 
     /// <summary>Passes of the [0.25, 0.5, 0.25] temporal kernel applied to the baked transforms (0 = off).
-    /// Internal-settable so the jitter probe can sweep it; 3 was chosen by the probe — it cuts the worst
+    /// Internal-settable so the jitter probe can sweep it; 3 was chosen by the probe - it cuts the worst
     /// hair-tip frame-to-frame angular jerk ~5× (0.50→0.10 rad) with ZERO phase lag (symmetric kernel over
     /// an offline bake), so fast motion survives while the transmitted head-shake twitch is smoothed out.</summary>
     internal static int SmoothingPasses = 0;
@@ -259,7 +259,7 @@ public sealed class MMDBakedPhysics
 
 /// <summary>
 /// Disk cache + coalesced background baking. First open of a (model, motion) pair starts one
-/// background bake and plays with live physics; every later open — the show's actual GO — loads the
+/// background bake and plays with live physics; every later open - the show's actual GO - loads the
 /// cached bake instantly (the YouTube reliable-mode pattern: prepare once, never compute on GO).
 /// </summary>
 /// <remarks>
@@ -269,7 +269,7 @@ public sealed class MMDBakedPhysics
 /// pinned in the static dictionary; the returned <see cref="MMDBakedPhysics"/> (and its arrays) become
 /// collectable once callers drop it.</para>
 /// <para><strong>Shared lifetime vs. per-caller waiting (MMD-01).</strong> The background bake runs on
-/// <see cref="CancellationToken.None"/> — one caller cancelling must not abort the bake other callers
+/// <see cref="CancellationToken.None"/> - one caller cancelling must not abort the bake other callers
 /// joined. <see cref="BakeAsync"/> honours its caller token by awaiting the shared task through
 /// <c>WaitAsync(callerToken)</c>: cancelling stops that caller's wait, not the shared work. A faulted or
 /// cancelled shared task is treated as retryable (never re-joined).</para>
@@ -318,7 +318,7 @@ public static class MMDPhysicsBakeCache
 
     /// <summary>
     /// Explicit user-triggered bake (the dialog's "bake now" button). Joins the running background
-    /// bake when one exists (its progress isn't observable — callers show indeterminate); otherwise
+    /// bake when one exists (its progress isn't observable - callers show indeterminate); otherwise
     /// starts a bake that reports 0..1 progress. Returns the cached bake immediately when present.
     /// The <paramref name="cancellation"/> token cancels this caller's <em>wait</em>, not the shared bake.
     /// </summary>
@@ -363,7 +363,7 @@ public static class MMDPhysicsBakeCache
         }
         catch (IOException)
         {
-            return null; // storage/read unavailable — fall through to (re)bake, don't delete
+            return null; // storage/read unavailable - fall through to (re)bake, don't delete
         }
 
         // File exists but is not a valid bake for this model (bad magic / version / bone-count mismatch).
@@ -385,7 +385,7 @@ public static class MMDPhysicsBakeCache
                 var key = (string)state!;
                 lock (Gate)
                 {
-                    // Evict ONLY if the entry still refers to the task that just completed — a retry may have
+                    // Evict ONLY if the entry still refers to the task that just completed - a retry may have
                     // already replaced it (MMD-01: cancelled/faulted work is retryable).
                     if (Pending.TryGetValue(key, out var current) && ReferenceEquals(current, completed))
                         Pending.Remove(key);
@@ -407,7 +407,7 @@ public static class MMDPhysicsBakeCache
     }
 
     /// <summary>Persists a completed bake: unique temp file → flush → atomic move. A storage failure is
-    /// logged and the temp cleaned up, but never propagated — the in-memory bake stays usable (MMD-02).</summary>
+    /// logged and the temp cleaned up, but never propagated - the in-memory bake stays usable (MMD-02).</summary>
     private static void TryPersist(string file, MMDBakedPhysics baked)
     {
         string? temp = null;
@@ -422,7 +422,7 @@ public static class MMDPhysicsBakeCache
             }
 
             File.Move(temp, file, overwrite: true);
-            temp = null; // moved — nothing to clean up
+            temp = null; // moved - nothing to clean up
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {

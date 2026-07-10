@@ -9,8 +9,8 @@ namespace Classic.Avalonia.Theme.Dock;
 /// chrome invokes (float/pin/close/preview). Avalonia 12.1 removed compiled-binding support for
 /// methods with a typed parameter (only parameterless or single-<c>object</c> overloads compile),
 /// which broke the upstream Dock pattern of <c>Command="{Binding Owner.Factory.CloseDockable}"</c>.
-/// Each command takes the <see cref="IDockable"/> as its CommandParameter — the same object those
-/// bindings already passed — and resolves the layout's factory from it.
+/// Each command takes the <see cref="IDockable"/> as its CommandParameter - the same object those
+/// bindings already passed - and resolves the layout's factory from it.
 /// </summary>
 public static class DockFactoryCommands
 {
@@ -38,7 +38,7 @@ public static class DockFactoryCommands
         }
 
         /// <summary>Owner-first mirrors the old <c>Owner.Factory</c> binding path; the fallback to
-        /// the dockable's own factory covers root docks with no owner. Same instance either way —
+        /// the dockable's own factory covers root docks with no owner. Same instance either way -
         /// InitLayout stamps one factory across the layout.</summary>
         private static IFactory? ResolveFactory(object? parameter) =>
             parameter is IDockable dockable ? dockable.Owner?.Factory ?? dockable.Factory : null;

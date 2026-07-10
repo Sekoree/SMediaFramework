@@ -1,7 +1,7 @@
 namespace S.Media.Session.Tests;
 
 /// <summary>A registry decoder that opens any URI as a short synthetic silent audio clip (no FFmpeg/device).
-/// <paramref name="chunks"/> sizes the source (default 8 reads ≈ instant EOF — tests that need the clip to
+/// <paramref name="chunks"/> sizes the source (default 8 reads ≈ instant EOF - tests that need the clip to
 /// STAY ALIVE through pauses/fades must pass a large count, since natural EOF now legitimately flips the
 /// player to not-running).</summary>
 internal sealed class FakeAudioDecoderProvider(int chunks = 8) : IMediaDecoderProvider
@@ -19,7 +19,7 @@ internal sealed class FakeAudioDecoderProvider(int chunks = 8) : IMediaDecoderPr
         MediaRegistry.Build(b => b.AddDecoder(new FakeAudioDecoderProvider(chunks)));
 }
 
-/// <summary>A provider whose atomic open BLOCKS until the token is cancelled — to verify a STOP/abort preempts
+/// <summary>A provider whose atomic open BLOCKS until the token is cancelled - to verify a STOP/abort preempts
 /// an in-flight cold clip open (NXT-03). Probes only the <c>blocking://</c> scheme.</summary>
 internal sealed class BlockingOpenProvider : IMediaDecoderProvider
 {
@@ -38,7 +38,7 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new BlockingOpenProvider()));
 }
 
-/// <summary>A finite stereo source that yields a few chunks of silence then exhausts — enough for a clip
+/// <summary>A finite stereo source that yields a few chunks of silence then exhausts - enough for a clip
 /// to open and Play() without a real decoder or device.</summary>
 internal sealed class SyntheticSilentSource(int chunks = 8) : IAudioSource, ISeekableSource
 {
@@ -64,7 +64,7 @@ internal sealed class SyntheticSilentSource(int chunks = 8) : IAudioSource, ISee
     public void Seek(TimeSpan position) => _position = position;
 }
 
-/// <summary>A fake audio backend that records every output it creates (channel count + device id) — lets a
+/// <summary>A fake audio backend that records every output it creates (channel count + device id) - lets a
 /// headless test assert the routing scene's N→M channel counts and the per-group multi-output fan-out.</summary>
 internal sealed class RecordingAudioBackend : IAudioBackend
 {
@@ -96,7 +96,7 @@ internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
     public void Submit(ReadOnlySpan<float> packedSamples) { }
 }
 
-/// <summary>An <see cref="IAudioOutput"/> that also counts Dispose calls — lets a test prove the session did
+/// <summary>An <see cref="IAudioOutput"/> that also counts Dispose calls - lets a test prove the session did
 /// (or did NOT) dispose a host-provided output, i.e. the borrowed-output ownership contract of the audio-output
 /// factory seam (an NDI carrier's audio side must never be disposed by the session).</summary>
 internal sealed class TrackingAudioOutput(AudioFormat format) : IAudioOutput, IDisposable
@@ -116,7 +116,7 @@ internal sealed class UnboundedHeldVideoSource(TimeSpan duration) : IVideoSource
 
     public VideoFormat Format { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));
     public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
-    public bool IsExhausted => false; // held frame — never runs out
+    public bool IsExhausted => false; // held frame - never runs out
     public TimeSpan Duration { get; } = duration;
     public TimeSpan Position => TimeSpan.FromTicks(TimeSpan.TicksPerSecond * Volatile.Read(ref _next) / 30);
 
@@ -165,7 +165,7 @@ internal sealed class FakeVideoDecoderProvider(int frameCount = 30) : IMediaDeco
 
     /// <summary>A registry whose fake video clips run <paramref name="frameCount"/>/30 seconds. Tests that
     /// STOP a playing clip need runway (a slow CI runner can otherwise reach the clip's natural fade-out
-    /// window first, whose claim then beats the stop's — the stop returns without ramping).</summary>
+    /// window first, whose claim then beats the stop's - the stop returns without ramping).</summary>
     public static IMediaRegistry Registry(int frameCount = 30) =>
         MediaRegistry.Build(b => b.AddDecoder(new FakeVideoDecoderProvider(frameCount)));
 }

@@ -31,7 +31,7 @@ public sealed class RgbGamutMatrixTests
     [Fact]
     public void Bt2020ToBt709_PureRedExpandsBeyondGamut()
     {
-        // BT.2020 saturated red maps to a colour outside the BT.709 gamut — characteristic check
+        // BT.2020 saturated red maps to a colour outside the BT.709 gamut - characteristic check
         // that we're going the right direction. R channel boosts > 1, G/B go slightly negative.
         var m = RgbGamutMatrix.Bt2020ToBt709.Matrix;
         var (r, g, b) = Apply(m, 1f, 0f, 0f);

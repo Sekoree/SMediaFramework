@@ -26,7 +26,7 @@ public sealed record AudioOutputDeviceChoice(
 public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 {
     /// <summary>
-    /// When non-null, the dialog is editing an existing line (§3.2 — Edit reuses the same dialog as Add).
+    /// When non-null, the dialog is editing an existing line (§3.2 - Edit reuses the same dialog as Add).
     /// On <see cref="TryCommit"/> we keep this Id so playback references survive the edit.
     /// </summary>
     private Guid? _existingId;
@@ -176,7 +176,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
         if (value is null)
             return;
         ChannelCount = Math.Clamp(ChannelCount, 1, value.EffectiveMaxOutputChannels);
-        // Only auto-snap the sample rate during the Add flow — when editing, preserve the saved value
+        // Only auto-snap the sample rate during the Add flow - when editing, preserve the saved value
         // so a device swap doesn't silently reset the user's chosen rate.
         if (!IsEditing)
         {

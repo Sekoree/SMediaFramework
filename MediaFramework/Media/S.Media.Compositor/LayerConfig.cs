@@ -3,7 +3,7 @@ namespace S.Media.Compositor;
 /// <summary>Declarative per-layer composite parameters resolved each output frame.</summary>
 /// <remarks>Rotation/scale are composed around the source origin (see <see cref="LayerTransform2D"/>). A
 /// previous <c>ScaleAnchor</c> field was never read by the resolver, so it was removed rather than left as
-/// an API control that did nothing — anchor-aware composition can be reintroduced when actually wired.</remarks>
+/// an API control that did nothing - anchor-aware composition can be reintroduced when actually wired.</remarks>
 public readonly record struct LayerConfig(
     LayerPosition Position,
     float Scale = 1f,

@@ -122,7 +122,7 @@ public sealed class OutputMappingModelTests
     [Fact]
     public void CueListJson_WithoutMapping_LoadsAsNull()
     {
-        // Pre-mapping project files have no Mapping property — must load unchanged.
+        // Pre-mapping project files have no Mapping property - must load unchanged.
         var json = """{"VideoOutputs":[{"OutputLineId":"11111111-1111-1111-1111-111111111111","CompositionId":"22222222-2222-2222-2222-222222222222"}]}""";
         var loaded = JsonSerializer.Deserialize<CueList>(json);
         Assert.Null(Assert.Single(loaded!.VideoOutputs).Mapping);

@@ -28,7 +28,7 @@ public sealed record ClipCompositionOutputLease(
     bool DisposeOutputOnRuntimeDispose = false,
     ClipOutputMappingSpec? Mapping = null);
 
-/// <summary>A host-provided audio output for a clip route's device — the audio analogue of
+/// <summary>A host-provided audio output for a clip route's device - the audio analogue of
 /// <see cref="ClipCompositionOutputLease"/>. Lets the host route a clip's audio to a sink the session's
 /// <c>IAudioBackend</c> can't create, e.g. an NDI sender's audio side that must share the SAME carrier as the
 /// composition's video. A BORROWED output declares <see cref="DisposeOutputOnRuntimeDispose"/> = false so the
@@ -85,12 +85,12 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     private readonly Func<VideoFormat, ClipCompositionCompositor> _compositorFactory;
 
-    /// <summary>Mapping stages whose compositor must be torn down on the pump (driver) thread —
+    /// <summary>Mapping stages whose compositor must be torn down on the pump (driver) thread -
     /// retired by live mapping updates or runtime dispose; drained at the next tick.</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<OutputMappingStage> _retiredMappingStages = new();
 
     /// <summary>True when the single mapped output's warp runs inside the canvas compositor
-    /// (<see cref="IWarpPassVideoCompositor"/>) — the mixer frame is already warped and the
+    /// (<see cref="IWarpPassVideoCompositor"/>) - the mixer frame is already warped and the
     /// chained per-lease stage is skipped. Saves a full readback + re-upload per frame.</summary>
     private volatile bool _integratedWarpActive;
 
@@ -101,7 +101,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>Clip-owned subtitle layers. Each feed has its own clip-position provider, allowing several
     /// subtitle tracks and clips on one composition without sharing a global subtitle timeline.</summary>
     private readonly List<SubtitleLayerFeed> _subtitleFeeds = [];
-    // Same lock-free snapshot pattern as _acquiredSnapshot — the per-frame DriveSubtitleLayers reads this
+    // Same lock-free snapshot pattern as _acquiredSnapshot - the per-frame DriveSubtitleLayers reads this
     // instead of snapshotting _subtitleFeeds.ToArray() every tick (NXT-11).
     private volatile IReadOnlyList<SubtitleLayerFeed> _subtitleFeedsSnapshot = [];
 
@@ -252,7 +252,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     }
 
     /// <summary>
-    /// Live-swaps the output mapping of <paramref name="outputId"/> (null clears it — the output
+    /// Live-swaps the output mapping of <paramref name="outputId"/> (null clears it - the output
     /// goes back to receiving the raw canvas). Safe while the pump runs; the editor calls this on
     /// every change. Returns false when the output isn't part of this runtime.
     /// </summary>
@@ -299,7 +299,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         lock (_gate)
         {
-            // Disposed mid-attach: drop it. (A mapping stage, if any, is GC-reclaimed — preview attaches carry none.)
+            // Disposed mid-attach: drop it. (A mapping stage, if any, is GC-reclaimed - preview attaches carry none.)
             if (_disposed)
                 return false;
             _acquired.Add(acquired);
@@ -464,7 +464,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             var rawSlot = _mixer.AddSlot();
             // Master-clock compositions align decoded frames to the clock by PTS; without a master they
             // are latest-wins. Callers whose frames carry no meaningful PTS (subtitle overlays are
-            // pump-driven and re-rendered in place at PresentationTime 0) must opt into Latest explicitly —
+            // pump-driven and re-rendered in place at PresentationTime 0) must opt into Latest explicitly -
             // MasterAligned would freeze on the first frame, since every frame is equidistant from the clock.
             if (_master is not null)
                 rawSlot.KeepPolicy = keepPolicy;
@@ -504,11 +504,11 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>
     /// Adds a GPU layer surface (NXT-10): <paramref name="surface"/> renders directly into the canvas on
     /// the compositor's GL thread, ON TOP of every frame layer (surfaces don't z-interleave with frame
-    /// layers — v1 contract; they order among themselves by <see cref="VideoPlacementSpec.LayerIndex"/>).
+    /// layers - v1 contract; they order among themselves by <see cref="VideoPlacementSpec.LayerIndex"/>).
     /// The placement's destination rect/fit/opacity resolve exactly like a frame layer's (the surface's
     /// nominal source size is the canvas). Integrated multi-output warp is bypassed while any surface is
     /// present (the chained per-lease mapping path still applies). Disposing the returned slot removes
-    /// the layer AND disposes the surface (the runtime owns it — mirrors <see cref="LayerSlot"/> handing
+    /// the layer AND disposes the surface (the runtime owns it - mirrors <see cref="LayerSlot"/> handing
     /// its slot back). Throws when <see cref="SupportsSurfaceLayers"/> is false.
     /// </summary>
     public SurfaceLayerSlot AddSurfaceLayer(IVideoCompositorLayerSurface surface, VideoPlacementSpec placement)
@@ -564,7 +564,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>
     /// Attaches a subtitle/overlay source as a full-canvas, top-z-order layer. Each frame the runtime renders the
     /// source at the owning clip's position, copies its (borrowed) overlay into a pooled, slot-owned frame, and pushes it
-    /// like any other layer — so the mixer composites it uniformly (z-order, opacity, blend). The source should
+    /// like any other layer - so the mixer composites it uniformly (z-order, opacity, blend). The source should
     /// render at the canvas size. The returned lease removes the layer and disposes the source; dispose it when
     /// the owning clip stops.
     /// </summary>
@@ -578,7 +578,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var placement = new VideoPlacementSpec(CompositionName, layerIndex, Placement: "stretch");
-        // Latest-wins: the subtitle feed is pump-driven — it renders the source at the current position each
+        // Latest-wins: the subtitle feed is pump-driven - it renders the source at the current position each
         // tick and submits that frame. Its frames carry no per-frame PTS (re-rendered in place at PTS 0), so a
         // MasterAligned slot would freeze on the first frame (every frame equidistant from the clock). Latest
         // takes the newest submitted frame, which is exactly the one rendered for this position.
@@ -872,7 +872,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         // composites its warp sections from the canvas (compositors never take frame ownership)
         // and gets its own output-sized frame. Unmapped outputs share the canvas via the fan-out
         // below. With the integrated GPU warp active, the mixer frame IS the warped output already
-        // — the chained stage is skipped. See Doc/HaPlay-Output-Mapping-Plan.md.
+        // - the chained stage is skipped. See Doc/HaPlay-Output-Mapping-Plan.md.
         var integratedWarp = _integratedWarpActive;
         List<AcquiredOutput>? unmapped = null;
         foreach (var output in snapshot)
@@ -907,10 +907,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         // Multi-output fan-out is zero-copy when the canvas is CPU-backed (the CpuVideoCompositor's
-        // pool-rented buffer — the common case): every output gets a refcounted view over the same
+        // pool-rented buffer - the common case): every output gets a refcounted view over the same
         // pixels and the canvas returns to the pool once the last view is disposed. The per-output
         // deep copies this replaces were ~8 MB × (outputs−1) of memcpy per 1080p frame. Fallback to
-        // cloning covers non-CPU backings (GL compositor) — TryCreateCpuFanOutViews leaves the frame
+        // cloning covers non-CPU backings (GL compositor) - TryCreateCpuFanOutViews leaves the frame
         // untouched when it declines.
         VideoFrame[]? views = null;
         if (unmapped.Count > 1)
@@ -1168,7 +1168,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         // Best-effort fallback for stages the driver window didn't reach (pump never started, or
-        // the dispose deadline lapsed) — mirrors the direct canvas-compositor dispose below.
+        // the dispose deadline lapsed) - mirrors the direct canvas-compositor dispose below.
         DrainRetiredMappingStages();
 
         MediaDiagnostics.SwallowDisposeErrors(_mixer.Dispose, "ClipCompositionRuntime.Dispose: mixer");
@@ -1231,7 +1231,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             return warpSections;
         }
 
-        /// <summary>True when any section carries a mesh warp — needs the GL warp pass; the CPU
+        /// <summary>True when any section carries a mesh warp - needs the GL warp pass; the CPU
         /// fallback renders such sections with their affine placement instead.</summary>
         private bool HasMeshSection()
         {
@@ -1247,7 +1247,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         private bool _warpModeApplied;
         private bool _meshFallbackWarned;
 
-        /// <summary>Pump thread only. The canvas frame is borrowed — the compositor never takes
+        /// <summary>Pump thread only. The canvas frame is borrowed - the compositor never takes
         /// ownership, so the caller keeps disposing it.</summary>
         public VideoFrame Composite(VideoFrame canvas, Func<VideoFormat, ClipCompositionCompositor> compositorFactory)
         {
@@ -1265,7 +1265,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (compositor is IWarpPassVideoCompositor warpCapable)
             {
                 // Warp mode (GL): composite the canvas as one identity layer, then the compositor's
-                // integrated warp pass cuts/warps it into the output — the same pixel path as the
+                // integrated warp pass cuts/warps it into the output - the same pixel path as the
                 // single-output integrated warp, and the only path that renders mesh sections.
                 // Applied once per stage instance; section edits arrive as a new instance sharing
                 // the boxed compositor (WithSections), re-applying here on its first frame.
@@ -1342,7 +1342,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         public bool DisposeOutputOnRuntimeDispose => _lease.DisposeOutputOnRuntimeDispose;
 
         /// <summary>Current mapping stage, or null when this output receives the raw canvas.
-        /// Volatile snapshot — the pump reads it once per frame, the UI thread swaps it.</summary>
+        /// Volatile snapshot - the pump reads it once per frame, the UI thread swaps it.</summary>
         public OutputMappingStage? MappingStage => _mappingStage;
 
         /// <summary>Swaps the mapping. When the output canvas size is unchanged the existing
@@ -1451,7 +1451,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     }
 
     /// <summary>
-    /// The placement surface a clip's composition layer exposes regardless of HOW it renders — a decoded
+    /// The placement surface a clip's composition layer exposes regardless of HOW it renders - a decoded
     /// frame slot (<see cref="LayerSlot"/>) or a GPU layer surface (<see cref="SurfaceLayerSlot"/>, NXT-10).
     /// The session's fade rides, live placement edits, and teardown all go through this contract, so a
     /// surface-backed clip behaves exactly like a frame-backed one for transport purposes.
@@ -1466,7 +1466,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>
     /// One GPU layer surface placed on this composition (NXT-10). Mirrors <see cref="LayerSlot"/>'s
     /// placement semantics (dest rect/fit/rotation/opacity resolve identically; the surface's nominal
-    /// source size is the canvas). Disposing removes the layer and disposes the SURFACE — the runtime
+    /// source size is the canvas). Disposing removes the layer and disposes the SURFACE - the runtime
     /// owns surface lifetime once placed.
     /// </summary>
     public sealed class SurfaceLayerSlot : IPlacedClipLayer
@@ -1514,7 +1514,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             }
         }
 
-        /// <summary>Resolves the placement to the surface's canvas transform — the same
+        /// <summary>Resolves the placement to the surface's canvas transform - the same
         /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
         /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity).</summary>
         internal void ApplyPlacement()

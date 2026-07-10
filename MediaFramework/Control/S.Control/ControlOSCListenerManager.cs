@@ -114,7 +114,7 @@ public sealed class ControlOSCListenerManager : IAsyncDisposable, IDisposable
     /// <summary>
     /// Dispatches an OSC message that arrived on a device's own client socket (e.g. an X32 reply to our
     /// request, or an <c>/xremote</c> push). The device is already resolved by the caller from the source
-    /// host/port, so this needs no app-level listener — it records the input and routes the same control
+    /// host/port, so this needs no app-level listener - it records the input and routes the same control
     /// event the listener path uses (cache update, triggers, monitor).
     /// </summary>
     public async ValueTask<ControlOSCListenerDispatchResult> DispatchDeviceMessageAsync(

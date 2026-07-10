@@ -8,7 +8,7 @@ namespace S.Media.Decode.FFmpeg.Tests;
 /// <summary>
 /// FFMPEG-02: pure invariant tests for the extracted <see cref="FFmpegTimestamps"/> normalization arithmetic.
 /// These need no native FFmpeg (unlike the fixture matrix), so they run on every runner and lock the timebase ↔
-/// wall-clock mapping — the historically most seek-fragile part of decode — against a single tested definition.
+/// wall-clock mapping - the historically most seek-fragile part of decode - against a single tested definition.
 /// </summary>
 public sealed class FFmpegTimestampsTests
 {

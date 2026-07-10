@@ -10,7 +10,7 @@ internal static unsafe partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
 
-    // A.1 — late-bound property so PALibLogging.Configure() is always honoured,
+    // A.1 - late-bound property so PALibLogging.Configure() is always honoured,
     // even if called after the first Native.* reference.
     private static ILogger Logger => PALibLogging.GetLogger("PALib.Core");
 
@@ -35,7 +35,7 @@ internal static unsafe partial class Native
     private static partial nint Pa_GetVersionText_Import();
 
     /// <summary>Returns a textual description of the current PortAudio build.</summary>
-    /// <remarks>Deprecated as of PortAudio 19.5.0 — prefer <see cref="Pa_GetVersionInfo"/> and read <c>VersionText</c>.</remarks>
+    /// <remarks>Deprecated as of PortAudio 19.5.0 - prefer <see cref="Pa_GetVersionInfo"/> and read <c>VersionText</c>.</remarks>
     public static string? Pa_GetVersionText()
     {
         if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_GetVersionText));

@@ -5,12 +5,12 @@ using HaPlay.Models;
 namespace HaPlay.Views.Dialogs;
 
 /// <summary>
-/// Phase B (§12.2) — opt-in helper that restores a dialog's last-known size on open and saves the
+/// Phase B (§12.2) - opt-in helper that restores a dialog's last-known size on open and saves the
 /// current size (debounced) on resize / close. Attach via <see cref="Attach"/> from the dialog's
 /// constructor; the persister owns the wiring and detaches itself when the window closes.
 /// </summary>
 /// <remarks>
-/// Position is not persisted — dialogs always centre on their owner (Avalonia's
+/// Position is not persisted - dialogs always centre on their owner (Avalonia's
 /// <see cref="WindowStartupLocation.CenterOwner"/>). The state lives in
 /// <see cref="AppSettings.DialogSizes"/> keyed by the dialog id passed to <see cref="Attach"/>.
 /// </remarks>
@@ -34,7 +34,7 @@ internal sealed class DialogStatePersister
     }
 
     /// <summary>Attach size persistence to <paramref name="window"/>. The <paramref name="id"/> is the
-    /// dialog-type key — use a stable string like the class name so two instances of the same dialog
+    /// dialog-type key - use a stable string like the class name so two instances of the same dialog
     /// share their size memory (which is what a user expects when they resize an Add… dialog once and
     /// open it again later).</summary>
     public static void Attach(Window window, string id, double minWidth = 200, double minHeight = 150)

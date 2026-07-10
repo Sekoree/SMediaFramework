@@ -9,7 +9,7 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Covers <see cref="HaPlayShowMapper"/> — the GUI <c>CueList</c> → framework <c>ShowDocument</c>
+/// <summary>Covers <see cref="HaPlayShowMapper"/> - the GUI <c>CueList</c> → framework <c>ShowDocument</c>
 /// bridge for the Phase 8a convergence slice.</summary>
 public class ShowDocumentMapperTests
 {
@@ -124,7 +124,7 @@ public class ShowDocumentMapperTests
                         {
                             new CueOutputMappingSection
                             {
-                                Name = "Left", // framework section has no Name — dropped gracefully
+                                Name = "Left", // framework section has no Name - dropped gracefully
                                 Enabled = true,
                                 SrcX = 0, SrcY = 0, SrcWidth = 0.5, SrcHeight = 1.0,
                                 DestX = 0, DestY = 0, DestWidth = 1920, DestHeight = 1080,
@@ -164,7 +164,7 @@ public class ShowDocumentMapperTests
         Assert.Equal(ClipEndBehavior.FreezeLastFrame, introClip.EndBehavior);
 
         // Live + image sources resolve to a path / scheme URI. The NDI URI is the option-carrying descriptor
-        // form (shared with the deck) — assert via the provider's parser so option order stays free.
+        // form (shared with the deck) - assert via the provider's parser so option order stays free.
         var camUri = doc.Clips.Single(c => c.CueId == camB.Id.ToString()).MediaPath;
         var camDescriptor = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(camUri);
         Assert.Equal("STUDIO (CAM 2)", camDescriptor.SourceName);
@@ -189,7 +189,7 @@ public class ShowDocumentMapperTests
     public void NestedGroups_CollapseIntoOutermostGroupId()
     {
         // A top-level group is one transport/clock unit; nested subgroups must not split their cues
-        // into a separate SessionClock — every descendant carries the OUTERMOST group's id.
+        // into a separate SessionClock - every descendant carries the OUTERMOST group's id.
         var deep = new MediaCueNode { Label = "Deep", Source = new FilePlaylistItem("/m/deep.mp4") };
         var mid = new MediaCueNode { Label = "Mid", Source = new FilePlaylistItem("/m/mid.mp4") };
         var inner = new CueGroupNode { Label = "Inner", Children = { deep } };
@@ -364,7 +364,7 @@ public class ShowDocumentMapperTests
     public void MMDAndYouTubeCues_MapToTheirDescriptorUris()
     {
         // The cue path must produce the SAME provider URIs as the deck (HaPlayPlaybackHelpers) so a
-        // cue-fired item keeps its per-item options — this was the "cue player cannot play MMD/YouTube"
+        // cue-fired item keeps its per-item options - this was the "cue player cannot play MMD/YouTube"
         // gap's mapping leg.
         ShowClipBinding Map(PlaylistItem source) =>
             Assert.Single(HaPlayShowMapper.ToShowDocument(

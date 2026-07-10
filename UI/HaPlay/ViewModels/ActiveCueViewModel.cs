@@ -44,7 +44,7 @@ public sealed partial class ActiveCueViewModel : ObservableObject
     }
 
     /// <summary>Operator aid (mirrors the media deck's low-time clock warning): true when a finite
-    /// cue is within <see cref="LowTimeWarningMs"/> of its end — drives the row's red readout so an
+    /// cue is within <see cref="LowTimeWarningMs"/> of its end - drives the row's red readout so an
     /// ending cue draws the eye before it goes silent. False for unknown-duration (live) cues.</summary>
     public bool IsNearEnd => DurationMs > 0 && DurationMs - PositionMs <= LowTimeWarningMs;
 
@@ -81,7 +81,7 @@ public sealed partial class ActiveCueViewModel : ObservableObject
     {
         var pos = FormatMs(positionMs);
         if (durationMs <= 0)
-            return $"{pos} / {Resources.Strings.EmDash}";
+            return $"{pos} / {Resources.Strings.Dash}";
         var dur = FormatMs(durationMs);
         var remaining = FormatMs(Math.Max(0, durationMs - positionMs));
         return $"{pos} / {dur} (-{remaining})";

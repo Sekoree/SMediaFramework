@@ -50,7 +50,7 @@
     </ResourceDictionary>
     <!-- No "Dark" dictionary: the Classic theme is a light theme, and popup TopLevels (PopupRoot /
          OverlayPopupHost, which take Foreground from ThemeForegroundBrush) do not reliably inherit
-         a host app's forced Light variant on dark-mode systems — the upstream Dark values put
+         a host app's forced Light variant on dark-mode systems - the upstream Dark values put
          near-white text on the classic light-gray menu surfaces. Dark lookups now fall back to
          Default, keeping every variant on the one classic palette. -->
   </ResourceDictionary.ThemeDictionaries>

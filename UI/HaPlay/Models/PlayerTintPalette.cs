@@ -6,14 +6,14 @@ namespace HaPlay.Models;
 /// (clears the tint).</summary>
 public sealed record PlayerTintSwatch(string Name, Color? Color)
 {
-    /// <summary>True for the "None" entry — the swatch renders an empty/✕ cell instead of a color.</summary>
+    /// <summary>True for the "None" entry - the swatch renders an empty/✕ cell instead of a color.</summary>
     public bool IsNone => Color is null;
 
     /// <summary>The swatch fill (transparent for "None"). Kept here so the picker binds a brush directly.</summary>
     public IBrush Brush => Color is { } c ? new SolidColorBrush(c) : Brushes.Transparent;
 }
 
-/// <summary>Predefined per-player tint colors — a subtle color-code applied to ALL of a deck's dockable panels
+/// <summary>Predefined per-player tint colors - a subtle color-code applied to ALL of a deck's dockable panels
 /// so they stay identifiable once split/floated apart. Shares the high-contrast hues of
 /// <see cref="CueColorTagPalette"/> (they read on both light and dark themes); the panel applies them at a low
 /// alpha as a wash, so the saturated value here is only used for the swatch itself. A custom color is picked

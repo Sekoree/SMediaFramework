@@ -143,7 +143,7 @@ internal static partial class Native
     [LibraryImport(LibraryName)]
     internal static partial void NDIlib_send_send_video_async_v2(nint p_instance, in NDIVideoFrameV2 p_video_data);
 
-    // Used to flush a pending async frame — maps to the same entry point with a zeroed struct
+    // Used to flush a pending async frame - maps to the same entry point with a zeroed struct
     [LibraryImport(LibraryName, EntryPoint = "NDIlib_send_send_video_async_v2")]
     internal static partial void NDIlib_send_flush_async(nint p_instance, nint p_video_data);
 
@@ -243,7 +243,7 @@ internal static partial class Native
     internal static partial nint NDIlib_routing_get_source_name(nint p_instance);
 
     // ------------------------------------------------------------------
-    // Utility — interleaved audio send helpers
+    // Utility - interleaved audio send helpers
     // ------------------------------------------------------------------
 
     [LibraryImport(LibraryName)]
@@ -259,7 +259,7 @@ internal static partial class Native
         nint p_instance, in NDIAudioInterleaved32f p_audio_data);
 
     // ------------------------------------------------------------------
-    // Utility — audio format conversions (v3 / FLTP)
+    // Utility - audio format conversions (v3 / FLTP)
     // ------------------------------------------------------------------
 
     [LibraryImport(LibraryName)]
@@ -293,7 +293,7 @@ internal static partial class Native
         in NDIAudioInterleaved32f p_src, ref NDIAudioFrameV3 p_dst);
 
     // ------------------------------------------------------------------
-    // Utility — video format conversions
+    // Utility - video format conversions
     // ------------------------------------------------------------------
 
     [LibraryImport(LibraryName)]

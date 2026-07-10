@@ -371,7 +371,7 @@ public sealed class ControlScriptRuntimeTests
     [Fact]
     public void DispatchControlEvent_GettingStartedEncoderArrayScriptRequestsThenMovesFader()
     {
-        // Mirrors Doc/HaPlay-Control-Getting-Started.md — one handler, a CC-indexed
+        // Mirrors Doc/HaPlay-Control-Getting-Started.md - one handler, a CC-indexed
         // array of channels, and request-on-miss instead of assuming a value. Keep
         // this in sync with the doc's script.
         const string source =

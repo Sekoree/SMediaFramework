@@ -11,7 +11,7 @@ namespace S.Media.Session.Tests;
 
 /// <summary>
 /// NXT-10 end-to-end: a clip whose video source can render itself as a GPU layer surface composites
-/// surface-side when the composition's compositor hosts surfaces — no frame fan-out — while transport
+/// surface-side when the composition's compositor hosts surfaces - no frame fan-out - while transport
 /// (fire, position, stop) behaves exactly like a frame-backed clip; on a CPU-only compositor the same
 /// clip falls back to its normal frame path untouched.
 /// </summary>
@@ -112,14 +112,14 @@ public sealed class SurfaceLayerSessionTests
 
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
 
-        // The standby engine may open a second (warm) source; exactly ONE — the fired clip's — took
+        // The standby engine may open a second (warm) source; exactly ONE - the fired clip's - took
         // the surface path.
         RecordingSurface? surface;
         lock (provider.Opened)
             surface = Assert.Single(provider.Opened, s => s.CreatedSurface is not null).CreatedSurface;
         Assert.NotNull(surface);
 
-        // The pump composites the surface with the transport timeline's SOURCE time — poll until at
+        // The pump composites the surface with the transport timeline's SOURCE time - poll until at
         // least two composites landed, then confirm the coordinate advanced (transport is live).
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
@@ -144,7 +144,7 @@ public sealed class SurfaceLayerSessionTests
         Assert.Equal(0, stats!.Value.LayerCount);
         Assert.True(Assert.Single(session.Snapshot()).IsActive);
 
-        // Stop releases the clip and the RUNTIME disposes the surface it owns (poll — the stop's
+        // Stop releases the clip and the RUNTIME disposes the surface it owns (poll - the stop's
         // fade/release tail lands one dispatcher op after the stop returns).
         await session.StopAllAsync();
         var stopDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
@@ -158,7 +158,7 @@ public sealed class SurfaceLayerSessionTests
     {
         var provider = new SurfaceCapableProvider(TimeSpan.FromSeconds(30));
         await using var session = new ShowSession(
-            MediaRegistry.Build(b => b.AddDecoder(provider))); // default CPU compositor — no surface host
+            MediaRegistry.Build(b => b.AddDecoder(provider))); // default CPU compositor - no surface host
         await session.LoadDocumentAsync(SurfaceClipDoc());
 
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());

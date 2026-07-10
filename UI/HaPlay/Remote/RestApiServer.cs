@@ -10,7 +10,7 @@ namespace HaPlay.Remote;
 
 /// <summary>
 /// Minimal HTTP front-end for <see cref="RemoteApiDispatcher"/> built on <see cref="HttpListener"/>
-/// (no web-framework dependency — the app publishes NativeAOT). Binds loopback by default; LAN binding is
+/// (no web-framework dependency - the app publishes NativeAOT). Binds loopback by default; LAN binding is
 /// an explicit operator choice. The access token is <strong>optional</strong>: this control surface targets
 /// closed-LAN automation (e.g. Bitfocus Companion), so when no token is configured every request is allowed;
 /// set a token to require it (compared in constant time). Status is read with GET; commands require POST.
@@ -36,7 +36,7 @@ public sealed class RestApiServer : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _acceptLoop;
 
-    /// <summary>Human-facing base URL (LAN address when available) — what Copy-API-URL uses.</summary>
+    /// <summary>Human-facing base URL (LAN address when available) - what Copy-API-URL uses.</summary>
     public string? BaseUrl { get; private set; }
 
     /// <summary>Non-null when the last <see cref="Start"/> failed or degraded (e.g. loopback fallback).</summary>
@@ -61,7 +61,7 @@ public sealed class RestApiServer : IDisposable
             listener = TryStart($"http://*:{port}/", out var error);
             if (listener is null)
             {
-                // Windows refuses wildcard prefixes without an ACL (netsh http add urlacl) — degrade
+                // Windows refuses wildcard prefixes without an ACL (netsh http add urlacl) - degrade
                 // to loopback so the API still works locally rather than not at all.
                 listener = TryStart($"http://localhost:{port}/", out var loopbackError);
                 if (listener is null)

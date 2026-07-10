@@ -5,7 +5,7 @@ using S.Media.Time;
 
 // Phase 5 live-convergence probe. Receives a real NDI source and drives its video onto a live-led session
 // master (SessionClock over a MonotonicWallClock) through a SourceTimeline (RebaseToLatest) via
-// LiveTimelineDriver — the P7 model: "live is a source scheduled against the master", not a master-less
+// LiveTimelineDriver - the P7 model: "live is a source scheduled against the master", not a master-less
 // path. Reports frame rate, the per-frame schedule lead (DueMaster - master-now; bounded = healthy), and
 // RebaseToLatest re-anchors. No display needed.
 
@@ -85,6 +85,6 @@ Console.WriteLine($"video : {vfmt.Width}x{vfmt.Height} @ {frames / start.Elapsed
 Console.WriteLine($"audio : {(hasAudio ? $"{afmt.SampleRate} Hz, {afmt.Channels} ch" : "not delivered")}");
 Console.WriteLine($"sched : lead {(frames > 0 ? (leadSum / frames).TotalMilliseconds : 0):0.0}ms mean, [{leadMin.TotalMilliseconds:0.0}, {leadMax.TotalMilliseconds:0.0}]ms, {driver.ReAnchorCount} re-anchor(s)");
 Console.WriteLine(frames > 0
-    ? "LiveReceiveProbe OK — live NDI video scheduled against the session master with bounded lead."
+    ? "LiveReceiveProbe OK - live NDI video scheduled against the session master with bounded lead."
     : "LiveReceiveProbe: no video frames received (sender video off?).");
 return frames > 0 ? 0 : 5;

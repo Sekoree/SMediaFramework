@@ -38,7 +38,7 @@ internal static class AvPlaybackCoordinator
 
         if (audioRouter is not null && audioClock is not null)
         {
-            // Realign audio before video.Play() — video starts the decode thread and may start
+            // Realign audio before video.Play() - video starts the decode thread and may start
             // the shared clock; audio Position tracks emitted samples (≈ clock at pause) so a
             // drift threshold would skip realign even when video decode is ~700ms ahead.
             if (!audioClock.IsRunning)
@@ -91,7 +91,7 @@ internal static class AvPlaybackCoordinator
 
         // The earliest queued frame sits beyond the lead window of the sync target. Frames are buffered
         // in increasing-PTS order, so that earliest frame is the lowest PTS the source will ever deliver
-        // here — waiting cannot lower it, and once the jitter buffer saturates the decode thread just
+        // here - waiting cannot lower it, and once the jitter buffer saturates the decode thread just
         // blocks on a slot it can never get (the queue only drains once the clock runs, which is gated on
         // this very check). This happens for streams whose first presentable frame starts a frame period
         // or two after the clock origin: e.g. an MP4 with video start_time=0.04 where demux priming
@@ -102,7 +102,7 @@ internal static class AvPlaybackCoordinator
     }
 
     /// <summary>
-    /// True when the video source will never deliver a frame to wait for — an audio-only file's stub video
+    /// True when the video source will never deliver a frame to wait for - an audio-only file's stub video
     /// (exhausted from the start with nothing queued or in flight). Without this, audio playback of WAV/MP3
     /// or any video-less file blocks for the full pre-audio wait before a single sample is heard.
     /// </summary>
@@ -213,7 +213,7 @@ internal static class AvPlaybackCoordinator
         }
         catch (InvalidOperationException ex)
         {
-            // Multiple sources — host must pass audioSourceId.
+            // Multiple sources - host must pass audioSourceId.
             Trace.LogDebug(ex, "RealignAudio: skipped unqualified seek before start");
         }
         catch (Exception ex)
@@ -294,7 +294,7 @@ internal static class AvPlaybackCoordinator
             video.Clock.Seek(position);
         }
 
-        // Seek the video only when its source is seekable — an audio clip's cover-art/stub video (and live
+        // Seek the video only when its source is seekable - an audio clip's cover-art/stub video (and live
         // video) can't seek, but the audio seek above is what matters for those.
         if (video.CanSeek)
             video.Seek(position);

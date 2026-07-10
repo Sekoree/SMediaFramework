@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Present.SDL3 — IVideoOutput on its own GL render thread (salvaged from S.Media.SDL3).
+    <!-- S.Media.Present.SDL3 - IVideoOutput on its own GL render thread (salvaged from S.Media.SDL3).
          Output + GL context only: [Core, Gpu]. The SDL3 GL *compositor backend* lives in the separate
          S.Media.Present.SDL3.Compositor bridge so this presenter never references S.Media.Compositor. -->
 

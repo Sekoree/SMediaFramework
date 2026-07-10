@@ -94,7 +94,7 @@ public sealed class OSCClient : IOSCClient
             "Sending OSC {Kind} to {Endpoint} ({Bytes}B)",
             packet.Kind, _remoteEndPoint, encoded.Length);
 
-        // Use the connected-default overload — Connect() was already called in the constructor.
+        // Use the connected-default overload - Connect() was already called in the constructor.
         await _udpClient.SendAsync(encoded.Memory, cancellationToken).ConfigureAwait(false);
     }
 

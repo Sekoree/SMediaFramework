@@ -18,7 +18,7 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
 
     /// <summary>
     /// Raised after <see cref="ReconfigureAsync"/> applies new placement / sizing to the window. Active
-    /// playback sessions don't need to re-acquire (the underlying output reference stays valid — only its
+    /// playback sessions don't need to re-acquire (the underlying output reference stays valid - only its
     /// window framing changes), but Phase B may use this hook to refresh UI bindings.
     /// </summary>
     event EventHandler? Reconfigured;
@@ -36,7 +36,7 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
     IVideoOutput? AcquireForPlayback();
 
     /// <summary>
-    /// Returns the output to "idle preview" mode after a playback session ends — reconfigures it to a
+    /// Returns the output to "idle preview" mode after a playback session ends - reconfigures it to a
     /// small black frame so the window keeps showing something even with no media loaded.
     /// </summary>
     void ReleaseFromPlayback();
@@ -48,7 +48,7 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
     void ApplyHoldImageWindowSize(int? width, int? height);
 
     /// <summary>
-    /// Phase A (§9.6) — applies a new <see cref="LocalVideoOutputDefinition"/> in place. Window size,
+    /// Phase A (§9.6) - applies a new <see cref="LocalVideoOutputDefinition"/> in place. Window size,
     /// screen index, and surface mode are honoured live. <see cref="LocalVideoOutputDefinition.Engine"/>
     /// must not change (engine switches go through Remove + Add at the management layer).
     /// </summary>
@@ -177,7 +177,7 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             var output = new SDL3GLVideoOutput(_definition.DisplayName, iw, ih)
             {
                 // Display-side fit chosen per output (letterbox by default): how the canvas is scaled into the
-                // window. The compositor (and any NDI output) is unaffected — it always carries the full canvas.
+                // window. The compositor (and any NDI output) is unaffected - it always carries the full canvas.
                 ViewportFit = LocalVideoFitMap.ToViewportFit(_definition.VideoFit),
             };
             output.CloseRequested += OnSDLCloseRequested;
@@ -228,12 +228,12 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 nameof(newDefinition));
         if (newDefinition.Engine != _definition.Engine)
             throw new ArgumentException(
-                "Cannot switch VideoOutputEngine in-place — remove and re-add the output.",
+                "Cannot switch VideoOutputEngine in-place - remove and re-add the output.",
                 nameof(newDefinition));
 
         _definition = newDefinition;
 
-        // Window placement runs on whichever thread SDL prefers — Task.Run avoids blocking the caller
+        // Window placement runs on whichever thread SDL prefers - Task.Run avoids blocking the caller
         // (typically the UI thread invoking Apply Edit from a dialog).
         return Task.Run(() =>
         {
@@ -242,7 +242,7 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             if (output is null)
                 return;
             // The viewport fit is a render-time property (independent of the frame stream), so a fit change
-            // applies immediately — even while a session is driving frames into the window.
+            // applies immediately - even while a session is driving frames into the window.
             output.ViewportFit = LocalVideoFitMap.ToViewportFit(newDefinition.VideoFit);
             ApplySDLWindowPlacement(
                 output,
@@ -312,7 +312,7 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     public void ReleaseFromPlayback()
     {
-        // Reset to the idle preview frame so the window keeps showing something between sessions —
+        // Reset to the idle preview frame so the window keeps showing something between sessions -
         // the SDL3GLVideoOutput retains its existing window/GL context across the reconfigure.
         var output = _sink;
         if (output is not null)
@@ -326,7 +326,7 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             }
             catch
             {
-                /* best effort — the output may have been closed by the user */
+                /* best effort - the output may have been closed by the user */
             }
         }
 
@@ -352,7 +352,7 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             }
             finally
             {
-                // Reached only via SDL's WindowCloseRequested/Quit — our own Dispose() unsubscribes this
+                // Reached only via SDL's WindowCloseRequested/Quit - our own Dispose() unsubscribes this
                 // handler before tearing the sink down, so this is always an operator-initiated close.
                 Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewEnded(_line, userInitiated: true));
             }
@@ -471,7 +471,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
                 nameof(newDefinition));
         if (newDefinition.Engine != _definition.Engine)
             throw new ArgumentException(
-                "Cannot switch VideoOutputEngine in-place — remove and re-add the output.",
+                "Cannot switch VideoOutputEngine in-place - remove and re-add the output.",
                 nameof(newDefinition));
 
         _definition = newDefinition;
@@ -525,7 +525,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
                 }
                 catch
                 {
-                    /* best effort — window may have been closed externally */
+                    /* best effort - window may have been closed externally */
                 }
             }, DispatcherPriority.Normal);
         }

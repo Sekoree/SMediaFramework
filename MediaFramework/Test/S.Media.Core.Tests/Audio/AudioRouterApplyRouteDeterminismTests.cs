@@ -4,7 +4,7 @@ namespace S.Media.Core.Tests.Audio;
 
 /// <summary>
 /// Validates <see cref="AudioRouter.ApplyRoute"/> (SIMD + scalar + gain ramps) against a
-/// compact scalar reference mixer on seeded random graphs — extends fuzz-style coverage without
+/// compact scalar reference mixer on seeded random graphs - extends fuzz-style coverage without
 /// threading nondeterminism.
 /// </summary>
 public sealed class AudioRouterApplyRouteDeterminismTests

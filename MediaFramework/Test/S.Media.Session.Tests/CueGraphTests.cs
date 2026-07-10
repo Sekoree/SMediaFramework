@@ -42,7 +42,7 @@ public sealed class CueGraphTests
 
         var fire = graph.FireAsync("a").AsTask();
         var done = await Task.WhenAny(fire, Task.Delay(TimeSpan.FromSeconds(5)));
-        Assert.Same(fire, done); // completed — did not hang or recurse forever
+        Assert.Same(fire, done); // completed - did not hang or recurse forever
         await fire;
 
         // Each cue ran a small bounded number of times (the guard stops before re-firing a cue in the chain).

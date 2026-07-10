@@ -5,8 +5,8 @@ namespace HaPlay.Services;
 
 /// <summary>
 /// Metadata written as <c>session.json</c> inside each recovery folder (<c>…/HaPlay/recovery/{sessionId}</c>).
-/// The folder's mere existence is the crash marker — created when the app starts and deleted on a clean
-/// shutdown — so any folder still present on the next launch is an unclean exit. This record lets the restore
+/// The folder's mere existence is the crash marker - created when the app starts and deleted on a clean
+/// shutdown - so any folder still present on the next launch is an unclean exit. This record lets the restore
 /// prompt describe what it found (which project, how recent) and lets discovery skip a folder whose process is
 /// still alive (a concurrent second instance, not a crash).
 /// </summary>
@@ -15,7 +15,7 @@ public sealed record RecoverySessionInfo
     /// <summary>Opaque per-launch id; also the recovery folder name.</summary>
     public string SessionId { get; init; } = string.Empty;
 
-    /// <summary>OS process id that owns this session — used as a best-effort liveness check so a still-running
+    /// <summary>OS process id that owns this session - used as a best-effort liveness check so a still-running
     /// instance is not mistaken for a crashed one.</summary>
     public int Pid { get; init; }
 
@@ -28,7 +28,7 @@ public sealed record RecoverySessionInfo
     public string? ProjectTitle { get; init; }
 
     /// <summary>True when the captured project is untitled and had control scripts living only in the scratch
-    /// cache — in that case the recovery folder also carries a <c>scripts/</c> copy so restore is faithful.</summary>
+    /// cache - in that case the recovery folder also carries a <c>scripts/</c> copy so restore is faithful.</summary>
     public bool HasUnsavedScripts { get; init; }
 
     /// <summary>Project-relative script paths whose editor buffers had not reached disk when captured.</summary>
@@ -39,7 +39,7 @@ public sealed record RecoverySessionInfo
 
     public DateTimeOffset StartedUtc { get; init; }
 
-    /// <summary>When the last snapshot was captured — shown in the prompt and used to order multiple orphans
+    /// <summary>When the last snapshot was captured - shown in the prompt and used to order multiple orphans
     /// (most recent first) and to age out stale folders.</summary>
     public DateTimeOffset LastSavedUtc { get; init; }
 }

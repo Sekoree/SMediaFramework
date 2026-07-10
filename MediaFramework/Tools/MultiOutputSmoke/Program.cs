@@ -9,14 +9,14 @@ using S.Media.Present.SDL3;
 // through the registry (FFmpeg) and fans its video to TWO independent outputs via
 // MediaPlayer.AttachVideoOutput → VideoRouter (per-branch negotiation/pumps). Each output is instrumented:
 // every Submit records (frame PTS → monotonic wall instant), and at the end the same-PTS pairs reduce to a
-// cross-output presentation-skew distribution that is GATED at one frame period (p95) — the measurable
+// cross-output presentation-skew distribution that is GATED at one frame period (p95) - the measurable
 // software proxy for "both displays show the same frame at the same time".
 //
 //   MultiOutputSmoke <media> [seconds=30] [--headless]
 //
-// Default (windows): two SDL3 GL windows — run on real displays for the hardware check (put one window on
+// Default (windows): two SDL3 GL windows - run on real displays for the hardware check (put one window on
 // each physical output; the printed skew is the router+present-path skew, and eyes/camera confirm the
-// glass). --headless: two discarding sinks (no display needed) — gates the router/fan-out skew on any box,
+// glass). --headless: two discarding sinks (no display needed) - gates the router/fan-out skew on any box,
 // the scheduled/CI tier of the same measurement.
 
 var positional = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
@@ -34,9 +34,9 @@ var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
 
 // Software decode so the source publishes its pixel format up front (a hardware decoder only does so after
 // its first frame, which the player's up-front negotiation needs primed). The router then fans CPU frames
-// to two INDEPENDENT outputs (each does its own GL upload — no shared-texture constraint).
+// to two INDEPENDENT outputs (each does its own GL upload - no shared-texture constraint).
 using var player = MediaPlayer.Open(registry, uri, new MediaPlayerOpenOptions { TryHardwareAcceleration = false });
-Console.WriteLine($"opened '{uri}' — fanning to two {(headless ? "headless sinks" : "phase-locked windows")} for {seconds:0}s or until closed…");
+Console.WriteLine($"opened '{uri}' - fanning to two {(headless ? "headless sinks" : "phase-locked windows")} for {seconds:0}s or until closed…");
 
 var closed = false;
 IVideoOutput sink1, sink2;
@@ -78,7 +78,7 @@ while (sw.Elapsed.TotalSeconds < seconds && !closed && !player.Video.IsSourceExh
 }
 
 Console.WriteLine();
-Console.WriteLine($"MultiOutputSmoke done — two outputs fanned {player.Video.DisplayedCount} frames " +
+Console.WriteLine($"MultiOutputSmoke done - two outputs fanned {player.Video.DisplayedCount} frames " +
     $"({(closed ? "window closed" : player.Video.IsSourceExhausted ? "source ended" : "time elapsed")}).");
 
 // --- NXT-04 measured cross-output skew gate ------------------------------------------------------------
@@ -126,15 +126,15 @@ if (p95 > budgetMs || missRatio > 0.05)
     var clauses = new List<string>();
     if (p95 > budgetMs) clauses.Add($"p95={p95:F2}ms > {budgetMs:F1}ms");
     if (missRatio > 0.05) clauses.Add($"one-sided frames {missRatio:P1} > 5%");
-    Console.Error.WriteLine($"FAIL: cross-output skew gate — {string.Join(" and ", clauses)}");
+    Console.Error.WriteLine($"FAIL: cross-output skew gate - {string.Join(" and ", clauses)}");
     return 18;
 }
 
-Console.WriteLine("MultiOutputSmoke skew gate OK — both outputs presented the same frames within one frame period.");
+Console.WriteLine("MultiOutputSmoke skew gate OK - both outputs presented the same frames within one frame period.");
 return 0;
 
 /// <summary>Wraps a real output, recording (frame PTS → Stopwatch timestamp) at every Submit before
-/// forwarding — the per-output presentation instant used by the cross-output skew gate.</summary>
+/// forwarding - the per-output presentation instant used by the cross-output skew gate.</summary>
 sealed class SkewProbeOutput(IVideoOutput inner) : IVideoOutput
 {
     private readonly Lock _gate = new();

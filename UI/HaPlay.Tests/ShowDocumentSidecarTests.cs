@@ -11,7 +11,7 @@ namespace HaPlay.Tests;
 
 /// <summary>
 /// D10: a full project save publishes one framework <see cref="ShowDocument"/> per cue list next to
-/// the project file — the headless / C-ABI-runnable artifact of the saved show.
+/// the project file - the headless / C-ABI-runnable artifact of the saved show.
 /// </summary>
 public sealed class ShowDocumentSidecarTests : IDisposable
 {

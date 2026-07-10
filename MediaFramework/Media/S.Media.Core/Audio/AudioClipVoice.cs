@@ -99,7 +99,7 @@ public sealed class AudioClipVoice : IAudioSource, IDisposable
                     // clip-end boundary). There are no more samples to carry the release
                     // ramp, so finish it now: drive gain to zero and stop. Otherwise the
                     // ramp never completes, _stopped stays false, and IsExhausted is stuck
-                    // false forever — the voice lingers returning zero samples and is never
+                    // false forever - the voice lingers returning zero samples and is never
                     // reaped.
                     _gain = 0f;
                     _stopped = true;

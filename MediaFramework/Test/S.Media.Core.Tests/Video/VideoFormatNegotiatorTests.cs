@@ -10,7 +10,7 @@ public class VideoFormatNegotiatorTests
         var src = new FakeSource([PixelFormat.I420, PixelFormat.Nv12]);
         var output = new FakeOutput([PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420]);
 
-        // Walks output preferences in order — Nv12 is the first overlap.
+        // Walks output preferences in order - Nv12 is the first overlap.
         Assert.Equal(PixelFormat.Nv12, VideoFormatNegotiator.Negotiate(src, output));
     }
 

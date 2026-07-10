@@ -13,7 +13,7 @@ namespace S.Media.Core.Video;
 /// Drop-frame is a SMPTE convention used for 29.97 (NTSC) and 59.94 fps streams: frames 0 and 1 of
 /// each minute (or 0/1/2/3 at 59.94) are skipped except every tenth minute. This compensates for
 /// the offset between integer-frame time and real time so 1 hour of timecode ≈ 1 hour of wall
-/// clock. Drop-frame applies only to 29.97 / 59.94 — 23.976 is NOT drop-frame.
+/// clock. Drop-frame applies only to 29.97 / 59.94 - 23.976 is NOT drop-frame.
 /// </para>
 /// <para>
 /// Use <see cref="VideoTimecodeMath.IsDropFrameRate"/> to test eligibility. Constructing a drop-frame
@@ -75,7 +75,7 @@ public readonly record struct VideoTimecode
         VideoTimecodeMath.ToFrameNumber(Hours, Minutes, Seconds, Frames, FrameRate, IsDropFrame);
 
     /// <summary>
-    /// 100-ns ticks since <c>00:00:00:00</c>. Computed as <c>frame_number / fps</c> in ticks —
+    /// 100-ns ticks since <c>00:00:00:00</c>. Computed as <c>frame_number / fps</c> in ticks -
     /// this is what NDI's timecode slot consumes.
     /// </summary>
     public long ToTicksAtRate()
@@ -134,7 +134,7 @@ public static class VideoTimecodeMath
     }
 
     /// <summary>
-    /// Nominal integer FPS used for timecode framing — 30 for 29.97, 60 for 59.94, otherwise
+    /// Nominal integer FPS used for timecode framing - 30 for 29.97, 60 for 59.94, otherwise
     /// rounded from the rational value.
     /// </summary>
     public static int NominalIntegerFps(Rational rate)

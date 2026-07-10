@@ -3,7 +3,7 @@ namespace S.Media.Routing;
 /// <summary>
 /// Registry-wired capability hooks for <see cref="AudioRouter"/>. These replace the old process-wide
 /// <c>MediaFrameworkPlugins</c> slots (P2): the host/session sets them once from the media registry
-/// before the router runs. Both are optional — when unset, the dependent feature (autoResample /
+/// before the router runs. Both are optional - when unset, the dependent feature (autoResample /
 /// adaptive-rate) throws a clear error instead of silently using global state.
 /// </summary>
 public sealed partial class AudioRouter

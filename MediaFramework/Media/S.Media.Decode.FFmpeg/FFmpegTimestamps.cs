@@ -1,7 +1,7 @@
 namespace S.Media.Decode.FFmpeg;
 
 /// <summary>
-/// FFMPEG-02: the timestamp-normalization arithmetic shared by every FFmpeg decode path — the standalone audio
+/// FFMPEG-02: the timestamp-normalization arithmetic shared by every FFmpeg decode path - the standalone audio
 /// and video file decoders and the shared A/V demux. These conversions were hand-duplicated in four places; the
 /// timebase ↔ wall-clock mapping and the best-effort-PTS resolution are the historically most seek-fragile part
 /// of the pipeline (see the HW-frame-PTS and timebase-mismatch traps), so they now have a single, pure, directly
@@ -11,7 +11,7 @@ internal static class FFmpegTimestamps
 {
     /// <summary>
     /// The effective decode PTS for a frame: FFmpeg's <c>best_effort_timestamp</c> when it is known, otherwise the
-    /// raw container <c>pts</c>. Returns <see cref="AV_NOPTS_VALUE"/> when neither is known — the caller then
+    /// raw container <c>pts</c>. Returns <see cref="AV_NOPTS_VALUE"/> when neither is known - the caller then
     /// applies its own fallback (audio counts emitted samples, video counts emitted frames at the nominal rate).
     /// This mirrors the classic <c>pts = best_effort; if (pts == AV_NOPTS_VALUE) pts = frame->pts;</c> idiom.
     /// </summary>

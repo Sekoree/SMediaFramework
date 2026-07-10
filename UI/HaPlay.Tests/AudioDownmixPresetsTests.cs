@@ -46,7 +46,7 @@ public sealed class AudioDownmixPresetsTests
         Assert.DoesNotContain(c, x => x.InputChannel == AudioDownmixPresets.Lfe51Channel);
         Assert.Contains(new DownmixContribution(0, 0, 0.0), c);
         Assert.Contains(new DownmixContribution(5, 5, 0.0), c);
-        Assert.Equal(5, c.Count); // 0,1,2,4,5 — channel 3 dropped
+        Assert.Equal(5, c.Count); // 0,1,2,4,5 - channel 3 dropped
     }
 
     [Theory]
@@ -90,7 +90,7 @@ public sealed class AudioDownmixPresetsTests
 
         matrix.ApplyDownmix(AudioDownmixPreset.Surround51ToStereo); // not applicable to stereo
 
-        Assert.True(matrix.Cell(0, 0)!.IsAudible); // unchanged — not silenced
+        Assert.True(matrix.Cell(0, 0)!.IsAudible); // unchanged - not silenced
         Assert.True(matrix.Cell(1, 1)!.IsAudible);
     }
 }

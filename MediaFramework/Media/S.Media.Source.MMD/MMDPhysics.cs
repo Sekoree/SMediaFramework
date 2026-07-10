@@ -7,14 +7,14 @@ namespace S.Media.Source.MMD;
 /// <see cref="MMDBulletNative"/> C ABI, exactly as MikuMikuDance and babylon-mmd do. The PMX rigid bodies
 /// become Bullet rigid bodies (sphere/box/capsule with the file's mass, inertia, damping, friction,
 /// restitution and 16-bit collision group/mask), and every PMX joint becomes a
-/// <c>btGeneric6DofSpringConstraint</c> with the authored per-axis limits and spring stiffnesses — so the
+/// <c>btGeneric6DofSpringConstraint</c> with the authored per-axis limits and spring stiffnesses - so the
 /// file's Bullet-tuned parameters mean precisely what their authors intended. Kinematic
 /// (<see cref="PMXPhysicsMode.FollowBone"/>) bodies follow the animated bones and drag the dynamic chains;
 /// dynamic bodies write their transforms back to their bones between IK and skinning.
 ///
 /// <para>STATEFUL by nature (unlike the pure-function-of-time animator): the owner steps it monotonically
 /// once per rendered frame. Backward seeks or large jumps reset the chain to the animated pose and run a
-/// one-frame kinematic warm-up — the same behavior MMD itself has on seek.</para>
+/// one-frame kinematic warm-up - the same behavior MMD itself has on seek.</para>
 ///
 /// <para>Owns an unmanaged Bullet world; <see cref="Dispose"/> frees it (a finalizer backstops leaks).</para>
 /// </summary>
@@ -44,7 +44,7 @@ public sealed class MMDPhysics : IDisposable
 
     /// <summary>Retained for API/back-compat: the old custom solver fired this when its anti-stuck
     /// supervisor snapped a body back onto its bone. Real Bullet has no such supervisor, so this never
-    /// fires now — kept only so existing callers/tests compile.</summary>
+    /// fires now - kept only so existing callers/tests compile.</summary>
     public static Action<int>? DebugStuckReset;
 
     private MMDPhysics(nint world, Body[] bodies, bool[] drivenBones)
@@ -56,7 +56,7 @@ public sealed class MMDPhysics : IDisposable
         Array.Fill(_bodyEnabled, true);
     }
 
-    /// <summary>True when the simulation overwrites this bone's world transform — the animator re-chains
+    /// <summary>True when the simulation overwrites this bone's world transform - the animator re-chains
     /// the OTHER bones under their (possibly physics-moved) parents after <see cref="Step"/>.</summary>
     public bool DrivesBone(int boneIndex) =>
         (uint)boneIndex < (uint)_drivenBones.Length && _drivenBones[boneIndex];
@@ -167,7 +167,7 @@ public sealed class MMDPhysics : IDisposable
                     linLower, linUpper, angLower, angUpper, springPos, springRot);
 
                 // MMD quirk (katwat, ref: babylon-mmd): a PhysicsWithBonePosition body whose bone's PARENT
-                // carries the joint's dynamic A body must act as plain Physics — the bone-position snap
+                // carries the joint's dynamic A body must act as plain Physics - the bone-position snap
                 // would fight the parent link it hangs from.
                 if (specA.Mode != PMXPhysicsMode.FollowBone && b.AlignBonePosition
                     && BoneParentOf(model, b.BoneIndex) is { } parentOfB && parentOfB == a.BoneIndex)
@@ -205,7 +205,7 @@ public sealed class MMDPhysics : IDisposable
         }
     }
 
-    /// <summary>Resets every body onto its (animated) kinematic pose and clears velocities — a seek/jump
+    /// <summary>Resets every body onto its (animated) kinematic pose and clears velocities - a seek/jump
     /// re-basing. <paramref name="world"/> is the animator's post-IK world matrices. The next
     /// <see cref="Step"/> runs a one-frame kinematic warm-up before dynamics take over (MMD's
     /// play-from-here behavior), so a mid-dance FK pose never explodes the chain.</summary>
@@ -322,7 +322,7 @@ public sealed class MMDPhysics : IDisposable
 
     private static unsafe void WriteMatrix(in Matrix4x4 m, float* dst)
     {
-        // System.Numerics stores M11..M44 sequentially — bit-identical to OpenGL column-major, so the
+        // System.Numerics stores M11..M44 sequentially - bit-identical to OpenGL column-major, so the
         // native side reads the same transform back with setFromOpenGLMatrix (no transpose).
         dst[0] = m.M11; dst[1] = m.M12; dst[2] = m.M13; dst[3] = m.M14;
         dst[4] = m.M21; dst[5] = m.M22; dst[6] = m.M23; dst[7] = m.M24;

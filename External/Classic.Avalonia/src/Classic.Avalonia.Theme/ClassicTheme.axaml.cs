@@ -47,7 +47,7 @@ public class ClassicTheme : Styles
         {
             UpdateRangeClasses(bar);
         });
-        // Avalonia 12: SystemDecorations is a plain CLR property (not styleable) — apply the
+        // Avalonia 12: SystemDecorations is a plain CLR property (not styleable) - apply the
         // platform-specific decoration choice from code instead of the window style.
         Control.LoadedEvent.AddClassHandler<Window>((window, _) =>
         {

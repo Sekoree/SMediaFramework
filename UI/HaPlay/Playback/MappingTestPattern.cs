@@ -7,7 +7,7 @@ namespace HaPlay.Playback;
 /// <summary>
 /// Generates the calibration grid the mapping editor pushes through a composition: a labeled-ish
 /// BGRA frame (grid lines, border, center cross, per-corner color markers for orientation) the
-/// operator aligns against physical panels. One-time managed render — performance irrelevant.
+/// operator aligns against physical panels. One-time managed render - performance irrelevant.
 /// </summary>
 internal static class MappingTestPattern
 {
@@ -34,17 +34,17 @@ internal static class MappingTestPattern
             Fill(pixels, stride, 0, y, width, Math.Min(2, height - y), v, v, v);
         }
 
-        // Center cross (red) — quick sanity anchor for section alignment.
+        // Center cross (red) - quick sanity anchor for section alignment.
         Fill(pixels, stride, width / 2 - 1, 0, 2, height, 0x20, 0x20, 0xE0);
         Fill(pixels, stride, 0, height / 2 - 1, width, 2, 0x20, 0x20, 0xE0);
 
-        // Border (white, 4 px) — edge visibility on every panel.
+        // Border (white, 4 px) - edge visibility on every panel.
         Fill(pixels, stride, 0, 0, width, 4, 0xFF, 0xFF, 0xFF);
         Fill(pixels, stride, 0, height - 4, width, 4, 0xFF, 0xFF, 0xFF);
         Fill(pixels, stride, 0, 0, 4, height, 0xFF, 0xFF, 0xFF);
         Fill(pixels, stride, width - 4, 0, 4, height, 0xFF, 0xFF, 0xFF);
 
-        // Corner markers — distinct colors so flipped/rotated sections are obvious:
+        // Corner markers - distinct colors so flipped/rotated sections are obvious:
         // TL white, TR red, BL green, BR blue.
         var m = Math.Max(24, step / 2);
         Fill(pixels, stride, 0, 0, m, m, 0xFF, 0xFF, 0xFF);

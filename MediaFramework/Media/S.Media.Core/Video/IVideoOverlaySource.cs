@@ -6,7 +6,7 @@ namespace S.Media.Core.Video;
 /// (pull-based, monotonic), it is queried by absolute time.
 /// </summary>
 /// <remarks>
-/// The returned frame is <strong>borrowed</strong> — owned by the source and potentially re-rendered in place, so
+/// The returned frame is <strong>borrowed</strong> - owned by the source and potentially re-rendered in place, so
 /// it is valid only for the current composition tick. Composite it immediately and do <em>not</em> dispose it.
 /// Subtitle layers (text via Skia, ASS via libass) are the primary implementers.
 /// </remarks>

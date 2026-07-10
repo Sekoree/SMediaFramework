@@ -15,7 +15,7 @@ namespace S.Media.Decode.FFmpeg;
 /// </summary>
 /// <remarks>
 /// Pass-through libav video uses <see cref="PassThroughDescriptorArena"/> the same way as <see cref="VideoFileDecoder"/> (Treiber-stack pooled descriptor arrays, <c>Array.Clear</c> on return).
-/// <c>Rent</c>/<c>Return</c> run under the normal video decode serialization for this demux — there is no extra mutex around the arena itself.
+/// <c>Rent</c>/<c>Return</c> run under the normal video decode serialization for this demux - there is no extra mutex around the arena itself.
 /// On teardown, selected managed disposals (<see cref="PassThroughDescriptorArena"/>, hardware acceleration, primed-seek holder) are wrapped so <strong>Debug</strong> builds log via <see cref="S.Media.Core.Diagnostics.MediaDiagnostics.LogError"/> and <strong>Release</strong> builds continue best-effort (same policy as <see cref="VideoRouter.Dispose"/>).
 /// </remarks>
 internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
@@ -31,7 +31,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     private int _maxAudioPacketsQueued = DefaultAudioPacketsQueued;
     private int _maxVideoPacketsQueued = DefaultVideoPacketsQueued;
 
-    /// <summary><c>AV_DISPOSITION_ATTACHED_PIC</c> — album art / cover; must not be chosen over a real video track.</summary>
+    /// <summary><c>AV_DISPOSITION_ATTACHED_PIC</c> - album art / cover; must not be chosen over a real video track.</summary>
     private const int AvDispositionAttachedPic = 1024;
 
     private readonly object _lifecycleLock = new();
@@ -42,7 +42,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     private volatile bool _disposed;
     private volatile bool _demuxerStopRequest;
-    // Cancellation for the (blocking, native) open — checked by the interrupt callback ONLY while an open is in
+    // Cancellation for the (blocking, native) open - checked by the interrupt callback ONLY while an open is in
     // flight, then cleared, so a slow/blocked open (e.g. a network connect) aborts promptly on cancel without
     // the open token leaking into later reads/seeks (NXT-02 cancellable open / NXT-03 STOP-preempts-open).
     private CancellationToken _openCancellation;
@@ -65,7 +65,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     private readonly Queue<nint> _audioPacketQ = new();
     private readonly Queue<nint> _videoPacketQ = new();
 
-    /// <summary>Packet dequeued but not yet accepted by <c>avcodec_send_packet</c> (EAGAIN) — must be retried.</summary>
+    /// <summary>Packet dequeued but not yet accepted by <c>avcodec_send_packet</c> (EAGAIN) - must be retried.</summary>
     private nint _aPendingPacket;
     private nint _vPendingPacket;
 
@@ -108,7 +108,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     // Source geometry the sws context (and pass-through plane math) was configured for. Streams can
     // change dimensions mid-file (DVB captures, spliced MKVs); SyncVideoPixelFormatIfNeeded compares the
     // decoded frame against these and rebuilds the conversion path instead of feeding sws mismatched
-    // geometry (which corrupts or over-reads — sws trusts its build-time source dims).
+    // geometry (which corrupts or over-reads - sws trusts its build-time source dims).
     private int _vSrcW;
     private int _vSrcH;
     private PixelFormat _vNativePixFmt;
@@ -124,7 +124,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     // not been consumed, the second call is deduplicated instead of repeating the avformat_seek + decode.
     private TimeSpan? _seekPrimedPosition;
     // True while the demux is sitting exactly where the last SeekPresentation left it and no read has
-    // pulled past it yet. This — not the presence of a primed keeper frame — gates the coordinated-seek
+    // pulled past it yet. This - not the presence of a primed keeper frame - gates the coordinated-seek
     // dedup: a prime that bailed early (4 s deadline or a cancellation) still leaves the demux positioned
     // at the target, so the paired call must dedup rather than redo a full (and equally doomed) seek.
     // Cleared by the first audio/video read after the seek (and re-armed by the next SeekPresentation).
@@ -163,10 +163,10 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     /// <summary>Container stream index of the elected video stream, or −1 (no video / disabled / degraded).</summary>
     public int ActiveVideoStreamIndex => _vStream;
 
-    /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
+    /// <summary>True when the container exposed a decodable audio stream - false for video-only files.</summary>
     public bool HasAudio => _hasAudio;
 
-    /// <summary>True when the container exposed a decodable video stream — false for audio-only files
+    /// <summary>True when the container exposed a decodable video stream - false for audio-only files
     /// (the <see cref="VideoTrack"/> is a stub that reports <c>IsExhausted = true</c> immediately).</summary>
     public bool HasVideo => _hasVideo;
 
@@ -188,7 +188,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         try
         {
             d.OpenInternal(path, videoOptions);
-            d._openCancellation = default; // open complete — don't let the open token abort later reads/seeks
+            d._openCancellation = default; // open complete - don't let the open token abort later reads/seeks
             return d;
         }
         catch
@@ -275,7 +275,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.OpenLargeBufferFile", slowWarningMs: 1000);
         // bufferSize:1 disables FileStream's own buffering so the large AVIO read maps to a large OS read;
-        // SequentialScan hints the kernel readahead. The bridge does not own the stream — we do.
+        // SequentialScan hints the kernel readahead. The bridge does not own the stream - we do.
         var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             bufferSize: 1, FileOptions.SequentialScan);
         _ownedInputStream = fs;
@@ -340,7 +340,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         {
             aSt = _fmt->streams[_aStream];
             // Wrap audio-stream setup so a file with a usable VIDEO stream still opens (video-only) when
-            // the audio stream is unusable — unsupported codec build, corrupt codec parameters, a channel
+            // the audio stream is unusable - unsupported codec build, corrupt codec parameters, a channel
             // layout swr can't negotiate, etc. Mirrors the video-side degrade below; the catch only engages
             // when there IS video to fall back to (an audio-only file still surfaces the error).
             try
@@ -385,7 +385,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
         if (!_hasAudio)
         {
-            // Sentinel format for video-only files: AudioFormat(0, 0) — both fields zero so any
+            // Sentinel format for video-only files: AudioFormat(0, 0) - both fields zero so any
             // consumer that forgets to guard with HasAudio fails fast at AudioFormat.Validate
             // rather than silently latching onto a bogus 48000 Hz rate.
             AudioCodecName = "";
@@ -395,7 +395,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         AVStream* vSt = null;
         if (!_hasVideo)
         {
-            // No decodable video stream — audio-only file (e.g. MP3 with no cover art).
+            // No decodable video stream - audio-only file (e.g. MP3 with no cover art).
             // Provide a stub VideoFormat so format negotiation between the stub IVideoSource and a
             // permissive output (DiscardingVideoOutput, or any output with at least one accepted format)
             // succeeds. The decode loop never produces frames because VideoTrack.IsExhausted is true.
@@ -429,10 +429,10 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
         vSt = _fmt->streams[_vStream];
         // Wrap video-stream setup so a file with a playable AUDIO stream still opens (audio-only) when the
-        // video stream is unusable — unsupported cover/video codec, bad dimensions, sws failure, etc. Without
+        // video stream is unusable - unsupported cover/video codec, bad dimensions, sws failure, etc. Without
         // this the whole open throws and a perfectly good audio track (e.g. an album with a broken embedded
         // cover) won't play. The catch only engages when there IS audio to fall back to; a video-only file
-        // still surfaces the error. (Body left at this indent to keep the change a pure wrap — see catch below.)
+        // still surfaces the error. (Body left at this indent to keep the change a pure wrap - see catch below.)
         try
         {
         _videoIsAttachedPicture = (vSt->disposition & AvDispositionAttachedPic) != 0;
@@ -445,7 +445,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
 
         // Never hardware-decode an attached-picture cover (album art): it is a single still, so a GPU decode
-        // session buys nothing and some drivers (e.g. VAAPI MJPEG) are slow/flaky for one-shot JPEG/PNG —
+        // session buys nothing and some drivers (e.g. VAAPI MJPEG) are slow/flaky for one-shot JPEG/PNG -
         // which stalls the pre-audio video-buffer wait for seconds and can leave the cover blank. Software
         // decode of one frame is effectively free.
         var tryHw = (videoOptions?.TryHardwareAcceleration ?? true) && !_videoIsAttachedPicture;
@@ -491,11 +491,11 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
         _hwAccel = hw;
         _drmGpuNv12Path = hw?.OutputsDrmPrimeGpuFrame == true;
-        // Only take the D3D11 zero-copy path — which RETAINS each decoded surface through the whole
-        // consumer pipeline — when the caller actually opted into it (RetainD3D11SharedHandleForGl).
+        // Only take the D3D11 zero-copy path - which RETAINS each decoded surface through the whole
+        // consumer pipeline - when the caller actually opted into it (RetainD3D11SharedHandleForGl).
         // d3d11va's only decoder output format is AV_PIX_FMT_D3D11, so without this gate every default
         // hardware-decode open would pin surfaces from the fixed (default 20) pool and exhaust it after
-        // ~one jitter-buffer's worth of frames — avcodec_send_packet then fails with AVERROR_INVALIDDATA
+        // ~one jitter-buffer's worth of frames - avcodec_send_packet then fails with AVERROR_INVALIDDATA
         // ("Static surface pool size exceeded"). The extra_hw_frames head-room above is only applied on the
         // retain path, so the un-gated default had a 20-surface pool and faulted almost immediately. When
         // retain is off we instead fall through to the generic hwaccel path: ResolveWorkVideoFrame downloads
@@ -505,10 +505,10 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         //
         // Also require 8-bit content. The Win32 D3D11 retain path is NV12-only (D3D11VaNv12BackingFactory rejects
         // any non-NV12 surface, and the output format is forced to NV12). But d3d11va decodes 10/12-bit 4:2:0 into
-        // P010/P016 surfaces — those would be rejected by the backing and then mislabeled as 8-bit NV12 by the
+        // P010/P016 surfaces - those would be rejected by the backing and then mislabeled as 8-bit NV12 by the
         // forced-format fallback, corrupting HDR/10-bit playback. Route higher bit depths through the generic
         // hwaccel path instead (ResolveWorkVideoFrame downloads to CPU; SyncVideoPixelFormatIfNeeded detects the
-        // real P010/P016 and keeps full precision) — mirrors InferDrmPrimeOutputPixelFormat's bit-depth split on
+        // real P010/P016 and keeps full precision) - mirrors InferDrmPrimeOutputPixelFormat's bit-depth split on
         // Linux. (4:2:2 / RGB never reach here: d3d11va doesn't hardware-decode them.)
         var hwHigherBitDepth = vSt->codecpar->bits_per_raw_sample >= 10;
         _d3d11GpuNv12Path = retainD3D11 && hw?.OutputsD3D11GpuFrame == true && !hwHigherBitDepth;
@@ -541,12 +541,12 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 _vNativePixFmt = PixelFormat.Unknown;
                 _vPassThrough = false;
                 _vOutPixFmt = PixelFormat.Bgra32;
-                // This branch is NOT passthrough — it sws-converts the transferred frame and always EMITS
-                // BGRA32 — so advertise that (what we emit), like the software + attached-pic paths below.
+                // This branch is NOT passthrough - it sws-converts the transferred frame and always EMITS
+                // BGRA32 - so advertise that (what we emit), like the software + attached-pic paths below.
                 // Declaring nothing makes a HW source negotiate as [] AT OPEN (before the first frame primes
                 // the real layout); against a permissive empty-declaring sink (the deck's DiscardingVideoOutput
                 // negotiation lead) that throws "neither source nor output declared any pixel formats" and the
-                // file won't play — exactly HaPlayPlaybackSession's open path.
+                // file won't play - exactly HaPlayPlaybackSession's open path.
                 _vNativePixFormats = [PixelFormat.Bgra32];
             }
         }
@@ -584,7 +584,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         // chroma subsampling (I420 / NV12 over NDI) require even W and H, and BGRA / RGBA / UYVY require
         // even W. Round up to the next even multiple here and route through the sws-to-BGRA32 path so
         // downstream outputs always see even dimensions. The visible difference is at most one row/column
-        // of sub-pixel rescaling — imperceptible for a static cover image.
+        // of sub-pixel rescaling - imperceptible for a static cover image.
         var outWidth = _vCtx->width + (_vCtx->width & 1);
         var outHeight = _vCtx->height + (_vCtx->height & 1);
         var dimensionsRounded = outWidth != _vCtx->width || outHeight != _vCtx->height;
@@ -660,8 +660,8 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     /// <summary>
     /// After a partial video-stream setup throws on a file that has a usable audio stream, release the
-    /// half-initialised video native state and reconfigure as a no-video (audio-only) container — the same
-    /// stub state the no-decodable-video path produces — so the audio still plays. The chosen video stream is
+    /// half-initialised video native state and reconfigure as a no-video (audio-only) container - the same
+    /// stub state the no-decodable-video path produces - so the audio still plays. The chosen video stream is
     /// disowned (<c>_vStream = -1</c>) so the demux reader stops routing its packets.
     /// </summary>
     private void ConfigureNoVideoStubAfterVideoSetupFailure(AVStream* aSt, string reason)
@@ -706,8 +706,8 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     /// <summary>
     /// After a partial audio-stream setup throws on a file that has a usable video stream, release the
-    /// half-initialised audio native state and reconfigure as a no-audio (video-only) container — the same
-    /// stub state the no-decodable-audio path produces — so the video still plays. The chosen audio stream
+    /// half-initialised audio native state and reconfigure as a no-audio (video-only) container - the same
+    /// stub state the no-decodable-audio path produces - so the video still plays. The chosen audio stream
     /// is disowned (<c>_aStream = -1</c>) so the demux reader stops routing its packets.
     /// </summary>
     private void ConfigureNoAudioStubAfterAudioSetupFailure(string reason)
@@ -760,7 +760,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         var fmt = (AVSampleFormat)_aFrame->format;
         var rate = _aFrame->sample_rate;
         if (fmt == AVSampleFormat.AV_SAMPLE_FMT_NONE || rate <= 0 || _aFrame->ch_layout.nb_channels <= 0)
-            return; // frame metadata incomplete — trust the existing configuration
+            return; // frame metadata incomplete - trust the existing configuration
 
         bool layoutMatches;
         fixed (AVChannelLayout* cfg = &_swrInChLayout)
@@ -771,7 +771,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         MediaDiagnostics.LogWarning(
             $"MediaContainerSharedDemux: audio stream parameters changed mid-stream " +
             $"(fmt {_swrInSampleFmt}→{fmt}, rate {_swrInSampleRate}→{rate}, channels →{_aFrame->ch_layout.nb_channels}); " +
-            $"rebuilding resampler — output stays {Audio.Format}.");
+            $"rebuilding resampler - output stays {Audio.Format}.");
 
         if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
 
@@ -903,7 +903,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         if (attached)
             // attached_pic streams are conceptually 1 FPS (one still for the whole file), but downstream
             // outputs with SDK-paced video clocks (NDI's clockVideo:true paces NDIlib_send_send_video_async_v2
-            // at the declared rate) would then block sender threads for one second per frame — making prime
+            // at the declared rate) would then block sender threads for one second per frame - making prime
             // / hold-toggle / cover-art appearance take 10+ seconds in practice. Declare 30 FPS so the SDK
             // paces at ~33 ms per send; we still only emit a single decoded frame, receivers just hold it.
             return new Rational(30, 1);
@@ -1118,7 +1118,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
                 // Coordinated A/V seek seeks this shared demux twice (audio then video) at the same target.
                 // If no read has consumed the freshly primed state yet, the demux is already exactly where
-                // the second call wants it — skip the repeat avformat_seek + decode-to-target. Keyed on a
+                // the second call wants it - skip the repeat avformat_seek + decode-to-target. Keyed on a
                 // "primed, not yet consumed" flag rather than the keeper frames so a prime that bailed early
                 // (deadline / cancellation) still dedups instead of redoing an equally-doomed full seek.
                 if (_seekPrimedPosition == position && _seekPrimePending)
@@ -1473,7 +1473,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     /// </summary>
     /// <remarks>
     /// Draining only one stream (the old video-only catch-up) let the other queue fill and block the single
-    /// demux thread, starving the stream being drained — on a large-GOP file that hung the seek while it held
+    /// demux thread, starving the stream being drained - on a large-GOP file that hung the seek while it held
     /// the read/seek write gate, and because the seek is not cancellable the hang orphaned this thread and
     /// deadlocked everything after it. Interleaving drains whichever queue has data, so the demux never blocks.
     /// A wall-clock deadline bounds a stalled/corrupt demux to a best-effort position rather than an unbounded
@@ -1482,7 +1482,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     private void PrimeBothAfterSeekLocked(TimeSpan target)
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.PrimeAfterSeek", slowWarningMs: 1000);
-        // Attached-picture cover art is a single still for the whole file — there is no video packet at a seek
+        // Attached-picture cover art is a single still for the whole file - there is no video packet at a seek
         // target to advance to. Trying would drain the entire remaining file looking for one (or hit the 12 s
         // deadline) on every seek/realign. Treat video as already primed; the cover was decoded once and is
         // held downstream (see _vAttachedPicEmitted / VideoTrack.IsExhausted).
@@ -1506,7 +1506,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 timing?.SetOutcome($"target={target} cancelled videoDone={videoDone} audioDone={audioDone} vSteps={videoSteps} aSteps={audioSteps} waits={waits}");
                 Trace.LogDebug("PrimeAfterSeek: cancelled/yielded target={Target} videoDone={VideoDone} audioDone={AudioDone} vSteps={VideoSteps} aSteps={AudioSteps}",
                     target, videoDone, audioDone, videoSteps, audioSteps);
-                return; // superseded by a newer seek / stop, or cancelled by the caller — keep the
+                return; // superseded by a newer seek / stop, or cancelled by the caller - keep the
                         // best-effort position; a later op (or the dedup) re-primes from its target
             }
 
@@ -1554,7 +1554,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                         fileComplete,
                         videoSteps,
                         audioSteps);
-                    return; // demux stalled — keep the best-effort position rather than hang the (uncancellable) seek
+                    return; // demux stalled - keep the best-effort position rather than hang the (uncancellable) seek
                 }
 
                 lock (_queueGate)
@@ -1628,7 +1628,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         var frameEnd = pts + TimeSpan.FromSeconds((double)_aFrame->nb_samples / srcRate);
         if (frameEnd <= target)
         {
-            av_frame_unref(_aFrame); // wholly before the target — drop it (swr is not fed, so no leftover)
+            av_frame_unref(_aFrame); // wholly before the target - drop it (swr is not fed, so no leftover)
             return true;
         }
 
@@ -1918,7 +1918,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     /// <summary>
     /// After <see cref="SeekPresentation"/>, returns the timeline position both decoders have actually
     /// reached. When catch-up is incomplete, prefer <paramref name="fallback"/> (the requested seek
-    /// target) if audio and video disagree by more than a quarter second — otherwise the clock would
+    /// target) if audio and video disagree by more than a quarter second - otherwise the clock would
     /// sit on a pre-target GOP keyframe while audio resumes at the keeper frame on the target.
     /// </summary>
     internal TimeSpan GetAlignedPresentationPosition(TimeSpan fallback)
@@ -1940,7 +1940,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         return fallback;
     }
 
-    /// <summary>Video track position for clock alignment — uses the primed keeper frame when present.</summary>
+    /// <summary>Video track position for clock alignment - uses the primed keeper frame when present.</summary>
     private TimeSpan ResolveVideoAlignmentPosition() =>
         _vPrimedAfterSeek?.PresentationTime ?? Video.Position;
 
@@ -2099,7 +2099,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
             throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
 
         // SeekPresentation primes one frame with the previous output pixel format; negotiation
-        // (SelectOutputFormat) can change the output path afterward — drop the stale prime.
+        // (SelectOutputFormat) can change the output path afterward - drop the stale prime.
         if (format != Video.Format.PixelFormat)
         {
             _vPrimedAfterSeek?.Dispose();
@@ -2297,21 +2297,21 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     {
         var width = Video.Format.Width;
         var height = Video.Format.Height;
-        // sws_scale's srcSliceH is the SOURCE slice height — must match the decoder's actual frame
+        // sws_scale's srcSliceH is the SOURCE slice height - must match the decoder's actual frame
         // height even when we're upscaling to even output dimensions (attached_pic / odd-dim path).
         // _vSrcH tracks mid-stream geometry changes (SyncVideoPixelFormatIfNeeded runs before this).
         var srcHeight = _vSrcH;
         var bytesPerPixel = VideoFileDecoder.BytesPerPackedPixel(_vOutPixFmt);
         if (bytesPerPixel == 0)
         {
-            // Multi-plane targets (Nv12 / Nv21 / I420). Mirror VideoFileDecoder.BuildConvertedPlanarFrame —
+            // Multi-plane targets (Nv12 / Nv21 / I420). Mirror VideoFileDecoder.BuildConvertedPlanarFrame -
             // attached-picture cover-art branches need this path because their CPU-side conversion was
             // previously routed at the GPU layer; when the routing graph picks Nv12 (e.g. NDI branch with
             // pixel-format lock) and no GPU acceleration is in use, we must pack here too.
             if (_vOutPixFmt is PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.I420)
                 return BuildConvertedPlanarVideoFrame(work, pts, meta, srcHeight);
             throw new NotSupportedException(
-                $"sws conversion to {_vOutPixFmt} is not implemented — use BGRA32, NV12, I420, or a packed RGB layout.");
+                $"sws conversion to {_vOutPixFmt} is not implemented - use BGRA32, NV12, I420, or a packed RGB layout.");
         }
 
         var stride = width * bytesPerPixel;
@@ -2357,7 +2357,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     /// Planar-target sws path (Nv12 / Nv21 / I420). Allocates one rented buffer per plane (sized via
     /// <see cref="PixelFormatInfo.PlanePitchBufferLength"/>), pins for the duration of sws_scale, then
     /// returns a <see cref="VideoFrame"/> whose release callback returns every plane to the pool.
-    /// Mirrors <c>VideoFileDecoder.BuildConvertedPlanarFrame</c> — same allocation discipline so the
+    /// Mirrors <c>VideoFileDecoder.BuildConvertedPlanarFrame</c> - same allocation discipline so the
     /// attached-pic path doesn't diverge from the regular video file path.
     /// </summary>
     private VideoFrame BuildConvertedPlanarVideoFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta, int srcHeight)
@@ -2388,7 +2388,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
             strides[i] = PixelFormatInfo.PlaneByteWidth(_vOutPixFmt, width, i);
 
         var buffers = new byte[n][];
-        // Transient pinning scratch (freed before return) — stack-allocate it; `allocated` tracks how
+        // Transient pinning scratch (freed before return) - stack-allocate it; `allocated` tracks how
         // many were pinned so a mid-loop Rent failure frees exactly those.
         Span<GCHandle> handles = stackalloc GCHandle[n];
         var allocated = 0;

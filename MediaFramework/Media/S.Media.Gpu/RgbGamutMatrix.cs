@@ -2,13 +2,13 @@ namespace S.Media.Gpu;
 
 /// <summary>
 /// 3×3 RGB → RGB matrix applied after the per-frame YUV → RGB conversion and HDR preview pass.
-/// Used to map between RGB working spaces — primarily BT.2020 → BT.709 for SDR display preview
+/// Used to map between RGB working spaces - primarily BT.2020 → BT.709 for SDR display preview
 /// of UHD HDR content.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Stored row-major like <see cref="YuvColorSpace.Matrix"/>; pass to GLSL <c>uniformMatrix3fv</c>
-/// with <c>transpose = true</c> (or transpose locally) — GLSL <c>mat3</c> is column-major.
+/// with <c>transpose = true</c> (or transpose locally) - GLSL <c>mat3</c> is column-major.
 /// </para>
 /// <para>
 /// The matrix is applied to display-space RGB, not linear-light RGB, which is technically incorrect
@@ -19,7 +19,7 @@ namespace S.Media.Gpu;
 /// </remarks>
 public readonly record struct RgbGamutMatrix(float[] Matrix)
 {
-    /// <summary>Identity — no remap. Default for every renderer; cheap GPU branch.</summary>
+    /// <summary>Identity - no remap. Default for every renderer; cheap GPU branch.</summary>
     public static readonly RgbGamutMatrix Identity = new(
         Matrix: new float[]
         {
@@ -31,7 +31,7 @@ public readonly record struct RgbGamutMatrix(float[] Matrix)
     /// <summary>
     /// BT.2020 → BT.709 RGB matrix (ITU-R BT.2087). Maps unit BT.2020 white (1, 1, 1) onto unit
     /// BT.709 white. Saturated BT.2020 primaries can fall outside the BT.709 gamut after the
-    /// remap — caller is expected to clamp post-multiply if a strict 0…1 output is required.
+    /// remap - caller is expected to clamp post-multiply if a strict 0…1 output is required.
     /// </summary>
     public static readonly RgbGamutMatrix Bt2020ToBt709 = new(
         Matrix: new float[]

@@ -18,7 +18,7 @@ namespace S.Media.Routing;
 /// There is no central mixer bus. Routes are direct. To play one source on
 /// two outputs differently, register two routes from the same source ID to
 /// each output ID with their own channel maps and gains. To mix two sources
-/// into one output, register two routes both targeting the same output — they
+/// into one output, register two routes both targeting the same output - they
 /// sum.
 /// </para>
 /// <para>
@@ -31,7 +31,7 @@ namespace S.Media.Routing;
 /// into that output without changing the router's graph rate.
 /// </para>
 /// <para>
-/// The graph is <strong>fully dynamic</strong> — sources, outputs, and routes
+/// The graph is <strong>fully dynamic</strong> - sources, outputs, and routes
 /// can be added or removed at any time, including while the router is
 /// running. Updates take effect on the next chunk. Mutations swap an immutable
 /// <see cref="RouterState"/> under a lock; the run loop reads it without
@@ -155,7 +155,7 @@ public sealed partial class AudioRouter : IDisposable
     /// <summary>Non-null after the router loop faulted and stopped (see <see cref="Faulted"/>). Cleared by <see cref="Start"/>.</summary>
     public Exception? Fault => _fault;
 
-    /// <summary>Raised when a output pump drops chunks — sustained drops mean the output is behind.</summary>
+    /// <summary>Raised when a output pump drops chunks - sustained drops mean the output is behind.</summary>
     public event EventHandler<AudioRouterPumpPressureEventArgs>? PumpPressure;
 
     /// <summary>
@@ -187,13 +187,13 @@ public sealed partial class AudioRouter : IDisposable
 
     /// <summary>
     /// Register a source. <paramref name="id"/> defaults to an auto-generated
-    /// value (<c>src_1</c>, <c>src_2</c>, …) — pass an explicit ID to make
+    /// value (<c>src_1</c>, <c>src_2</c>, …) - pass an explicit ID to make
     /// route definitions self-documenting.
     /// </summary>
     /// <param name="autoResample">
     /// When <c>true</c> and <paramref name="source"/>'s rate doesn't match the router's nominal rate,
     /// the source is transparently wrapped via <see cref="ResamplerFactory"/> (wired from the media
-    /// registry's resampler — e.g. the FFmpeg swresample wrapper). The router owns
+    /// registry's resampler - e.g. the FFmpeg swresample wrapper). The router owns
     /// and disposes that wrapper, but it does not assume ownership of the caller's original source;
     /// wrapper factories must make their own inner-source ownership policy explicit. The default
     /// FFmpeg wrapper deliberately leaves the original source caller-owned. Throws
@@ -214,7 +214,7 @@ public sealed partial class AudioRouter : IDisposable
                 if (Interlocked.Exchange(ref _defaultAutoResampleMismatchLogged, 1) == 0)
                 {
                     MediaDiagnostics.LogWarning(
-                        "AudioRouter.AddSource: source rate {0} differs from router rate {1} and autoResample is off — set AudioRouter.DefaultAutoResample = true or pass autoResample: true.",
+                        "AudioRouter.AddSource: source rate {0} differs from router rate {1} and autoResample is off - set AudioRouter.DefaultAutoResample = true or pass autoResample: true.",
                         source.Format.SampleRate,
                         _sampleRate);
                 }
@@ -315,7 +315,7 @@ public sealed partial class AudioRouter : IDisposable
     /// </para>
     /// <para>
     /// Auto-tuning of the default for <see cref="IClockedOutput"/> at <c>AddOutput</c> time is
-    /// not implemented — callers pass <paramref name="pumpCapacityChunks"/> explicitly when
+    /// not implemented - callers pass <paramref name="pumpCapacityChunks"/> explicitly when
     /// they want non-default behaviour. <see cref="AudioPlayer.AddOutput"/> exposes the same
     /// knob via its <c>outputPumpCapacityChunks</c> parameter.
     /// </para>
@@ -341,7 +341,7 @@ public sealed partial class AudioRouter : IDisposable
     }
 
     /// <summary>Snapshot of registered output ids. Allocates a fresh array per call (same as
-    /// <see cref="SourceIds"/>/<see cref="OutputIds"/>) — for HUD/status polling, sample at a low
+    /// <see cref="SourceIds"/>/<see cref="OutputIds"/>) - for HUD/status polling, sample at a low
     /// rate and reuse the snapshot rather than calling per frame.</summary>
     public IReadOnlyList<string> GetRegisteredOutputIds()
     {
@@ -430,7 +430,7 @@ public sealed partial class AudioRouter : IDisposable
         else pump.Dispose();
 
         // Dispose the router-created adaptive-rate wrapper (if any) so its monitor subscription /
-        // resampler don't leak. We only dispose wrappers WE created (IAdaptiveRateWrappedOutput) — the
+        // resampler don't leak. We only dispose wrappers WE created (IAdaptiveRateWrappedOutput) - the
         // pump doesn't own its inner and we must never dispose the caller's own output.
         if (removedOutput is IAdaptiveRateWrappedOutput and IDisposable wrapper)
             MediaDiagnostics.SwallowDisposeErrors(wrapper.Dispose, "AudioRouter.RemoveOutput: adaptive wrapper");
@@ -445,7 +445,7 @@ public sealed partial class AudioRouter : IDisposable
     /// <summary>
     /// Add (or replace) a route from <paramref name="sourceId"/> to
     /// <paramref name="outputId"/>. The route's <paramref name="map"/> describes
-    /// how source channels feed output channels — its
+    /// how source channels feed output channels - its
     /// <see cref="ChannelMap.OutputChannels"/> must match the output's channel
     /// count. <paramref name="gain"/> scales the contribution before summation.
     /// Re-adding for an existing pair replaces it.
@@ -510,24 +510,24 @@ public sealed partial class AudioRouter : IDisposable
         lock (_gate)
         {
             if (_lastSourceId is null)
-                throw new InvalidOperationException("RouteLast: no source registered yet — call AddSource first.");
+                throw new InvalidOperationException("RouteLast: no source registered yet - call AddSource first.");
             if (_lastOutputId is null)
-                throw new InvalidOperationException("RouteLast: no output registered yet — call AddOutput first.");
+                throw new InvalidOperationException("RouteLast: no output registered yet - call AddOutput first.");
         }
 
         var routeMap = map ?? DefaultMap(_lastSourceId!, _lastOutputId!);
         return Route(_lastSourceId!, _lastOutputId!, routeMap, gain);
     }
 
-    /// <summary>Alias for <see cref="Start"/> — starts the router pump.</summary>
+    /// <summary>Alias for <see cref="Start"/> - starts the router pump.</summary>
     public void Play() => Start();
 
     /// <summary>
-    /// Phase C (§4.3.4) — add (or replace) a route under an explicit <paramref name="routeId"/>. Multiple
+    /// Phase C (§4.3.4) - add (or replace) a route under an explicit <paramref name="routeId"/>. Multiple
     /// routes may target the same <c>(source, output)</c> pair when they carry distinct ids; their
     /// per-cell contributions sum additively into the output (the run loop already iterates and
     /// accumulates every route per chunk). Re-adding the same <paramref name="routeId"/>
-    /// replaces the previous route in-place (channel map + gain hard-reset, no fade — same semantics as
+    /// replaces the previous route in-place (channel map + gain hard-reset, no fade - same semantics as
     /// re-registering via the legacy overload).
     /// </summary>
     public void AddRoute(string sourceId, string outputId, string routeId, ChannelMap map, float gain = 1.0f)
@@ -611,7 +611,7 @@ public sealed partial class AudioRouter : IDisposable
         }
     }
 
-    /// <summary>Phase C (§4.3.4) — remove a single route by its registration id. Returns false when no such id.</summary>
+    /// <summary>Phase C (§4.3.4) - remove a single route by its registration id. Returns false when no such id.</summary>
     public bool RemoveRouteById(string routeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(routeId);
@@ -654,7 +654,7 @@ public sealed partial class AudioRouter : IDisposable
         }
     }
 
-    /// <summary>Phase C (§4.3.4) — update gain on a specific route by its id. Click-free fade as in <see cref="SetRouteGain"/>.</summary>
+    /// <summary>Phase C (§4.3.4) - update gain on a specific route by its id. Click-free fade as in <see cref="SetRouteGain"/>.</summary>
     public void SetRouteGainById(string routeId, float gain)
     {
         ArgumentException.ThrowIfNullOrEmpty(routeId);
@@ -723,7 +723,7 @@ public sealed partial class AudioRouter : IDisposable
     }
 
     /// <summary>
-    /// Sums <see cref="OutputPumpStats"/> for every registered output under one lock. For operator HUD / logging — not a
+    /// Sums <see cref="OutputPumpStats"/> for every registered output under one lock. For operator HUD / logging - not a
     /// multi-output master clock or automatic PPM policy (see class <see cref="AudioRouter"/> remarks).
     /// </summary>
     public AudioRouterAggregatePumpStats GetAggregatePumpStats()
@@ -774,7 +774,7 @@ public sealed partial class AudioRouter : IDisposable
 
     /// <summary>
     /// Point <see cref="OutputSlavedRouterClock"/> pacing at <paramref name="outputId"/>.
-    /// Safe while the router is running — the next <see cref="IRouterClock.WaitForNextChunk"/> uses the new output.
+    /// Safe while the router is running - the next <see cref="IRouterClock.WaitForNextChunk"/> uses the new output.
     /// </summary>
     public void RetargetSlaveClock(string outputId)
     {
@@ -796,7 +796,7 @@ public sealed partial class AudioRouter : IDisposable
 
     /// <summary>
     /// Pace the router from an ingest / media <see cref="IPlaybackClock"/> (e.g. NDI ingest timeline).
-    /// Only safe while stopped — call before <see cref="Start"/> or after <see cref="Stop"/>.
+    /// Only safe while stopped - call before <see cref="Start"/> or after <see cref="Stop"/>.
     /// </summary>
     public void SlaveToIngest(IPlaybackClock ingestClock)
     {
@@ -814,7 +814,7 @@ public sealed partial class AudioRouter : IDisposable
     }
 
     /// <summary>
-    /// Replace the active router clock. Only safe while stopped — for framework/tests.
+    /// Replace the active router clock. Only safe while stopped - for framework/tests.
     /// </summary>
     internal void SetClock(IRouterClock clock)
     {
@@ -856,7 +856,7 @@ public sealed partial class AudioRouter : IDisposable
     /// <para>
     /// The router does not resample: update or replace every <see cref="IAudioSource"/> and <see cref="IAudioOutput"/> so their
     /// <see cref="AudioFormat"/> matches <paramref name="newSampleRate"/> before calling this method. Chunk length in samples
-    /// (<see cref="ChunkSamples"/>) is unchanged — only the nominal Hz and pacing interval change.
+    /// (<see cref="ChunkSamples"/>) is unchanged - only the nominal Hz and pacing interval change.
     /// </para>
     /// </remarks>
     public void ReconfigureSampleRateWhileRunning(int newSampleRate)
@@ -1092,7 +1092,7 @@ public sealed partial class AudioRouter : IDisposable
     /// <remarks>
     /// <para>
     /// Pauses the <strong>entire</strong> router, so every output goes silent during
-    /// the seek — other routed sources briefly gap too. Prefer direct
+    /// the seek - other routed sources briefly gap too. Prefer direct
     /// <see cref="ISeekableSource.Seek"/> if you must avoid startling other mixes.
     /// </para>
     /// </remarks>
@@ -1441,10 +1441,10 @@ public sealed partial class AudioRouter : IDisposable
                 var snapshot = Volatile.Read(ref _state);
 
                 // Only consume sources that have at least one route this chunk. Registering a source must
-                // NOT drain it — a cue/soundboard can load a clip before routing/firing it (otherwise the
+                // NOT drain it - a cue/soundboard can load a clip before routing/firing it (otherwise the
                 // clip is silently consumed and plays back empty when finally routed). A source feeding
                 // several routes is still read exactly once; muted-but-routed sources keep advancing
-                // (standard mixer "mute" — the timeline keeps running, only the gain is zero).
+                // (standard mixer "mute" - the timeline keeps running, only the gain is zero).
                 //
                 // Auto-stop (CompletedNaturally) fires only when routes exist AND every routed source is
                 // exhausted. With no sources we run forever (silence); with sources but no routes yet we
@@ -1463,7 +1463,7 @@ public sealed partial class AudioRouter : IDisposable
                         // Contract: ReadInto returns a count in [0, scratch.Length]. A negative
                         // count would throw in AsSpan below (crashing the router thread); an
                         // over-count would skip silence-padding and leak stale data. Don't trust a
-                        // misbehaving source — clear the whole chunk and keep routing.
+                        // misbehaving source - clear the whole chunk and keep routing.
                         Trace.LogError("RunLoop: source returned invalid read count {Read} (scratch={Len}); clearing chunk",
                             read, src.Scratch.Length);
                         Array.Clear(src.Scratch);
@@ -1475,7 +1475,7 @@ public sealed partial class AudioRouter : IDisposable
 
                 // Per-output working buffers come from each pump's free-pool. The
                 // router writes the mixed audio directly into them and Commit()s
-                // by reference — no second copy on the producer thread.
+                // by reference - no second copy on the producer thread.
                 foreach (var (_, output) in snapshot.Outputs)
                     Array.Clear(output.Pump.WorkingBuffer);
 
@@ -1496,8 +1496,8 @@ public sealed partial class AudioRouter : IDisposable
 
                 // Publish each output's mixed buffer to its pump (zero-copy hand-off); the drainer
                 // thread does the actual Submit. For the pacing (primary) output the producer applies
-                // backpressure — it briefly waits for its drainer to recycle a buffer instead of
-                // dropping — so a jittery drainer (notably under NativeAOT scheduling) can't overflow
+                // backpressure - it briefly waits for its drainer to recycle a buffer instead of
+                // dropping - so a jittery drainer (notably under NativeAOT scheduling) can't overflow
                 // the pump. A dropped chunk on the master output skips audio CONTENT forward while the
                 // sample-counted clock keeps advancing, permanently desyncing A/V; the pump is meant to
                 // absorb that jitter, not discard it. Non-primary outputs keep dropping so one slow
@@ -1537,12 +1537,12 @@ public sealed partial class AudioRouter : IDisposable
             // stop the loop, and surface it via Fault / Faulted so the host can decide policy (swap
             // the bad source, restart, surface to UI). The finally still tears the thread/cts down.
             _fault = ex;
-            Trace.LogError(ex, "RunLoop: unhandled exception — router faulted and stopped");
+            Trace.LogError(ex, "RunLoop: unhandled exception - router faulted and stopped");
             RaiseFaulted(ex);
         }
         finally
         {
-            // When the loop exits on natural EOF, StopInternal was never called — release CTS,
+            // When the loop exits on natural EOF, StopInternal was never called - release CTS,
             // clear the thread field, drain pumps, and flush hardware outputs so Pause/Dispose and
             // hosts (e.g. smoke tools) can shut down promptly.
             FinishRunLoopThreadLifetime(naturalEof: CompletedNaturally);
@@ -1613,7 +1613,7 @@ public sealed partial class AudioRouter : IDisposable
     {
         var profileRoutes = ChannelRouteMixProfiling.ShouldProfileApplyRoute();
 
-        // Both ends silent — nothing to mix in.
+        // Both ends silent - nothing to mix in.
         if (fromGain == 0f && toGain == 0f) return;
 
         // Steady-state: same gain at both ends, take the constant-gain fast path.
@@ -1705,7 +1705,7 @@ public sealed partial class AudioRouter : IDisposable
 
         // Linear ramp from fromGain to toGain across the chunk. Gain is
         // evaluated at sample-mid (s + 0.5) so the average across the chunk
-        // is exactly (fromGain + toGain) / 2 — no DC drift.
+        // is exactly (fromGain + toGain) / 2 - no DC drift.
         var step = (toGain - fromGain) / samplesPerChannel;
         var gain = fromGain + step * 0.5f;
         long tRamp = 0;
@@ -1732,7 +1732,7 @@ public sealed partial class AudioRouter : IDisposable
     /// the router; the legacy <see cref="AddRoute(string, string, ChannelMap, float)"/> overload
     /// synthesizes it from <c>(SourceId, OutputId)</c> for back-compat replace-by-pair semantics.
     /// Explicit routeIds (via <see cref="AddRoute(string, string, string, ChannelMap, float)"/>) let
-    /// callers register multiple routes per <c>(source, output)</c> pair — used by HaPlay's per-cell
+    /// callers register multiple routes per <c>(source, output)</c> pair - used by HaPlay's per-cell
     /// audio matrix to install one route per non-zero matrix cell.
     /// </summary>
     public sealed record AudioRoute(
@@ -1756,7 +1756,7 @@ public sealed partial class AudioRouter : IDisposable
     }
 
     /// <summary>
-    /// Single snapshot of summed per-output pump counters from <see cref="AudioRouter.GetAggregatePumpStats"/>. Hints only — hosts still own
+    /// Single snapshot of summed per-output pump counters from <see cref="AudioRouter.GetAggregatePumpStats"/>. Hints only - hosts still own
     /// any coordinated multi-output clock or drop policy.
     /// </summary>
     public readonly record struct AudioRouterAggregatePumpStats(

@@ -79,7 +79,7 @@ public sealed class Bcf2000GuideScriptsTests
             new InMemoryControlScriptSourceProvider(sources),
             new ControlScriptRuntimeServices(NullControlScriptCommandSink.Instance, new ControlValueCache()));
 
-        // A MIDIControlChange matches none of the MIDINote triggers, so no handler body runs — but
+        // A MIDIControlChange matches none of the MIDINote triggers, so no handler body runs - but
         // arming + dispatch makes the runtime compile every configured script (and its required helper).
         runtime.DispatchControlEvent(new MIDIControlEvent(
             DateTimeOffset.UtcNow, deviceId, deviceId, Guid.NewGuid(),

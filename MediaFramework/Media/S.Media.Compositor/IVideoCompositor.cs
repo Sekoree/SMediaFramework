@@ -9,14 +9,14 @@ namespace S.Media.Compositor;
 /// <para>
 /// Two implementations ship with the framework:
 /// <list type="bullet">
-/// <item><see cref="CpuVideoCompositor"/> — BGRA32 software reference; runs anywhere, no GPU context required.</item>
-/// <item><c>S.Media.Gpu.GlVideoCompositor</c> — GL 3.3 implementation that uploads each layer to a
+/// <item><see cref="CpuVideoCompositor"/> - BGRA32 software reference; runs anywhere, no GPU context required.</item>
+/// <item><c>S.Media.Gpu.GlVideoCompositor</c> - GL 3.3 implementation that uploads each layer to a
 /// texture and blends via shader into an FBO. The caller provides the GL context and must keep it current
 /// on the thread that drives <see cref="Composite"/>.</item>
 /// </list>
 /// </para>
 /// <para>
-/// <strong>Frame ownership:</strong> the returned <see cref="VideoFrame"/> is owned by the caller —
+/// <strong>Frame ownership:</strong> the returned <see cref="VideoFrame"/> is owned by the caller -
 /// it carries a <c>release</c> callback that returns any pooled buffers when the frame is disposed.
 /// Layer frames passed in remain owned by their submitter (typically a <see cref="VideoCompositorSource"/>
 /// slot) and are not disposed by the compositor.
@@ -30,7 +30,7 @@ namespace S.Media.Compositor;
 /// </remarks>
 public interface IVideoCompositor : IDisposable
 {
-    /// <summary>Output frame layout — width, height, pixel format, frame rate.</summary>
+    /// <summary>Output frame layout - width, height, pixel format, frame rate.</summary>
     VideoFormat OutputFormat { get; }
 
     /// <summary>Pixel formats this compositor accepts on input layers, ordered best-to-worst.</summary>
@@ -45,7 +45,7 @@ public interface IVideoCompositor : IDisposable
 
     /// <summary>
     /// Composite <paramref name="layersBackToFront"/> into a fresh <see cref="VideoFrame"/> at
-    /// <paramref name="presentationTime"/>. Layers are drawn in list order — first is the backdrop,
+    /// <paramref name="presentationTime"/>. Layers are drawn in list order - first is the backdrop,
     /// later layers blend on top.
     /// </summary>
     /// <remarks>

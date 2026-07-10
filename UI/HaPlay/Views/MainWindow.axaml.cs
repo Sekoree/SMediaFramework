@@ -7,7 +7,7 @@ namespace HaPlay.Views;
 
 public partial class MainWindow : Window
 {
-    /// <summary>Phase E (§8.7) — debounce window-state writes so a drag-resize or move doesn't fire a
+    /// <summary>Phase E (§8.7) - debounce window-state writes so a drag-resize or move doesn't fire a
     /// disk write per pixel change. The on-Closing handler still writes the final state synchronously.</summary>
     private DispatcherTimer? _saveDebounce;
 
@@ -26,7 +26,7 @@ public partial class MainWindow : Window
 
         Opened += OnOpened;
         Closing += OnClosing;
-        // Avalonia raises these on every drag pixel — debounce the save through _saveDebounce. We watch
+        // Avalonia raises these on every drag pixel - debounce the save through _saveDebounce. We watch
         // ClientSize + WindowState via the unified PropertyChanged signal (typed-Subscribe wants an
         // IObserver, which is more ceremony than this needs).
         PropertyChanged += OnAvaloniaPropertyChanged;
@@ -60,7 +60,7 @@ public partial class MainWindow : Window
         var candidate = new PixelPoint(snap.X, snap.Y);
         var workingArea = FindWorkingArea(candidate) ?? Screens?.Primary?.WorkingArea;
 
-        // Size first — Width/Height on a non-maximized window are the un-maximized values.
+        // Size first - Width/Height on a non-maximized window are the un-maximized values.
         if (snap.Width > 200 && snap.Height > 150)
         {
             Width = workingArea is { } area
@@ -124,7 +124,7 @@ public partial class MainWindow : Window
     // second (programmatic) Close() doesn't re-enter the gate.
     private bool _forceClose;
 
-    /// <summary>Save the *current* window state synchronously — the debounce timer fires after the next
+    /// <summary>Save the *current* window state synchronously - the debounce timer fires after the next
     /// dispatcher pump, which doesn't happen during shutdown. Without the synchronous write on Closing,
     /// a fresh-from-launch resize and quit would lose the last 400 ms of edits. Also prompts to save a project
     /// with unsaved changes (or scripts that only live in the scratch cache) before letting the window close.</summary>

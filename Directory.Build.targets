@@ -3,7 +3,7 @@
   <!-- Intentionally minimal. The repo is self-contained; per-module native deployment (PortAudio, PortMidi,
        SDL3, FFmpeg, NDI, libass, …) is added in the phase that introduces the native dependency. -->
 
-  <!-- BUILD-01/BUILD-03: every repo project — production, app, tool, and test — must compile warning-free.
+  <!-- BUILD-01/BUILD-03: every repo project - production, app, tool, and test - must compile warning-free.
        Keeping this in .targets overrides the SDK's late default. A narrow accepted warning remains visible by
        listing its ID in that project's WarningsNotAsErrors; blanket suppression is not the baseline policy.
        A project that genuinely cannot participate may document and set SkipWarningsAsErrors=true. -->

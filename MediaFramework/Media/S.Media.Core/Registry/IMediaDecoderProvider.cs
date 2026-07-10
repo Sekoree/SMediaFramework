@@ -40,8 +40,8 @@ public interface IMediaDecoderProvider
     /// <summary>
     /// Opens the tracks requested by <paramref name="request"/> in <strong>one atomic operation</strong> (NXT-02),
     /// returning a <see cref="MediaOpenResult"/> that owns the asset. A provider that can demux a correlated A/V
-    /// item once (e.g. FFmpeg) overrides this to share a <em>single</em> demux for the audio and video tracks —
-    /// one open/probe, one buffering/seek state — instead of the split <see cref="OpenVideo"/> + <see cref="OpenAudio"/>
+    /// item once (e.g. FFmpeg) overrides this to share a <em>single</em> demux for the audio and video tracks -
+    /// one open/probe, one buffering/seek state - instead of the split <see cref="OpenVideo"/> + <see cref="OpenAudio"/>
     /// path that opened two independent contexts. The default bridges to those per-kind methods (preserving older
     /// behaviour for providers that don't override) and runs on a worker thread so a slow open doesn't block the
     /// caller. Cancellation is honoured at stage boundaries (a synchronous native open can't be interrupted mid-call).
@@ -61,7 +61,7 @@ public interface IMediaDecoderProvider
             progress?.Report(new MediaPrepareProgress("opening", Message: request.Uri));
             // Open each requested kind opportunistically: a split-open provider legitimately throws for a kind
             // the source lacks (an audio-only file has no video, and vice-versa). Tolerate that and fail only
-            // when BOTH requested sides fail — surfacing the real cause(s), not a generic message (NXT-02).
+            // when BOTH requested sides fail - surfacing the real cause(s), not a generic message (NXT-02).
             IVideoSource? video = null;
             Exception? videoError = null;
             if (request.Video is not null)
@@ -80,7 +80,7 @@ public interface IMediaDecoderProvider
                 if (videoError is not null) causes.Add($"video: {videoError.Message}");
                 if (audioError is not null) causes.Add($"audio: {audioError.Message}");
                 throw new InvalidOperationException(causes.Count > 0
-                    ? $"could not open '{request.Uri}' — {string.Join("; ", causes)}"
+                    ? $"could not open '{request.Uri}' - {string.Join("; ", causes)}"
                     : $"'{request.Uri}' produced neither a requested audio nor video track.");
             }
 

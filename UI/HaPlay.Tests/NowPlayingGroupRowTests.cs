@@ -43,7 +43,7 @@ public sealed class NowPlayingGroupRowTests
             var row = Assert.IsType<ActiveGroupViewModel>(Assert.Single(vm.NowPlayingRows));
             Assert.Equal(group.Id, row.GroupId);
             Assert.Equal(2, row.Children.Count);
-            Assert.False(row.IsExpanded); // collapsed by default — aggregate is the glance surface
+            Assert.False(row.IsExpanded); // collapsed by default - aggregate is the glance surface
 
             // Longest child timeline drives the aggregate: 30 s into {60 s, 120 s} = 25 %.
             vm.OnCueProgress(new CuePlaybackProgress(child1.Id, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)));

@@ -7,7 +7,7 @@ namespace S.Media.Session;
 /// What the cue runtime does when a cue's action faults. <strong>Only <see cref="StopShow"/> and
 /// <see cref="Continue"/> have implemented behaviour today</strong>; every other value currently degrades to
 /// "log and continue" (NXT-07). The unimplemented values are retained for forward-compatible persistence and
-/// the GUI mapping — do not rely on their named behaviour until <see cref="CueGraph"/> implements it, and do
+/// the GUI mapping - do not rely on their named behaviour until <see cref="CueGraph"/> implements it, and do
 /// not add a value without implementing it in <c>FireEntryAsync</c>.
 /// </summary>
 public enum CueFaultPolicy
@@ -15,25 +15,25 @@ public enum CueFaultPolicy
     /// <summary>Implemented: rethrow the fault so the show stops.</summary>
     StopShow,
 
-    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
     SkipCue,
 
     /// <summary>Implemented: log the fault and continue (the fall-through for every non-StopShow value).</summary>
     Continue,
 
-    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
     HoldLastFrame,
 
-    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
     FadeToBlackOrSilence,
 
-    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
     ContinueAudioOnly,
 
-    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
     ContinueVideoOnly,
 
-    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
     RouteToFallbackOutput,
 }
 
@@ -84,7 +84,7 @@ public sealed record CueExecutionLogEntry(
 
 public sealed class CueGraph
 {
-    // NXT-23: the execution log is bounded — a long-running show (looping / auto-continue installs) fires
+    // NXT-23: the execution log is bounded - a long-running show (looping / auto-continue installs) fires
     // indefinitely, and an unbounded list both grows without limit and makes every ExecutionLog snapshot
     // copy it all. Consumers only ever read the recent tail; trim in batches so appends stay O(1) amortized.
     private const int MaxLogEntries = 512;
@@ -103,7 +103,7 @@ public sealed class CueGraph
         }
     }
 
-    /// <summary>The recent execution history, newest last — bounded to the last 512 entries (NXT-23), so a
+    /// <summary>The recent execution history, newest last - bounded to the last 512 entries (NXT-23), so a
     /// long-running looping show cannot grow it without limit.</summary>
     public IReadOnlyList<CueExecutionLogEntry> ExecutionLog
     {
@@ -235,12 +235,12 @@ public sealed class CueGraph
         CueEntry entry, CancellationToken cancellationToken, HashSet<string>? autoContinueChain = null)
     {
         var cue = entry.Definition;
-        // Defence in depth against a cyclic auto-continue chain — ShowDocumentValidator rejects these at load,
+        // Defence in depth against a cyclic auto-continue chain - ShowDocumentValidator rejects these at load,
         // but CueGraph can be driven directly. If this cue is already in the active auto-continue chain, the
         // follow-on links form a cycle that would otherwise recurse forever (NXT-07).
         if (autoContinueChain is not null && !autoContinueChain.Add(cue.Id))
             throw new InvalidOperationException(
-                $"auto-continue follow-on cycle detected at cue '{cue.Id}' — aborting to avoid infinite recursion.");
+                $"auto-continue follow-on cycle detected at cue '{cue.Id}' - aborting to avoid infinite recursion.");
 
         if (!cue.Enabled)
             return Log(cue, CueExecutionStatus.SkippedDisabled, "cue is disabled");

@@ -12,7 +12,7 @@ public enum RoutingTransitionKind
 
 /// <summary>
 /// One source→output patch in the routing scene. <paramref name="ChannelMatrix"/> carries the N→M audio
-/// remap (03 §6) as serializable show data — the <c>map[outCh] = inCh</c> encoding of
+/// remap (03 §6) as serializable show data - the <c>map[outCh] = inCh</c> encoding of
 /// <see cref="ChannelMap"/> (<c>-1</c> = silence); <c>null</c> means the router's source-derived default
 /// (<see cref="ChannelMap.DefaultFor"/>). In <see cref="ShowDocument"/> playback, <paramref name="SourceId"/>
 /// matches the clip binding's cue id. Use <see cref="ToChannelMap"/> to materialize it for the router.

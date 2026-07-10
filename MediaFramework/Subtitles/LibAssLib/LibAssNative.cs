@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace LibAssLib;
 
 /// <summary>
-/// Direct P/Invoke binding for <b>libass</b> (<c>ass_*</c>) — no custom C shim. Handles are passed as opaque
+/// Direct P/Invoke binding for <b>libass</b> (<c>ass_*</c>) - no custom C shim. Handles are passed as opaque
 /// <see cref="nint"/> (<c>ASS_Library*</c>, <c>ASS_Renderer*</c>, <c>ASS_Track*</c>); strings are passed as
 /// caller-pinned UTF-8 <c>byte*</c> to avoid marshalling allocations on the render path. The native library is
 /// <c>libass.so</c> / <c>ass.dll</c>, deployed by the host alongside its FreeType/FriBidi/HarfBuzz/fontconfig

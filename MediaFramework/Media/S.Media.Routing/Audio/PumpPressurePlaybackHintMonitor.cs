@@ -8,14 +8,14 @@ namespace S.Media.Routing;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is intentionally minimal — no automatic clock wiring. Hosts subscribe to
+/// This is intentionally minimal - no automatic clock wiring. Hosts subscribe to
 /// <see cref="HintPpmBiasChanged"/> or poll <see cref="HintPpmBias"/> and apply bias to
 /// <see cref="Clock.IPlaybackClock"/> (or logging / metrics) as they see fit.
 /// Use the overload with a output id when several pumps are active so hints are not
 /// conflated across outputs.
 /// </para>
 /// <para>
-/// Coordinated <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong> policies across multiple outputs are out of scope here —
+/// Coordinated <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong> policies across multiple outputs are out of scope here -
 /// this type only derives a scalar hint from queue pressure. Per-output rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioOutput</c> instead.
 /// </para>
 /// <para>

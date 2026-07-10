@@ -7,7 +7,7 @@ namespace HaPlay.Tests;
 
 public sealed class OutputManagementViewModelTests
 {
-    /// <summary>Phase E (§8.1) — the sparkline ring on <see cref="OutputLineViewModel"/> stores
+    /// <summary>Phase E (§8.1) - the sparkline ring on <see cref="OutputLineViewModel"/> stores
     /// per-tick deltas. Three ticks of growing cumulative counters must produce three positive
     /// samples whose peak matches the largest delta.</summary>
     [Fact]
@@ -102,7 +102,7 @@ public sealed class OutputManagementViewModelTests
         Assert.Equal(48000, ((PortAudioOutputDefinition)line.Definition).SampleRate);
 
         // No PortAudio runtime is started in this VM (ReplaceDefinitionsForLoad never spins up runtimes
-        // by design — Phase B's load orchestration does that). The reconfigure should still update the
+        // by design - Phase B's load orchestration does that). The reconfigure should still update the
         // definition on the line VM so consumers observe the new values.
         var updated = original with { SampleRate = 96000, ChannelCount = 4 };
         await vm.ReconfigureLineAsync(line, updated);
@@ -139,7 +139,7 @@ public sealed class OutputManagementViewModelTests
         });
 
         var line = vm.Outputs[0];
-        // Same Id, different kind. The runtime mapping doesn't work — must be rejected so callers can
+        // Same Id, different kind. The runtime mapping doesn't work - must be rejected so callers can
         // surface the right error instead of silently doing nothing.
         var swapped = new NDIOutputDefinition(id, "PA", "src", null, NDIOutputStreamMode.VideoAndAudio, 2, 48000);
         await Assert.ThrowsAsync<ArgumentException>(() => vm.ReconfigureLineAsync(line, swapped));
@@ -342,7 +342,7 @@ public sealed class OutputManagementViewModelTests
                 VideoSurfaceMode.Windowed, 0, 800, 600),
         });
 
-        // Phase B caps clone chains at 1 deep — clones aren't themselves eligible parents.
+        // Phase B caps clone chains at 1 deep - clones aren't themselves eligible parents.
         var candidates = vm.GetPotentialCloneParents().ToList();
         Assert.Equal(2, candidates.Count);
         Assert.DoesNotContain(candidates, c => c.Id == cloneId);

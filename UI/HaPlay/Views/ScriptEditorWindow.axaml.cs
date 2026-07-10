@@ -39,7 +39,7 @@ public partial class ScriptEditorWindow : Window
         try
         {
             // Dark variant gets a brighter palette (the light xshd's dark-blue keywords are unreadable on the
-            // dark editor surface). The variant is fixed per session — variant changes prompt a restart — so
+            // dark editor surface). The variant is fixed per session - variant changes prompt a restart - so
             // reading it once at window open is enough.
             var dark = Avalonia.Application.Current?.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark;
             var asset = dark ? "Mond.Dark.xshd" : "Mond.xshd";

@@ -10,8 +10,8 @@ namespace HaPlay.Playback;
 /// Shows the user-supplied fallback image on selected video outputs when no <see cref="MediaPlayer"/> session
 /// is open. For NDI outputs, the image is installed on the persistent <c>NDIOutputPreviewRuntime</c> carrier
 /// (via <see cref="OutputManagementViewModel.SetNDICarrierLogo"/>) so receivers see the slate over the same
-/// sender they were already locked onto — no NDI re-discovery. For local video outputs, the line's PERSISTENT
-/// window/sink is acquired (single-holder, same seam playback uses) and the image is pumped into it — previews
+/// sender they were already locked onto - no NDI re-discovery. For local video outputs, the line's PERSISTENT
+/// window/sink is acquired (single-holder, same seam playback uses) and the image is pumped into it - previews
 /// stay alive across playback in the current output model (<c>StopPreviewsForPlayback</c> is a no-op), so the
 /// old approach of creating a dedicated slate window put a SECOND window next to the real output instead of
 /// showing the image on it. A line currently held by a playback session is skipped; the periodic
@@ -115,7 +115,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
                     {
                         // Acquire the line's PERSISTENT window/sink (the same single-holder seam playback
                         // uses) and pump the image into it. Null ⇒ the line is held by a playback session or
-                        // its preview isn't running — skip it; the periodic slate re-sync retries later.
+                        // its preview isn't running - skip it; the periodic slate re-sync retries later.
                         var sink = repository.TryAcquireLocalVideoOutputForPlayback(line);
                         if (sink is null)
                             break;
@@ -140,7 +140,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
                         }
                         catch
                         {
-                            logo.Dispose(); // wrapper only — the borrowed sink stays alive
+                            logo.Dispose(); // wrapper only - the borrowed sink stays alive
                             repository.ReleaseLocalVideoOutputForPlayback(line);
                             throw;
                         }
@@ -238,14 +238,14 @@ internal sealed class IdleLogoSlateSession : IDisposable
 
         foreach (var logo in _localLogos)
         {
-            try { logo.Dispose(); } // wrapper only — the borrowed persistent sink stays alive
+            try { logo.Dispose(); } // wrapper only - the borrowed persistent sink stays alive
             catch { /* best effort */ }
         }
 
         _localLogos.Clear();
 
         // Release the acquired lines so they return to their idle preview (and a playback session can
-        // acquire them next — the deck's open path calls StopIdleSlate BEFORE it acquires).
+        // acquire them next - the deck's open path calls StopIdleSlate BEFORE it acquires).
         foreach (var line in _localLines)
         {
             try { _outputs.ReleaseLocalVideoOutputForPlayback(line); }

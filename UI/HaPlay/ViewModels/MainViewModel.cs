@@ -38,7 +38,7 @@ public partial class MainViewModel : ViewModelBase
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
     // The cue workspace's ShowSession runtime, its output leases, reloads, and progress polls all live on the
-    // coordinator (extracted from this VM — review Part-5 #3); this VM only constructs and forwards to it.
+    // coordinator (extracted from this VM - review Part-5 #3); this VM only constructs and forwards to it.
     private readonly CueShowSessionCoordinator _cueShow;
     private int _shutdownCleanupStarted;
     private bool _midiInitialized;
@@ -67,7 +67,7 @@ public partial class MainViewModel : ViewModelBase
         Players = new ObservableCollection<MediaPlayerViewModel>();
         Players.CollectionChanged += (_, _) => OnPlayersChangedForPlayerTabs();
         RecentProjects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoRecentProjects));
-        // First player can't be removed — there's always at least one in the UI.
+        // First player can't be removed - there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
         Soundboard = new SoundboardWorkspaceViewModel(OutputManagement);
@@ -76,7 +76,7 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.PreRollRefreshSuggested += (_, _) =>
             FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
         CuePlayer.RefreshPreviewAudioDevices();
-        // The cue workspace + soundboard run on the headless ShowSession — the only playback runtime since the
+        // The cue workspace + soundboard run on the headless ShowSession - the only playback runtime since the
         // legacy CuePlaybackEngine/SoundboardEngine were deleted (NXT-06/NXT-13 cutover completion). The session,
         // its output leases, reloads, and polls are owned by the coordinator.
         _cueShow = new CueShowSessionCoordinator(CuePlayer, Soundboard, OutputManagement);
@@ -88,7 +88,7 @@ public partial class MainViewModel : ViewModelBase
         RefreshMIDIDeviceCatalog();
         // APP-02: the endpoint-health polling lifecycle (5 s timer, single-flight guard, per-run CTS, timing)
         // lives in a dedicated service; the view model keeps only the probe loop (ProbeAllEndpointsAsync).
-        // APP-01 behaviour — poll only while endpoints exist — is preserved by the pending-count gate + SyncEnabled.
+        // APP-01 behaviour - poll only while endpoints exist - is preserved by the pending-count gate + SyncEnabled.
         _endpointHealth = new EndpointHealthMonitor(
             TimeSpan.FromSeconds(5),
             () => OSCEndpointRows.Count + MIDIEndpointRows.Count,
@@ -97,7 +97,7 @@ public partial class MainViewModel : ViewModelBase
         FireAndLog(_endpointHealth.RefreshAsync(), "EndpointHealthMonitor startup");
         _endpointHealth.SyncEnabled();
 
-        // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
+        // Phase B (§3.6) - give the Edit dialog a way to ask "is any player playing through this line?".
         // Iterating the Players collection on each probe is fine: outputs are edited rarely, never
         // during a hot loop, and this is the single source of truth that doesn't require a new event.
         OutputManagement.PlaybackUsageProbe =
@@ -107,7 +107,7 @@ public partial class MainViewModel : ViewModelBase
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
-        // Appearance (§8.6) — load saved values and apply them immediately. The OnXChanged hooks would
+        // Appearance (§8.6) - load saved values and apply them immediately. The OnXChanged hooks would
         // re-save on first set; seed via backing fields so we don't fire that pointlessly.
         _baseTheme = _appSettings.BaseTheme;
         _theme = _appSettings.Theme;
@@ -129,12 +129,12 @@ public partial class MainViewModel : ViewModelBase
                             ?? WorkspaceItem.Players;
         ToastCenter.Sink = OnToastPosted;
 
-        // Remote API (per-machine setting) — seed via backing fields so the OnXChanged hooks don't
+        // Remote API (per-machine setting) - seed via backing fields so the OnXChanged hooks don't
         // re-save during construction, then bring the listener up if it was left enabled.
         _restApiEnabled = _appSettings.RestApiEnabled;
         _restApiPort = _appSettings.RestApiPort is >= 1 and <= 65535 ? _appSettings.RestApiPort : 8990;
         _restApiAllowLan = _appSettings.RestApiAllowLan;
-        // Optional token (API-01): no token by default — the remote API targets closed-LAN automation
+        // Optional token (API-01): no token by default - the remote API targets closed-LAN automation
         // (e.g. Bitfocus Companion). A token is only required when the operator sets one.
         _restApiAccessToken = _appSettings.RestApiAccessToken ?? string.Empty;
         RestartRestApi();
@@ -261,7 +261,7 @@ public partial class MainViewModel : ViewModelBase
     public bool HasRestApiAccessToken => !string.IsNullOrEmpty(RestApiAccessToken);
 
     /// <summary>Endpoint cheat-sheet rendered as a list by the Project workspace card. Paths are
-    /// protocol, not prose — only the descriptions localize.</summary>
+    /// protocol, not prose - only the descriptions localize.</summary>
     public IReadOnlyList<Remote.RemoteApiEndpointDoc> RestApiEndpointDocs { get; } =
     [
         new("/api/v1/cues/go · pause · resume · stop · panic", Strings.RemoteApiDocCues),
@@ -302,7 +302,7 @@ public partial class MainViewModel : ViewModelBase
             RestApiEnabled, RestApiPort, RestApiAccessToken, RestApiAllowLan,
             () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control));
 
-        // Copy-API-URL menus keep working while the listener is off — the copied URL targets the
+        // Copy-API-URL menus keep working while the listener is off - the copied URL targets the
         // configured port and becomes live the moment the API is enabled. The token is never embedded in
         // copied URLs (API-01); a token-protected server expects the X-HaPlay-Api-Key header instead.
         Remote.RemoteApi.BaseUrl = _remoteApi.AdvertisedBaseUrl(RestApiPort, RestApiAllowLan);
@@ -337,7 +337,7 @@ public partial class MainViewModel : ViewModelBase
     private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(6);
     private DispatcherTimer? _toastSweepTimer;
 
-    /// <summary>Visible toasts, newest last. Rendered by the MainView overlay — never part of layout.</summary>
+    /// <summary>Visible toasts, newest last. Rendered by the MainView overlay - never part of layout.</summary>
     public ObservableCollection<ToastViewModel> Toasts { get; } = new();
 
     private void OnToastPosted(ToastSeverity severity, string message)
@@ -427,7 +427,7 @@ public partial class MainViewModel : ViewModelBase
     public SoundboardWorkspaceViewModel? LoadedSoundboardWorkspace => _soundboardWorkspaceLoaded ? Soundboard : null;
     public ControlWorkspaceViewModel? LoadedControlWorkspace => _controlWorkspaceLoaded ? Control : null;
 
-    /// <summary>True when the operator has authored control scripts but never saved the project — they live
+    /// <summary>True when the operator has authored control scripts but never saved the project - they live
     /// only in the scratch cache and would be lost on close. Drives the on-close "save your work?" prompt.</summary>
     public bool HasUnsavedScratchScripts => LoadedControlWorkspace?.HasUnsavedScratchScripts == true;
 
@@ -462,12 +462,12 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Phase E (§8.7): Main window state persistence -----------------------------------------
 
-    /// <summary>Phase E (§8.7) — last saved main-window placement, or <see langword="null"/> on first
+    /// <summary>Phase E (§8.7) - last saved main-window placement, or <see langword="null"/> on first
     /// launch. The window code-behind calls this on Opened to restore size/position; values are
     /// validated against the current screen layout before being applied.</summary>
     public WindowStateSnapshot? GetSavedWindowState() => _appSettings.MainWindow;
 
-    /// <summary>Phase E (§8.7) — persist the current main-window placement. Called from the window
+    /// <summary>Phase E (§8.7) - persist the current main-window placement. Called from the window
     /// code-behind on Closing (or on debounced size/move/state changes). Writes through to
     /// <c>app-settings.json</c> immediately so a hard kill still preserves the last-known good state.</summary>
     public void SaveWindowState(WindowStateSnapshot snapshot)
@@ -538,11 +538,11 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private AppBaseTheme _baseTheme;
 
-    /// <summary>Phase E (§8.6) — chrome light/dark variant. Persisted; composed at the next startup.</summary>
+    /// <summary>Phase E (§8.6) - chrome light/dark variant. Persisted; composed at the next startup.</summary>
     [ObservableProperty]
     private AppThemeMode _theme;
 
-    /// <summary>Phase E (§8.6) — Fluent density. Persisted; composed at the next startup.</summary>
+    /// <summary>Phase E (§8.6) - Fluent density. Persisted; composed at the next startup.</summary>
     [ObservableProperty]
     private AppDensityMode _density;
 
@@ -603,7 +603,7 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowAppearanceRestartPrompt));
     }
 
-    /// <summary>"Later" — keep the running appearance; the saved choice applies on the next launch.</summary>
+    /// <summary>"Later" - keep the running appearance; the saved choice applies on the next launch.</summary>
     [RelayCommand]
     private void DismissAppearanceRestart()
     {
@@ -611,7 +611,7 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowAppearanceRestartPrompt));
     }
 
-    /// <summary>"Restart now" — relaunch so the saved appearance is composed fresh at startup.</summary>
+    /// <summary>"Restart now" - relaunch so the saved appearance is composed fresh at startup.</summary>
     [RelayCommand]
     private void RestartApp() => AppRestart.Restart();
 
@@ -1048,7 +1048,7 @@ public partial class MainViewModel : ViewModelBase
             SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
     }
 
-    /// <summary>Tracks the floating window per detached player — gates double-detach (second click
+    /// <summary>Tracks the floating window per detached player - gates double-detach (second click
     /// just activates the window) and lets <see cref="RemovePlayer"/> close it.</summary>
     private readonly Dictionary<MediaPlayerViewModel, Views.Dialogs.DetachedPlayerWindow> _detachedPlayerWindows = new();
 
@@ -1087,7 +1087,7 @@ public partial class MainViewModel : ViewModelBase
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.RefreshCuePreRollAsync", slowWarningMs: 1000);
         // Latest-request-wins: install our own token and cancel whatever was in flight. We only
-        // Cancel the predecessor here (never Dispose) — each invocation disposes its own CTS in its
+        // Cancel the predecessor here (never Dispose) - each invocation disposes its own CTS in its
         // finally once it's done reading the token, which avoids a use-after-dispose race.
         var cts = new CancellationTokenSource();
         var previous = Interlocked.Exchange(ref _preRollRefreshCts, cts);
@@ -1137,7 +1137,7 @@ public partial class MainViewModel : ViewModelBase
             {
                 Trace.LogWarning(ex, "RefreshCuePreRollAsync: pre-roll refresh failed");
                 timing?.SetOutcome("failed");
-                /* best effort — pre-roll must not break transport */
+                /* best effort - pre-roll must not break transport */
             }
             finally
             {
@@ -1323,7 +1323,7 @@ public partial class MainViewModel : ViewModelBase
     public sealed record MIDIOutputOption(int Id, string Name);
 
     /// <summary>
-    /// Phase A — build a <see cref="HaPlayProject"/> snapshot from the current VM state. Pure projection,
+    /// Phase A - build a <see cref="HaPlayProject"/> snapshot from the current VM state. Pure projection,
     /// no I/O. Phase B will wire this through a File → Save menu; for now tests and programmatic callers
     /// can round-trip via <see cref="ProjectIO"/>.
     /// </summary>
@@ -1337,7 +1337,7 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>
     /// Scoped snapshot (save/load rework 2026-06-10): when <paramref name="sections"/> is non-null,
     /// only the listed <see cref="ProjectSections"/> leaves are filled in and the file records them
-    /// in <see cref="HaPlayProject.SavedSections"/> — loading such a file applies only those parts.
+    /// in <see cref="HaPlayProject.SavedSections"/> - loading such a file applies only those parts.
     /// </summary>
     public HaPlayProject BuildProjectSnapshot(IReadOnlyCollection<string>? sections)
     {
@@ -1374,7 +1374,7 @@ public partial class MainViewModel : ViewModelBase
     /// </summary>
     /// <remarks>
     /// Phase A intentionally does NOT spin up the underlying runtimes (PortAudio open / NDI start /
-    /// preview windows) — that's a Phase B concern. Tests use this to verify round-trip projection
+    /// preview windows) - that's a Phase B concern. Tests use this to verify round-trip projection
     /// without touching real devices.
     /// </remarks>
     public void ApplyProjectSnapshot(HaPlayProject project)
@@ -1383,7 +1383,7 @@ public partial class MainViewModel : ViewModelBase
         // sections; everything else in the live show is left untouched, so partial project files
         // double as section imports. null = full project, original replace-everything semantics.
         var sections = project.SavedSections;
-        // The per-project auto-save flag is document-level, not a section — only a full project load adopts it;
+        // The per-project auto-save flag is document-level, not a section - only a full project load adopts it;
         // a partial section import leaves the current show's setting untouched.
         if (sections is null)
             AutoSaveEnabled = project.AutoSaveEnabled;
@@ -1458,7 +1458,7 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Phase B (§7): Project save / load command plumbing --------------------------------
 
-    /// <summary>Path of the project file last saved or opened in this session — drives "Save" vs "Save As".</summary>
+    /// <summary>Path of the project file last saved or opened in this session - drives "Save" vs "Save As".</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ProjectTitle))]
     [NotifyPropertyChangedFor(nameof(HasOpenProject))]
@@ -1505,7 +1505,7 @@ public partial class MainViewModel : ViewModelBase
     /// Drives the "save the project once" hint next to the auto-save toggle.</summary>
     public bool AutoSaveUnavailable => !HasOpenProject;
 
-    /// <summary>Content hash of the project as of the last New / Open / Save — the "clean" baseline the
+    /// <summary>Content hash of the project as of the last New / Open / Save - the "clean" baseline the
     /// unsaved-changes check compares against. There's no central dirty flag, so this hash IS the flag.</summary>
     private string _savedProjectHash = string.Empty;
 
@@ -1523,7 +1523,7 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>True when the live project differs from the last-saved baseline. Recomputed on demand (it builds
-    /// a snapshot), so evaluate it at decision points like close — do not bind it in a hot UI path.</summary>
+    /// a snapshot), so evaluate it at decision points like close - do not bind it in a hot UI path.</summary>
     public bool IsProjectDirty
     {
         get
@@ -1553,7 +1553,7 @@ public partial class MainViewModel : ViewModelBase
             : Strings.Format(nameof(Strings.ProjectTitleFormat), Path.GetFileNameWithoutExtension(CurrentProjectPath)))
         + (IsProjectDirty || Control.IsSelectedScriptDirty ? " *" : string.Empty);
 
-    /// <summary>Default location for project files (§7.3 — ~/Documents/HaPlay Projects/).</summary>
+    /// <summary>Default location for project files (§7.3 - ~/Documents/HaPlay Projects/).</summary>
     public static string DefaultProjectsFolder
     {
         get
@@ -1686,7 +1686,7 @@ public partial class MainViewModel : ViewModelBase
     /// <see cref="string"/>: the recent-projects submenu binds this command via an item Style that also
     /// matches the submenu's header MenuItem (whose DataContext is this view-model). A string-typed
     /// RelayCommand casts the CommandParameter in CanExecute, so that header would throw
-    /// InvalidCastException when the menu renders — making the whole File menu fail to open. Accepting
+    /// InvalidCastException when the menu renders - making the whole File menu fail to open. Accepting
     /// <c>object?</c> and guarding on the actual path avoids the cast and is harmless for the header.</summary>
     [RelayCommand]
     private Task OpenRecentAsync(object? path) =>

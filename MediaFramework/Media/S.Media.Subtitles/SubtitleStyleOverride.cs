@@ -2,7 +2,7 @@ namespace S.Media.Subtitles;
 
 /// <summary>
 /// Optional per-render style overrides for libass-rendered subtitles (sidecar ASS, or any format FFmpeg decodes
-/// to ASS events). Applied globally to the renderer — they nudge the document's own styling rather than rewriting
+/// to ASS events). Applied globally to the renderer - they nudge the document's own styling rather than rewriting
 /// it. Ignored by bitmap (PGS/DVB) subtitles, which carry their own pixels. A <c>null</c> field keeps the
 /// document's value.
 /// </summary>

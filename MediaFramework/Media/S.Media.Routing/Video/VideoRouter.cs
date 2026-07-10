@@ -24,7 +24,7 @@ public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, Pixe
 /// <remarks>
 /// <para>
 /// Pixel negotiation uses the <strong>primary</strong> output registered with
-/// <see cref="AddInput"/> — its <see cref="IVideoOutput.AcceptedPixelFormats"/> are re-exposed
+/// <see cref="AddInput"/> - its <see cref="IVideoOutput.AcceptedPixelFormats"/> are re-exposed
 /// on the returned <see cref="IVideoOutput"/>. Branch outputs receive
 /// <see cref="IVideoCpuFrameConverter"/> conversion when needed, using the converter factory on
 /// <see cref="VideoRouterOptions"/> (wired from the media registry).
@@ -37,7 +37,7 @@ public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, Pixe
 /// Each NV12 output receives an independent <see cref="VideoFrame"/> sharing refcounted fds via
 /// <see cref="VideoFrame.CreateNv12DmabufSharedReference"/>; each P010 output uses <see cref="VideoFrame.CreateP010DmabufSharedReference"/>; each P016 output uses <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
 /// <strong>CPU NV12</strong> with the same constraints uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so every output shares one backing instead of <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/>.
-/// When a branch needs a different pixel format and the input is Linux DRM dma-buf semi-planar, <see cref="VideoDmabufCpuReadback"/> performs a best-effort <c>mmap</c> copy into CPU memory for that branch’s <see cref="IVideoCpuFrameConverter"/> (may fail for tiled / protected buffers — see that type).
+/// When a branch needs a different pixel format and the input is Linux DRM dma-buf semi-planar, <see cref="VideoDmabufCpuReadback"/> performs a best-effort <c>mmap</c> copy into CPU memory for that branch’s <see cref="IVideoCpuFrameConverter"/> (may fail for tiled / protected buffers - see that type).
 /// <strong>Win32</strong> shared NV12 with a branch CPU converter remains unsupported at <see cref="IVideoOutput.Submit"/> time.
 /// Configure-time cannot know whether NV12, P010, or P016 frames will be CPU-backed or hardware-backed; when hardware-backed semi-planar dma-buf frames are delivered,
 /// the router logs a warning if any branch uses a CPU converter (see <see cref="InputRegistration.ApplyConfigureLocked"/>).
@@ -96,7 +96,7 @@ public sealed class VideoRouter : IDisposable
     /// only when <see cref="VideoOutputPumpAttachOptions.DisposeInnerOutputWhenPumpDisposes"/> is set.
     /// </param>
     /// <param name="synchronous">
-    /// When <c>true</c>, the output is registered as-is — <see cref="IVideoOutput.Submit"/> runs on the
+    /// When <c>true</c>, the output is registered as-is - <see cref="IVideoOutput.Submit"/> runs on the
     /// clock-driver thread. Use this for outputs that are guaranteed to return promptly
     /// (e.g. <see cref="DiscardingVideoOutput"/>) or that manage their own threading. Mutually exclusive
     /// with <paramref name="asyncPump"/>; passing both throws <see cref="ArgumentException"/>.
@@ -121,7 +121,7 @@ public sealed class VideoRouter : IDisposable
 
         if (synchronous && asyncPump is not null)
             throw new ArgumentException(
-                "synchronous: true is mutually exclusive with asyncPump — pick one.",
+                "synchronous: true is mutually exclusive with asyncPump - pick one.",
                 nameof(synchronous));
 
         // Default ergonomics (Phase 2): pump-by-default so new outputs don't silently stall the clock
@@ -200,7 +200,7 @@ public sealed class VideoRouter : IDisposable
 
             // The router owns the registered output/pump when it was added with
             // disposeOutputOnRouterDispose (always true on the default pump-by-default
-            // path). Dispose it on removal too — Dispose() does, but RemoveOutput
+            // path). Dispose it on removal too - Dispose() does, but RemoveOutput
             // previously dropped the registration without disposing, leaking the pump's
             // drainer thread and the inner output's native resources.
             if (removed.DisposeOutputOnRouterDispose && removed.Output is IDisposable d)
@@ -220,7 +220,7 @@ public sealed class VideoRouter : IDisposable
 
     /// <summary>
     /// Registers a logical input bound to <paramref name="primaryOutputId"/> (negotiation lead).
-    /// That output must be free — it is claimed immediately.
+    /// That output must be free - it is claimed immediately.
     /// </summary>
     public VideoRouterInputRegistration AddInput(string primaryOutputId, string? inputId = null)
     {
@@ -236,7 +236,7 @@ public sealed class VideoRouter : IDisposable
             if (_outputOwner.ContainsKey(primaryOutputId))
             {
                 var msg =
-                    $"VideoRouter: cannot add input '{inputId}' — output '{primaryOutputId}' is already routed from input '{_outputOwner[primaryOutputId]}'.";
+                    $"VideoRouter: cannot add input '{inputId}' - output '{primaryOutputId}' is already routed from input '{_outputOwner[primaryOutputId]}'.";
                 _log?.LogError("{Message}", msg);
                 throw new InvalidOperationException(msg);
             }
@@ -287,14 +287,14 @@ public sealed class VideoRouter : IDisposable
                 errorMessage =
                     $"output '{outputId}' is already routed from input '{owner}'; cannot route from '{inputId}'.";
                 _log?.LogError(
-                    "VideoRouter: declined route — output {OutputId} is owned by input {Owner}; attempted input {Attempted}.",
+                    "VideoRouter: declined route - output {OutputId} is owned by input {Owner}; attempted input {Attempted}.",
                     outputId, owner, inputId);
                 return false;
             }
 
             // Capture the pre-mutation configure state so a failed branch negotiation can be rolled
             // back completely. Without this, a throw out of ApplyConfigureLocked used to leave a
-            // half-added route behind with Configured=false — every subsequent Submit on the input
+            // half-added route behind with Configured=false - every subsequent Submit on the input
             // then failed until the route was manually removed.
             var wasConfigured = reg.Configured;
             var previousFormat = reg.NegotiatedFormat;
@@ -341,7 +341,7 @@ public sealed class VideoRouter : IDisposable
         }
     }
 
-    /// <summary>Removes one fan-out branch. The primary output for an input cannot be removed while the input exists — remove the input instead.</summary>
+    /// <summary>Removes one fan-out branch. The primary output for an input cannot be removed while the input exists - remove the input instead.</summary>
     public bool TryRemoveRoute(string inputId, string outputId, [NotNullWhen(false)] out string? errorMessage)
     {
         ArgumentException.ThrowIfNullOrEmpty(inputId);
@@ -358,7 +358,7 @@ public sealed class VideoRouter : IDisposable
             if (outputId == reg.PrimaryOutputId)
             {
                 errorMessage =
-                    $"cannot remove primary output '{outputId}' from input '{inputId}' — call RemoveInput instead.";
+                    $"cannot remove primary output '{outputId}' from input '{inputId}' - call RemoveInput instead.";
                 return false;
             }
             if (!reg.RoutedSet.Remove(outputId))
@@ -529,7 +529,7 @@ public sealed class VideoRouter : IDisposable
     private IVideoCpuFrameConverter CreateCpuFrameConverter() =>
         _options.VideoCpuFrameConverterFactory?.Invoke()
         ?? throw new InvalidOperationException(
-            "VideoRouter: no CPU frame converter — set VideoRouterOptions.VideoCpuFrameConverterFactory (wire registry.CreateCpuConverter).");
+            "VideoRouter: no CPU frame converter - set VideoRouterOptions.VideoCpuFrameConverterFactory (wire registry.CreateCpuConverter).");
 
     private bool CanConvertCpuFrame(PixelFormat src, PixelFormat dst, int width, int height) =>
         _options.VideoCpuFrameCanConvertProbe?.Invoke(src, dst, width, height) ?? false;
@@ -645,7 +645,7 @@ public sealed class VideoRouter : IDisposable
                 var needsConversion = branchFmt != negotiated.PixelFormat;
                 var branchVideoFormat = new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate);
 
-                // P2-7: when the branch output is asynchronous (a VideoOutputPump — the default wrapping), hand
+                // P2-7: when the branch output is asynchronous (a VideoOutputPump - the default wrapping), hand
                 // any pixel conversion to the pump so the swscale repack runs on the pump's drain thread instead
                 // of the player submit thread (matters for heavy branches like NDI yuv422p10le→UYVY at 4K60). The
                 // branch then flows through the no-converter fan-out path in SubmitPhased and receives a
@@ -685,7 +685,7 @@ public sealed class VideoRouter : IDisposable
                         if (Interlocked.Exchange(ref _nv12FanoutCpuBranchWarned, 1) == 0)
                         {
                             _owner._log?.LogWarning(
-                                "VideoRouter input {InputId}: NV12/P010/P016 fan-out includes branch output(s) that use a CPU pixel converter — if the decoder delivers DRM dma-buf NV12/P010/P016, the router attempts an mmap readback for swscale (see VideoDmabufCpuReadback); Win32 shared NV12 with a branch converter is still unsupported.",
+                                "VideoRouter input {InputId}: NV12/P010/P016 fan-out includes branch output(s) that use a CPU pixel converter - if the decoder delivers DRM dma-buf NV12/P010/P016, the router attempts an mmap readback for swscale (see VideoDmabufCpuReadback); Win32 shared NV12 with a branch converter is still unsupported.",
                                 Id);
                         }
 
@@ -704,7 +704,7 @@ public sealed class VideoRouter : IDisposable
             {
                 if (p.Converter is not { } conv) continue;
                 if (_convertInFlight)
-                    _deferredConverters.Add(conv); // a submit may be converting with it — free it when the submit drains
+                    _deferredConverters.Add(conv); // a submit may be converting with it - free it when the submit drains
                 else
                     conv.Dispose();
             }
@@ -812,7 +812,7 @@ public sealed class VideoRouter : IDisposable
                             throw new InvalidOperationException($"VideoRouter input '{Id}'.Submit called before Configure");
                         }
 
-                        // Single output: no branch conversion — deliver directly under the lock (fast path).
+                        // Single output: no branch conversion - deliver directly under the lock (fast path).
                         if (RoutedOutputIds.Count == 1)
                         {
                             _owner._outputs[RoutedOutputIds[0]].Output.Submit(frame);
@@ -839,25 +839,25 @@ public sealed class VideoRouter : IDisposable
                             {
                                 frame.Dispose();
                                 throw new NotSupportedException(
-                                    $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                                    $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output - use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
                             }
                             if (frame.DmabufNv12 is not null && !VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out converterReadback))
                             {
                                 frame.Dispose();
                                 throw new NotSupportedException(
-                                    $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                                    $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter - use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
                             }
                             if (frame.DmabufP010 is not null && !VideoDmabufCpuReadback.TryCreateP010CpuCopy(frame, out converterReadback))
                             {
                                 frame.Dispose();
                                 throw new NotSupportedException(
-                                    $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
+                                    $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter - use matching outputs, a single output, or software decode.");
                             }
                             if (frame.DmabufP016 is not null && !VideoDmabufCpuReadback.TryCreateP016CpuCopy(frame, out converterReadback))
                             {
                                 frame.Dispose();
                                 throw new NotSupportedException(
-                                    $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
+                                    $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter - use matching outputs, a single output, or software decode.");
                             }
                         }
 
@@ -953,7 +953,7 @@ public sealed class VideoRouter : IDisposable
                         for (var i = 0; i < branchFrames.Length; i++)
                         {
                             branchFrames[i]?.Dispose();
-                            branchFrames[i] = null; // scratch is reused — leave every slot null
+                            branchFrames[i] = null; // scratch is reused - leave every slot null
                         }
                         primary?.Dispose();
                         throw;
@@ -1000,7 +1000,7 @@ public sealed class VideoRouter : IDisposable
             var needsReadback = hasHw && _planAnyConverterOrPump;
             // Any CPU-backed format can fan out into shared zero-copy views; a branch that converts on the
             // submit thread forces the per-branch path, but a pump-converts branch (repacked on its own
-            // thread) does not — it just receives a raw view to convert there.
+            // thread) does not - it just receives a raw view to convert there.
             var canFanOut = !hasHw && !_planAnySyncConverter;
             return new SubmitPlan(_planOutputIds, _planConverters, _planPumpConverts,
                 NegotiatedFormat!.Value, needsReadback, canFanOut);
@@ -1127,5 +1127,5 @@ public sealed class VideoRouter : IDisposable
     }
 }
 
-/// <summary>Return value of <see cref="VideoRouter.AddInput"/> — stable id plus the <see cref="IVideoOutput"/> the decoder connects to.</summary>
+/// <summary>Return value of <see cref="VideoRouter.AddInput"/> - stable id plus the <see cref="IVideoOutput"/> the decoder connects to.</summary>
 public readonly record struct VideoRouterInputRegistration(string Id, IVideoOutput Output);

@@ -61,7 +61,7 @@ public sealed class AudioRouterMatrixTests
         Assert.Throws<ArgumentException>(() => router.ApplyMatrix(srcId, outId, new float[2, 6]));
     }
 
-    /// <summary>Hosts often size matrices from their UI model, not the negotiated formats — a matrix
+    /// <summary>Hosts often size matrices from their UI model, not the negotiated formats - a matrix
     /// smaller than the channel counts is valid and leaves the remaining channels unrouted.</summary>
     [Fact]
     public void ApplyMatrix_SmallerMatrix_RoutesOnlyCoveredCells_AndZeroRowsClear()

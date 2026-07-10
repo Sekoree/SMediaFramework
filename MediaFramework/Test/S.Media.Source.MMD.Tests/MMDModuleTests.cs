@@ -325,7 +325,7 @@ public sealed class MMDModuleTests
                 var plane = frame.Planes[0].Span;
                 var lit = 0;
                 for (var i = 0; i < plane.Length; i += 4)
-                    if (plane[i + 2] > 16) // red channel — the material is red
+                    if (plane[i + 2] > 16) // red channel - the material is red
                         lit++;
                 Assert.True(lit > 20, $"expected the red triangle on screen, lit={lit}");
             }
@@ -389,7 +389,7 @@ public sealed class MMDModuleTests
     public void ResolveTexturePath_FallsBackToCaseInsensitiveSegments()
     {
         // MMD models are authored on Windows: `spa\\A1.bmp` in the PMX happily matches `spa/a1.bmp` on
-        // disk there — on Linux the exact path misses and the material used to silently render white
+        // disk there - on Linux the exact path misses and the material used to silently render white
         // (the 2026-07-03 "black and white model" report).
         var root = Directory.CreateTempSubdirectory("mmd-tex-").FullName;
         try
@@ -406,7 +406,7 @@ public sealed class MMDModuleTests
             // Compare modulo case. On a case-SENSITIVE FS (Linux CI) the resolver folds the miscased
             // path to the real on-disk casing, so this is an exact match. On a case-INSENSITIVE FS
             // (Windows CI, default macOS) the miscased path opens the file directly, so the resolver
-            // returns it verbatim — same file, different casing — which an ordinal Equal would wrongly reject.
+            // returns it verbatim - same file, different casing - which an ordinal Equal would wrongly reject.
             Assert.Equal(exact, folded, StringComparer.OrdinalIgnoreCase);
 
             Assert.Null(MMDGlLayerSurface.ResolveTexturePath(root, Path.Combine("tex", "missing.png")));

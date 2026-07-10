@@ -6,16 +6,16 @@ namespace S.Media.Routing;
 /// An <see cref="IVideoOutput"/> that buffers submitted frames and presents them only when a
 /// <see cref="VideoPresentSyncGroup"/> tells it to, so several physical outputs present the frame for one
 /// shared reference timestamp in lock-step. The concrete member of the video genlock domain (issues-doc #2,
-/// Option&nbsp;B, Phase&nbsp;2b — see <c>Doc/HaPlay-MultiOutput-Sync.md</c>); the audio analogue is
+/// Option&nbsp;B, Phase&nbsp;2b - see <c>Doc/HaPlay-MultiOutput-Sync.md</c>); the audio analogue is
 /// <c>AdaptiveRateAudioOutput</c>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Wrap the real device output (an SDL/GL output, an NDI sender, …) in one of these, add it to a
-/// <see cref="VideoPresentSyncGroup"/>, and feed frames via <see cref="Submit"/> as usual — the router /
+/// <see cref="VideoPresentSyncGroup"/>, and feed frames via <see cref="Submit"/> as usual - the router /
 /// player keeps producing, this just <em>defers the present</em> to the group's tick. The inner output
 /// should present promptly on <see cref="IVideoOutput.Submit"/> (a directly-presenting display, not another
-/// async <see cref="VideoOutputPump"/> — that would re-introduce the independent cadence this removes).
+/// async <see cref="VideoOutputPump"/> - that would re-introduce the independent cadence this removes).
 /// </para>
 /// <para>
 /// Frame ownership: this output takes ownership of every submitted frame. Frames dropped for capacity or
@@ -41,7 +41,7 @@ public sealed class SyncPresentVideoOutput : IVideoOutput, ISyncPresentableVideo
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.SyncPresentVideoOutput");
 
     /// <param name="inner">The directly-presenting device output this wraps.</param>
-    /// <param name="maxBufferedFrames">Unpresented-frame capacity before drop-oldest (must be ≥ 1). Keep small — buffering adds latency.</param>
+    /// <param name="maxBufferedFrames">Unpresented-frame capacity before drop-oldest (must be ≥ 1). Keep small - buffering adds latency.</param>
     /// <param name="name">Diagnostic name.</param>
     /// <param name="disposeInnerOnDispose">Dispose the inner output when this is disposed.</param>
     public SyncPresentVideoOutput(IVideoOutput inner, int maxBufferedFrames = 4, string name = "SyncPresentVideoOutput",
@@ -100,7 +100,7 @@ public sealed class SyncPresentVideoOutput : IVideoOutput, ISyncPresentableVideo
                 throw new InvalidOperationException("SyncPresentVideoOutput.Submit called before Configure");
             }
 
-            // Drop a frame that is not newer than what we already presented — it can never be selected and
+            // Drop a frame that is not newer than what we already presented - it can never be selected and
             // would otherwise let a coordinated catch-up "present backwards".
             if (_lastPresentedPts is { } last && frame.PresentationTime <= last)
             {
@@ -207,7 +207,7 @@ public sealed class SyncPresentVideoOutput : IVideoOutput, ISyncPresentableVideo
         catch (Exception ex)
         {
             toPresent!.Dispose();
-            Trace.LogError(ex, "{Name}: inner Submit failed — frame dropped", _name);
+            Trace.LogError(ex, "{Name}: inner Submit failed - frame dropped", _name);
             Interlocked.Increment(ref _dropped);
         }
 
@@ -224,7 +224,7 @@ public sealed class SyncPresentVideoOutput : IVideoOutput, ISyncPresentableVideo
             Interlocked.CompareExchange(ref _lastDropLogTicks, now, prev) != prev)
             return;
         MediaDiagnostics.LogWarning(
-            $"SyncPresentVideoOutput '{_name}': buffer full — dropped oldest frame(s); total DroppedFrames={Interlocked.Read(ref _dropped)}. " +
+            $"SyncPresentVideoOutput '{_name}': buffer full - dropped oldest frame(s); total DroppedFrames={Interlocked.Read(ref _dropped)}. " +
             "The present scheduler is not draining fast enough, or this member is over-fed; raise maxBufferedFrames or check the group tick rate.");
     }
 

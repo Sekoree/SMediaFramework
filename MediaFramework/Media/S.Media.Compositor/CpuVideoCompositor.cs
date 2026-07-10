@@ -4,7 +4,7 @@ namespace S.Media.Compositor;
 
 /// <summary>
 /// Software <see cref="IVideoCompositor"/> reference implementation. BGRA32 layers in, BGRA32 out.
-/// Always available — no GPU context required. Used by tests, headless server scenarios, and as the
+/// Always available - no GPU context required. Used by tests, headless server scenarios, and as the
 /// fallback when an <c>S.Media.Gpu.GlVideoCompositor</c> isn't wired up.
 /// </summary>
 /// <remarks>
@@ -16,7 +16,7 @@ namespace S.Media.Compositor;
 /// <para>
 /// Premultiplied-alpha math is used internally. SkiaSharp's <c>SKAlphaType.Premul</c> output matches
 /// (see <c>S.Media.SkiaSharp.ImageFileSource</c>); BGRA32 frames produced by FFmpeg's swscale path
-/// are also treated as premultiplied here — alpha is typically 0xFF in that path so the distinction
+/// are also treated as premultiplied here - alpha is typically 0xFF in that path so the distinction
 /// is moot.
 /// </para>
 /// <para>
@@ -24,7 +24,7 @@ namespace S.Media.Compositor;
 /// <see cref="VideoFrame"/>'s <c>release</c> callback. <see cref="CompositorSamplingMode.Bilinear"/>
 /// is supported via the <see cref="SamplingMode"/> property (default
 /// <see cref="CompositorSamplingMode.Nearest"/> for back-compat); bicubic stays out of scope
-/// — the OpenGL compositor already has it.
+/// - the OpenGL compositor already has it.
 /// </para>
 /// </remarks>
 public sealed class CpuVideoCompositor : IVideoCompositor
@@ -286,7 +286,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
     /// 4-tap bilinear sample at fractional <paramref name="sxf"/>/<paramref name="syf"/> source coords (pixel-center convention).
     /// Edge clamping: out-of-range neighbors snap to the nearest valid pixel so layer edges stay sharp instead of fading
     /// to transparent. Returns <see langword="false"/> when every neighbor is fully outside <paramref name="srcW"/> ×
-    /// <paramref name="srcH"/> — equivalent to the nearest-path's "skip" branch.
+    /// <paramref name="srcH"/> - equivalent to the nearest-path's "skip" branch.
     /// </summary>
     private static bool SampleBilinear(
         ReadOnlySpan<byte> srcSpan, int srcStride, int srcW, int srcH,
@@ -339,7 +339,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
     /// <summary>
     /// 4×4 Catmull-Rom bicubic sample at fractional <paramref name="sxf"/>/<paramref name="syf"/>
     /// source coords (pixel-center convention). Catmull-Rom is a sharp interpolating spline
-    /// (passes through every input sample) — natural for image upscaling. Out-of-range neighbors
+    /// (passes through every input sample) - natural for image upscaling. Out-of-range neighbors
     /// in the 4×4 footprint clamp to the source edge; per-channel intermediate overshoot is
     /// clamped to <c>[0, 255]</c> at the final byte write.
     /// </summary>

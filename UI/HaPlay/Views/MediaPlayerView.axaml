@@ -14,13 +14,13 @@
 
     <!--
       Deck layout rules (2026-07 rewrite):
-      · Every header row is ALWAYS present with reserved height — media-type differences (file vs
+      · Every header row is ALWAYS present with reserved height - media-type differences (file vs
         live vs idle) swap content IN PLACE (clocks↔LIVE badge, enabled↔disabled) but never add or
         remove a layout row, so the transport buttons never move under the operator's finger.
       · One timeline row: position · scrubber · middle clock · duration share a single 26px line
         (the old separate clock row with under-labels is folded in; labels live in tooltips).
       · The busy bar owns a fixed 3px slot; its status text sits in the fixed status line row.
-      · Routing lives ONLY in the header chip (always visible) + its flyout — the old bottom
+      · Routing lives ONLY in the header chip (always visible) + its flyout - the old bottom
         summary strip duplicated it and cost a full row.
       · The playlist toolbar and the Set tab strip share one row.
     -->
@@ -29,7 +29,7 @@
         <!-- Classic notebook-tab look for the playlist set strip: REAL TabItems restyled for the strip
              (padding only). A hand-rolled TabStripItem theme drew its own ClassicBorderDecorator, but a
              decorator instantiated from a view-local ControlTheme misses the bevel brushes its implicit
-             theme provides and the tab rendered outline-less — reusing the package's proven TabItem
+             theme provides and the tab rendered outline-less - reusing the package's proven TabItem
              theme (via a header-only TabControl) gets the exact Player-tab chrome for free. -->
         <ControlTheme x:Key="PlaylistSetTabItemTheme" TargetType="TabItem"
                       BasedOn="{StaticResource {x:Type TabItem}}">
@@ -162,7 +162,7 @@
                         <!-- Deck color: tints this player so decks are easy to tell apart. -->
                         <mpp:MediaPlayerTintPicker VerticalAlignment="Center" />
                         <!-- Multi-output aggregate: worst-case health dot + routed-output count, with a
-                             per-output health flyout. ALWAYS visible (shows "No output" when unrouted) —
+                             per-output health flyout. ALWAYS visible (shows "No output" when unrouted) -
                              this chip is the deck's single routing surface; edits live in the flyout's
                              Edit button → routing editor. -->
                         <Button Padding="8,4" VerticalAlignment="Center"
@@ -272,7 +272,7 @@
 
                 <!-- Timeline row: position · scrubber-with-waveform · middle clock (click toggles
                      elapsed/remaining) · duration, all on one line. For live sources the scrubber is
-                     opacity-hidden (NOT collapsed — it keeps reserving its natural height under every
+                     opacity-hidden (NOT collapsed - it keeps reserving its natural height under every
                      theme's slider size) and a LIVE badge overlays it, so the row never changes height
                      when the media type changes. -->
                 <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
@@ -341,7 +341,7 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Busy bar in a fixed 3px slot — indicates loading / analysing / waiting without
+                <!-- Busy bar in a fixed 3px slot - indicates loading / analysing / waiting without
                      ever pushing the transport down. -->
                 <Panel Grid.Row="3" Height="3">
                     <ProgressBar Classes="busy" Minimum="0" Maximum="100"
@@ -505,12 +505,12 @@
                     </Button>
 
                     <!-- Set tabs fill the space between the buttons and WRAP onto extra lines when
-                         they don't fit (no scrolling — every Set stays visible). Bottom-aligned +
+                         they don't fit (no scrolling - every Set stays visible). Bottom-aligned +
                          ZIndex so the last line's selected-tab chrome sits on the playlist pane edge
                          (per-Set removal lives on each tab: the X in rename mode + the right-click
                          Remove/Duplicate menu). -->
                     <!-- Header-only TabControl: the template renders JUST the tab headers (real
-                         TabItems with the theme's classic chrome — same look as the player tabs);
+                         TabItems with the theme's classic chrome - same look as the player tabs);
                          the playlist ListBox below acts as the "pane" the selected tab merges into. -->
                     <TabControl ZIndex="1" Margin="6,0,6,0"
                                 VerticalAlignment="Bottom"
@@ -605,7 +605,7 @@
                                       Click="OnCopyPlaylistItemApiUrlClick" />
                             <Separator />
                             <!-- Audio-track AND subtitle selection both live in the Properties dialog's Tracks
-                                 tab (shown only when the file has multiple audio / any subtitle streams) — no
+                                 tab (shown only when the file has multiple audio / any subtitle streams) - no
                                  more per-row track submenus on the context menu. -->
                             <MenuItem Header="{x:Static res:Strings.PlaylistContextProperties}"
                                       Command="{Binding ShowItemPropertiesCommand}" />

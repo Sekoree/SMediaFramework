@@ -119,7 +119,7 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         }
     }
 
-    [TimingFact] // per-clip-thread scheduling soak — hangs the testhost on an oversubscribed CI VM regardless
+    [TimingFact] // per-clip-thread scheduling soak - hangs the testhost on an oversubscribed CI VM regardless
                  // of thread count; opt-in via MFP_TIMING_TESTS=1 (players still scale with core count below).
     public void ManySimultaneousPlayers_AllStayScheduled_ThreadCostMeasured()
     {
@@ -130,7 +130,7 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
         // evidence rather than speculation (the finding: the per-clip model keeps every clip scheduled here).
         // Scale the count with core count: the representative max is 24, but a constrained CI runner (2 cores,
         // heavily contended) would otherwise be oversubscribed into a multi-minute stall / blame-hang. Kept at
-        // ≥2× cores so the per-clip model is still exercised under real oversubscription — which is the point.
+        // ≥2× cores so the per-clip model is still exercised under real oversubscription - which is the point.
         var players = Math.Clamp(Environment.ProcessorCount * 2, 4, 24);
         var startThreads = Process.GetCurrentProcess().Threads.Count;
 
@@ -147,7 +147,7 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
                 running.Add((player, backend));
             }
 
-            // Every player must reach non-zero output within the window — i.e. none is starved of scheduling.
+            // Every player must reach non-zero output within the window - i.e. none is starved of scheduling.
             var allScheduled = SpinWait.SpinUntil(
                 () => running.All(r => r.Backend.Output.NonZeroSamples > 0),
                 TimeSpan.FromSeconds(15));
@@ -160,7 +160,7 @@ public sealed class MediaPlayerTests(ITestOutputHelper output)
                 $"{(peakThreads - startThreads) / (double)players:0.0}/player)");
 
             Assert.True(allScheduled,
-                $"only {progressed}/{players} simultaneous players stayed scheduled — the per-clip model starved a clip under load");
+                $"only {progressed}/{players} simultaneous players stayed scheduled - the per-clip model starved a clip under load");
         }
         finally
         {

@@ -7,7 +7,7 @@ using S.Media.Source.YouTube;
 
 namespace HaPlay.ViewModels.Dialogs;
 
-/// <summary>One selectable video stream row (muxed streams are rarely offered — video is its own leg).</summary>
+/// <summary>One selectable video stream row (muxed streams are rarely offered - video is its own leg).</summary>
 public sealed record YouTubeVideoOption(YouTubeVideoStreamInfo Info)
 {
     public override string ToString() =>
@@ -154,7 +154,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            // Show the actual provider error — the app must not promise every URL is playable.
+            // Show the actual provider error - the app must not promise every URL is playable.
             ValidationMessage = Strings.Format(nameof(Strings.YouTubeResolveFailedFormat), ex.Message);
             HasManifest = false;
         }
@@ -252,7 +252,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
     public void CancelPending() => _cts?.Cancel();
 
     /// <summary>Byte-level readout for the download phases: "done / total · speed". The gateway reports a
-    /// 0–1 fraction and the manifest carries each stream's exact size, so bytes are derived here — the
+    /// 0–1 fraction and the manifest carries each stream's exact size, so bytes are derived here - the
     /// currently-downloading stream is identified by the phase. Non-download phases show no detail.</summary>
     private string? BuildDownloadDetail(YouTubePrepareProgress p)
     {

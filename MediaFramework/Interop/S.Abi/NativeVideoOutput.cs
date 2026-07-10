@@ -3,7 +3,7 @@ using S.Media.Core.Video;
 namespace S.Abi;
 
 /// <summary>
-/// Adapts a native plugin's <c>MfpVideoOutputVTable</c> to the managed <see cref="IVideoOutput"/> — plus optional
+/// Adapts a native plugin's <c>MfpVideoOutputVTable</c> to the managed <see cref="IVideoOutput"/> - plus optional
 /// <see cref="IVideoOutputQueueControl"/> when the plugin provides abandon/wait-idle. <see cref="Submit"/> pins the
 /// managed frame's CPU planes or hardware backing as an <c>MfpVideoFrame</c> for the synchronous native submit.
 /// </summary>

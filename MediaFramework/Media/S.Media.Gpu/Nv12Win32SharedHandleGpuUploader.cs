@@ -82,7 +82,7 @@ void main()
     private readonly GL _gl;
     private readonly ID3D11Device _device;
     private readonly ID3D11DeviceContext _context;
-    // ID3D11Multithread on the immediate context (when the device exposes it — libav's d3d11va device does and
+    // ID3D11Multithread on the immediate context (when the device exposes it - libav's d3d11va device does and
     // runs with SetMultithreadProtected(TRUE)). Used to serialize our staging CopySubresourceRegion/Map/Unmap
     // against the decode thread that shares this immediate context. Null when the device has no such interface
     // (then there is no concurrent decoder on it either, e.g. an output-owned interop device).
@@ -150,7 +150,7 @@ void main()
         if (!D3D11InteropUtility.TryValidateDeviceComPointer(d3d11DeviceComPtr, out var validateErr))
         {
             MediaDiagnostics.LogWarning(
-                "{0}.{1}: invalid D3D11 device pointer — {2}",
+                "{0}.{1}: invalid D3D11 device pointer - {2}",
                 nameof(Nv12Win32SharedHandleGpuUploader),
                 nameof(TryCreate),
                 validateErr);
@@ -246,7 +246,7 @@ void main()
         if (Interlocked.Exchange(ref _strictTextureAdapterMismatchLogged, 1) == 0)
         {
             MediaDiagnostics.LogWarning(
-                "{0}: DXGI adapter LUID of ID3D11Texture2D (packed={1}) != uploader ID3D11Device LUID (packed={2}) — set WIN32_NV12_D3D11_STRICT_TEXTURE_ADAPTER_LUID=0 to allow (not recommended on multi-GPU).",
+                "{0}: DXGI adapter LUID of ID3D11Texture2D (packed={1}) != uploader ID3D11Device LUID (packed={2}) - set WIN32_NV12_D3D11_STRICT_TEXTURE_ADAPTER_LUID=0 to allow (not recommended on multi-GPU).",
                 nameof(Nv12Win32SharedHandleGpuUploader),
                 texLuid,
                 uploadLuid);
@@ -341,7 +341,7 @@ void main()
             _wglInteropDisabled = true;
             LogInteropUnavailableOnce(
                 "wglDXOpenDeviceNV returned NULL for the upload ID3D11Device (entry points resolved but the driver " +
-                "rejected the device — e.g. it is on a different adapter than the GL context, or a software/WARP device).");
+                "rejected the device - e.g. it is on a different adapter than the GL context, or a software/WARP device).");
             return false;
         }
 
@@ -373,7 +373,7 @@ void main()
         }
 
         MediaDiagnostics.LogWarning(
-            "{0}: zero-copy WGL_NV_DX_interop unavailable — using the slower D3D11 staging CPU upload path. " +
+            "{0}: zero-copy WGL_NV_DX_interop unavailable - using the slower D3D11 staging CPU upload path. " +
             "Reason: {1} | GL_VENDOR='{2}' GL_RENDERER='{3}' GL_VERSION='{4}'.",
             nameof(Nv12Win32SharedHandleGpuUploader),
             reason,
@@ -558,7 +558,7 @@ void main()
     /// Ensures the owned single-slice NV12 copy texture exists at <paramref name="gpuW"/>×<paramref name="gpuH"/> and
     /// is registered with WGL_NV_DX_interop against <see cref="_interopGlTex"/>. Re-creates on size change. Returns
     /// <see langword="false"/> (and permanently disables the interop path) if the driver refuses to register an NV12
-    /// single texture — planar interop is not universally supported; the BGRA convert-then-register path is the
+    /// single texture - planar interop is not universally supported; the BGRA convert-then-register path is the
     /// alternative. The registered object stays D3D-owned (unlocked) between frames so the per-frame copy is valid.
     /// </summary>
     private bool EnsureInteropCopyTextureAndRegistration(uint gpuW, uint gpuH)

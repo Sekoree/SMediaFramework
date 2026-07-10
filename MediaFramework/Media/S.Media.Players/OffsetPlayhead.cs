@@ -9,7 +9,7 @@ namespace S.Media.Players;
 /// <remarks>
 /// Companion to <c>RetimingVideoOutput</c> for clip-window playback: when a trimmed clip's frames
 /// are rebased to clip-relative PTS (offset = −window.Start) before they reach a composition slot,
-/// the timeline used for master-aligned frame selection must be rebased identically — mixing
+/// the timeline used for master-aligned frame selection must be rebased identically - mixing
 /// source-time playhead with clip-relative frame PTS makes "closest to the playhead" pick a stale
 /// pre-seek frame over fresh post-seek frames after every backward seek (video freezes while
 /// audio plays on).

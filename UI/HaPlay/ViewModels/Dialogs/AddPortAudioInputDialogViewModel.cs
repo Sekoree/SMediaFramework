@@ -7,7 +7,7 @@ using S.Media.Audio.PortAudio;
 namespace HaPlay.ViewModels.Dialogs;
 
 /// <summary>
-/// Phase C.5 (§6.4) — "Add PortAudio input" dialog VM. Mirrors
+/// Phase C.5 (§6.4) - "Add PortAudio input" dialog VM. Mirrors
 /// <see cref="AddPortAudioOutputDialogViewModel"/> but enumerates capture devices and produces a
 /// <see cref="PortAudioInputPlaylistItem"/> on commit. Edit-existing is supported so a saved item's
 /// device choice can be re-bound after a USB swap (§6.4 device-by-name + index-fallback rule).
@@ -63,7 +63,7 @@ public partial class AddPortAudioInputDialogViewModel : ViewModelBase
                 SelectedHostApi = hostMatch;
         }
 
-        // Match by device name first (§6.4 — name match survives USB port renumbering); then fall back to
+        // Match by device name first (§6.4 - name match survives USB port renumbering); then fall back to
         // the global index if the name is no longer enumerable.
         PortAudioInputDeviceEntry? deviceMatch =
             Devices.Where(d => string.Equals(d.Name, existing.DeviceName, StringComparison.OrdinalIgnoreCase))

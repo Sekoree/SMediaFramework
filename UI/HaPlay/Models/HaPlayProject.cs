@@ -14,7 +14,7 @@ public sealed record HaPlayProject
     /// <summary>Bump on every breaking field change so the loader can migrate (§9.4).</summary>
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
-    /// <summary>Best-effort app version stamp — informational only.</summary>
+    /// <summary>Best-effort app version stamp - informational only.</summary>
     public string? HaPlayVersion { get; init; }
 
     /// <summary>
@@ -49,7 +49,7 @@ public sealed record HaPlayProject
     /// <summary>
     /// Per-project session-restore setting (default off). When on, HaPlay writes edits through to this
     /// project's file on the crash-recovery cadence (true autosave); when off, only a crash-recovery
-    /// duplicate is kept in the cache and the file is written solely by an explicit Save. Additive/optional —
+    /// duplicate is kept in the cache and the file is written solely by an explicit Save. Additive/optional -
     /// old files (no field) load as <see langword="false"/>, which is why the schema version is not bumped.
     /// </summary>
     public bool AutoSaveEnabled { get; init; }

@@ -35,12 +35,12 @@ public sealed partial class AudioRouter
         private readonly int _floatsPerChunk;
         private readonly int _pumpCapacityChunks;
         /// <summary>Upper bound on how long the primary-output producer waits for the drainer to recycle
-        /// a buffer (backpressure) before falling back to dropping — keeps a dead device from hanging the
+        /// a buffer (backpressure) before falling back to dropping - keeps a dead device from hanging the
         /// router thread while being far longer than any healthy drainer scheduling gap.</summary>
         private const int BackpressureCapMs = 1000;
         private const double SlowSubmitWarningMs = 100;
         // Start/dispose are serialized so a late EnsureStarted can never launch the
-        // drainer after Dispose has completed the collection / disposed the cts —
+        // drainer after Dispose has completed the collection / disposed the cts -
         // that would crash the freshly started thread (disposed _ready / _cts.Token).
         private readonly object _startGate = new();
         private bool _started;
@@ -48,7 +48,7 @@ public sealed partial class AudioRouter
         private long _enqueued;
         private long _processed;
         private long _dropped;
-        // Enqueued chunks evicted from _ready in Commit (pool-exhaustion drop) — they leave the queue without
+        // Enqueued chunks evicted from _ready in Commit (pool-exhaustion drop) - they leave the queue without
         // ever being delivered, so WaitForIdle counts them as "no longer in flight" without inflating the
         // delivered (_processed) count that per-output pacing relies on.
         private long _readyEvictions;
@@ -67,7 +67,7 @@ public sealed partial class AudioRouter
         };
 
         /// <summary>
-        /// Producer-thread scratch — the buffer the router currently writes
+        /// Producer-thread scratch - the buffer the router currently writes
         /// into. <see cref="Commit"/> publishes it and rotates a fresh one in.
         /// Only the producer thread should access this.
         /// </summary>
@@ -87,7 +87,7 @@ public sealed partial class AudioRouter
 
             // Create the managed Thread object now (cheap), but do NOT Start() it here.
             // Start() is what allocates the OS thread + stack; starting one per output at
-            // AddOutput time — even for outputs whose router never runs — is the source of
+            // AddOutput time - even for outputs whose router never runs - is the source of
             // the suite-level thread pressure / intermittent OOM. The drainer is launched
             // lazily via EnsureStarted() when the router actually starts (or when an output
             // is added to an already-running router).
@@ -127,7 +127,7 @@ public sealed partial class AudioRouter
         /// is <see langword="false"/> (non-primary outputs), evict the oldest queued chunk and count the
         /// drop so a slow output never stalls the shared router. When <see langword="true"/> (the pacing
         /// primary output, which is the master clock), wait briefly for the drainer to recycle a buffer
-        /// instead — a dropped chunk there permanently desyncs A/V (the played sample count keeps
+        /// instead - a dropped chunk there permanently desyncs A/V (the played sample count keeps
         /// advancing while the audio content skips), and the pump exists to absorb that jitter.
         /// </summary>
         public void Commit(bool applyBackpressure = false)
@@ -139,14 +139,14 @@ public sealed partial class AudioRouter
             {
                 if (applyBackpressure && WaitForFreeBuffer(out next))
                 {
-                    // Recycled a buffer via backpressure — the drainer took one from _ready, so there
+                    // Recycled a buffer via backpressure - the drainer took one from _ready, so there
                     // is room below; fall through to publish without dropping.
                 }
                 else if (_ready.TryTake(out next!))
                 {
                     // The evicted chunk was already counted in _enqueued; it leaves _ready here without ever
                     // reaching the drainer. Record it as a ready-queue eviction so WaitForIdle stops treating
-                    // it as still-in-flight — otherwise processed < enqueued forever after any drop and every
+                    // it as still-in-flight - otherwise processed < enqueued forever after any drop and every
                     // pause/stop/seek spins the full WaitForIdle timeout (e.g. the _audio_discard sink). We do
                     // NOT bump _processed here: that counter means "delivered to the sink" (per-output pacing).
                     Interlocked.Increment(ref _readyEvictions);
@@ -155,7 +155,7 @@ public sealed partial class AudioRouter
                 else
                 {
                     // Pool and consumer queue are empty: drop this mixed chunk and
-                    // reuse the same buffer next iteration — avoids allocating on the producer thread.
+                    // reuse the same buffer next iteration - avoids allocating on the producer thread.
                     RecordDrop();
                     return;
                 }
@@ -193,7 +193,7 @@ public sealed partial class AudioRouter
             {
                 if (_free.TryDequeue(out buf))
                     return true;
-                spin.SpinOnce(); // escalates to Thread.Yield/Sleep — never a hot busy-spin
+                spin.SpinOnce(); // escalates to Thread.Yield/Sleep - never a hot busy-spin
             }
             buf = null;
             MaybeLogBackpressureTimeout();
@@ -202,7 +202,7 @@ public sealed partial class AudioRouter
 
         /// <summary>
         /// Discard every chunk currently queued. Does <em>not</em> interrupt an
-        /// in-flight <see cref="IAudioOutput.Submit"/> on the drainer thread —
+        /// in-flight <see cref="IAudioOutput.Submit"/> on the drainer thread -
         /// the caller should follow with <see cref="WaitForIdle"/> if they
         /// need quiescence guarantees.
         /// </summary>
@@ -212,7 +212,7 @@ public sealed partial class AudioRouter
             {
                 _free.Enqueue(buf);
                 // Each chunk we take here was counted in _enqueued and will never reach the
-                // drainer, so count it as processed too — otherwise WaitForIdle sees
+                // drainer, so count it as processed too - otherwise WaitForIdle sees
                 // processed < enqueued forever and blocks for the full timeout after a flush.
                 Interlocked.Increment(ref _processed);
                 RecordDrop();
@@ -227,7 +227,7 @@ public sealed partial class AudioRouter
         {
             var started = Stopwatch.GetTimestamp();
             var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
-            // A chunk is "in flight" until it leaves _ready — either delivered (_processed, incl. AbandonQueue)
+            // A chunk is "in flight" until it leaves _ready - either delivered (_processed, incl. AbandonQueue)
             // or evicted in Commit (_readyEvictions). Counting evictions here is what keeps a dropped chunk
             // from wedging WaitForIdle at processed < enqueued forever.
             while (Volatile.Read(ref _processed) + Volatile.Read(ref _readyEvictions) < Volatile.Read(ref _enqueued))

@@ -11,7 +11,7 @@ public static class NDILibLogging
 
     /// <summary>
     /// Configures the logger factory used by all NDILib logging.
-    /// Safe to call multiple times — the factory is updated on every call.
+    /// Safe to call multiple times - the factory is updated on every call.
     /// </summary>
     public static void Configure(ILoggerFactory? loggerFactory)
     {

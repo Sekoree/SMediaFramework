@@ -25,7 +25,7 @@ public readonly struct HardwareVideoPlaneDescriptor
     public HardwareVideoMemoryKind Kind { get; init; }
     /// <summary>
     /// FD, NT handle, IOSurface ref, Vulkan handle, D3D11 <c>ID3D11Texture2D*</c> COM pointer for
-    /// <see cref="HardwareVideoMemoryKind.Win32D3D11Nv12Texture"/>, … — zero when unspecified.
+    /// <see cref="HardwareVideoMemoryKind.Win32D3D11Nv12Texture"/>, … - zero when unspecified.
     /// </summary>
     public nint HandleOrDescriptor { get; init; }
     public nuint RowPitchBytes { get; init; }
@@ -52,7 +52,7 @@ public readonly struct HardwareVideoSurfaceDescriptor
     /// <c>ID3D11Device</c> COM pointer (non-owning) that owns the texture in <see cref="Plane0"/> / <see cref="Plane1"/>.
     /// For <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/> NV12, callers must leave this <c>0</c> (see
     /// <see cref="HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing"/>); the GL importer still uses a separate
-    /// consumer <c>ID3D11Device</c> for <c>OpenSharedResource</c> on those NT handles — that device is not part
+    /// consumer <c>ID3D11Device</c> for <c>OpenSharedResource</c> on those NT handles - that device is not part
     /// of this descriptor. Eliminating decode-path and consumer-device COM from the portable descriptor while
     /// retaining safe DXGI import is product backlog (**PO-01**).
     /// </summary>
@@ -63,5 +63,5 @@ public readonly struct HardwareVideoSurfaceDescriptor
     public HardwareVideoPlaneDescriptor Plane3 { get; init; }
 }
 
-/// <summary>Default stub — satisfies <see cref="IHardwareVideoInterop"/> until a platform backend lands.</summary>
+/// <summary>Default stub - satisfies <see cref="IHardwareVideoInterop"/> until a platform backend lands.</summary>
 public sealed class NoOpHardwareVideoInterop : IHardwareVideoInterop;

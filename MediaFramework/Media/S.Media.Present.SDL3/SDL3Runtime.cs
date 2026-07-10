@@ -11,7 +11,7 @@ namespace S.Media.Present.SDL3;
 /// <remarks>
 /// Threading: SDL's docs recommend initializing video on the main thread on
 /// macOS (window/event handling there is pinned to it). On Linux/Windows the
-/// init thread is flexible — the SDL3VideoOutput runs all of its calls on its
+/// init thread is flexible - the SDL3VideoOutput runs all of its calls on its
 /// own dedicated render thread, which is fine outside of macOS. macOS support
 /// will require an external pump-on-main-thread harness; not implemented yet.
 /// </remarks>

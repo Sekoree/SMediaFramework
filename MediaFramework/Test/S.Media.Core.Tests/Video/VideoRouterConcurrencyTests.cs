@@ -9,7 +9,7 @@ namespace S.Media.Core.Tests.Video;
 /// router lock and leases them, does the heavy per-branch work with the lock released, then delivers to the
 /// outputs that still exist; a reconfigure racing that window defers converter disposal until the in-flight
 /// submit drains, and outputs are pump-wrapped by default so a submit is a non-blocking enqueue. This stresses
-/// that path — it must never throw a use-after-dispose, corrupt the submit-plan cache, or drop a frame from the
+/// that path - it must never throw a use-after-dispose, corrupt the submit-plan cache, or drop a frame from the
 /// always-routed primary output.
 /// </summary>
 public sealed class VideoRouterConcurrencyTests
@@ -47,7 +47,7 @@ public sealed class VideoRouterConcurrencyTests
             catch (Exception ex) { errors.Enqueue(ex); }
         });
 
-        // Churn a second branch route in and out while frames are flowing — every iteration reshapes the
+        // Churn a second branch route in and out while frames are flowing - every iteration reshapes the
         // snapshotted submit plan under the lock while a submit may be mid-flight with the lock released.
         var churn = new Thread(() =>
         {
@@ -70,7 +70,7 @@ public sealed class VideoRouterConcurrencyTests
         Assert.True(errors.IsEmpty,
             "concurrent submit vs route churn threw: " + string.Join(" | ", errors.Select(e => $"{e.GetType().Name}: {e.Message}")));
 
-        // The primary output is routed for the whole run, so it must have received exactly every frame —
+        // The primary output is routed for the whole run, so it must have received exactly every frame -
         // no frame lost to a race, none delivered twice.
         Assert.Equal(submits, primary.SubmitCount);
         // The router is still usable after the storm.

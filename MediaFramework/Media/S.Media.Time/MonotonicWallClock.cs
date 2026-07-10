@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace S.Media.Time;
 
 /// <summary>
-/// A monotonic, pausable wall clock exposed as an <see cref="IPlaybackClock"/> — the time reference for a
+/// A monotonic, pausable wall clock exposed as an <see cref="IPlaybackClock"/> - the time reference for a
 /// <em>live-led</em> <see cref="SessionClock"/> (no file output to slave to). Built on
 /// <see cref="Stopwatch"/> so it never goes backwards. In Phase 5 the live ingest disciplines its long-term
 /// rate (a PI controller on arrival cadence); for now it free-runs at real time.

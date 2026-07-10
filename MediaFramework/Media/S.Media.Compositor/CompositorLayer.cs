@@ -7,7 +7,7 @@ namespace S.Media.Compositor;
 /// </summary>
 public readonly record struct RectNormalized(float X0, float Y0, float X1, float Y1)
 {
-    /// <summary>The entire source frame — no crop.</summary>
+    /// <summary>The entire source frame - no crop.</summary>
     public static RectNormalized Full { get; } = new(0f, 0f, 1f, 1f);
 
     public float Width => X1 - X0;
@@ -32,10 +32,10 @@ public readonly record struct RectNormalized(float X0, float Y0, float X1, float
 }
 
 /// <summary>
-/// One layer in an <see cref="IVideoCompositor"/> composite — a frame plus how to crop, position
+/// One layer in an <see cref="IVideoCompositor"/> composite - a frame plus how to crop, position
 /// and blend it onto the destination canvas.
 /// </summary>
-/// <param name="Frame">Pixel data. The compositor does not take ownership — caller still disposes.</param>
+/// <param name="Frame">Pixel data. The compositor does not take ownership - caller still disposes.</param>
 /// <param name="Transform">Source-to-destination affine, in destination pixels (top-left origin, Y down).</param>
 /// <param name="Opacity">Per-layer multiplier in <c>[0, 1]</c> applied on top of the frame's own alpha. Values outside the range are clamped by the compositor.</param>
 /// <param name="BlendMode">How this layer combines with what's already on the canvas.</param>

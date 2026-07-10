@@ -1,4 +1,4 @@
-// SubtitleDecodeSmoke — the unified subtitle path. Text (sidecar SRT/VTT/MicroDVD/SAMI/… or an in-container
+// SubtitleDecodeSmoke - the unified subtitle path. Text (sidecar SRT/VTT/MicroDVD/SAMI/… or an in-container
 // stream) is FFmpeg-decoded to ASS events and rendered by libass; bitmap subs (PGS/DVB/VobSub) are FFmpeg-decoded
 // to images and composited directly. Either way it renders an overlay and checks for visible pixels.
 using S.Media.Core.Video;
@@ -28,7 +28,7 @@ if (text.Events.Count > 0)
     source = new AssSubtitleLayerSource(W, H, text.Header, events, fonts);
     var first = text.Events[0];
     when = TimeSpan.FromMilliseconds(first.StartMs + Math.Max(1, first.DurationMs / 2));
-    Console.WriteLine($"decoded '{Path.GetFileName(path)}': TEXT — {text.Events.Count} events, {text.Fonts.Count} fonts → libass");
+    Console.WriteLine($"decoded '{Path.GetFileName(path)}': TEXT - {text.Events.Count} events, {text.Fonts.Count} fonts → libass");
 }
 else
 {
@@ -42,7 +42,7 @@ else
     source = new BitmapSubtitleLayerSource(bmp);
     var first = bmp.Cues[0];
     when = TimeSpan.FromMilliseconds(first.StartMs + Math.Max(1, (first.EndMs - first.StartMs) / 2));
-    Console.WriteLine($"decoded '{Path.GetFileName(path)}': BITMAP — {bmp.Cues.Count} cues @ {bmp.Width}x{bmp.Height} → composite");
+    Console.WriteLine($"decoded '{Path.GetFileName(path)}': BITMAP - {bmp.Cues.Count} cues @ {bmp.Width}x{bmp.Height} → composite");
 }
 
 var frame = source.RenderAt(when);
@@ -63,5 +63,5 @@ if (visible == 0)
     return 3;
 }
 
-Console.WriteLine("SubtitleDecodeSmoke OK — subtitle decoded + rendered.");
+Console.WriteLine("SubtitleDecodeSmoke OK - subtitle decoded + rendered.");
 return 0;

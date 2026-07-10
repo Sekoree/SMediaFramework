@@ -13,7 +13,7 @@ public struct PmDeviceInfo
     /// <summary>Internal structure version (should be <c>200</c>).</summary>
     public int StructVersion;
 
-    // Native char* fields — accessed through the properties below.
+    // Native char* fields - accessed through the properties below.
     private nint _interf;
     private nint _name;
 

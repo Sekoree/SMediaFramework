@@ -34,7 +34,7 @@ public sealed class ArchitectureTests
             ["S.Media.Core", "S.Media.FFmpeg.Common", "S.Media.Decode.FFmpeg", "S.Media.Time", "YoutubeExplode"],
         // MMD prototype (Gate 6): pure managed PMX/VMD + software render, plus the NXT-10 GL
         // layer-surface renderer (Compositor for the surface contract; Silk.NET bindings and
-        // StbImageSharp are pure managed — a GL context only ever comes from the hosting compositor,
+        // StbImageSharp are pure managed - a GL context only ever comes from the hosting compositor,
         // so the module still ships no native runtime of its own).
         ["S.Media.Source.MMD"] = ["S.Media.Core", "S.Media.Time", "S.Media.Compositor"],
         // Text cue source (SESSION-02): a pure-managed SkiaSharp text rasterizer + held-frame source. References
@@ -132,7 +132,7 @@ public sealed class ArchitectureTests
         }
 
         Assert.True(violations.Count == 0,
-            "Disallowed project references (violate the layering rules — fix the ref or update the Allowed map):\n  "
+            "Disallowed project references (violate the layering rules - fix the ref or update the Allowed map):\n  "
             + string.Join("\n  ", violations));
     }
 

@@ -3,7 +3,7 @@ using HaPlay.Resources;
 
 namespace HaPlay.ViewModels;
 
-/// <summary>List row for OSC/MIDI workspaces — wraps a persisted endpoint with live health.</summary>
+/// <summary>List row for OSC/MIDI workspaces - wraps a persisted endpoint with live health.</summary>
 public sealed partial class ActionEndpointRowViewModel : ObservableObject
 {
     public ActionEndpointRowViewModel(ActionEndpoint endpoint) => Endpoint = endpoint;

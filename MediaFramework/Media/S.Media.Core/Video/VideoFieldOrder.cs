@@ -6,7 +6,7 @@ namespace S.Media.Core.Video;
 /// </summary>
 public enum VideoFieldOrder : byte
 {
-    /// <summary>Progressive frame — no fields. Default for the vast majority of content.</summary>
+    /// <summary>Progressive frame - no fields. Default for the vast majority of content.</summary>
     Progressive = 0,
     /// <summary>Interlaced, top field is temporally first.</summary>
     TopFieldFirst = 1,

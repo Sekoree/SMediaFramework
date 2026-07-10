@@ -114,7 +114,7 @@ public sealed class CuePlayerViewInteractionTests
         });
 
         // Generous window: the executor hops through Task.Run on a thread pool the parallel test
-        // collections keep saturated on CI — 2 s flaked on the Windows runner. Exits early on success.
+        // collections keep saturated on CI - 2 s flaked on the Windows runner. Exits early on success.
         PumpUntil(() => seenFinalStatus.IsSet, TimeSpan.FromSeconds(20));
 
         Assert.True(seenFinalStatus.IsSet);

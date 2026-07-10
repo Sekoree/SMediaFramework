@@ -6,7 +6,7 @@ namespace S.Media.Subtitles;
 /// <summary>
 /// A full-fidelity ASS/SSA subtitle overlay aligned to the master timeline, rendered by libass (via
 /// <see cref="LibAssLib"/>). Given a master time it produces the Bgra32-premultiplied overlay frame for that
-/// instant — every active event composited with its styling, positioning, karaoke and animated transforms — or
+/// instant - every active event composited with its styling, positioning, karaoke and animated transforms - or
 /// <c>null</c> when nothing shows. This is the high-fidelity counterpart to <see cref="SubtitleLayerSource"/>
 /// (which renders plain text via Skia); use it for ASS tracks where styling matters.
 /// </summary>
@@ -14,7 +14,7 @@ namespace S.Media.Subtitles;
 /// The returned frame is owned by this source and <strong>re-rendered in place</strong>: it is valid only until
 /// the next <see cref="RenderAt"/> call (libass content can change every frame, e.g. karaoke/transforms, so a
 /// per-frame copy would churn megabytes). Composite it within the tick; do not hold a reference across calls and
-/// do not dispose it. Single-threaded — call from the composition thread.
+/// do not dispose it. Single-threaded - call from the composition thread.
 /// </remarks>
 public sealed class AssSubtitleLayerSource : IVideoOverlaySource
 {
@@ -73,7 +73,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
     }
 
     // libass has no global alignment knob, so an alignment override is applied by rewriting the document's
-    // [V4+ Styles] rows' Alignment field (ASS numpad 1–9). Only V4+ (ASS) is rewritten — SSA's V4 alignment uses
+    // [V4+ Styles] rows' Alignment field (ASS numpad 1–9). Only V4+ (ASS) is rewritten - SSA's V4 alignment uses
     // a different encoding, so it's left untouched. Style rows have a fixed comma-delimited field set (no free
     // text), so a plain split is safe. Returns UTF-8 bytes for libass.
     private static byte[] RewriteAssAlignment(ReadOnlySpan<byte> assText, int alignment)
@@ -124,7 +124,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
     }
 
     /// <summary>
-    /// Creates a source from decoded ASS pieces — the header, timed events, and optional embedded fonts — the
+    /// Creates a source from decoded ASS pieces - the header, timed events, and optional embedded fonts - the
     /// libass streaming path used for FFmpeg-decoded subtitles (any text format, sidecar or in-container). Events
     /// are fed via <c>ass_process_chunk</c>; fonts are registered before the font provider initializes so styles
     /// can resolve them.
@@ -193,7 +193,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
 
     /// <summary>
     /// The overlay frame for the subtitles active at <paramref name="masterTime"/>, or <c>null</c> when nothing
-    /// shows. Borrowed and re-rendered in place — valid until the next call; do not dispose.
+    /// shows. Borrowed and re-rendered in place - valid until the next call; do not dispose.
     /// </summary>
     public VideoFrame? RenderAt(TimeSpan masterTime)
     {
@@ -208,7 +208,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
             case AssRenderOutcome.Rendered:
                 _hasContent = true;
                 return _frame;
-            default: // Unchanged — buffer still holds the previous image
+            default: // Unchanged - buffer still holds the previous image
                 return _hasContent ? _frame : null;
         }
     }

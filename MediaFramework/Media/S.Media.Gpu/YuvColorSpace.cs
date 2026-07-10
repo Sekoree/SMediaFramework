@@ -7,13 +7,13 @@ namespace S.Media.Gpu;
 /// shaders. Written as <c>row-major</c> 3×3 matrices that satisfy
 /// <c>RGB = M * (YUV - offset)</c> with values normalized to [0, 1].
 /// Pass to GLSL as <c>uniformMatrix3fv</c> with <c>transpose = true</c> (or
-/// transpose locally) — GLSL <c>mat3</c> is column-major.
+/// transpose locally) - GLSL <c>mat3</c> is column-major.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Two pieces per choice: the <see cref="Matrix"/> applied after
 /// <see cref="Offset"/> subtraction. <see cref="Offset"/> handles black
-/// level / chroma centering — <c>(0, 0.5, 0.5)</c> for full range and
+/// level / chroma centering - <c>(0, 0.5, 0.5)</c> for full range and
 /// <c>(16/255, 128/255, 128/255)</c> for limited / studio range.
 /// </para>
 /// <para>
@@ -74,7 +74,7 @@ public readonly record struct YuvColorSpace(float[] Matrix, float[] Offset)
         },
         Offset: new[] { 0f, 128f / 255f, 128f / 255f });
 
-    /// <summary>Pick a default by frame height — BT.709 for HD+ content, BT.601 for SD.</summary>
+    /// <summary>Pick a default by frame height - BT.709 for HD+ content, BT.601 for SD.</summary>
     public static YuvColorSpace DefaultForHeight(int height, bool fullRange = false)
     {
         if (height >= 720)
@@ -93,7 +93,7 @@ public readonly record struct YuvColorSpace(float[] Matrix, float[] Offset)
         return cs switch
         {
             VideoColorSpace.Bt709 => full ? Bt709Full : Bt709Limited,
-            VideoColorSpace.Bt601 => Bt601Limited, // SD path — full-range 601 is rare; map to limited.
+            VideoColorSpace.Bt601 => Bt601Limited, // SD path - full-range 601 is rare; map to limited.
             VideoColorSpace.Bt2020 or VideoColorSpace.Bt2020Cl => full ? Bt2020Full : Bt2020Limited,
             _ => DefaultForHeight(height, full),
         };

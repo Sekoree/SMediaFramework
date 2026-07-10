@@ -28,7 +28,7 @@ namespace S.Media.Players;
 /// <para>
 /// Thread safety / latency: <see cref="IVideoOutput.Submit"/> runs on the
 /// <see cref="IMediaClock.VideoTick"/> thread (the clock's driver thread),
-/// so outputs must return promptly — typically by handing the frame to a
+/// so outputs must return promptly - typically by handing the frame to a
 /// render thread of their own. A slow Submit delays subsequent ticks for
 /// every other subscriber on the same clock.
 /// </para>
@@ -67,7 +67,7 @@ public sealed class VideoPlayer : IDisposable
     private volatile Exception? _fault;
     /// <summary>Set when a decode thread failed to exit within the join cap (blocked in a native read).
     /// A restart would create a second decode thread sharing this source/queue, so <see cref="Play"/>
-    /// is refused once this is set — the player is terminally stuck and must be disposed.</summary>
+    /// is refused once this is set - the player is terminally stuck and must be disposed.</summary>
     private volatile bool _decodeThreadStuck;
 
     private long _decoded;
@@ -145,13 +145,13 @@ public sealed class VideoPlayer : IDisposable
     /// True when the presentation queue is at capacity, so the decode thread is blocked waiting for a
     /// slot and cannot deliver any further frames until one is consumed. Frames are buffered in
     /// increasing-PTS order, so a saturated buffer means the earliest queued frame is the lowest PTS
-    /// the source will ever deliver for the current position — used by the pre-audio sync gate to stop
+    /// the source will ever deliver for the current position - used by the pre-audio sync gate to stop
     /// waiting for an earlier frame that can never arrive.
     /// </summary>
     internal bool IsJitterBufferSaturated => _queue.Count >= _queueCapacity;
 
     /// <summary>
-    /// True when the underlying source reports it will produce no further frames — e.g. an audio-only
+    /// True when the underlying source reports it will produce no further frames - e.g. an audio-only
     /// file's stub video source (which is exhausted from the start), or genuine end of stream. Lets the
     /// pre-audio sync wait skip a video buffer that can never fill instead of blocking for its full timeout.
     /// </summary>
@@ -185,7 +185,7 @@ public sealed class VideoPlayer : IDisposable
     /// HEARD a fixed latency after the clock says "now". Video, presented immediately at clock time, would
     /// then lead the audio by that latency. Set this to the output's buffered latency to hold video back so
     /// it lines up with what's actually heard. Default zero (no compensation). Read on the clock's video
-    /// tick thread; setting it is a cheap volatile-ish write — safe to update live.
+    /// tick thread; setting it is a cheap volatile-ish write - safe to update live.
     /// </summary>
     public TimeSpan PlayheadOffset { get; set; }
 
@@ -198,7 +198,7 @@ public sealed class VideoPlayer : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Only CPU-backed frames are supported today — hardware backings (DMA-BUF NV12/P010/P016,
+    /// Only CPU-backed frames are supported today - hardware backings (DMA-BUF NV12/P010/P016,
     /// Win32 D3D11 shared NV12) fall through to natural completion since their lifetime is bound
     /// to the source's release callback. Wrap the source in a CPU-readback path (or pre-decode
     /// images via SkiaSharp) if you need hold-last with HW frames.
@@ -315,7 +315,7 @@ public sealed class VideoPlayer : IDisposable
 
     /// <summary>
     /// Stop scheduling and decoding, drop any queued frames. Use this for
-    /// both pause and stop semantics — when the master clock is also paused,
+    /// both pause and stop semantics - when the master clock is also paused,
     /// the displayed frame just freezes anyway.
     /// </summary>
     /// <remarks>
@@ -330,7 +330,7 @@ public sealed class VideoPlayer : IDisposable
 
     /// <summary>
     /// Coordinated seek: pauses, calls <see cref="ISeekableSource.Seek"/> on
-    /// the source (must implement it — throws otherwise), and resumes if
+    /// the source (must implement it - throws otherwise), and resumes if
     /// the player was running.
     /// </summary>
     public void Seek(TimeSpan position)
@@ -347,7 +347,7 @@ public sealed class VideoPlayer : IDisposable
         timing?.SetOutcome($"target={position} resumed={wasRunning}");
     }
 
-    /// <summary>True when the underlying source supports <see cref="Seek"/> (file decoders) — false for live
+    /// <summary>True when the underlying source supports <see cref="Seek"/> (file decoders) - false for live
     /// sources and non-seekable stubs (e.g. an audio clip's embedded cover-art or empty video).</summary>
     public bool CanSeek => _source is ISeekableSource;
 
@@ -400,7 +400,7 @@ public sealed class VideoPlayer : IDisposable
         try
         {
             // Never join the decode thread without a wall-clock cap: with CancellationToken.None,
-            // JoinThreadWhileCancelable would spin until the thread exits — if TryReadNextFrame blocks
+            // JoinThreadWhileCancelable would spin until the thread exits - if TryReadNextFrame blocks
             // in native code, Pause/Dispose can hang for minutes. Bounded join + cancelled CTS unblocks Wait.
             CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(12), cancellationToken);
         }
@@ -437,7 +437,7 @@ public sealed class VideoPlayer : IDisposable
         {
             // The decode thread is still blocked in native code after the full join cap (not an early
             // cooperative cancel). A subsequent Play() must NOT start a second decode thread sharing
-            // this source/queue/semaphore — concurrent non-thread-safe decoder access. Mark terminal.
+            // this source/queue/semaphore - concurrent non-thread-safe decoder access. Mark terminal.
             _decodeThreadStuck = true;
             var ex = new TimeoutException("VideoPlayer decode thread did not exit within the join cap; the player is now non-restartable.");
             _fault = ex;
@@ -591,8 +591,8 @@ public sealed class VideoPlayer : IDisposable
         var lateCutoff = playhead - LateThreshold;
 
         VideoFrame? toShow = null;
-        // Anti-freeze / catch-up fallback. When the playhead has run past EVERY queued frame — decode
-        // fell behind after a seek or a high-variance scene and the shallow queue drained — we used to
+        // Anti-freeze / catch-up fallback. When the playhead has run past EVERY queued frame - decode
+        // fell behind after a seek or a high-variance scene and the shallow queue drained - we used to
         // drop them all and present nothing, which froze the picture permanently (the freerun clock never
         // waits for video, so it never recovered). Instead keep the NEWEST late frame and show it when no
         // on-time frame exists: a brief A/V lag beats a freeze, and presenting the latest decoded frame
@@ -601,7 +601,7 @@ public sealed class VideoPlayer : IDisposable
 
         // Walk the queue forward as long as the next frame's PTS is in the
         // past (or within early tolerance). We always prefer the latest such
-        // frame — older candidates are dropped as "skipped" when we find a
+        // frame - older candidates are dropped as "skipped" when we find a
         // newer one. Frames more than LateThreshold behind are held as the
         // newest-late fallback (newest wins) rather than discarded outright.
         lock (_queueGate)
@@ -645,14 +645,14 @@ public sealed class VideoPlayer : IDisposable
         }
         else
         {
-            // Nothing on time — present the newest late frame (if any) so the picture keeps moving.
+            // Nothing on time - present the newest late frame (if any) so the picture keeps moving.
             toShow = newestLate;
         }
 
         if (toShow is not null)
         {
             // Capture a managed snapshot of the last-frame plane data the moment we know this
-            // is the final frame the source will produce — must happen before _sink.Submit takes
+            // is the final frame the source will produce - must happen before _sink.Submit takes
             // ownership (the output may free the underlying buffers via the frame's release).
             // Skipped for hardware-backed frames: their lifetime is tied to the source's release
             // and there's no portable way to fork an additional refcounted view here.
@@ -680,7 +680,7 @@ public sealed class VideoPlayer : IDisposable
         }
         else if (!HoldLastFrameAtEnd && _heldPlanes is not null)
         {
-            // Property toggled off mid-hold — drop the snapshot.
+            // Property toggled off mid-hold - drop the snapshot.
             ReleaseHeldFrame();
         }
     }
@@ -854,13 +854,13 @@ public sealed class VideoPlayer : IDisposable
         catch (Exception ex)
         {
 #if DEBUG
-            // A persistently failing sink would otherwise log a full stack every tick — report the
+            // A persistently failing sink would otherwise log a full stack every tick - report the
             // first failure, then summarize once per 100 while the streak lasts.
             var streak = Interlocked.Increment(ref _submitFailureStreak);
             if (streak == 1 || streak % 100 == 0)
                 MediaDiagnostics.LogError(ex, $"VideoPlayer.{operation} output Submit (consecutive failures={streak})");
 #endif
-            // Output threw — ownership did not move; release the frame to avoid a
+            // Output threw - ownership did not move; release the frame to avoid a
             // native buffer leak. Rethrow would kill MediaClock's driver.
             try { frame.Dispose(); }
 #if DEBUG

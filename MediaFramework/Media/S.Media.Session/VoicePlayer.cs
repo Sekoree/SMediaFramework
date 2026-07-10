@@ -4,7 +4,7 @@ namespace S.Media.Session;
 
 /// <summary>
 /// The session's independent-players surface: soundboard voices (polyphonic keyed one-shots, each a fresh
-/// player on an output) and the single cue preview (a loaded cue auditioned on a separate device) — playback
+/// player on an output) and the single cue preview (a loaded cue auditioned on a separate device) - playback
 /// that is deliberately OUTSIDE the transport groups. Owns the voice/preview registries and their end
 /// monitors; state is dispatcher-confined exactly like the session's (every mutation marshals through
 /// <see cref="ShowSession.InvokeAsync{T}"/>), and media opens run OFF the dispatcher with a published claim
@@ -30,7 +30,7 @@ internal sealed class VoicePlayer
     // host id (the GUI's soundboard tile). Owned by the dispatcher.
     private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
     // Voice opens in flight (NXT-19): voiceId → the open's claim CTS, published so a stop / re-fire / dispose
-    // preempts the OFF-dispatcher open before it commits. Owned by the dispatcher; a canceller only Cancel()s —
+    // preempts the OFF-dispatcher open before it commits. Owned by the dispatcher; a canceller only Cancel()s -
     // the open flow that created the CTS is the one that disposes it (the blocked open still holds its token).
     private readonly Dictionary<string, CancellationTokenSource> _pendingVoiceOpens = new(StringComparer.Ordinal);
 
@@ -39,7 +39,7 @@ internal sealed class VoicePlayer
 
     // Lock-free query view (NXT-16 residue): the current voices (id + player), republished on the dispatcher
     // whenever a voice commits or releases, so the soundboard's 200 ms progress poll and the is-playing query
-    // never round-trip the dispatcher — a parked loop must not freeze the tiles.
+    // never round-trip the dispatcher - a parked loop must not freeze the tiles.
     private volatile VoiceView[] _voiceViews = [];
 
     private sealed record VoiceView(string Id, S.Media.Players.MediaPlayer Player);
@@ -90,7 +90,7 @@ internal sealed class VoicePlayer
         if (setup is not { } s)
             return false;
 
-        // --- OPEN (OFF the dispatcher): the long part — the loop stays free throughout (NXT-19).
+        // --- OPEN (OFF the dispatcher): the long part - the loop stays free throughout (NXT-19).
         IArmedClip armed;
         try
         {
@@ -98,7 +98,7 @@ internal sealed class VoicePlayer
         }
         catch (OperationCanceledException)
         {
-            return false; // preempted by StopPreview / a replacing preview / dispose — not an error
+            return false; // preempted by StopPreview / a replacing preview / dispose - not an error
         }
 
         // --- COMMIT (dispatcher): only if our claim is still the current preview.
@@ -108,7 +108,7 @@ internal sealed class VoicePlayer
         }
         catch (ObjectDisposedException)
         {
-            // Disposed between the open completing and the commit — release the orphaned clip directly.
+            // Disposed between the open completing and the commit - release the orphaned clip directly.
             await armed.ReleaseAsync().ConfigureAwait(false);
             return false;
         }
@@ -149,13 +149,13 @@ internal sealed class VoicePlayer
         });
     }
 
-    /// <summary>Stops the current preview, if any — including one still opening (NXT-19).</summary>
+    /// <summary>Stops the current preview, if any - including one still opening (NXT-19).</summary>
     public Task StopPreviewAsync() => _session.InvokeAsync(() => ReleasePreviewAsync().AsTask());
 
     /// <summary>Releases the preview clip/outputs and preempts a pending preview open. Call on the dispatcher.</summary>
     public async ValueTask ReleasePreviewAsync()
     {
-        // Cancel only — never Dispose the CTS here: a preempted preview open (NXT-19) may still hold its token
+        // Cancel only - never Dispose the CTS here: a preempted preview open (NXT-19) may still hold its token
         // off-dispatcher. A cancelled CTS with no timer holds no unmanaged state, so GC reclaims it.
         _previewCts?.Cancel();
         _previewCts = null;
@@ -205,7 +205,7 @@ internal sealed class VoicePlayer
                     catch (OperationCanceledException) { }
                     catch
                     {
-                        // best-effort — a preview-monitor hiccup must never crash the session
+                        // best-effort - a preview-monitor hiccup must never crash the session
                     }
                 },
                 ct);
@@ -229,7 +229,7 @@ internal sealed class VoicePlayer
             return (clipSpec, claim);
         }).ConfigureAwait(false);
 
-        // --- OPEN (OFF the dispatcher): the long part — the loop stays free throughout (NXT-19).
+        // --- OPEN (OFF the dispatcher): the long part - the loop stays free throughout (NXT-19).
         IArmedClip armed;
         try
         {
@@ -250,11 +250,11 @@ internal sealed class VoicePlayer
             }
             catch (ObjectDisposedException)
             {
-                // disposed mid-open — ReleaseAllAsync already dropped/cancelled the pending claim
+                // disposed mid-open - ReleaseAllAsync already dropped/cancelled the pending claim
             }
 
             if (cancelled)
-                return; // preempted by stop/re-fire/dispose — not an error, the voice just never started
+                return; // preempted by stop/re-fire/dispose - not an error, the voice just never started
             throw; // a real open failure (bad path/device) surfaces to the caller as before
         }
 
@@ -265,7 +265,7 @@ internal sealed class VoicePlayer
         }
         catch (ObjectDisposedException)
         {
-            // Disposed between the open completing and the commit — release the orphaned clip directly (the
+            // Disposed between the open completing and the commit - release the orphaned clip directly (the
             // standby engine is internally thread-safe; nothing registered it, so nothing else will).
             await armed.ReleaseAsync().ConfigureAwait(false);
         }
@@ -314,7 +314,7 @@ internal sealed class VoicePlayer
     /// <summary>Stops one soundboard voice (no <see cref="VoiceEnded"/>).</summary>
     public Task StopVoiceAsync(string voiceId) => _session.InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask());
 
-    /// <summary>Stops every soundboard voice — including any still opening (NXT-19).</summary>
+    /// <summary>Stops every soundboard voice - including any still opening (NXT-19).</summary>
     public Task StopAllVoicesAsync() => _session.InvokeAsync(() => ReleaseAllVoicesAsync().AsTask());
 
     /// <summary>Live-sets a voice's output gain (linear). No-op when the voice isn't playing.</summary>
@@ -341,7 +341,7 @@ internal sealed class VoicePlayer
             return Task.CompletedTask;
         });
 
-    /// <summary>Whether a soundboard voice is currently playing — a lock-free view read (NXT-16 residue),
+    /// <summary>Whether a soundboard voice is currently playing - a lock-free view read (NXT-16 residue),
     /// eventually consistent with the dispatcher state like every session snapshot query.</summary>
     public Task<bool> IsVoicePlayingAsync(string voiceId)
     {
@@ -351,7 +351,7 @@ internal sealed class VoicePlayer
         return Task.FromResult(false);
     }
 
-    /// <summary>Per-voice playhead (id, position, duration) for every currently-playing soundboard voice — a
+    /// <summary>Per-voice playhead (id, position, duration) for every currently-playing soundboard voice - a
     /// lock-free view read (NXT-16 residue): the 200 ms soundboard poll must never queue behind the dispatcher.
     /// Player position/duration reads are thread-safe (the transport snapshot reads them the same way).</summary>
     public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync()
@@ -362,13 +362,13 @@ internal sealed class VoicePlayer
         {
             TimeSpan pos = TimeSpan.Zero, dur = TimeSpan.Zero;
             try { pos = views[i].Player.Position; dur = views[i].Player.Duration; }
-            catch { /* concurrent teardown — zeros for this tick */ }
+            catch { /* concurrent teardown - zeros for this tick */ }
             snaps[i] = new VoiceProgress(views[i].Id, pos, dur);
         }
         return Task.FromResult<IReadOnlyList<VoiceProgress>>(snaps);
     }
 
-    /// <summary>Releases the preview and every voice (running or still opening) — the session's disposal
+    /// <summary>Releases the preview and every voice (running or still opening) - the session's disposal
     /// teardown. Call on the dispatcher (disposal runs there directly, not through InvokeAsync).</summary>
     public async ValueTask ReleaseAllAsync()
     {
@@ -385,7 +385,7 @@ internal sealed class VoicePlayer
     private async ValueTask ReleaseVoiceAsync(string voiceId)
     {
         // Preempt a still-opening voice (NXT-19): cancel its claim so the off-dispatcher open aborts and its
-        // commit is refused. Only Cancel here — the open flow that created the CTS disposes it (it still holds
+        // commit is refused. Only Cancel here - the open flow that created the CTS disposes it (it still holds
         // the token inside the blocked open).
         if (_pendingVoiceOpens.Remove(voiceId, out var pending))
             pending.Cancel();
@@ -433,13 +433,13 @@ internal sealed class VoicePlayer
                         }
                     }
                     catch (OperationCanceledException) { }
-                    catch { /* best-effort — a voice-monitor hiccup must never crash the session */ }
+                    catch { /* best-effort - a voice-monitor hiccup must never crash the session */ }
                 },
                 ct);
         }
     }
 
-    /// <summary>Ramps a voice's gain to 0 over <paramref name="duration"/> then releases it (fade-out) — a
+    /// <summary>Ramps a voice's gain to 0 over <paramref name="duration"/> then releases it (fade-out) - a
     /// <see cref="FadeRamp"/> at the same step rate as every other fade.</summary>
     private void StartVoiceFadeOut(string voiceId, S.Media.Players.MediaPlayer player, TimeSpan duration, CancellationToken ct)
     {

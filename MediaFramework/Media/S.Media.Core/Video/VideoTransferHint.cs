@@ -8,7 +8,7 @@ namespace S.Media.Core.Video;
 public enum VideoTransferHint : byte
 {
     Unspecified = 0,
-    /// <summary>SDR / BT.709-ish — clamp to display range.</summary>
+    /// <summary>SDR / BT.709-ish - clamp to display range.</summary>
     Sdr = 1,
     /// <summary>IEC 61966-2-1 (similar to decoding sRGB-encoded RGB).</summary>
     FromSrgb = 2,

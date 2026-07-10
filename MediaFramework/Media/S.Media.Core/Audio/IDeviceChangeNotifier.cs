@@ -4,7 +4,7 @@ namespace S.Media.Core.Audio;
 /// Optional backend capability (D6 / OQ9): a backend that can <em>natively</em> signal device
 /// add/remove/reroute implements this so the host doesn't have to poll. Backends without native
 /// notifications (PortAudio, PortMIDI) omit it and a shared coalescing poller services them; either way
-/// the host surfaces a single uniform "devices changed" signal. This is the dynamic-device seam — the
+/// the host surfaces a single uniform "devices changed" signal. This is the dynamic-device seam - the
 /// capability set itself stays frozen (D6); only the device <em>list</em> moves.
 /// </summary>
 /// <remarks>

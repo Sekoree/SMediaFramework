@@ -49,7 +49,7 @@ internal static class RuntimeModules
         try
         {
             // The exact call every device picker makes; throws DllNotFoundException when the native
-            // portaudio library is absent (a machine without it must still run the app — the Windows
+            // portaudio library is absent (a machine without it must still run the app - the Windows
             // launch smoke caught a startup hard-crash from an unguarded enumeration).
             _ = PortAudioDeviceCatalog.EnumerateHostApis();
             return new RuntimeModuleStatus(true, "PortAudio runtime available.");

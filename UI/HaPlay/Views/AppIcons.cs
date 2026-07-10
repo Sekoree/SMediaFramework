@@ -5,7 +5,7 @@ namespace HaPlay.Views;
 /// <summary>
 /// The app's monochrome vector icon set (24×24 filled geometries, default even-odd fill).
 /// Replaces the emoji glyphs that rendered as tofu boxes on systems without a color-emoji
-/// font. Used from XAML as <c>&lt;PathIcon Data="{x:Static views:AppIcons.Play}" /&gt;</c> —
+/// font. Used from XAML as <c>&lt;PathIcon Data="{x:Static views:AppIcons.Play}" /&gt;</c> -
 /// PathIcon paints with the control Foreground, so the icons follow the Classic theme's
 /// text colors (including HighlightText on selection) for free.
 /// </summary>
@@ -92,7 +92,7 @@ public static class AppIcons
 
     private static StreamGeometry G(string pathData) => StreamGeometry.Parse(pathData);
 
-    // Lazily-parsed backing fields — StreamGeometry.Parse requires the Avalonia platform
+    // Lazily-parsed backing fields - StreamGeometry.Parse requires the Avalonia platform
     // (IPlatformRenderInterface), so parsing happens on first USE (always on a UI thread with a
     // running platform), never in the type initializer. A benign parse race is acceptable.
     private static StreamGeometry? _antenna;

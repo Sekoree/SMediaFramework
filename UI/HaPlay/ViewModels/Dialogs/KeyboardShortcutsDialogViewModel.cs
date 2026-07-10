@@ -12,7 +12,7 @@ public sealed record ShortcutGroup(string Title, IReadOnlyList<ShortcutEntry> En
 
 /// <summary>
 /// UX-03: the searchable keyboard-shortcut help overlay. This VM is the single documented source of truth
-/// for the app's shortcuts — the same gestures wired in <c>MainView</c>'s KeyBindings and the cue/player
+/// for the app's shortcuts - the same gestures wired in <c>MainView</c>'s KeyBindings and the cue/player
 /// key handlers. Filtering matches gesture or description, case-insensitively.
 /// </summary>
 public sealed partial class KeyboardShortcutsDialogViewModel : ObservableObject

@@ -89,7 +89,7 @@ public partial class AudioMatrixDialog : Window
             Spacing = 4,
         };
 
-        var placeholder = new TextBlock { Text = "—", Opacity = 0.45 };
+        var placeholder = new TextBlock { Text = "-", Opacity = 0.45 };
 
         var spinner = new NumericUpDown
         {

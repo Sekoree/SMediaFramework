@@ -3,7 +3,7 @@ using Xunit;
 namespace S.Media.Session.Tests;
 
 /// <summary>The deck/cue mid-play audio-route paths: a rebuild while the clip plays must pump the re-added
-/// outputs, and one un-openable device must never silence the rest (per-route isolation) — the "route an audio
+/// outputs, and one un-openable device must never silence the rest (per-route isolation) - the "route an audio
 /// device mid-playback → no output" bug.</summary>
 public sealed class AudioRouteRebuildTests
 {
@@ -97,7 +97,7 @@ public sealed class AudioRouteRebuildTests
     public async Task RebuildFromZeroRoutes_PumpsTheNewDeviceOutput()
     {
         // The user-visible bug shape: media playing with NO routed device (explicitly silent), then a device is
-        // routed mid-play — the rebuilt output must actually receive audio (router add-on-running + master
+        // routed mid-play - the rebuilt output must actually receive audio (router add-on-running + master
         // promotion), not stay silent until a re-fire.
         var backend = new PickyAudioBackend();
         await using var session = new ShowSession(LongAudioProvider.Registry(), backend);

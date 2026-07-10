@@ -63,7 +63,7 @@ public sealed record MediaStreamInfo(
     }
 
     /// <summary>
-    /// Stable identity of the track's content independent of its index — used by hosts to detect that a
+    /// Stable identity of the track's content independent of its index - used by hosts to detect that a
     /// persisted explicit index no longer points at the same track after a re-mux (and fall back to auto).
     /// </summary>
     public string ContentSignature => $"{Kind}:{CodecName}:{Language ?? ""}:{Channels}:{SampleRate}:{Width}x{Height}";
@@ -110,7 +110,7 @@ public static unsafe class MediaStreamProbe
         }
     }
 
-    /// <summary>Container-level probe (format/duration/bit rate + stream table) — same cheap
+    /// <summary>Container-level probe (format/duration/bit rate + stream table) - same cheap
     /// open-enumerate-close as <see cref="ProbeFile"/>, no decoders built.</summary>
     public static MediaContainerInfo ProbeContainer(string path)
     {

@@ -6,7 +6,7 @@ namespace S.Media.Core.Video;
 /// <summary>
 /// Owns POSIX file descriptors plus layout metadata for decoded NV12 in Linux
 /// DRM PRIME / dma-buf form. Callers import via EGL; do not <see cref="MemoryExtensions.Pin"/>
-/// the CPU <see cref="VideoFrame.Planes"/> on the matching frame — they are stubs.
+/// the CPU <see cref="VideoFrame.Planes"/> on the matching frame - they are stubs.
 /// </summary>
 public sealed class DmabufNv12Backing : VideoFrameHardwareBacking
 {

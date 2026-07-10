@@ -11,12 +11,12 @@ using S.Media.NDI;
 namespace HaPlay.ViewModels.Dialogs;
 
 /// <summary>
-/// Phase C.5 (§6.3) — "Add NDI input" dialog VM. Two paths to identify the source:
+/// Phase C.5 (§6.3) - "Add NDI input" dialog VM. Two paths to identify the source:
 /// <list type="bullet">
-/// <item>Live-discovered list — <see cref="NDIFinder"/> scans the network and fills a refreshing
+/// <item>Live-discovered list - <see cref="NDIFinder"/> scans the network and fills a refreshing
 /// dropdown. Manual <see cref="RefreshAsync"/> rescans on demand; <see cref="StartDiscoveryAsync"/>
 /// kicks off a 1-Hz background poll while the dialog is open.</item>
-/// <item>Manual name — free text. Save an item that may not resolve until later (camera powers up at
+/// <item>Manual name - free text. Save an item that may not resolve until later (camera powers up at
 /// showtime, NDI bridge connects on cue, sender behind a VLAN joins later).</item>
 /// </list>
 /// Both paths produce the same <see cref="NDIInputPlaylistItem"/> on commit. Callers must invoke
@@ -65,7 +65,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         VideoOnly = existing.VideoOnly;
         RetrySeconds = existing.RetrySeconds;
         AudioMinBufferedDurationMs = existing.AudioMinBufferedDurationMs;
-        // Default to manual-name when editing — the saved name is authoritative and shouldn't be silently
+        // Default to manual-name when editing - the saved name is authoritative and shouldn't be silently
         // replaced by a discovery match with the same human label but a different transport address.
         UseDiscovery = false;
 
@@ -74,7 +74,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(PrimaryButtonLabel));
     }
 
-    /// <summary>Open the NDI finder and start polling for sources. Safe to call multiple times — the
+    /// <summary>Open the NDI finder and start polling for sources. Safe to call multiple times - the
     /// timer is idempotent.</summary>
     public Task StartDiscoveryAsync()
     {
@@ -106,7 +106,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         return Task.CompletedTask;
     }
 
-    /// <summary>Manual rescan — equivalent to a tick of the discovery timer.</summary>
+    /// <summary>Manual rescan - equivalent to a tick of the discovery timer.</summary>
     [CommunityToolkit.Mvvm.Input.RelayCommand]
     private async Task RefreshAsync()
     {
@@ -125,7 +125,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
 
     /// <summary>
     /// Probes the live network for the lowest glitch-free audio jitter-buffer size for the selected source
-    /// (ramps from a safe reserve down to the floor — see <see cref="NDIAudioBufferProbe"/>), reports the
+    /// (ramps from a safe reserve down to the floor - see <see cref="NDIAudioBufferProbe"/>), reports the
     /// lowest/balanced/safe presets, and sets the override to the measured floor. Runs off the UI thread with
     /// per-step progress; cancellable.
     /// </summary>
@@ -168,7 +168,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             }
             if (!presets.Value.HasAudio)
             {
-                BufferProbeStatus = "Source carries no audio — a buffer override isn't needed.";
+                BufferProbeStatus = "Source carries no audio - a buffer override isn't needed.";
                 return;
             }
 
@@ -176,7 +176,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             AudioMinBufferedDurationMs = (int)Math.Round(p.Lowest.TotalMilliseconds);
             BufferProbeStatus =
                 $"Lowest {p.Lowest.TotalMilliseconds:0} ms · balanced {p.Balanced.TotalMilliseconds:0} ms · " +
-                $"safe {p.Safe.TotalMilliseconds:0} ms — override set to lowest (raise it if you hear dropouts).";
+                $"safe {p.Safe.TotalMilliseconds:0} ms - override set to lowest (raise it if you hear dropouts).";
         }
         catch (OperationCanceledException)
         {

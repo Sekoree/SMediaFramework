@@ -17,7 +17,7 @@ public readonly record struct NDIAudioBufferPresets(TimeSpan Lowest, TimeSpan Ba
 
 /// <summary>
 /// Probes the lowest glitch-free audio jitter buffer for an NDI source on the current network and returns
-/// latency/safety presets — for a UI to offer "lowest / balanced / safe", or to pass <see cref="NDIAudioBufferPresets.Lowest"/>
+/// latency/safety presets - for a UI to offer "lowest / balanced / safe", or to pass <see cref="NDIAudioBufferPresets.Lowest"/>
 /// straight to <see cref="NDIModule"/>. The buffer is the dominant tunable latency between a live source's audio
 /// and its low-latency video, so shrinking it is the A/V-sync lever (audio comes forward to meet the video).
 /// </summary>
@@ -25,7 +25,7 @@ public readonly record struct NDIAudioBufferPresets(TimeSpan Lowest, TimeSpan Ba
 /// Glitches are measured source-side: the receiver's audio is pumped at the consumption rate and chunks the ring
 /// couldn't fully supply are counted (a short read = a silence gap the router would pad = an audible dropout).
 /// No output device is opened; video is drained on a side thread so the receiver runs under the realistic A/V
-/// load of the shared connection. The call blocks for roughly (warmup + measure) × tested-sizes — run it on a
+/// load of the shared connection. The call blocks for roughly (warmup + measure) × tested-sizes - run it on a
 /// background thread. <paramref name="onStep"/> reports each tested size as it completes (for progress UI), and
 /// <paramref name="cancellationToken"/> stops it between sizes.
 /// </remarks>
@@ -51,7 +51,7 @@ public static class NDIAudioBufferProbe
         {
             cancellationToken.ThrowIfCancellationRequested();
             var underruns = MeasureUnderruns(source, ms, warm, meas, cancellationToken);
-            if (underruns < 0) // no audio on the source — presets are meaningless
+            if (underruns < 0) // no audio on the source - presets are meaningless
             {
                 var d = NDIAudioReceiver.DefaultMinBufferedDuration;
                 return new NDIAudioBufferPresets(d, d, d) { HasAudio = false };

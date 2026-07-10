@@ -25,11 +25,11 @@ namespace S.Media.Time;
 /// </para>
 /// <para>
 /// Candidates are evaluated in registration order within the same priority value
-/// (first registered wins ties — the constructor sorts by priority descending, then by registration index ascending).
+/// (first registered wins ties - the constructor sorts by priority descending, then by registration index ascending).
 /// </para>
 /// <para>
 /// Priority merge affects <see cref="IPlaybackClock.ElapsedSinceStart"/> / <see cref="IPlaybackClock.IsAdvancing"/> only;
-/// graph-wide coordinated master PPM and synchronized multi-output drop/repeat remain host-owned — see
+/// graph-wide coordinated master PPM and synchronized multi-output drop/repeat remain host-owned - see
 /// <see cref="MediaClock"/> and <see cref="S.Media.Core.Audio.AudioRouter"/>.
 /// </para>
 /// </remarks>

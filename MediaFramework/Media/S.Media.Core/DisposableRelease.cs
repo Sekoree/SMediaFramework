@@ -15,7 +15,7 @@ public static class DisposableRelease
         return new ChainedDisposable(primary, secondary);
     }
 
-    /// <summary>Wraps an action and an <see cref="IDisposable"/> — both run on dispose.</summary>
+    /// <summary>Wraps an action and an <see cref="IDisposable"/> - both run on dispose.</summary>
     public static IDisposable Combine(Action? action, IDisposable? disposable) =>
         Chain(disposable, Wrap(action));
 

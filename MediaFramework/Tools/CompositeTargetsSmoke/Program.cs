@@ -87,7 +87,7 @@ else
 
 // Layer-surface seam: a surface that fills the centre quarter green renders ON TOP of a red frame layer,
 // directly into the compositor's canvas (proves IVideoCompositorLayerSurface runs in the GL context).
-// ConfigureGl is deliberately NOT called here — the surface-hosting compositor owns the configure
+// ConfigureGl is deliberately NOT called here - the surface-hosting compositor owns the configure
 // contract (NXT-10) and must invoke it on first sight, on its GL thread.
 var red2 = SolidBgra(W, H, b: 0, g: 0, r: 255);
 var surface = new GreenCentreSurface();
@@ -99,8 +99,8 @@ var surfFrame = compositor.CompositeWithSurfaces(
     TimeSpan.Zero);
 {
     var ss = surfFrame.Planes[0].Span;
-    var cc = ((H / 2) * surfFrame.Strides[0]) + (W / 2) * 4;   // centre — surface green
-    var ce = (4 * surfFrame.Strides[0]) + 4 * 4;               // corner — frame red
+    var cc = ((H / 2) * surfFrame.Strides[0]) + (W / 2) * 4;   // centre - surface green
+    var ce = (4 * surfFrame.Strides[0]) + 4 * 4;               // corner - frame red
     var surfCentreGreen = ss[cc + 1] > 200 && ss[cc + 2] < 60 && ss[cc] < 60;  // BGRA
     var surfCornerRed = ss[ce + 2] > 200 && ss[ce + 1] < 60 && ss[ce] < 60;
     Console.WriteLine($"surface centre BGRA-as-RGB = ({ss[cc + 2]},{ss[cc + 1]},{ss[cc]}); corner = ({ss[ce + 2]},{ss[ce + 1]},{ss[ce]})");
@@ -118,7 +118,7 @@ red2.Dispose();
 surface.Dispose();
 
 // ExternalImageCompositeTarget: export the red composite as a dmabuf, then RE-IMPORT it via EGL and read
-// it back — the definitive proof the exported pixels are correct (the cross-API zero-copy path, D7/OQ2).
+// it back - the definitive proof the exported pixels are correct (the cross-API zero-copy path, D7/OQ2).
 var red3 = SolidBgra(W, H, b: 0, g: 0, r: 255);
 ExternalImageHandle? exported = null;
 var extTarget = new ExternalImageCompositeTarget
@@ -142,13 +142,13 @@ if (exported is { } eh)
 {
     // The export is verified by handle well-formedness (valid fd, an 8888 DRM fourcc, a stride that fits
     // the row). The same-process GL re-import is a best-effort diagnostic: radeonsi exports a TILED buffer
-    // with an INVALID modifier, which isn't portably re-importable without modifier negotiation — that
+    // with an INVALID modifier, which isn't portably re-importable without modifier negotiation - that
     // (and the Windows D3D11 leg) is verified by the real Phase-5 consumer / cross-platform CI.
     var wellFormed = eh.DmabufFds.Count == 1 && eh.DmabufFds[0] >= 0 && eh.Strides[0] >= W * 4 && eh.DrmFourcc != 0;
     Console.WriteLine($"dmabuf export: fourcc=0x{eh.DrmFourcc:X8} fd={eh.DmabufFds[0]} stride={eh.Strides[0]} modifier=0x{eh.DrmModifier:X} → well-formed={wellFormed}");
     Console.WriteLine(Egl.ImportAndCheckRed(gl, eh, W, H)
         ? "dmabuf round-trip (export→reimport→readback) = red ✓"
-        : "dmabuf round-trip = not re-importable on this driver (tiled/INVALID-modifier; needs modifier negotiation — Phase-5 consumer)");
+        : "dmabuf round-trip = not re-importable on this driver (tiled/INVALID-modifier; needs modifier negotiation - Phase-5 consumer)");
     ok &= wellFormed;
     var releaseThread = new Thread(() => eh.Release()) { IsBackground = true, Name = "dmabuf-release-smoke" };
     releaseThread.Start();
@@ -157,7 +157,7 @@ if (exported is { } eh)
 }
 else
 {
-    Console.WriteLine("dmabuf export unavailable on this platform/context — consumers use the CpuFrameCompositeTarget fallback.");
+    Console.WriteLine("dmabuf export unavailable on this platform/context - consumers use the CpuFrameCompositeTarget fallback.");
 }
 red3.Dispose();
 
@@ -176,7 +176,7 @@ if (!ok)
     return 1;
 }
 
-Console.WriteLine("CompositeTargetsSmoke OK — zero-copy GlCompositeTarget + CpuFrameCompositeTarget both correct.");
+Console.WriteLine("CompositeTargetsSmoke OK - zero-copy GlCompositeTarget + CpuFrameCompositeTarget both correct.");
 return 0;
 
 static VideoFrame SolidBgra(int w, int h, byte b, byte g, byte r)
@@ -221,7 +221,7 @@ sealed class GreenCentreSurface : IVideoCompositorLayerSurface
 }
 
 // Minimal EGL dmabuf RE-IMPORT for the round-trip check: imports the exported dmabuf as a GL texture and
-// reads back the centre pixel — the same path a real GL consumer (Avalonia's GL backend) would use.
+// reads back the centre pixel - the same path a real GL consumer (Avalonia's GL backend) would use.
 static unsafe partial class Egl
 {
     private const int EGL_NONE = 0x3038;

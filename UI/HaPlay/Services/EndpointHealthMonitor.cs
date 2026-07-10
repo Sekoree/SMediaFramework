@@ -5,7 +5,7 @@ using S.Media.Core.Diagnostics;
 namespace HaPlay.Services;
 
 /// <summary>
-/// APP-02: owns the endpoint-health polling lifecycle that used to live inline in <c>MainViewModel</c> — the
+/// APP-02: owns the endpoint-health polling lifecycle that used to live inline in <c>MainViewModel</c> - the
 /// background <see cref="DispatcherTimer"/>, the single-flight guard, the per-run <see cref="CancellationTokenSource"/>,
 /// and the timed-operation logging. The view model keeps only the domain probe loop, handed in as
 /// <paramref name="probeAll"/>; this service decides <em>when</em> and <em>how often</em> it runs and guarantees a
@@ -49,7 +49,7 @@ public sealed class EndpointHealthMonitor : IDisposable
     }
 
     /// <summary>Runs one health sweep now (startup, endpoint-set change, or manual). Coalesces with any in-flight
-    /// run and cancels a superseded one — the same single-flight semantics the view model had inline.</summary>
+    /// run and cancels a superseded one - the same single-flight semantics the view model had inline.</summary>
     public Task RefreshAsync() => RunAsync("manual");
 
     private async Task RunAsync(string reason)

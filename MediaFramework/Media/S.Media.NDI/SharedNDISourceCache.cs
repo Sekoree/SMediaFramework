@@ -6,7 +6,7 @@ namespace S.Media.NDI;
 /// <summary>
 /// Shares one ref-counted <see cref="NDISource"/> across the provider's paired
 /// <c>OpenVideo</c>/<c>OpenAudio</c> calls, so an <c>ndi://</c> open uses ONE receiver delivering both audio
-/// and video — anchored together on the single audio-driven ingest clock — instead of two independently
+/// and video - anchored together on the single audio-driven ingest clock - instead of two independently
 /// anchored receivers (the ~startup A/V offset <c>NDIAVCorrelationProbe</c> measured). Independent consumers
 /// get independent receivers; otherwise their reads/rebases would mutate the same queues and steal frames.
 /// The paired receiver is torn down when its last leased adapter is disposed.
@@ -92,7 +92,7 @@ internal sealed class SharedNDISourceCache(Func<string, NDISource> open)
             }
         }
 
-        // Outside the lock — receiver teardown stops a capture thread and can block.
+        // Outside the lock - receiver teardown stops a capture thread and can block.
         entry.Source.Dispose();
     }
 
@@ -107,7 +107,7 @@ internal sealed class SharedNDISourceCache(Func<string, NDISource> open)
         public void Release() => owner.Release(this);
     }
 
-    /// <summary>A leased view of the shared source's video adapter — delegates everything, and on dispose
+    /// <summary>A leased view of the shared source's video adapter - delegates everything, and on dispose
     /// releases its reference (the receiver is torn down only when the last lease is disposed).</summary>
     private sealed class VideoLease(Entry entry) : ILiveVideoSource, IDisposable
     {

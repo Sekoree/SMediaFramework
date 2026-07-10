@@ -19,7 +19,7 @@ public sealed class YuvDmabufEglInterop
 }
 
 /// <summary>
-/// Linux EGL/GL upload for NV12, P010, and P016 DRM PRIME dma-bufs (split-plane EGL import). Other decoded layouts are not imported here — see
+/// Linux EGL/GL upload for NV12, P010, and P016 DRM PRIME dma-bufs (split-plane EGL import). Other decoded layouts are not imported here - see
 /// <see cref="LinuxDmabufGlHardwareFormats.IsSupportedForPrimeGlImport"/>.
 /// </summary>
 /// <remarks>

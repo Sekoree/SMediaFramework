@@ -22,8 +22,8 @@ public enum PlacementFit
 }
 
 /// <summary>
-/// Resolves a layer placement — a destination rectangle on the canvas, a fit mode, and per-edge source
-/// crop insets — into the <see cref="LayerTransform2D"/> + <see cref="RectNormalized"/> source crop that a
+/// Resolves a layer placement - a destination rectangle on the canvas, a fit mode, and per-edge source
+/// crop insets - into the <see cref="LayerTransform2D"/> + <see cref="RectNormalized"/> source crop that a
 /// compositor consumes. The crop is expanded to absorb any fit overflow so the visible image maps exactly
 /// into the destination rect and never spills onto neighbouring layers (enabling clean split-screen).
 /// </summary>
@@ -74,7 +74,7 @@ public static class PlacementResolver
         var imgH = ch * scaleY;
 
         // Where the scaled image overflows the dest rect, trim the source crop on that axis so the visible
-        // part maps exactly into the dest rect (centered) — this is what keeps adjacent layers from spilling.
+        // part maps exactly into the dest rect (centered) - this is what keeps adjacent layers from spilling.
         if (imgW > dw + 0.5f)
         {
             var trimSrc = (imgW - dw) / scaleX;
@@ -93,7 +93,7 @@ public static class PlacementResolver
             imgH = ch * scaleY;
         }
 
-        // Center the (possibly smaller) image within the dest rect — letterbox/pillarbox on underflow.
+        // Center the (possibly smaller) image within the dest rect - letterbox/pillarbox on underflow.
         var ox = dx + (dw - imgW) * 0.5f;
         var oy = dy + (dh - imgH) * 0.5f;
 

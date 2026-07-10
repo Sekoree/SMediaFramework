@@ -8,7 +8,7 @@ namespace S.Control.Tests;
 
 /// <summary>
 /// MIDI-01: the PortMIDI capability diagnostic must give a truthful, non-throwing snapshot (present-or-not,
-/// device counts) against the real native library, and — opt-in — a device round-trip must open/close a real
+/// device counts) against the real native library, and - opt-in - a device round-trip must open/close a real
 /// MIDI stream. The device-loop case self-skips when no MIDI device is attached (headless/CI), so the diagnostic
 /// case is the always-on regression guard.
 /// </summary>
@@ -73,7 +73,7 @@ public sealed class MIDIRuntimeDiagnosticsTests(ITestOutputHelper output)
             Assert.Equal(PmError.NoError, PMUtil.OpenOutput(out var stream, device.Id));
             try
             {
-                // A middle-C note-on then note-off — exercises the write path; harmless on any synth.
+                // A middle-C note-on then note-off - exercises the write path; harmless on any synth.
                 Assert.Equal(PmError.NoError, PMUtil.WriteShort(stream, 0, 0x00_3C_90u)); // note on, ch1, C4
                 Assert.Equal(PmError.NoError, PMUtil.WriteShort(stream, 0, 0x00_3C_80u)); // note off
             }

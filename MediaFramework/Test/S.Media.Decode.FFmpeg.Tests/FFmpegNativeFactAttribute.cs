@@ -6,7 +6,7 @@ namespace S.Media.Decode.FFmpeg.Tests;
 
 /// <summary>
 /// A <see cref="FactAttribute"/> that <em>skips</em> (rather than fails) when the FFmpeg native libraries the
-/// test needs cannot actually be used — a CI runner without FFmpeg (Windows), or with a distro FFmpeg whose
+/// test needs cannot actually be used - a CI runner without FFmpeg (Windows), or with a distro FFmpeg whose
 /// major version doesn't match the generated bindings (functions then throw <see cref="NotSupportedException"/>
 /// from the dynamic loader). Mirrors <c>LibAssFactAttribute</c>. The probe creates a real resampler once and
 /// caches the verdict.
@@ -25,7 +25,7 @@ public sealed class FFmpegNativeFactAttribute : FactAttribute
         catch (Exception ex)
         {
             // Any failure to CREATE a trivial same-rate resampler is an environment problem (missing/mismatched
-            // natives), not a code defect — the tests behind this attribute all start with exactly this call.
+            // natives), not a code defect - the tests behind this attribute all start with exactly this call.
             return $"FFmpeg native (swresample) not usable on this runner: {ex.GetType().Name}: {ex.Message}";
         }
     }

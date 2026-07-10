@@ -117,7 +117,7 @@ public sealed class NDIFinder : IDisposable
 // ------------------------------------------------------------------
 
 /// <summary>
-/// Optional creation-time settings for <see cref="NDIReceiver.Create"/> — maps field-for-field onto the SDK’s
+/// Optional creation-time settings for <see cref="NDIReceiver.Create"/> - maps field-for-field onto the SDK’s
 /// <c>NDIRecvCreateV3</c> block (see vendor <c>Processing.NDI.Lib.h</c> / equivalent).
 /// </summary>
 /// <remarks>
@@ -134,7 +134,7 @@ public sealed class NDIReceiverSettings
     /// <summary>
     /// Whether the receiver accepts interlaced/fielded video. §3.47j / N23: defaults
     /// to <see langword="false"/> because the current framesync path always pulls
-    /// <c>Progressive</c> frames — allowing fields is pure bandwidth/CPU waste.
+    /// <c>Progressive</c> frames - allowing fields is pure bandwidth/CPU waste.
     /// Set to <see langword="true"/> only when integrating directly with the raw
     /// receiver and consuming fielded content.
     /// </summary>
@@ -252,7 +252,7 @@ public sealed class NDIReceiver : IDisposable
                     timeoutMs);
 
                 if (frameType == NDIFrameType.Error && Logger.IsEnabled(LogLevel.Debug))
-                    Logger.LogDebug("NDIReceiver capture returned Error (ptr={Ptr}) — possible stream disconnect",
+                    Logger.LogDebug("NDIReceiver capture returned Error (ptr={Ptr}) - possible stream disconnect",
                         NDILibLogging.PtrMeta(_instance));
 
                 return frameType;
@@ -381,7 +381,7 @@ public sealed class NDIReceiver : IDisposable
 
     /// <summary>
     /// Returns <see langword="true"/> if the connected source supports PTZ control.
-    /// May take a second after connection to stabilize — check after <see cref="NDIFrameType.StatusChange"/>.
+    /// May take a second after connection to stabilize - check after <see cref="NDIFrameType.StatusChange"/>.
     /// </summary>
     public bool IsPtzSupported() => Native.NDIlib_recv_ptz_is_supported(_instance);
 
@@ -473,7 +473,7 @@ public sealed class NDIReceiver : IDisposable
 }
 
 // ------------------------------------------------------------------
-// NDICaptureScope  (top-level — promoted from NDIReceiver nested class)
+// NDICaptureScope  (top-level - promoted from NDIReceiver nested class)
 // ------------------------------------------------------------------
 
 /// <summary>
@@ -591,7 +591,7 @@ public sealed class NDISender : IDisposable
     }
 
     // ------------------------------------------------------------------
-    // Send — video
+    // Send - video
     // ------------------------------------------------------------------
 
     /// <summary>Sends a video frame synchronously (blocks until clocked if <c>clockVideo</c> is set).</summary>
@@ -615,7 +615,7 @@ public sealed class NDISender : IDisposable
     public void FlushAsync() => SynchronizeAsyncVideo();
 
     // ------------------------------------------------------------------
-    // Send — audio / metadata
+    // Send - audio / metadata
     // ------------------------------------------------------------------
 
     public void SendAudio(in NDIAudioFrameV3    frame) => Native.NDIlib_send_send_audio_v3(_instance, frame);
@@ -790,7 +790,7 @@ public sealed class NDIFrameSync : IDisposable
 
     /// <summary>
     /// Returns the approximate number of audio samples currently available in the queue.
-    /// Treat as advisory — the frame-sync dynamically resamples audio.
+    /// Treat as advisory - the frame-sync dynamically resamples audio.
     /// </summary>
     public int AudioQueueDepth() => Native.NDIlib_framesync_audio_queue_depth(_instance);
 
@@ -911,7 +911,7 @@ public sealed class NDIRouter : IDisposable
 }
 
 // ------------------------------------------------------------------
-// NDIAudioUtils — static helpers for interleaved audio conversion
+// NDIAudioUtils - static helpers for interleaved audio conversion
 // ------------------------------------------------------------------
 
 /// <summary>
@@ -920,7 +920,7 @@ public sealed class NDIRouter : IDisposable
 /// </summary>
 public static class NDIAudioUtils
 {
-    // Sender convenience overloads — send interleaved directly without manual conversion
+    // Sender convenience overloads - send interleaved directly without manual conversion
 
     public static void SendInterleaved16s(NDISender sender, in NDIAudioInterleaved16s frame)
         => Native.NDIlib_util_send_send_audio_interleaved_16s(GetSenderInstance(sender), frame);
@@ -977,7 +977,7 @@ public static class NDIAudioUtils
 }
 
 // ------------------------------------------------------------------
-// NDIRecvAdvertiser — Advertises receivers to an NDI Discovery Server
+// NDIRecvAdvertiser - Advertises receivers to an NDI Discovery Server
 // ------------------------------------------------------------------
 
 /// <summary>
@@ -1075,7 +1075,7 @@ public sealed class NDIRecvAdvertiser : IDisposable
 }
 
 // ------------------------------------------------------------------
-// NDIRecvListener — Discovers advertised receivers on the Discovery Server
+// NDIRecvListener - Discovers advertised receivers on the Discovery Server
 // ------------------------------------------------------------------
 
 /// <summary>
@@ -1262,13 +1262,13 @@ public sealed class NDIRecvListener : IDisposable
 }
 
 // ------------------------------------------------------------------
-// NDISendAdvertiser — Advertises senders to an NDI Discovery Server
+// NDISendAdvertiser - Advertises senders to an NDI Discovery Server
 // ------------------------------------------------------------------
 
 /// <summary>
 /// Advertises senders to an NDI Discovery Server for centralized monitoring.
 /// This is distinct from the normal mDNS/Discovery Server advertisement that
-/// <c>NDIlib_send_create</c> does automatically — this is strictly for monitoring purposes.
+/// <c>NDIlib_send_create</c> does automatically - this is strictly for monitoring purposes.
 /// </summary>
 public sealed class NDISendAdvertiser : IDisposable
 {
@@ -1358,7 +1358,7 @@ public sealed class NDISendAdvertiser : IDisposable
 }
 
 // ------------------------------------------------------------------
-// NDISendListener — Discovers advertised senders on the Discovery Server
+// NDISendListener - Discovers advertised senders on the Discovery Server
 // ------------------------------------------------------------------
 
 /// <summary>

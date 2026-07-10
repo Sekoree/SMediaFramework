@@ -17,7 +17,7 @@ public sealed record SubtitleTrackInfo(
         "hdmv_pgs_subtitle", "pgssub", "dvb_subtitle", "dvbsub", "dvd_subtitle", "xsub",
     };
 
-    /// <summary>True for image-based subtitles (PGS/DVB/VobSub) — font/placement overrides don't apply.</summary>
+    /// <summary>True for image-based subtitles (PGS/DVB/VobSub) - font/placement overrides don't apply.</summary>
     public bool IsBitmap => BitmapCodecs.Contains(CodecName);
 }
 

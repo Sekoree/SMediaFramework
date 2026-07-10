@@ -9,7 +9,7 @@ namespace S.Media.Decode.FFmpeg;
 /// <c>ReadOrder,Layer,Style,…,Text</c> fields, no timing) plus its absolute start and duration in milliseconds.</summary>
 public readonly record struct DecodedSubtitleEvent(byte[] Body, long StartMs, long DurationMs);
 
-/// <summary>An embedded font attachment (e.g. an MKV font) — its filename and raw bytes, fed to libass via AddFont.</summary>
+/// <summary>An embedded font attachment (e.g. an MKV font) - its filename and raw bytes, fed to libass via AddFont.</summary>
 public readonly record struct DecodedSubtitleFont(string Name, byte[] Data);
 
 /// <summary>A subtitle stream decoded to libass-ready pieces: the ASS header (script info + styles + the events
@@ -21,10 +21,10 @@ public sealed record DecodedSubtitleTrack(
 
 /// <summary>
 /// Decodes a container's (or sidecar file's) subtitle stream into ASS events via libav. FFmpeg's text decoders
-/// convert <em>every</em> text format — SRT/VTT/MicroDVD/SAMI/SubViewer/STL/… and ASS/SSA — into ASS dialogue
+/// convert <em>every</em> text format - SRT/VTT/MicroDVD/SAMI/SubViewer/STL/… and ASS/SSA - into ASS dialogue
 /// (the <c>SUBTITLE_ASS</c> rect form), so this single path feeds libass uniformly for sidecar files and
 /// in-container streams alike. Embedded font attachments come along for libass to use. Bitmap subtitles
-/// (PGS/DVB/VobSub) are <em>not</em> handled here — they are images, rendered without libass.
+/// (PGS/DVB/VobSub) are <em>not</em> handled here - they are images, rendered without libass.
 /// </summary>
 public static unsafe class FFmpegSubtitleDecoder
 {

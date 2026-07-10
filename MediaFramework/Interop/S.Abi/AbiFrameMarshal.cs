@@ -8,7 +8,7 @@ namespace S.Abi;
 /// <summary>
 /// Shared CPU-frame + pixel-format marshalling between the ABI's <c>MfpVideoFrame</c> and Core's
 /// <see cref="VideoFrame"/> (used by the video source/output/subtitle adapters). MfpPixelFormat ↔ PixelFormat is an
-/// explicit name table — the two enums do not share an ordinal order. Linux dma-buf and Windows D3D11 shared
+/// explicit name table - the two enums do not share an ordinal order. Linux dma-buf and Windows D3D11 shared
 /// handles are duplicated into Core-owned hardware backings; GL texture frames remain context-local to layer surfaces.
 /// </summary>
 internal static unsafe class AbiFrameMarshal

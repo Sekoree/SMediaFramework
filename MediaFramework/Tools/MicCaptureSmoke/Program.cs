@@ -5,7 +5,7 @@ using S.Media.Core.Registry;
 
 // Phase 5 mic-input smoke. Opens the default audio input through the PortAudio backend
 // (IAudioBackend.CreateInput) and pulls live capture samples for a few seconds, reporting the captured
-// frame count + RMS level — proving the live audio-capture path. Needs native PortAudio + an input device.
+// frame count + RMS level - proving the live audio-capture path. Needs native PortAudio + an input device.
 
 var seconds = args.Length > 0 && double.TryParse(args[0], out var s) ? s : 3.0;
 var deviceId = args.Length > 1 ? args[1] : null; // null = system default input
@@ -50,11 +50,11 @@ try
 
     if (frames < format.SampleRate / 2) // expect at least ~0.5s of audio
     {
-        Console.Error.WriteLine("FAIL: captured far fewer frames than expected — input not flowing.");
+        Console.Error.WriteLine("FAIL: captured far fewer frames than expected - input not flowing.");
         return 1;
     }
 
-    Console.WriteLine("MicCaptureSmoke OK — live audio capture path works (a quiet room reads near-silence, which is fine).");
+    Console.WriteLine("MicCaptureSmoke OK - live audio capture path works (a quiet room reads near-silence, which is fine).");
     return 0;
 }
 finally

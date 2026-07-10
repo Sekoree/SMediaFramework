@@ -48,7 +48,7 @@ public static class VideoOutputFanoutFormats
 
         // Prefer the negotiated format whenever the branch accepts it. Walking
         // BranchFormatPreference first would pick UYVY for NV12→UYVY swscale even
-        // though both are 4:2:0 — that forces a per-branch converter and breaks
+        // though both are 4:2:0 - that forces a per-branch converter and breaks
         // multi-output routes on GPU-backed NV12 frames.
         if (OutputHas(branchAccepted, src))
             return src;

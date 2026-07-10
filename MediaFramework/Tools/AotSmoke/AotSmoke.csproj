@@ -12,12 +12,12 @@
 
     <!-- AOT-01: the ONE accepted NativeAOT trim warning. Mond (0.11.2) builds a script stack trace on a runtime
          error via System.Diagnostics.StackFrame, which the trim analyzer flags as IL2026 (`RequiresUnreferencedCode`).
-         It affects only the *detail* of an error trace, never correctness — the AOT publish succeeds and the error
+         It affects only the *detail* of an error trace, never correctness - the AOT publish succeeds and the error
          path runs (Program.cs exercises it; the CI smoke runs the published exe and checks the "mond error path"
          line). Deliberately NOT suppressed: WarningsNotAsErrors keeps this one accepted ID VISIBLE while the
          repo-wide warning-as-error policy rejects any new/different warning. Revisit on a Mond upgrade. -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026</WarningsNotAsErrors>
-    <ExpectedAotWarnings>IL2026 (Mond StackFrame error-trace detail — accepted; publish + run verified)</ExpectedAotWarnings>
+    <ExpectedAotWarnings>IL2026 (Mond StackFrame error-trace detail - accepted; publish + run verified)</ExpectedAotWarnings>
   </PropertyGroup>
 
   <ItemGroup>

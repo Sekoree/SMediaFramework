@@ -61,7 +61,7 @@ public static class PortAudioDeviceCatalog
     /// <summary>The PortAudio device index treated as the "default" output. Honors the
     /// <c>MFP_PORTAUDIO_HOST_API</c> environment variable (substring match against a host API name, e.g.
     /// <c>JACK</c>): when set and that host API is present, its default output device is used instead of
-    /// PortAudio's global default. Lets a deployment — or a test run — route through JACK/PipeWire instead of
+    /// PortAudio's global default. Lets a deployment - or a test run - route through JACK/PipeWire instead of
     /// the box's ALSA default, whose virtual-PCM config is noisy and can be flaky under test. Unset / no match
     /// ⇒ PortAudio's global default. Call only while the runtime is acquired (it enumerates host APIs).</summary>
     private static int ResolveDefaultOutputDevice()

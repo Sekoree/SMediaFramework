@@ -108,7 +108,7 @@ public sealed class SoundboardViewModelTests
 
     /// <summary>The "tile with a fade-out never plays again" regression: a fade-out releases its
     /// engine voice WITHOUT a VoiceEnded event, so the host must reset the tile (the coordinator's
-    /// voice-poll reconciliation / stop wrappers call OnSoundEnded). Once reset, a tap PLAYS again —
+    /// voice-poll reconciliation / stop wrappers call OnSoundEnded). Once reset, a tap PLAYS again -
     /// before the fix the tile sat in the fading state forever and every tap tried to stop it.</summary>
     [Fact]
     public async Task FadedOutTile_AfterHostReset_PlaysAgain()
@@ -124,7 +124,7 @@ public sealed class SoundboardViewModelTests
         await vm.TapTileAsync(tile); // second tap: starts the fade
         Assert.True(tile.IsFading);
 
-        vm.OnSoundEnded(tile.Id); // the fade ramp released the voice — host reconciliation resets the tile
+        vm.OnSoundEnded(tile.Id); // the fade ramp released the voice - host reconciliation resets the tile
         Assert.False(tile.IsPlaying);
         Assert.False(tile.IsFading);
 
@@ -150,7 +150,7 @@ public sealed class SoundboardViewModelTests
 
     /// <summary>The "board settings not retained" regression: RefreshOutputOptions used to Clear()
     /// the live ComboBox ItemsSources, which dropped the selection and wrote Guid.Empty back through
-    /// the TwoWay SelectedValue binding — wiping the board default output on every edit-mode entry
+    /// the TwoWay SelectedValue binding - wiping the board default output on every edit-mode entry
     /// and output-list change. The merge keeps unchanged entries in place.</summary>
     [Fact]
     public void RefreshOutputOptions_DoesNotChurnUnchangedEntries()
@@ -168,7 +168,7 @@ public sealed class SoundboardViewModelTests
                 resets++;
         };
 
-        vm.RefreshOutputOptions(); // unchanged output set — must not remove/reset anything
+        vm.RefreshOutputOptions(); // unchanged output set - must not remove/reset anything
 
         Assert.Equal(0, resets);
         Assert.Equal(tileBefore, vm.TileOutputOptions);
@@ -480,14 +480,14 @@ public sealed class SoundboardViewModelTests
         vm.IsEditMode = true;
         vm.SelectedTile = tile;
 
-        tile.Volume = 0.4; // idle — config only, no live push
+        tile.Volume = 0.4; // idle - config only, no live push
         Assert.Empty(live);
 
         vm.OnSoundStarted(tile.Id);
         tile.Volume = 0.8;
         Assert.Equal([(tile.Id, 0.8)], live);
 
-        tile.FadeOutMs = 100; // unrelated property — no push
+        tile.FadeOutMs = 100; // unrelated property - no push
         Assert.Single(live);
 
         vm.SelectedTile = null;
@@ -516,7 +516,7 @@ public sealed class SoundboardViewModelTests
         var imported = vm.Boards[1];
         Assert.Same(imported, vm.SelectedBoard);
         Assert.Equal("FX", imported.Name);
-        Assert.NotEqual(sourceBoard.Id, imported.Id); // fresh ids — live tile lookups must not alias
+        Assert.NotEqual(sourceBoard.Id, imported.Id); // fresh ids - live tile lookups must not alias
         var importedTile = imported.Tiles[0];
         Assert.NotEqual(sourceTile.Id, importedTile.Id);
         Assert.Equal("Horn", importedTile.Label);

@@ -9,7 +9,7 @@ namespace HaPlay.ViewModels;
 /// <summary>
 /// Relaunches the desktop app so a persisted appearance change (base theme / variant / density) is composed
 /// fresh at startup. Starts a new instance of the current executable (forwarding the original CLI args), then
-/// asks the desktop lifetime to shut down — which runs the normal teardown (ShowSession cleanup +
+/// asks the desktop lifetime to shut down - which runs the normal teardown (ShowSession cleanup +
 /// MediaRuntime.Shutdown) so native holds are released cleanly. If the relaunch can't be started, the app is
 /// left running (the saved choice still applies on the next manual restart) rather than exiting into nothing.
 /// </summary>
@@ -23,7 +23,7 @@ internal static class AppRestart
         var exe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exe))
         {
-            MediaDiagnostics.LogWarning("App restart: ProcessPath unavailable; cannot relaunch — staying open.");
+            MediaDiagnostics.LogWarning("App restart: ProcessPath unavailable; cannot relaunch - staying open.");
             return;
         }
 

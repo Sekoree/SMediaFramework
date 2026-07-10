@@ -80,7 +80,7 @@ internal static unsafe partial class GlExternalImageexport_Egl
             return false;
 
         // Copy the composited result into a dedicated, owned RGBA8 texture (the warp/canvas textures are
-        // recycled next frame; the consumer may still be reading). GPU→GPU blit — no CPU readback.
+        // recycled next frame; the consumer may still be reading). GPU→GPU blit - no CPU readback.
         var exportTex = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, exportTex);
         gl.TexImage2D(TextureTarget.Texture2D, 0, (int)InternalFormat.Rgba8,
@@ -94,7 +94,7 @@ internal static unsafe partial class GlExternalImageexport_Egl
         gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, srcFbo);
         gl.BlitFramebuffer(0, 0, format.Width, format.Height, 0, 0, format.Width, format.Height,
             ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
-        // Sync (OQ2): the simplest negotiated primitive — the producer fully completes before handing over,
+        // Sync (OQ2): the simplest negotiated primitive - the producer fully completes before handing over,
         // so the consumer needs no fence (SyncKind.None). A sync-fd fence is the zero-stall upgrade later.
         gl.Finish();
 

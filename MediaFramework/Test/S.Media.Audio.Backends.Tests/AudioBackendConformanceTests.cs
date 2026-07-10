@@ -10,7 +10,7 @@ namespace S.Media.Audio.Backends.Tests;
 /// AUDIO-01: one behavioural conformance suite run against <em>every</em> <see cref="IAudioBackend"/>
 /// implementation (PortAudio and miniaudio), so a new backend is held to the same resolver / enumeration /
 /// format / lifecycle / error contract. The name and error-parse cases need no device and always run; the cases
-/// that open the default device are device-dependent — they exercise real hardware where a device is present and
+/// that open the default device are device-dependent - they exercise real hardware where a device is present and
 /// return early (logging the reason to the test output) on a headless runner with no usable device, so the suite
 /// is green everywhere yet asserts real open/lifecycle behaviour wherever a device exists.
 /// </summary>
@@ -115,7 +115,7 @@ public sealed class AudioBackendConformanceTests(ITestOutputHelper output)
     [Fact]
     public void PortAudio_CreateOutput_RejectsAMalformedDeviceId()
     {
-        // PortAudio ids are global device indices; a non-numeric id is invalid at parse time — a controlled
+        // PortAudio ids are global device indices; a non-numeric id is invalid at parse time - a controlled
         // ArgumentException, before any device is touched (so this runs with no hardware).
         var backend = new PortAudioBackend();
         Assert.Throws<ArgumentException>(() => backend.CreateOutput("not-a-device-index", StandardFormat));

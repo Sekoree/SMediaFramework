@@ -127,7 +127,7 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
         if (MasterTimeProvider is { } masterTimeProvider)
         {
             // Timeline mode: every layer advances to the master clock rather than by one frame per
-            // downstream read — so a downstream player prebuffering its queue no longer races every
+            // downstream read - so a downstream player prebuffering its queue no longer races every
             // layer forward at decode speed, and each layer shows the frame whose interval contains the
             // clock position (frame-accurate). The composite is stamped with the master time.
             var masterTime = masterTimeProvider();
@@ -136,7 +136,7 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
             return _source.TryReadNextFrame(masterTime, out frame);
         }
 
-        // Read-paced mode (no clock): exactly one inner frame per read — preserves a single-layer
+        // Read-paced mode (no clock): exactly one inner frame per read - preserves a single-layer
         // scaler/adapter's 1:1 passthrough (e.g. HaPlay's OutputPresetVideoSource) with no PTS-grid
         // drift. Transitions resolve against a synthetic read-index timeline; output PTS stays synthetic.
         var readTime = TimeSpan.FromTicks(_framePeriodTicks * _compositeReads);

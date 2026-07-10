@@ -6,7 +6,7 @@ namespace S.Media.Source.MMD.Tests;
 
 /// <summary>
 /// Stage-5 physics on a purpose-built rig: a kinematic anchor at the shoulder with a dynamic sphere on a
-/// HORIZONTAL arm — under gravity the arm must swing DOWN through its joint (and stay bounded), which is
+/// HORIZONTAL arm - under gravity the arm must swing DOWN through its joint (and stay bounded), which is
 /// exactly the hair/skirt behavior the solver exists for. The real-asset test drives the full 136-body
 /// YYB chain over real motion.
 /// </summary>
@@ -21,7 +21,7 @@ public sealed class MMDPhysicsTests
             IsIk: false, IkTargetIndex: -1, IkLoopCount: 0, IkLimitRadians: 0f, IkLinks: []);
 
     /// <summary>Kinematic anchor at (0,10,0); dynamic sphere on the tip bone at (1,10,0); a wide-limit
-    /// joint at the anchor connects them — a 1-unit horizontal pendulum.</summary>
+    /// joint at the anchor connects them - a 1-unit horizontal pendulum.</summary>
     private static PMXDocument PendulumRig() => new()
     {
         Version = 2.0f,
@@ -86,7 +86,7 @@ public sealed class MMDPhysicsTests
         var tip = world[TipBone].Translation;
         Assert.True(tip.Y < 9.7f, $"tip did not swing down under gravity (y={tip.Y:F2}, started at 10)");
         Assert.True(Vector3.Distance(tip, new Vector3(0, 10, 0)) < 1.5f,
-            $"tip left the joint's reach — the chain exploded (tip={tip})");
+            $"tip left the joint's reach - the chain exploded (tip={tip})");
         Assert.True(float.IsFinite(tip.X) && float.IsFinite(tip.Y) && float.IsFinite(tip.Z));
     }
 
@@ -112,14 +112,14 @@ public sealed class MMDPhysicsTests
 
     /// <summary>YYB-style tails hold their inner joints stiff (tight limits + a strong angular spring):
     /// when the parent bone rotates, the link must FOLLOW it toward the tracked pose rather than dangling
-    /// straight down like a free pendulum. Real Bullet (= MMD) is COMPLIANT — a stiff joint tracks softly,
-    /// it does not hard-lock — so the contract is "much closer to the tracked pose than to free-hang",
+    /// straight down like a free pendulum. Real Bullet (= MMD) is COMPLIANT - a stiff joint tracks softly,
+    /// it does not hard-lock - so the contract is "much closer to the tracked pose than to free-hang",
     /// not bit-exact rigidity (which only the removed hard-snap solver produced).</summary>
     [Fact]
     public void StiffJoint_TracksTheParent_NotFreeHang()
     {
         var template = PendulumRig();
-        var locked = new Vector3(0.0017f, 0.0017f, 0.0017f); // ±0.1° — the tails' authored lock
+        var locked = new Vector3(0.0017f, 0.0017f, 0.0017f); // ±0.1° - the tails' authored lock
         var stiff = new Vector3(200f, 200f, 200f);           // strong angular spring (authored tail stiffness)
         var model = new PMXDocument
         {
@@ -187,7 +187,7 @@ public sealed class MMDPhysicsTests
             $"backward seek did not re-base the chain (tip={tip}, expected near bind (1,10,0))");
     }
 
-    /// <summary>Hair chains are authored with the linear DOF locked — no matter how hard the anchor is
+    /// <summary>Hair chains are authored with the linear DOF locked - no matter how hard the anchor is
     /// whipped around, the segments must never stretch apart (the operator-visible "hair ends stretch"
     /// regression: iterative-solver residual concentrates at the tips of long chains).</summary>
     [Fact]
@@ -209,7 +209,7 @@ public sealed class MMDPhysicsTests
             rigids.Add(new PMXRigidBody($"seg{k}", k, Group: 0, CollisionMask: 0, PMXRigidShape.Sphere,
                 new Vector3(0.1f, 0, 0), position, Vector3.Zero,
                 0.05f, 0.99f, 0.99f, 0f, 0.5f, PMXPhysicsMode.Physics));
-            // Locked linear + near-locked angular — the YYB tail authoring.
+            // Locked linear + near-locked angular - the YYB tail authoring.
             joints.Add(new PMXJoint($"j{k}", Type: 0, RigidBodyA: k - 1, RigidBodyB: k,
                 new Vector3(0, 10 - k + 0.5f, 0), Vector3.Zero,
                 Vector3.Zero, Vector3.Zero,
@@ -236,8 +236,8 @@ public sealed class MMDPhysicsTests
         physics.Reset(world);
 
         // (a) From rest the linked chain hangs as an inextensible line: each locked segment keeps ~bind
-        // spacing — it neither collapses nor stretches under MMD's 10× gravity. (Real Bullet/MMD links are
-        // compliant, so a light hanging load sags a hair above 1.0 — but not the ~2× the old free solver
+        // spacing - it neither collapses nor stretches under MMD's 10× gravity. (Real Bullet/MMD links are
+        // compliant, so a light hanging load sags a hair above 1.0 - but not the ~2× the old free solver
         // would droop, nor the bit-exact 1.0 the old hard-snap solver forced.)
         for (var i = 0; i < 600; i++)
             physics.Step(world, 1f / 60f);
@@ -249,7 +249,7 @@ public sealed class MMDPhysicsTests
         }
 
         // (b) Under a violent whip (a couple of units of travel per frame, alternating) the chain must
-        // never DIVERGE (explode) or go non-finite — it lags and stretches transiently, the compliant
+        // never DIVERGE (explode) or go non-finite - it lags and stretches transiently, the compliant
         // Bullet response, but stays bounded. (The old hard-snap solver kept spacing bit-exact; that
         // rigidity was a solver artifact, not MMD behavior.)
         for (var frame = 0; frame < 90; frame++)
@@ -268,7 +268,7 @@ public sealed class MMDPhysicsTests
     }
 
     /// <summary>Skirt plates are wide thin BOXES: a capsule sweeping into the flat face must collide
-    /// (the old capsule approximation only collided along the thin edge — legs passed through the face
+    /// (the old capsule approximation only collided along the thin edge - legs passed through the face
     /// and trapped the plate inside the body).</summary>
     [Fact]
     public void BoxPlate_IsPushedByACapsule_AcrossItsWideFace()
@@ -326,7 +326,7 @@ public sealed class MMDPhysicsTests
             $"plate was not pushed out of the capsule across its wide face (z={plateZ:F3}, expected < -0.1)");
         Assert.True(float.IsFinite(plateZ) && MathF.Abs(plateZ) < 5f, $"plate exploded (z={plateZ:F3})");
 
-        // Multi-point manifold regression: once pushed out, the plate RESTS against the capsule — it
+        // Multi-point manifold regression: once pushed out, the plate RESTS against the capsule - it
         // must not keep seesawing through it in a limit cycle (the single-contact-point behavior that
         // read as "skirt glitches into the body" and jittery over-motion). Rest = the pose stops moving.
         for (var i = 0; i < 120; i++) // 2 more simulated seconds to settle
@@ -391,7 +391,7 @@ public sealed class MMDPhysicsTests
 
         var plate = world[1];
         // The plate must be pushed/rotated OUT of the overlap (no contact at all leaves it exactly at
-        // z=0). It stops right at contact resolution rather than swinging far past it — Bullet's
+        // z=0). It stops right at contact resolution rather than swinging far past it - Bullet's
         // additional damping plants slow bodies once the penetration is resolved (the settled-weight
         // behavior), so the thresholds assert escape-from-overlap, not residual swing distance.
         Assert.True(plate.Translation.Z < -0.05f || MathF.Abs(plate.M13) > 0.05f,
@@ -458,7 +458,7 @@ public sealed class MMDPhysicsTests
         var physics = MMDPhysics.TryCreate(model)!;
         var world = BindWorlds(model);
         physics.Reset(world);
-        for (var i = 0; i < 900; i++) // 15 simulated seconds — far past the swing's decay
+        for (var i = 0; i < 900; i++) // 15 simulated seconds - far past the swing's decay
             physics.Step(world, 1f / 60f);
 
         var settled = world[TipBone].Translation;

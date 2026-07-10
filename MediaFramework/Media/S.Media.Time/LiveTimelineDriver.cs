@@ -3,25 +3,25 @@ namespace S.Media.Time;
 /// <summary>Result of placing one live frame onto the master timeline.</summary>
 /// <param name="DueMaster">Master time at which the frame should present.</param>
 /// <param name="ReAnchored">
-/// True if the timeline (re-)anchored on this call — the first frame, or a
+/// True if the timeline (re-)anchored on this call - the first frame, or a
 /// <see cref="RebasePolicy.RebaseToLatest"/> drift collapse.
 /// </param>
 public readonly record struct LiveFramePlacement(TimeSpan DueMaster, bool ReAnchored);
 
 /// <summary>
-/// Drives one live source's <see cref="SourceTimeline"/> against the session master (Doc 03 §2) — the
+/// Drives one live source's <see cref="SourceTimeline"/> against the session master (Doc 03 §2) - the
 /// consumer-side policy that <see cref="SourceTimeline"/> deliberately leaves to its caller: anchor
 /// sender↔master on the first frame, map each subsequent frame's sender PTS to a master due-time, and (for
 /// <see cref="RebasePolicy.RebaseToLatest"/>) collapse accumulated drift by re-anchoring the newest frame
 /// to "now" once it exceeds a threshold. This is what turns "live" into "a source scheduled against the
-/// master", replacing the old master-less path (the recurring NDI desync — see
+/// master", replacing the old master-less path (the recurring NDI desync - see
 /// <c>Next/03-AV-Sync-Clocks-Routing.md</c>).
 /// </summary>
 /// <remarks>
 /// Pure timing; holds no frame buffer (the source/receiver owns frames). A <see cref="RebasePolicy.Scheduled"/>
-/// timeline is never anchored — its sender PTS already live on the master timeline, so placement is the
+/// timeline is never anchored - its sender PTS already live on the master timeline, so placement is the
 /// identity <c>pts + Offset</c> used by files (driving a file through this driver is therefore a harmless
-/// no-op). Not thread-safe — driven from one ingest thread.
+/// no-op). Not thread-safe - driven from one ingest thread.
 /// </remarks>
 public sealed class LiveTimelineDriver
 {
@@ -48,7 +48,7 @@ public sealed class LiveTimelineDriver
     /// <summary>Frames placed since construction / <see cref="Reset"/>.</summary>
     public long PlacedCount => _placed;
 
-    /// <summary>Times the timeline (re-)anchored — 1 (warm-up) plus each drift collapse.</summary>
+    /// <summary>Times the timeline (re-)anchored - 1 (warm-up) plus each drift collapse.</summary>
     public long ReAnchorCount => _reAnchors;
 
     /// <summary>
@@ -59,7 +59,7 @@ public sealed class LiveTimelineDriver
     {
         _placed++;
 
-        // Scheduled: PTS already lives on the master timeline — never anchor; pts + Offset is authoritative.
+        // Scheduled: PTS already lives on the master timeline - never anchor; pts + Offset is authoritative.
         if (_timeline.Policy == RebasePolicy.Scheduled)
             return new LiveFramePlacement(_timeline.DueTime(senderPts), ReAnchored: false);
 

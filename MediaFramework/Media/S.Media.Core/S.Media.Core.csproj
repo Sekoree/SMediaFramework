@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Core — primitives + contracts + media registry. NO backend deps (arch-test enforced).
+    <!-- S.Media.Core - primitives + contracts + media registry. NO backend deps (arch-test enforced).
          Common build settings come from Directory.Build.props; versions from
          Directory.Packages.props. -->
 

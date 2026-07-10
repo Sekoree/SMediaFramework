@@ -3,9 +3,9 @@ using Silk.NET.OpenGL;
 namespace S.Media.Compositor;
 
 /// <summary>
-/// A custom GL layer that renders directly into the compositor's canvas FBO — the "3D object layer" plugin
+/// A custom GL layer that renders directly into the compositor's canvas FBO - the "3D object layer" plugin
 /// seam (Doc 05). It runs in the compositor's GL context, on the compositor's render thread (same-context
-/// only — never a cross-process frame). Mirrors the C-ABI <c>MfpLayerSurfaceVTable</c>
+/// only - never a cross-process frame). Mirrors the C-ABI <c>MfpLayerSurfaceVTable</c>
 /// (<c>configure_gl</c> / <c>render</c> / <c>destroy</c>) so a native plugin adapts onto this interface.
 /// </summary>
 public interface IVideoCompositorLayerSurface : IDisposable
@@ -33,7 +33,7 @@ public readonly record struct CompositorSurfaceLayer(
     float Opacity);
 
 /// <summary>
-/// Capability interface for compositors that can host <see cref="CompositorSurfaceLayer"/>s (NXT-10 —
+/// Capability interface for compositors that can host <see cref="CompositorSurfaceLayer"/>s (NXT-10 -
 /// layer surfaces as a first-class compositor citizen). Callers discover support with a type test instead
 /// of hard-coding a backend; the CPU compositor deliberately does NOT implement it (the surface contract
 /// renders through a live GL context), so a surface-producing source falls back to its CPU frame path
@@ -55,11 +55,11 @@ public interface IVideoCompositorSurfaceHost : IVideoCompositor
 }
 
 /// <summary>
-/// A video source that can ALSO render itself as a compositor layer surface (GPU-side, no CPU frame) —
+/// A video source that can ALSO render itself as a compositor layer surface (GPU-side, no CPU frame) -
 /// e.g. a 3D renderer whose software raster is only a fallback. When the target composition's compositor
 /// is an <see cref="IVideoCompositorSurfaceHost"/>, the session asks for a surface via
 /// <see cref="CreateLayerSurface"/> and does NOT attach a frame output for the placement; the source may
-/// then skip full-frame rasterization (its <c>TryReadNextFrame</c> should stay cheap — transport/priming
+/// then skip full-frame rasterization (its <c>TryReadNextFrame</c> should stay cheap - transport/priming
 /// may still pull frames). On a CPU-only compositor the source is consumed through its normal frame path.
 /// </summary>
 public interface ILayerSurfaceVideoSource

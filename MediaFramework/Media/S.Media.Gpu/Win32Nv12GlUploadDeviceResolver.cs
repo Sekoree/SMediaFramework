@@ -67,7 +67,7 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
             }
 
             MediaDiagnostics.LogWarning(
-                "{0}: ctor borrowD3D11DeviceComPtrForNv12Gl is not a valid ID3D11Device ({1}) — falling back to libav or owned device.",
+                "{0}: ctor borrowD3D11DeviceComPtrForNv12Gl is not a valid ID3D11Device ({1}) - falling back to libav or owned device.",
                 _logPrefix,
                 ctorErr);
         }
@@ -94,7 +94,7 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
             if (d3dErr is not null)
             {
                 MediaDiagnostics.LogWarning(
-                    "{0}: could not create D3D11 device for Win32 NV12 GL upload — trying libav D3D11 device instead: {1}",
+                    "{0}: could not create D3D11 device for Win32 NV12 GL upload - trying libav D3D11 device instead: {1}",
                     _logPrefix,
                     d3dErr);
             }
@@ -116,14 +116,14 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
                 _logPrefix,
                 libavErr,
                 _createFallbackD3D11InteropDeviceForWin32Nv12
-                    ? " — owned interop device was unavailable."
-                    : " — true zero-host mode will not create a output-owned D3D11 device.");
+                    ? " - owned interop device was unavailable."
+                    : " - true zero-host mode will not create a output-owned D3D11 device.");
         }
 
         if (win32D3d11DevicePtr == 0 && Interlocked.Exchange(ref _nv12ZeroHostModeLogged, 1) == 0)
         {
             MediaDiagnostics.LogInformation(
-                "{0}: Win32 NV12 true zero-host — skipping output-owned D3D11GlInteropDeviceHost; YuvVideoRenderer will use libav ID3D11Device from the first Win32 NV12 frame (requires LibavD3D11DeviceComPtr on backing or negotiator-borrowed device).",
+                "{0}: Win32 NV12 true zero-host - skipping output-owned D3D11GlInteropDeviceHost; YuvVideoRenderer will use libav ID3D11Device from the first Win32 NV12 frame (requires LibavD3D11DeviceComPtr on backing or negotiator-borrowed device).",
                 _logPrefix);
         }
     }
@@ -139,7 +139,7 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
             if (decodeLuid != deviceLuid)
             {
                 MediaDiagnostics.LogWarning(
-                    "{0}: DXGI adapter LUID from libav decode (packed={1}) differs from LUID derived from the D3D11 device used for GL (packed={2}) — OpenSharedResource / WGL_NV_DX_interop may fail on multi-GPU systems.",
+                    "{0}: DXGI adapter LUID from libav decode (packed={1}) differs from LUID derived from the D3D11 device used for GL (packed={2}) - OpenSharedResource / WGL_NV_DX_interop may fail on multi-GPU systems.",
                     _logPrefix,
                     decodeLuid,
                     deviceLuid);
@@ -154,7 +154,7 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
         }
 
         MediaDiagnostics.LogInformation(
-            "{0}: Win32 NV12 GL using libav D3D11 device (adapter LUID unavailable for diagnostics — decode path may still be valid).",
+            "{0}: Win32 NV12 GL using libav D3D11 device (adapter LUID unavailable for diagnostics - decode path may still be valid).",
             _logPrefix);
     }
 

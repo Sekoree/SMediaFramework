@@ -6,7 +6,7 @@ namespace S.Media.Core.Audio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Implement this when the output has an authoritative clock — typically a
+/// Implement this when the output has an authoritative clock - typically a
 /// hardware audio device (PortAudio output reports samples-played via its
 /// audio thread). Network senders that block their own <see cref="IAudioOutput.Submit"/>
 /// for clocking (e.g. NDI with <c>clockAudio = true</c>) generally don't need

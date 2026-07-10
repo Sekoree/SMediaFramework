@@ -18,7 +18,7 @@ public static class DrmPixelFormats
     /// <summary>16-bit single-channel luma (P010 Y plane for EGL split import).</summary>
     public static uint R16 => FourCc('R', '1', '6', ' ');
 
-    /// <summary>8-bit interleaved RG (UV) — second plane split from NV12 for EGL.</summary>
+    /// <summary>8-bit interleaved RG (UV) - second plane split from NV12 for EGL.</summary>
     public static uint Gr88 => FourCc('G', 'R', '8', '8');
 
     /// <summary>16:16 interleaved G:R (P010 UV plane for EGL, matches Linux <c>DRM_FORMAT_GR1616</c>).</summary>

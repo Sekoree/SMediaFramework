@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Present.SDL3.Compositor — the SDL3<->Compositor bridge: runs the GL compositor
+    <!-- S.Media.Present.SDL3.Compositor - the SDL3<->Compositor bridge: runs the GL compositor
          (S.Media.Compositor) on SDL3's shared GL context/thread (D7). Kept OUT of S.Media.Present.SDL3 so
          that presenter stays [Core, Gpu]; this bridge is the one place that adds Compositor. Acyclic:
          it references Present.SDL3 (for the public SDL3Runtime) but Present.SDL3 never references back. -->

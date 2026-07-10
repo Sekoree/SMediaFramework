@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- S.Media.Audio.MiniAudio — IAudioBackend over miniaudio (MALib). Registered into the media registry
+    <!-- S.Media.Audio.MiniAudio - IAudioBackend over miniaudio (MALib). Registered into the media registry
          via MiniAudioModule (no static AudioBackends global, P2). The native libminiaudio is host-supplied
          and loads lazily on first device use. -->
 

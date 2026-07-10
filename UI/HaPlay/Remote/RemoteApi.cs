@@ -16,7 +16,7 @@ public static class RemoteApi
     // API-01: copied URLs never embed the access token. When a token is configured the operator sends it as an
     // `X-HaPlay-Api-Key` (or `Authorization: Bearer`) header, so the long-lived secret is not written to the
     // clipboard, a shell history, or a shared automation config's URL field. The server still ACCEPTS `?key=`
-    // for manual/browser use (see RestApiServer.IsAuthorized) — it is simply never generated here.
+    // for manual/browser use (see RestApiServer.IsAuthorized) - it is simply never generated here.
     public static string TileTapUrl(int boardNumber, int tileNumber) =>
         $"{BaseUrl}/api/v1/soundboards/{boardNumber}/{tileNumber}/tap";
 

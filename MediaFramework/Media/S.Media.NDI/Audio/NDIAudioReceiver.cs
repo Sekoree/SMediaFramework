@@ -19,7 +19,7 @@ namespace S.Media.NDI.Audio;
 /// <para>
 /// The first audio frame from the source determines the
 /// <see cref="AudioFormat"/> (sample rate × channel count). Until that frame
-/// arrives <see cref="Format"/> is unknown — wait for <see cref="IsConnected"/>
+/// arrives <see cref="Format"/> is unknown - wait for <see cref="IsConnected"/>
 /// or for a successful read before binding routes.
 /// </para>
 /// <para>
@@ -67,7 +67,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         {
             var snap = Volatile.Read(ref _state);
             return snap is null
-                ? throw new InvalidOperationException("NDI source has not delivered an audio frame yet — wait until IsConnected is true")
+                ? throw new InvalidOperationException("NDI source has not delivered an audio frame yet - wait until IsConnected is true")
                 : snap.Format;
         }
     }
@@ -106,7 +106,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     /// holds no more than <paramref name="keepBuffered"/> of audio. Intended for the play-start moment
     /// in HaPlay: the receiver runs continuously from connect, so when the operator finally hits Play
     /// the ring already contains seconds of stale samples that the router would otherwise consume in
-    /// FIFO order — making audio play <c>Tconnect</c> seconds behind real time.
+    /// FIFO order - making audio play <c>Tconnect</c> seconds behind real time.
     /// </summary>
     /// <param name="keepBuffered">
     /// Default <see cref="TimeSpan.Zero"/> falls back to twice <see cref="DefaultMinBufferedDuration"/>
@@ -118,7 +118,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var snap = Volatile.Read(ref _state);
-        if (snap is null) return; // No frames captured yet — nothing to discard.
+        if (snap is null) return; // No frames captured yet - nothing to discard.
 
         var keep = keepBuffered <= TimeSpan.Zero
             ? TimeSpan.FromTicks(DefaultMinBufferedDuration.Ticks * 2)
@@ -151,7 +151,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     /// Jitter-buffer holdback. NDI senders deliver audio in bursts aligned to video frames (typically
     /// 16.7 ms at 60p or 33.3 ms at 30p). The <c>AudioRouter</c> pulls fixed-size chunks at a faster
     /// cadence, so without a holdback the ring frequently drains to fewer samples than the router asks
-    /// for and the router silence-pads the tail — audible as "lots of small dropouts." This holdback is
+    /// for and the router silence-pads the tail - audible as "lots of small dropouts." This holdback is
     /// the amount of samples the ring accumulates before <see cref="ReadInto"/> starts handing audio
     /// out after startup or underrun. Once primed, the buffered reserve is consumable so bursty NDI
     /// delivery can be smoothed into smaller router chunks. <c>null</c> uses
@@ -365,7 +365,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         // First frame, or a mid-stream format change: publish a fresh
         // snapshot. The previous one (if any) is dropped on the floor and
         // GC'd once the reader's local goes out of scope; that's acceptable
-        // — format changes are rare and a brief discontinuity at the
+        // - format changes are rare and a brief discontinuity at the
         // boundary is preferable to copying state across.
         var capacityFrames = Math.Max(MinCapacityFrames, (int)(_capacityDuration.TotalSeconds * sampleRate));
         var minBufferedFrames = ComputeMinBufferedFrames(_minBufferedDuration, sampleRate, capacityFrames);

@@ -21,7 +21,7 @@ namespace PMLib.Accumulators;
 /// CC is processed normally.
 /// </para>
 /// <para>
-/// <b>Threading:</b> Same as <see cref="HighResCCAccumulator"/> — call from a single thread.
+/// <b>Threading:</b> Same as <see cref="HighResCCAccumulator"/> - call from a single thread.
 /// </para>
 /// </remarks>
 public sealed class NRPNAccumulator

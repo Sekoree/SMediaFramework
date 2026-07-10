@@ -145,7 +145,7 @@ public sealed class SessionRecoveryTests : IDisposable
         await svc.CaptureAsync(new HaPlayProject(), null, false, null);
 
         // The capture stamped the session with THIS (live) process id, so discovery treats it as a concurrent
-        // instance and skips it — that guard is what stops a second running copy being offered as a "crash".
+        // instance and skips it - that guard is what stops a second running copy being offered as a "crash".
         Assert.DoesNotContain(
             SessionRecoveryService.DiscoverOrphans(excludeSessionId: Guid.NewGuid().ToString("N"), recoveryRoot: _root),
             o => o.Info.SessionId == svc.SessionId);

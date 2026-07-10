@@ -3,7 +3,7 @@ using S.Media.Session;
 namespace S.Control;
 
 /// <summary>
-/// The show actions a control script can invoke — the bridge from a MIDI/OSC trigger to the running show. So a
+/// The show actions a control script can invoke - the bridge from a MIDI/OSC trigger to the running show. So a
 /// hardware button or fader can GO, fire a cue, seek, or stop. Fire-and-forget: a control trigger dispatches an
 /// action and returns; it does not await the result. Implemented over <see cref="ShowSession"/> by
 /// <see cref="ShowSessionControlActions"/>; surfaced to scripts as the <c>show</c> global.
@@ -24,7 +24,7 @@ public interface IControlShowActions
 }
 
 /// <summary>
-/// Binds <see cref="IControlShowActions"/> to a live <see cref="ShowSession"/> — the host wires this so control
+/// Binds <see cref="IControlShowActions"/> to a live <see cref="ShowSession"/> - the host wires this so control
 /// scripts (e.g. a MIDI GO button) drive the running show. Actions are posted to the session's serial dispatcher;
 /// the returned task is intentionally not awaited (a trigger fires and returns).
 /// </summary>

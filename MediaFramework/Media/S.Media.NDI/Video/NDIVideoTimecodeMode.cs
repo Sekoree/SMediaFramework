@@ -14,7 +14,7 @@ public enum NDIVideoTimecodeMode
 
     /// <summary>
     /// Use <c>(<see cref="S.Media.Core.Video.VideoFrame.PresentationTime"/> − session anchor).Ticks</c>
-    /// as the frame timecode (100 ns units — same as <see cref="System.TimeSpan.Ticks"/>), so the video
+    /// as the frame timecode (100 ns units - same as <see cref="System.TimeSpan.Ticks"/>), so the video
     /// stream carries an explicit timeline comparable to <see cref="NDIAudioOutput"/>'s sample-based
     /// 100 ns timecodes when both streams share the same muxed source and start together.
     /// </summary>
@@ -36,7 +36,7 @@ public enum NDIVideoTimecodeMode
 
     /// <summary>
     /// Read SMPTE 12M timecode from <see cref="S.Media.Core.Video.VideoFrame.Timecode"/> and encode it as
-    /// 100-ns ticks (matching NDI's timecode slot semantics) — so e.g. <c>01:23:45:00</c> at 30 fps lands
+    /// 100-ns ticks (matching NDI's timecode slot semantics) - so e.g. <c>01:23:45:00</c> at 30 fps lands
     /// as <c>(1·3600 + 23·60 + 45)·10⁷</c> ticks. Frames without a timecode fall back to the same logic
     /// as <see cref="PresentationRelativeTicks"/>.
     /// </summary>

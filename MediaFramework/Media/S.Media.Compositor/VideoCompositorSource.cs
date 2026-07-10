@@ -59,7 +59,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     private long _compositesEmitted;
     private bool _disposed;
 
-    /// <param name="output">Output format. Pixel format must be one the compositor accepts on its **output** — both shipping compositors output BGRA32.</param>
+    /// <param name="output">Output format. Pixel format must be one the compositor accepts on its **output** - both shipping compositors output BGRA32.</param>
     /// <param name="compositor">The compositor that does the actual blending. Lifecycle: owned by the output when <paramref name="disposeCompositorOnDispose"/> is <c>true</c>.</param>
     /// <param name="disposeCompositorOnDispose">When <c>true</c> (default), <see cref="Dispose"/> also disposes the compositor.</param>
     public VideoCompositorSource(VideoFormat output, IVideoCompositor compositor, bool disposeCompositorOnDispose = true)
@@ -136,7 +136,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     /// canvas ON TOP of every frame layer, in surface-slot list order. The returned slot carries the
     /// mutable placement (<see cref="SurfaceSlot.Transform"/>/<see cref="SurfaceSlot.Opacity"/>); the
     /// SURFACE's lifetime stays with the caller (removing the slot does not dispose it). Throws when the
-    /// compositor is not an <see cref="IVideoCompositorSurfaceHost"/> — gate on
+    /// compositor is not an <see cref="IVideoCompositorSurfaceHost"/> - gate on
     /// <see cref="SupportsSurfaceLayers"/> and fall back to the source's frame path.
     /// </summary>
     public SurfaceSlot AddSurfaceSlot(IVideoCompositorLayerSurface surface, string? id = null)
@@ -145,7 +145,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_compositor is not IVideoCompositorSurfaceHost)
             throw new InvalidOperationException(
-                $"compositor '{_compositor.GetType().Name}' cannot host surface layers — check SupportsSurfaceLayers and use the source's frame path instead.");
+                $"compositor '{_compositor.GetType().Name}' cannot host surface layers - check SupportsSurfaceLayers and use the source's frame path instead.");
         lock (_slotsGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -169,7 +169,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             return _surfaceSlots.Remove(slot);
     }
 
-    /// <summary>Reorders surface slots in-place — the compositor's on-top draw order.</summary>
+    /// <summary>Reorders surface slots in-place - the compositor's on-top draw order.</summary>
     public void SortSurfaceSlots(Comparison<SurfaceSlot> comparison)
     {
         ArgumentNullException.ThrowIfNull(comparison);
@@ -233,7 +233,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         if (_compositor is not IWarpPassVideoCompositor warpCompositor)
             throw new InvalidOperationException("The configured compositor does not support multi-output warp composition.");
 
-        // Surface layers don't participate in the integrated multi-warp pass (v1 scope) — report
+        // Surface layers don't participate in the integrated multi-warp pass (v1 scope) - report
         // "not handled" so the caller falls back to the plain composite path, where
         // CompositeWithSurfaces renders them (per-lease chained mapping still applies there).
         lock (_slotsGate)
@@ -254,7 +254,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 return false;
             }
 
-            // Snapshot slot refs under _slotsGate (brief — keeps AddSlot/RemoveSlot from contending
+            // Snapshot slot refs under _slotsGate (brief - keeps AddSlot/RemoveSlot from contending
             // with the whole composite), then acquire each slot's held frame outside it. AddRange from
             // an ICollection copies without per-element/enumerator alloc once the scratch is warm.
             _snapshotScratch.Clear();
@@ -327,7 +327,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 return false;
             }
 
-            // Snapshot slot refs under _slotsGate (brief — keeps AddSlot/RemoveSlot from contending
+            // Snapshot slot refs under _slotsGate (brief - keeps AddSlot/RemoveSlot from contending
             // with the whole composite), then acquire each slot's held frame outside it. AddRange from
             // an ICollection copies without per-element/enumerator alloc once the scratch is warm.
             _snapshotScratch.Clear();
@@ -465,10 +465,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         });
     }
 
-    /// <summary>One input slot — combines an <see cref="IVideoOutput"/> target with mutable composite parameters.</summary>
+    /// <summary>One input slot - combines an <see cref="IVideoOutput"/> target with mutable composite parameters.</summary>
     /// <summary>
     /// One surface layer registered on the mixer (NXT-10): the GL-rendering surface plus its mutable
-    /// placement. Thread-safe like <see cref="Slot"/> — placement writes come from control threads while
+    /// placement. Thread-safe like <see cref="Slot"/> - placement writes come from control threads while
     /// the composite thread snapshots. Removing the slot never disposes the surface (caller-owned).
     /// </summary>
     public sealed class SurfaceSlot
@@ -584,7 +584,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             // A closed slot drops silently (frame disposed, ownership honored): a player tick is
             // routinely in flight while a cue's slots are torn down, and throwing here only
-            // produced per-tick error spam upstream — no submitter can react to it anyway.
+            // produced per-tick error spam upstream - no submitter can react to it anyway.
             VideoFrame? toDispose;
             var closed = false;
             lock (_gate)
@@ -740,7 +740,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 else
                 {
                     // A concurrent reader still holds _current. Returning _pending would be
-                    // unsafe — a subsequent SubmitFromOutput would dispose _pending while the
+                    // unsafe - a subsequent SubmitFromOutput would dispose _pending while the
                     // new lease is still using it. Fall back to _current (PTS-wise <= _pending,
                     // so older but never too-future). If _current is null we skip this tick.
                     best = _current;

@@ -18,7 +18,7 @@ namespace HaPlay.Services;
 /// Design notes:
 /// <list type="bullet">
 /// <item>There is no central "dirty" flag in the shell, so change detection is a content hash of the
-/// serialized snapshot rather than per-view-model instrumentation — a redundant tick writes nothing.</item>
+/// serialized snapshot rather than per-view-model instrumentation - a redundant tick writes nothing.</item>
 /// <item>The snapshot must be <em>built</em> on the UI thread (it reads observable collections); the returned
 /// <see cref="HaPlayProject"/> is a detached record whose serialize + disk write are offloaded off the UI
 /// thread by the timer tick.</item>
@@ -473,7 +473,7 @@ public sealed class SessionRecoveryService : IDisposable
 
             var projectFile = Path.Combine(dir, ProjectFileName);
             if (!File.Exists(projectFile))
-                continue; // folder created but nothing captured yet — nothing to recover
+                continue; // folder created but nothing captured yet - nothing to recover
 
             var info = TryReadInfo(Path.Combine(dir, SessionFileName));
             if (info is null)
@@ -589,7 +589,7 @@ public sealed class SessionRecoveryService : IDisposable
     }
 
     /// <summary>Best-effort: a session's process counts as alive only when a process with its id exists AND
-    /// shares this process's name — so a rebooted machine that recycled the pid onto some unrelated process
+    /// shares this process's name - so a rebooted machine that recycled the pid onto some unrelated process
     /// still surfaces the crash for recovery.</summary>
     private static bool IsProcessAlive(int pid)
     {

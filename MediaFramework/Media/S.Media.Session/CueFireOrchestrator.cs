@@ -1,9 +1,9 @@
 namespace S.Media.Session;
 
 /// <summary>
-/// The session's fire sequencing: owns the fire-lock (fires/GOs never interleave — the app drives GO
+/// The session's fire sequencing: owns the fire-lock (fires/GOs never interleave - the app drives GO
 /// serially) and the in-flight fire's cancellation source, and runs every cue fire OFF the serial dispatcher
-/// (NXT-03) so a pre-wait or media open never parks the loop — STOP/LOAD/DISPOSE preempt it through
+/// (NXT-03) so a pre-wait or media open never parks the loop - STOP/LOAD/DISPOSE preempt it through
 /// <see cref="CancelActiveFire"/>. State reads/commits (GO's cue selection and cursor advance) stay on
 /// <see cref="ShowSession"/> as internal dispatcher-marshaled operations; this class owns only the
 /// when/ordering. Split out of the session along its ownership seam (review Part-5 #2); the session's public
@@ -35,7 +35,7 @@ internal sealed class CueFireOrchestrator
     }
 
     /// <summary>The lock-free fire core (the caller MUST hold <see cref="_fireLock"/>): runs the cue graph fire OFF
-    /// the serial dispatcher (NXT-03) — its pre/post-wait and media open no longer park the loop; only the short
+    /// the serial dispatcher (NXT-03) - its pre/post-wait and media open no longer park the loop; only the short
     /// state commits re-enter it. The fire's cancellation source is published to <see cref="_activeFireCts"/> so
     /// <see cref="CancelActiveFire"/> aborts it; cancellation propagates as
     /// <see cref="OperationCanceledException"/> (callers map it to a non-advancing result).</summary>
@@ -81,7 +81,7 @@ internal sealed class CueFireOrchestrator
         catch (OperationCanceledException) { return CueExecutionStatus.Failed; }
     }
 
-    /// <summary>Cancels the in-flight cue fire, if any, WITHOUT marshaling onto the dispatcher — so a stop/load/
+    /// <summary>Cancels the in-flight cue fire, if any, WITHOUT marshaling onto the dispatcher - so a stop/load/
     /// dispose can unblock the serial loop that a long pre-wait or open is parking, then run promptly (NXT-03).
     /// A no-op when nothing is firing. Note: a synchronous, uninterruptible native open still runs to completion;
     /// this preempts the (common) pre/post-wait and any cancellable stage.</summary>
@@ -107,12 +107,12 @@ internal sealed class CueFireOrchestrator
             if (next is null)
                 return CueExecutionStatus.NotReady;
 
-            // Fire OFF the dispatcher (we already hold the fire-lock — FireCoreAsync is the lock-free core).
+            // Fire OFF the dispatcher (we already hold the fire-lock - FireCoreAsync is the lock-free core).
             CueExecutionStatus status;
             try { status = await FireCoreAsync(next.Id).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled — do NOT advance
+            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled - do NOT advance
 
-            // Advance the cursor on the dispatcher — only when the cue actually ran (or faulted), never a skip/cancel.
+            // Advance the cursor on the dispatcher - only when the cue actually ran (or faulted), never a skip/cancel.
             if (status is CueExecutionStatus.Fired or CueExecutionStatus.Failed)
                 await _session.AdvanceGoCursorAsync(groupId, next.Number, generation).ConfigureAwait(false);
             _ = _session.WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant

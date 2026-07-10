@@ -65,7 +65,7 @@ public static class MIDIMessageParser
             0xC0 => new ProgramChange(channel, data1),
             0xD0 => new ChannelAftertouch(channel, data1),
             0xE0 => new PitchBend(channel, (data1 | (data2 << 7)) - 8192),
-            // System messages (status >= 0xF0 — channel nibble is meaningless)
+            // System messages (status >= 0xF0 - channel nibble is meaningless)
             0xF0 => DecodeSystem(status, data1, data2),
             _ => null
         };
@@ -74,7 +74,7 @@ public static class MIDIMessageParser
     private static IMIDIMessage? DecodeSystem(byte status, byte data1, byte data2) =>
         status switch
         {
-            0xF0 => null,               // SysEx start — assembled by MIDIInputDevice
+            0xF0 => null,               // SysEx start - assembled by MIDIInputDevice
             0xF1 => new MIDITimeCode(data1),
             0xF2 => new SongPosition((ushort)(data1 | (data2 << 7))),
             0xF3 => new SongSelect(data1),

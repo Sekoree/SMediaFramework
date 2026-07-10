@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace HaPlay.Models;
 
 /// <summary>
-/// Phase C (§4.3.4) — persisted form of one cell in the per-output audio mix matrix. The matrix is
+/// Phase C (§4.3.4) - persisted form of one cell in the per-output audio mix matrix. The matrix is
 /// "rows = output (device) channels, columns = input (source) channels" with one cell per intersection
 /// carrying its own gain (in dB) and mute flag. Cells with <c>Muted = true</c> or a gain below
 /// <see cref="MutedFloorDb"/> register no route at the framework router; non-zero cells each install
@@ -25,7 +25,7 @@ public sealed record AudioMatrixCellConfig
 }
 
 /// <summary>
-/// Phase C (§4.3.4) — audible threshold for cells. Cells at or below this gain are dropped instead of
+/// Phase C (§4.3.4) - audible threshold for cells. Cells at or below this gain are dropped instead of
 /// installed as a router route. Matches the lowest slider value the UI exposes (-60 dB), so any cell the
 /// user can reach interactively still produces a route.
 /// </summary>
