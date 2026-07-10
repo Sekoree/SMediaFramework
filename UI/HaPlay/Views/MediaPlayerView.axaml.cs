@@ -54,6 +54,9 @@ public partial class MediaPlayerView : UserControl
         e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
+        // Consume it: this event otherwise bubbles on to the Players-workspace drop host, which
+        // would handle the same drop a second time.
+        e.Handled = true;
     }
 
     /// <summary>Copies the remote API URL playing the selected playlist item (the menu operates on
@@ -85,6 +88,9 @@ public partial class MediaPlayerView : UserControl
     private void OnPlaylistDrop(object? sender, DragEventArgs e)
     {
         _ = sender;
+        // Consume it even when nothing is added — otherwise the drop bubbles on to the
+        // Players-workspace host and gets handled twice.
+        e.Handled = true;
         if (DataContext is not MediaPlayerViewModel vm)
             return;
 

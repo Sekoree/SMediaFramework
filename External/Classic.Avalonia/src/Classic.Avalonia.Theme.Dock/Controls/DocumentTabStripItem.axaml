@@ -1,4 +1,5 @@
 ﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:dock="clr-namespace:Classic.Avalonia.Theme.Dock"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:core="using:Dock.Model.Core"
                     xmlns:commonControls="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
@@ -15,27 +16,27 @@
 
   <ContextMenu x:Key="DocumentTabStripItemContextMenu" x:DataType="core:IDockable" x:CompileBindings="True">
     <MenuItem Header="_Float"
-              Command="{Binding Owner.Factory.FloatDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Float}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanFloat}"/>
     <MenuItem Header="_Close"
-              Command="{Binding Owner.Factory.CloseDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Close}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
     <MenuItem Header="Close other tabs"
-              Command="{Binding Owner.Factory.CloseOtherDockables}"
+              Command="{x:Static dock:DockFactoryCommands.CloseOther}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
     <MenuItem Header="Close all tabs"
-              Command="{Binding Owner.Factory.CloseAllDockables}"
+              Command="{x:Static dock:DockFactoryCommands.CloseAll}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
     <MenuItem Header="_Close tabs to the left"
-              Command="{Binding Owner.Factory.CloseLeftDockables}"
+              Command="{x:Static dock:DockFactoryCommands.CloseLeft}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
     <MenuItem Header="_Close tabs to the right"
-              Command="{Binding Owner.Factory.CloseRightDockables}"
+              Command="{x:Static dock:DockFactoryCommands.CloseRight}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
   </ContextMenu>
@@ -72,7 +73,7 @@
                                     Content="{Binding}" />
                 </Panel>
                 <Button x:Name="PART_CloseButton"
-                        Command="{Binding Owner.Factory.CloseDockable}"
+                        Command="{x:Static dock:DockFactoryCommands.Close}"
                         CommandParameter="{Binding}"
                         IsVisible="{Binding CanClose}">
                   <Button.Styles>

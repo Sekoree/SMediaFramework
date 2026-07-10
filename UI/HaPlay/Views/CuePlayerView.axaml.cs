@@ -42,8 +42,10 @@ public partial class CuePlayerView : UserControl
         // fire whether the tree or anything else inside the cue tab has focus.
         CueTreeGrid.KeyDown += OnCueTreeKeyDown;
         KeyDown += OnUserControlKeyDown;
-        CueScrubberSlider.AddHandler(PointerReleasedEvent, OnCueScrubberPointerReleased, RoutingStrategies.Bubble);
-        CueScrubberSlider.AddHandler(KeyUpEvent, OnCueScrubberKeyUp, RoutingStrategies.Bubble);
+        // The Preview tab's scrubber is the deck's ONLY scrub surface (the General tab used to
+        // carry a second slider — and it was the only one wired to commit the seek).
+        CuePreviewScrubber.AddHandler(PointerReleasedEvent, OnCueScrubberPointerReleased, RoutingStrategies.Bubble);
+        CuePreviewScrubber.AddHandler(KeyUpEvent, OnCueScrubberKeyUp, RoutingStrategies.Bubble);
     }
 
     /// <summary>Transport bindings (Space/Esc/Enter/Backspace) at UserControl level. Skip when
@@ -105,6 +107,9 @@ public partial class CuePlayerView : UserControl
     {
         _ = sender;
         if (DataContext is not CuePlayerViewModel vm) return;
+        // Show-mode lockdown: every key below edits the list, so they all sit behind the same
+        // Edit-cues gate as the toolbar buttons and row drag-drop.
+        if (!vm.IsCueEditMode) return;
 
         // Tree-scoped editing keys — these fire when the tree (or a tree row) has focus.
         // Transport keys (Space/Esc/Enter/Backspace) are bound at the UserControl level via
@@ -189,7 +194,9 @@ public partial class CuePlayerView : UserControl
     {
         _ = sender;
         if (!IsOverCueTree(e)) return;
-        if (e.DataTransfer.Contains(DataFormat.File))
+        // File drops author media cues — locked down with the rest of the editing surface.
+        var editMode = DataContext is CuePlayerViewModel { IsCueEditMode: true };
+        if (editMode && e.DataTransfer.Contains(DataFormat.File))
             e.DragEffects = DragDropEffects.Copy;
         else
             e.DragEffects = DragDropEffects.None;
@@ -200,7 +207,7 @@ public partial class CuePlayerView : UserControl
     {
         _ = sender;
         if (!IsOverCueTree(e)) return;
-        if (DataContext is not CuePlayerViewModel vm)
+        if (DataContext is not CuePlayerViewModel { IsCueEditMode: true } vm)
             return;
         e.Handled = true;
 

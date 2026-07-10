@@ -187,7 +187,7 @@
 
         <ContentControl x:Name="PlayersPopoutHost">
         <Grid x:Name="PlayersQuickPlayHost"
-              ToolTip.Tip="{x:Static res:Strings.QuickPlayDropTooltip}">
+              ToolTip.Tip="{x:Static res:Strings.PlayersDropAddTooltip}">
           <TabControl ItemsSource="{Binding PlayerTabs}"
                       SelectedItem="{Binding SelectedPlayer, Mode=TwoWay}">
             <TabControl.ItemTemplate>

@@ -44,6 +44,11 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
     [ObservableProperty]
     private string _positionDisplay = "";
 
+    /// <summary>Low-time warning for the aggregate: the longest child timeline is within 10 s of
+    /// its end (same threshold as <see cref="ActiveCueViewModel.IsNearEnd"/>).</summary>
+    [ObservableProperty]
+    private bool _isNearEnd;
+
     /// <summary>Longest child duration — the timeline the aggregate progress runs on.</summary>
     public long LongestDurationMs { get; private set; }
 
@@ -65,6 +70,7 @@ public sealed partial class ActiveGroupViewModel : ObservableObject
         LongestDurationMs = maxDur;
         ProgressPercent = maxDur > 0 ? Math.Clamp(maxPos * 100.0 / maxDur, 0, 100) : 0;
         PositionDisplay = ActiveCueViewModel.FormatPositionDisplay(maxPos, maxDur);
+        IsNearEnd = maxDur > 0 && maxDur - maxPos <= 10_000;
     }
 
     [RelayCommand]

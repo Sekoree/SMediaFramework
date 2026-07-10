@@ -133,8 +133,8 @@
   <data name="AddPlayerButton" xml:space="preserve">
     <value>+ Add player</value>
   </data>
-  <data name="QuickPlayDropTooltip" xml:space="preserve">
-    <value>Drop media files here to play immediately (quick-play)</value>
+  <data name="PlayersDropAddTooltip" xml:space="preserve">
+    <value>Drop media files here to add them to the selected player's playlist</value>
   </data>
   <data name="ProjectHeader" xml:space="preserve">
     <value>Project</value>
@@ -2444,7 +2444,7 @@
     <value>This project used virtual audio channels (VOut); that model was replaced by output aliases and routing matrix presets. Review your player routing.</value>
   </data>
   <data name="PlayersDeckHint" xml:space="preserve">
-    <value>Players are shown as tabs. Drop media files here to quick-play on the selected player.</value>
+    <value>Players are shown as tabs. Drop media files here to add them to the selected player's playlist.</value>
   </data>
   <data name="HoldButtonLabel" xml:space="preserve">
     <value>HOLD</value>
@@ -2714,7 +2714,7 @@
     <value>Edit this board</value>
   </data>
   <data name="CueEmptyHint" xml:space="preserve">
-    <value>No cues yet. Add a media, image, or text cue to start building your show.</value>
+    <value>No cues yet. Add a media, image, or text cue — or drop media files here — to start building your show.</value>
   </data>
   <data name="CueEmptyAction" xml:space="preserve">
     <value>Add media cue</value>
@@ -3195,5 +3195,170 @@
   </data>
   <data name="EditVideoFxButton" xml:space="preserve">
     <value>Video FX…</value>
+  </data>
+  <data name="DownmixPassThroughButton" xml:space="preserve">
+    <value>Pass-through</value>
+  </data>
+  <data name="DownmixMonoToStereoButton" xml:space="preserve">
+    <value>Mono to stereo</value>
+  </data>
+  <data name="DownmixSurround51ToStereoButton" xml:space="preserve">
+    <value>5.1 to stereo</value>
+  </data>
+  <data name="DownmixDropLfeButton" xml:space="preserve">
+    <value>Drop LFE</value>
+  </data>
+  <data name="PlacementPresetsLabel" xml:space="preserve">
+    <value>Placement</value>
+  </data>
+  <data name="PlacementPresetFitButton" xml:space="preserve">
+    <value>Fit source</value>
+  </data>
+  <data name="PlacementPresetFitTooltip" xml:space="preserve">
+    <value>Fit the source into the canvas without changing its aspect ratio</value>
+  </data>
+  <data name="PlacementPresetFullButton" xml:space="preserve">
+    <value>Full</value>
+  </data>
+  <data name="PlacementPresetLeftHalfButton" xml:space="preserve">
+    <value>Left half</value>
+  </data>
+  <data name="PlacementPresetRightHalfButton" xml:space="preserve">
+    <value>Right half</value>
+  </data>
+  <data name="PlacementPresetTopHalfButton" xml:space="preserve">
+    <value>Top half</value>
+  </data>
+  <data name="PlacementPresetBottomHalfButton" xml:space="preserve">
+    <value>Bottom half</value>
+  </data>
+  <data name="PlacementPresetTopLeftButton" xml:space="preserve">
+    <value>Top left</value>
+  </data>
+  <data name="PlacementPresetTopRightButton" xml:space="preserve">
+    <value>Top right</value>
+  </data>
+  <data name="PlacementPresetBottomLeftButton" xml:space="preserve">
+    <value>Bottom left</value>
+  </data>
+  <data name="PlacementPresetBottomRightButton" xml:space="preserve">
+    <value>Bottom right</value>
+  </data>
+  <data name="PlacementCanvasDragHint" xml:space="preserve">
+    <value>Drag a layer to move it. Drag the bottom-right handle to resize; hold Shift to resize without locking the aspect ratio.</value>
+  </data>
+  <data name="PlacementPositionLabel" xml:space="preserve">
+    <value>Position</value>
+  </data>
+  <data name="PlacementXLabel" xml:space="preserve">
+    <value>X</value>
+  </data>
+  <data name="PlacementYLabel" xml:space="preserve">
+    <value>Y</value>
+  </data>
+  <data name="PlacementWidthLabel" xml:space="preserve">
+    <value>Width</value>
+  </data>
+  <data name="PlacementHeightLabel" xml:space="preserve">
+    <value>Height</value>
+  </data>
+  <data name="PlacementRotationLabel" xml:space="preserve">
+    <value>Rotation°</value>
+  </data>
+  <data name="CropPresetsLabel" xml:space="preserve">
+    <value>Crop</value>
+  </data>
+  <data name="CropPresetNoneButton" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="CropPresetCenterWideButton" xml:space="preserve">
+    <value>Center 50% wide</value>
+  </data>
+  <data name="CropPresetCenterTallButton" xml:space="preserve">
+    <value>Center 50% tall</value>
+  </data>
+  <data name="CropPresetCenterBoxButton" xml:space="preserve">
+    <value>Center box</value>
+  </data>
+  <data name="CropLeftLabel" xml:space="preserve">
+    <value>Left trim</value>
+  </data>
+  <data name="CropTopLabel" xml:space="preserve">
+    <value>Top</value>
+  </data>
+  <data name="CropRightLabel" xml:space="preserve">
+    <value>Right</value>
+  </data>
+  <data name="CropBottomLabel" xml:space="preserve">
+    <value>Bottom</value>
+  </data>
+  <data name="PlacementFitModeLabel" xml:space="preserve">
+    <value>Fit mode</value>
+  </data>
+  <data name="SubtitlesTabLabel" xml:space="preserve">
+    <value>Subtitles</value>
+  </data>
+  <data name="SubtitleTracksHeader" xml:space="preserve">
+    <value>Embedded subtitle tracks</value>
+  </data>
+  <data name="SubtitleTracksHint" xml:space="preserve">
+    <value>Tick the tracks to display over this cue's video — none, one, or several. (Sidecar files and font/placement options are coming.)</value>
+  </data>
+  <data name="SubtitleFontHeader" xml:space="preserve">
+    <value>Font</value>
+  </data>
+  <data name="SubtitleFontFamilyLabel" xml:space="preserve">
+    <value>Family</value>
+  </data>
+  <data name="SubtitleFontFamilyPlaceholder" xml:space="preserve">
+    <value>document default</value>
+  </data>
+  <data name="SubtitleFontScaleLabel" xml:space="preserve">
+    <value>Size ×</value>
+  </data>
+  <data name="SubtitleAlignLabel" xml:space="preserve">
+    <value>Align</value>
+  </data>
+  <data name="SubtitleFontOverridesHint" xml:space="preserve">
+    <value>Font overrides apply to the selected text tracks (ASS/SRT/…). Bitmap subtitles (PGS/DVB) carry their own pixels and ignore them.</value>
+  </data>
+  <data name="TextCueTabLabel" xml:space="preserve">
+    <value>Text</value>
+  </data>
+  <data name="TextContentLabel" xml:space="preserve">
+    <value>Text content</value>
+  </data>
+  <data name="TextFontFamilyLabel" xml:space="preserve">
+    <value>Font family</value>
+  </data>
+  <data name="TextBoldLabel" xml:space="preserve">
+    <value>Bold</value>
+  </data>
+  <data name="TextItalicLabel" xml:space="preserve">
+    <value>Italic</value>
+  </data>
+  <data name="TextFontSizeLabel" xml:space="preserve">
+    <value>Font size</value>
+  </data>
+  <data name="TextColorLabel" xml:space="preserve">
+    <value>Text color</value>
+  </data>
+  <data name="TextBackgroundColorLabel" xml:space="preserve">
+    <value>Background color</value>
+  </data>
+  <data name="TextOutlineColorLabel" xml:space="preserve">
+    <value>Outline color</value>
+  </data>
+  <data name="TextHAlignLabel" xml:space="preserve">
+    <value>Horizontal align</value>
+  </data>
+  <data name="TextVAlignLabel" xml:space="preserve">
+    <value>Vertical align</value>
+  </data>
+  <data name="TextWrapWidthLabel" xml:space="preserve">
+    <value>Wrap width</value>
+  </data>
+  <data name="TextCueFooterHint" xml:space="preserve">
+    <value>Colors use #AARRGGBB hex, with alpha first. Set the hold duration on General and position the cue on Video.</value>
   </data>
 </root>

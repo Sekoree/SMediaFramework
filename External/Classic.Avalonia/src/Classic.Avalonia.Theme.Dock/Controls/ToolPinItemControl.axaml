@@ -1,4 +1,5 @@
 ﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:dock="clr-namespace:Classic.Avalonia.Theme.Dock"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:core="using:Dock.Model.Core">
   <Design.PreviewWith>
@@ -7,15 +8,15 @@
 
   <ContextMenu x:Key="ToolPinItemControlContextMenu" x:DataType="core:IDockable" x:CompileBindings="True">
     <MenuItem Header="_Float"
-              Command="{Binding Owner.Factory.FloatDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Float}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanFloat}"/>
     <MenuItem Header="_Show"
-              Command="{Binding Owner.Factory.PreviewPinnedDockable}"
+              Command="{x:Static dock:DockFactoryCommands.PreviewPinned}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanPin}"/>
     <MenuItem Header="_Close"
-              Command="{Binding Owner.Factory.CloseDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Close}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
   </ContextMenu>
@@ -32,7 +33,7 @@
                     BorderBrush="Transparent"
                     BorderThickness="0"
                     CornerRadius="0"
-                    Command="{Binding Owner.Factory.PreviewPinnedDockable}"
+                    Command="{x:Static dock:DockFactoryCommands.PreviewPinned}"
                     CommandParameter="{Binding}"
                     IsVisible="{Binding CanPin}">
               <TextBlock Text="{Binding Title}"

@@ -43,6 +43,13 @@ public sealed partial class ActiveCueViewModel : ObservableObject
         }
     }
 
+    /// <summary>Operator aid (mirrors the media deck's low-time clock warning): true when a finite
+    /// cue is within <see cref="LowTimeWarningMs"/> of its end — drives the row's red readout so an
+    /// ending cue draws the eye before it goes silent. False for unknown-duration (live) cues.</summary>
+    public bool IsNearEnd => DurationMs > 0 && DurationMs - PositionMs <= LowTimeWarningMs;
+
+    private const long LowTimeWarningMs = 10_000;
+
     public string CueNumberDisplay => string.IsNullOrWhiteSpace(Node.Number)
         ? string.Empty
         : Node.Number;
@@ -54,6 +61,7 @@ public sealed partial class ActiveCueViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(PositionDisplay));
         OnPropertyChanged(nameof(ProgressPercent));
+        OnPropertyChanged(nameof(IsNearEnd));
     }
 
     partial void OnDurationMsChanged(long value)
@@ -61,6 +69,7 @@ public sealed partial class ActiveCueViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(PositionDisplay));
         OnPropertyChanged(nameof(ProgressPercent));
+        OnPropertyChanged(nameof(IsNearEnd));
     }
 
     [RelayCommand]

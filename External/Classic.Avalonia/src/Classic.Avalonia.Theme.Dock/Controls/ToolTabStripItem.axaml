@@ -1,4 +1,5 @@
 ﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:dock="clr-namespace:Classic.Avalonia.Theme.Dock"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:dmc="using:Dock.Model.Controls"
                     xmlns:commonControls="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia"
@@ -18,16 +19,16 @@
 
   <ContextMenu x:Key="ToolTabStripItemContextMenu" x:DataType="dmc:IToolDock" x:CompileBindings="True">
     <MenuItem Header="_Float"
-              Command="{Binding Owner.Factory.FloatDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Float}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanFloat}"/>
     <MenuItem Header="_Dock"
-              Command="{Binding Owner.Factory.PinDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Pin}"
               CommandParameter="{Binding}"
               IsEnabled="{Binding OriginalOwner, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}"
               IsVisible="{Binding CanPin, FallbackValue=False}"/>
     <MenuItem Header="_Auto Hide"
-              Command="{Binding Owner.Factory.PinDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Pin}"
               CommandParameter="{Binding }"
               IsEnabled="{Binding OriginalOwner, Converter={x:Static ObjectConverters.IsNull}, FallbackValue=False}">
       <MenuItem.IsVisible>
@@ -38,7 +39,7 @@
       </MenuItem.IsVisible>
     </MenuItem>
     <MenuItem Header="_Close"
-              Command="{Binding Owner.Factory.CloseDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Close}"
               CommandParameter="{Binding}"
               IsVisible="{Binding CanClose}"/>
   </ContextMenu>

@@ -326,14 +326,17 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TransportState))]
+    [NotifyPropertyChangedFor(nameof(TransportStateColor))]
     private CueNodeViewModel? _standbyCueNode;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TransportState))]
+    [NotifyPropertyChangedFor(nameof(TransportStateColor))]
     private CueNodeViewModel? _currentCueNode;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TransportState))]
+    [NotifyPropertyChangedFor(nameof(TransportStateColor))]
     private bool _isTransportPaused;
 
     [ObservableProperty]
@@ -496,6 +499,17 @@ public partial class CuePlayerViewModel : ViewModelBase
               + (StandbyCueNode is null
                   ? string.Empty
                   : Strings.Format(nameof(Strings.CueTransportNextFormat), CueDisplay(StandbyCueNode)));
+
+    /// <summary>Fill for the transport-state chip — same palette as the media deck's state pill:
+    /// green running, amber paused or standby-armed (ready), translucent gray idle.</summary>
+    public Avalonia.Media.ISolidColorBrush TransportStateColor =>
+        CurrentCueNode is null
+            ? StandbyCueNode is null
+                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#44808080"))
+                : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#F9A825"))
+            : IsTransportPaused
+                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#F9A825"))
+                : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#2E7D32"));
 
     /// <summary>UX-10: true when the selected list has no cues (or none selected) — drives the empty-state
     /// call-to-action over the cue tree instead of a blank grid.</summary>
@@ -1470,6 +1484,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         _ = value;
         OnPropertyChanged(nameof(TransportState));
+        OnPropertyChanged(nameof(TransportStateColor));
     }
 
     partial void OnStatusMessageChanged(string? value)

@@ -1,4 +1,5 @@
 ﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:dock="clr-namespace:Classic.Avalonia.Theme.Dock"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:converters="using:Dock.Avalonia.Converters"
                     xmlns:controls="using:Dock.Model.Controls"
@@ -10,16 +11,16 @@
   <MenuFlyout x:Key="ToolChromeControlContextMenu"
                x:DataType="controls:IToolDock" x:CompileBindings="True">
     <MenuItem Header="_Float"
-              Command="{Binding Owner.Factory.FloatDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Float}"
               CommandParameter="{Binding ActiveDockable}"
               IsVisible="{Binding ActiveDockable.CanFloat, FallbackValue=False}"/>
     <MenuItem Header="_Dock"
-              Command="{Binding Owner.Factory.PinDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Pin}"
               CommandParameter="{Binding ActiveDockable}"
               IsEnabled="{Binding ActiveDockable.OriginalOwner, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}"
               IsVisible="{Binding ActiveDockable.CanPin, FallbackValue=False}"/>
     <MenuItem Header="_Auto Hide"
-              Command="{Binding Owner.Factory.PinDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Pin}"
               CommandParameter="{Binding ActiveDockable}"
               IsEnabled="{Binding ActiveDockable.OriginalOwner, Converter={x:Static ObjectConverters.IsNull}, FallbackValue=False}">
       <MenuItem.IsVisible>
@@ -30,7 +31,7 @@
       </MenuItem.IsVisible>
     </MenuItem>
     <MenuItem Header="_Close"
-              Command="{Binding Owner.Factory.CloseDockable}"
+              Command="{x:Static dock:DockFactoryCommands.Close}"
               CommandParameter="{Binding ActiveDockable}"
               IsVisible="{Binding ActiveDockable.CanClose, FallbackValue=False}"/>
   </MenuFlyout>
@@ -80,7 +81,7 @@
                       <Path x:Name="PART_MenuPath" Width="6" Height="3" />
                   </Button>
                   <Button x:Name="PART_PinButton"
-                          Command="{Binding Owner.Factory.PinDockable}"
+                          Command="{x:Static dock:DockFactoryCommands.Pin}"
                           CommandParameter="{Binding ActiveDockable}"
                           Theme="{StaticResource ChromeButton}">
                     <Button.IsVisible>
@@ -97,7 +98,7 @@
                       <Path x:Name="PART_MaximizeRestorePath" />
                   </Button>
                   <Button x:Name="PART_CloseButton"
-                          Command="{Binding Owner.Factory.CloseDockable}"
+                          Command="{x:Static dock:DockFactoryCommands.Close}"
                           CommandParameter="{Binding ActiveDockable}"
                           IsVisible="{Binding ActiveDockable.CanClose, FallbackValue=False}"
                           Theme="{StaticResource ChromeButton}">

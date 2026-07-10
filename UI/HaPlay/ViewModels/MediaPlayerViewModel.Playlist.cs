@@ -368,15 +368,6 @@ public partial class MediaPlayerViewModel
 
     private bool CanShowItemProperties() => SelectedPlaylistItem is not null;
 
-    /// <summary>§8.5 quick-play — load and play the first dropped file without mutating the playlist.</summary>
-    public async Task QuickPlayDroppedFilesAsync(IEnumerable<string> paths)
-    {
-        var path = paths.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
-        if (path is null)
-            return;
-        await PlayPlaylistItemAsync(new FilePlaylistItem(path)).ConfigureAwait(false);
-    }
-
     [RelayCommand]
     public void AddDroppedFilesToPlaylist(IEnumerable<string> paths)
     {

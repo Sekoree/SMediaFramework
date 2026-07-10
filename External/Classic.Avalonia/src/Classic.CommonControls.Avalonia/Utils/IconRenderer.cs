@@ -151,7 +151,9 @@ public class IconRenderer : Control
                 SKRect bounds = Bounds.ToSKRect();
 
                 var stream = new MemoryStream();
-                bitmap.Save(stream);
+                // Same PNG the pre-12.1 parameterless Save() produced (it forwarded to
+                // PngBitmapEncoderOptions.Default); the cached instance avoids a per-render alloc.
+                bitmap.Save(stream, PngBitmapEncoderOptions.Default);
                 stream.Position = 0;
 
                 using var skBitmap = SKBitmap.Decode(stream);

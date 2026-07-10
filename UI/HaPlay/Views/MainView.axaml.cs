@@ -87,7 +87,9 @@ public partial class MainView : UserControl
         if (paths.Count == 0)
             return;
 
-        _ = player.QuickPlayDroppedFilesAsync(paths);
+        // Drops ADD to the selected player's playlist — they must never start playback (the old
+        // quick-play fired the file instantly, one stray drag away from live output).
+        player.AddDroppedFilesToPlaylist(paths);
     }
 
     private void MenuItem_OnClick(object? sender, RoutedEventArgs e)
