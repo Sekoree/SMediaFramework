@@ -1071,4 +1071,5 @@ public static class Strings
     public static string PlayerTintTooltip => Get(nameof(PlayerTintTooltip));
     public static string PlayerTintHeader => Get(nameof(PlayerTintHeader));
     public static string PlayerTintCustomLabel => Get(nameof(PlayerTintCustomLabel));
+    public static string LiveTimelineLabel => Get(nameof(LiveTimelineLabel));
 }

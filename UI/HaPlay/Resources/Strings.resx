@@ -3187,4 +3187,7 @@
   <data name="PlayerTintCustomLabel" xml:space="preserve">
     <value>Custom</value>
   </data>
+  <data name="LiveTimelineLabel" xml:space="preserve">
+    <value>LIVE — seeking unavailable</value>
+  </data>
 </root>

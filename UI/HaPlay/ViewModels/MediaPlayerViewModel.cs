@@ -1088,8 +1088,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>Phase C.5 (§6.5) — true when the loaded source has a finite, seekable duration. Files
     /// with non-zero duration are seekable; live items (PortAudio capture, NDI receiver) are not (their
-    /// duration stays zero). The view hides the seek slider + three-clock readout when this is false.</summary>
+    /// duration stays zero). The view disables seeking (slider + jump box) when this is false.</summary>
     public bool IsTransportSeekable => Duration > TimeSpan.Zero;
+
+    /// <summary>True while the loaded source is a live input (NDI / PortAudio capture). The view swaps
+    /// the timeline slot from scrubber+clocks to a LIVE badge in place — same reserved height either
+    /// way, so the transport row never moves when the media type changes.</summary>
+    public bool IsLiveSource => IsMediaLoaded && _currentPlaylistItem is { IsLive: true };
 
     /// <summary>Pre-formatted text bound by the view — Avalonia's <c>StringFormat=-{}{0:...}</c> with a leading minus
     /// is fragile (the binding silently fails). Formatting in the VM avoids the trap.</summary>
@@ -1283,6 +1288,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         NotifyTransportCanExecuteChanged();
         OnPropertyChanged(nameof(SourceKindLabel));
         OnPropertyChanged(nameof(IsTransportSeekable));
+        OnPropertyChanged(nameof(IsLiveSource));
         OnPropertyChanged(nameof(PlaybackStateLabel));
         OnPropertyChanged(nameof(PlaybackStateColor));
         SyncPlaybackSleepInhibitor();
