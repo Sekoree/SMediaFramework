@@ -9,6 +9,7 @@ public partial class RenameCueDialog : Window
     public RenameCueDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         // Focus the Label box on open - Number is usually fine; Label is what operators want to
         // edit most often.
         Opened += (_, _) => LabelBox.SelectAll();

@@ -36,6 +36,7 @@ public partial class MappingEditorDialog : Window
     public MappingEditorDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DataContextChanged += (_, _) => AttachVm();
         PreviewHost.SizeChanged += (_, _) => RenderPreview();
         Closed += (_, _) => _vm?.OnEditorClosed();

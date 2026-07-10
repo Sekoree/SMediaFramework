@@ -10,6 +10,7 @@ public partial class AddYouTubeDialog : Window
     public AddYouTubeDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(AddYouTubeDialog), MinWidth, MinHeight);
         DataContextChanged += (_, _) =>
         {

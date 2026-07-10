@@ -26,6 +26,7 @@ public partial class ProjectExportDialog : Window
     public ProjectExportDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         Choices =
         [
             new SectionChoice(ProjectSections.OutputsAudio, Strings.SectionAudioOutputsLabel, true),

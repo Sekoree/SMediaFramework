@@ -9,6 +9,7 @@ public partial class RebindMissingControlMIDIDevicesDialog : Window
     public RebindMissingControlMIDIDevicesDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(RebindMissingControlMIDIDevicesDialog), MinWidth, MinHeight);
     }
 

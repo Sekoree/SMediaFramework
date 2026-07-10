@@ -7,6 +7,7 @@ public partial class TargetConfigurationDialog : Window
     public TargetConfigurationDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(TargetConfigurationDialog), MinWidth, MinHeight);
     }
 

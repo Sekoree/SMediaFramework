@@ -6,7 +6,7 @@
   <!-- Native runtimes are APP-owned deployment assets (see UI/HaPlay.Desktop/HaPlay.Desktop.csproj):
        the framework libraries carry only the managed bindings so packaged libraries never pull native
        runtimes transitively. Every project in Tools/ is itself a final executable, so the same assets
-       are added here once for the whole tree — this is what puts libSDL3.so next to the CI smokes
+       are added here once for the whole tree - this is what puts libSDL3.so next to the CI smokes
        (AbiGlSmoke etc.) and dev-run tools; without it SDL_Init dies with DllNotFoundException. -->
   <ItemGroup>
     <PackageReference Include="SDL3-CS.Linux" />

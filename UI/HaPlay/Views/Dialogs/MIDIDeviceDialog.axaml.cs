@@ -9,6 +9,7 @@ public partial class MIDIDeviceDialog : Window
     public MIDIDeviceDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(MIDIDeviceDialog), MinWidth, MinHeight);
     }
 

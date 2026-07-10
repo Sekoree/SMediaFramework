@@ -16,6 +16,7 @@ public partial class AudioMatrixDialog : Window
     public AudioMatrixDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DataContextChanged += OnDataContextChanged;
     }
 

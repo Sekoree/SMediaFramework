@@ -27,6 +27,7 @@ public partial class RecoverSessionDialog : Window, INotifyPropertyChanged
         Sessions = sessions;
         _selectedSession = sessions.FirstOrDefault();
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DataContext = this;
     }
 

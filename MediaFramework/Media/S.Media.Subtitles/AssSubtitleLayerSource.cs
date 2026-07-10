@@ -14,7 +14,9 @@ namespace S.Media.Subtitles;
 /// The returned frame is owned by this source and <strong>re-rendered in place</strong>: it is valid only until
 /// the next <see cref="RenderAt"/> call (libass content can change every frame, e.g. karaoke/transforms, so a
 /// per-frame copy would churn megabytes). Composite it within the tick; do not hold a reference across calls and
-/// do not dispose it. Single-threaded - call from the composition thread.
+/// do not dispose it. <see cref="RenderAt"/> is composition-thread-only, but <see cref="AppendEvents"/> may be
+/// called concurrently from a background decode (the streaming path for large containers) - the two serialize on
+/// an internal gate around every libass call.
 /// </remarks>
 public sealed class AssSubtitleLayerSource : IVideoOverlaySource
 {
@@ -24,6 +26,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
     private readonly int _width;
     private readonly int _height;
     private readonly int _stride;
+    private readonly object _gate = new();  // serializes libass track/render calls (RenderAt vs AppendEvents)
     private byte[] _buffer = [];        // set by InitOverlayBuffer in each ctor
     private VideoFrame _frame = null!;  // set by InitOverlayBuffer in each ctor
     private bool _hasContent;
@@ -197,31 +200,55 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
     /// </summary>
     public VideoFrame? RenderAt(TimeSpan masterTime)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
         var timeMs = (long)masterTime.TotalMilliseconds;
 
-        switch (_renderer.RenderInto(_track, timeMs, _buffer, _width, _height, _stride))
+        lock (_gate)
         {
-            case AssRenderOutcome.Empty:
-                _hasContent = false;
-                return null;
-            case AssRenderOutcome.Rendered:
-                _hasContent = true;
-                return _frame;
-            default: // Unchanged - buffer still holds the previous image
-                return _hasContent ? _frame : null;
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            switch (_renderer.RenderInto(_track, timeMs, _buffer, _width, _height, _stride))
+            {
+                case AssRenderOutcome.Empty:
+                    _hasContent = false;
+                    return null;
+                case AssRenderOutcome.Rendered:
+                    _hasContent = true;
+                    return _frame;
+                default: // Unchanged - buffer still holds the previous image
+                    return _hasContent ? _frame : null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Appends further timed events to the track (via <c>ass_process_chunk</c>) - the streaming decode path:
+    /// a large container's events arrive in batches while the overlay is already live, so subtitles near the
+    /// playhead render long before the demux sweep finishes. Safe to call concurrently with
+    /// <see cref="RenderAt"/>; a call after dispose is a no-op (the background pump may outlive the layer).
+    /// </summary>
+    public void AppendEvents(IReadOnlyList<AssEventChunk> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            foreach (var chunk in events)
+                _track.ProcessChunk(chunk.Body, chunk.StartMs, chunk.DurationMs);
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
-        _disposed = true;
-        _track.Dispose();
-        _renderer.Dispose();
-        _library.Dispose();
-        _frame.Dispose();
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _track.Dispose();
+            _renderer.Dispose();
+            _library.Dispose();
+            _frame.Dispose();
+        }
     }
 }
 

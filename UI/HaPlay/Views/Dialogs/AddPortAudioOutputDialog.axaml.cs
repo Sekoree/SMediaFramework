@@ -10,6 +10,7 @@ public partial class AddPortAudioOutputDialog : Window
     public AddPortAudioOutputDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(AddPortAudioOutputDialog), MinWidth, MinHeight);
     }
 

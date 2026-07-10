@@ -8,6 +8,7 @@ public partial class RoutingDialog : Window
     public RoutingDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
     }
 
     private void CloseClick(object? sender, RoutedEventArgs e) => Close();

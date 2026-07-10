@@ -9,6 +9,7 @@ public partial class RenumberSelectionDialog : Window
     public RenumberSelectionDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

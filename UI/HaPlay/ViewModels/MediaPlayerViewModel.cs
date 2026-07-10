@@ -2173,6 +2173,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void ApplyPlayerConfig(MediaPlayerConfig config)
     {
+        // Project/recovery load: the shared outputs list was typically just replaced, but each player's
+        // binding rebuild is DEFERRED (OnSharedOutputsCollectionChanged posts it). Applying the saved
+        // routing onto the stale bindings meant the posted rebuild wiped every restored selection
+        // moments later ("outputs not connected" after a session restore). Sync NOW so the selections
+        // land on the live lines - the deferred rebuild then preserves them as survivors.
+        SyncOutputsCollection();
+
         Name = string.IsNullOrWhiteSpace(config.Name) ? Name : config.Name;
 
         ChannelPresetRules.Clear();
@@ -2202,7 +2209,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (PlaylistTabs.Count == 0)
             PlaylistTabs.Add(new PlaylistTabViewModel("Set A"));
 
-        MediaFilePath = config.MediaFilePath;
+        // A restored deck comes back IDLE: nothing is actually open, so restoring the last-loaded path
+        // here only made the header LOOK loaded (CurrentMediaDisplay falls back to MediaFilePath) and
+        // kicked off a waveform extraction of the whole file. The playlist selection below still
+        // restores, so the operator is one Play away from where they were. The path stays in the
+        // config file for forward compatibility; the live deck just doesn't adopt it.
+        MediaFilePath = null;
         _currentPlaylistItem = null;
         CurrentPlayingItem = null;
         OnPropertyChanged(nameof(CurrentMediaDisplay));

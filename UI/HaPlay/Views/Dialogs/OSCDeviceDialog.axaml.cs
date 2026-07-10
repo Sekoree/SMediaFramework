@@ -9,6 +9,7 @@ public partial class OSCDeviceDialog : Window
     public OSCDeviceDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(OSCDeviceDialog), MinWidth, MinHeight);
     }
 

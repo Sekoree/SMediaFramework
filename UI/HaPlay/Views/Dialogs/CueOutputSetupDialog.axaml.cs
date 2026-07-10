@@ -11,6 +11,7 @@ public partial class CueOutputSetupDialog : Window
     public CueOutputSetupDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(CueOutputSetupDialog), MinWidth, MinHeight);
     }
 

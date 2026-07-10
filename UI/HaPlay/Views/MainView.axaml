@@ -192,14 +192,22 @@
                       SelectedItem="{Binding SelectedPlayer, Mode=TwoWay}">
             <TabControl.ItemTemplate>
               <DataTemplate x:DataType="vm:MediaPlayerViewModel">
-                <StackPanel Orientation="Horizontal" Spacing="6" MinWidth="96">
-                  <TextBlock FontWeight="SemiBold"
-                             MaxWidth="180"
-                             Text="{Binding Name}"
-                             TextTrimming="CharacterEllipsis" />
-                  <TextBlock FontSize="11" Opacity="0.65" VerticalAlignment="Center"
-                             Text="{Binding PlaybackStateLabel}" />
-                </StackPanel>
+                <!-- The deck tint carries into the tab header: the same low-alpha wash the deck
+                     body uses plus a full-strength dot (the tint picker's swatch language). Both
+                     brushes are Transparent when no tint is set, so untinted tabs render exactly
+                     as before with stable widths - no show/hide reflow when a color is picked. -->
+                <Border Background="{Binding TintBrush}" CornerRadius="0" Padding="6,2">
+                  <StackPanel Orientation="Horizontal" Spacing="6" MinWidth="96">
+                    <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                             Fill="{Binding TintAccentBrush}" />
+                    <TextBlock FontWeight="SemiBold"
+                               MaxWidth="180"
+                               Text="{Binding Name}"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock FontSize="11" Opacity="0.65" VerticalAlignment="Center"
+                               Text="{Binding PlaybackStateLabel}" />
+                  </StackPanel>
+                </Border>
               </DataTemplate>
             </TabControl.ItemTemplate>
             <TabControl.ContentTemplate>

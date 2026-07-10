@@ -8,7 +8,11 @@ namespace HaPlay.Views.Dialogs;
 /// the caller treats as <see cref="UnsavedChangesChoice.Cancel"/>.</summary>
 public partial class UnsavedChangesDialog : Window
 {
-    public UnsavedChangesDialog() => InitializeComponent();
+    public UnsavedChangesDialog()
+    {
+        InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
+    }
 
     private void SaveClick(object? sender, RoutedEventArgs e) => Close(UnsavedChangesChoice.Save);
     private void DiscardClick(object? sender, RoutedEventArgs e) => Close(UnsavedChangesChoice.Discard);

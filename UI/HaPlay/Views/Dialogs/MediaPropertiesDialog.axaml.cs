@@ -15,6 +15,7 @@ public partial class MediaPropertiesDialog : Window
     public MediaPropertiesDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(MediaPropertiesDialog), MinWidth, MinHeight);
         Opened += async (_, _) =>
         {

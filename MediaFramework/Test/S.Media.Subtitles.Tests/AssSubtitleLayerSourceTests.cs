@@ -60,4 +60,41 @@ public class AssSubtitleLayerSourceTests
         Assert.NotNull(a);
         Assert.Same(a, b);
     }
+
+    // The header (script info + styles + events format line) of MinimalAss, without any dialogue -
+    // what an FFmpeg text-subtitle decode hands the streaming ctor via codec private data.
+    private static byte[] HeaderOnly =>
+        Encoding.UTF8.GetBytes(MinimalAss[..MinimalAss.IndexOf("Dialogue:", StringComparison.Ordinal)]);
+
+    [LibAssFact]
+    public void AppendEvents_RendersEventsAddedAfterConstruction()
+    {
+        // The streaming-decode path for large containers: the source goes live with ZERO events and a
+        // background pump appends them as the demux sweep passes - a cue appended mid-flight must render.
+        using var source = new AssSubtitleLayerSource(W, H, HeaderOnly, events: []);
+
+        Assert.Null(source.RenderAt(TimeSpan.FromSeconds(2))); // nothing appended yet
+
+        source.AppendEvents([new AssEventChunk(
+            Encoding.UTF8.GetBytes("0,0,Default,,0,0,0,,Streamed line"),
+            StartMs: 1000, DurationMs: 4000)]);
+
+        var frame = source.RenderAt(TimeSpan.FromSeconds(2));
+        Assert.NotNull(frame);
+        Assert.True(CountVisible(frame) > 0, "appended event did not render");
+
+        Assert.Null(source.RenderAt(TimeSpan.FromSeconds(10))); // outside the appended cue
+    }
+
+    [LibAssFact]
+    public void AppendEvents_AfterDispose_IsANoOp()
+    {
+        // The background pump may outlive the layer (dispose stops it at the next batch boundary) - a
+        // late append must not throw or touch freed libass state.
+        var source = new AssSubtitleLayerSource(W, H, HeaderOnly, events: []);
+        source.Dispose();
+
+        source.AppendEvents([new AssEventChunk(
+            Encoding.UTF8.GetBytes("0,0,Default,,0,0,0,,Late line"), 0, 1000)]);
+    }
 }

@@ -10,6 +10,7 @@ public partial class AddNDIOutputDialog : Window
     public AddNDIOutputDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(AddNDIOutputDialog), MinWidth, MinHeight);
     }
 

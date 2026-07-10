@@ -9,6 +9,7 @@ public partial class RebindMissingOutputsDialog : Window
     public RebindMissingOutputsDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(RebindMissingOutputsDialog), MinWidth, MinHeight);
     }
 

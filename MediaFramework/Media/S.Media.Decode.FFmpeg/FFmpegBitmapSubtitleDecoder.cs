@@ -48,6 +48,14 @@ public static unsafe class FFmpegBitmapSubtitleDecoder
             if (codec == null)
                 throw new InvalidOperationException($"No decoder for subtitle codec id {stream->codecpar->codec_id}.");
 
+            // Only the subtitle packets matter - discard the rest at the demux level so the movie's
+            // video/audio payload is skipped instead of surfaced packet-by-packet just to be unref'd.
+            for (uint i = 0; i < fmt->nb_streams; i++)
+            {
+                if (i != (uint)subIndex)
+                    fmt->streams[i]->discard = AVDiscard.AVDISCARD_ALL;
+            }
+
             codecCtx = avcodec_alloc_context3(codec);
             if (codecCtx == null)
                 throw new OutOfMemoryException("avcodec_alloc_context3 returned NULL");

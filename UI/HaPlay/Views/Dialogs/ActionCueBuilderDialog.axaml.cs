@@ -10,6 +10,7 @@ public partial class ActionCueBuilderDialog : Window
     public ActionCueBuilderDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(ActionCueBuilderDialog), MinWidth, MinHeight);
     }
 

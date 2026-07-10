@@ -9,6 +9,7 @@ public partial class CueListSettingsDialog : Window
     public CueListSettingsDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

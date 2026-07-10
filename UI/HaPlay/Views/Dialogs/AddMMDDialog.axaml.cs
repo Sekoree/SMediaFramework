@@ -10,6 +10,7 @@ public partial class AddMMDDialog : Window
     public AddMMDDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(AddMMDDialog), MinWidth, MinHeight);
         Closing += (_, _) => (DataContext as AddMMDDialogViewModel)?.CancelPending();
     }

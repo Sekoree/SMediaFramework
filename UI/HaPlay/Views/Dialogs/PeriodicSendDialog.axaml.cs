@@ -9,6 +9,7 @@ public partial class PeriodicSendDialog : Window
     public PeriodicSendDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(PeriodicSendDialog), MinWidth, MinHeight);
     }
 

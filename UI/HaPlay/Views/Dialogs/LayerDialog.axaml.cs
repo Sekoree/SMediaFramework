@@ -9,6 +9,7 @@ public partial class LayerDialog : Window
     public LayerDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(LayerDialog), MinWidth, MinHeight);
     }
 

@@ -12,6 +12,7 @@ public partial class KeyboardShortcutsDialog : Window
     public KeyboardShortcutsDialog()
     {
         InitializeComponent();
+        DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DataContext = new KeyboardShortcutsDialogViewModel();
         Opened += (_, _) => SearchBox.Focus(); // land in the search box for type-to-filter
     }
