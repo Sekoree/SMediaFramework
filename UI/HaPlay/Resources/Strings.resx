@@ -3190,4 +3190,10 @@
   <data name="LiveTimelineLabel" xml:space="preserve">
     <value>LIVE — seeking unavailable</value>
   </data>
+  <data name="AddSubtitleCueButton" xml:space="preserve">
+    <value>Subtitle cue</value>
+  </data>
+  <data name="EditVideoFxButton" xml:space="preserve">
+    <value>Video FX…</value>
+  </data>
 </root>

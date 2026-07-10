@@ -1072,4 +1072,6 @@ public static class Strings
     public static string PlayerTintHeader => Get(nameof(PlayerTintHeader));
     public static string PlayerTintCustomLabel => Get(nameof(PlayerTintCustomLabel));
     public static string LiveTimelineLabel => Get(nameof(LiveTimelineLabel));
+    public static string AddSubtitleCueButton => Get(nameof(AddSubtitleCueButton));
+    public static string EditVideoFxButton => Get(nameof(EditVideoFxButton));
 }
