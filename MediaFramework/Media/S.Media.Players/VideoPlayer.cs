@@ -286,7 +286,20 @@ public sealed class VideoPlayer : IDisposable
                     Trace.LogDebug(
                         "Play: realigning source from {Src} to clock {Clock} (driftMs={DriftMs})",
                         src, pos, drift.TotalMilliseconds);
-                    seekable.Seek(pos);
+                    try
+                    {
+                        seekable.Seek(pos);
+                    }
+                    catch (Exception ex)
+                    {
+                        // The realign is best-effort (drift within tolerance plays unaligned anyway); a
+                        // source whose seek faults must not abort Play - that stranded the clip paused
+                        // after a failed coordinated seek (the session's restore called Play, the realign
+                        // re-hit the broken seek, and the clip stayed frozen). Start from wherever the
+                        // source actually is; presentation pacing absorbs the offset.
+                        Trace.LogWarning(ex,
+                            "Play: source realign seek to {Clock} failed; starting unaligned from {Src}", pos, src);
+                    }
                 }
                 else
                 {

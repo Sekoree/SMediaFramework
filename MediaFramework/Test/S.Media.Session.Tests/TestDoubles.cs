@@ -211,6 +211,40 @@ internal sealed class SyntheticVideoSource(int frameCount = 30) : IVideoSource, 
     }
 }
 
+/// <summary>A video provider whose sources fault on every <c>Seek</c> - models a decoder that throws
+/// mid-coordinated-seek (observed live: <c>avcodec_send_packet</c> EINVAL). Playback itself is normal, so
+/// tests can pin the session's restore-play-state-on-failed-seek contract.</summary>
+internal sealed class ThrowingSeekVideoProvider(int frameCount = 300) : IMediaDecoderProvider
+{
+    public string Name => "throwing-seek";
+
+    public double Probe(string uri, MediaKind kind) => kind == MediaKind.Video ? 1.0 : 0.0;
+
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => new ThrowingSeekVideoSource(frameCount);
+
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
+        throw new NotSupportedException("throwing-seek provider is video-only");
+
+    public static IMediaRegistry Registry(int frameCount = 300) =>
+        MediaRegistry.Build(b => b.AddDecoder(new ThrowingSeekVideoProvider(frameCount)));
+}
+
+internal sealed class ThrowingSeekVideoSource(int frameCount) : IVideoSource, ISeekableSource
+{
+    private readonly SyntheticVideoSource _inner = new(frameCount);
+
+    public VideoFormat Format => _inner.Format;
+    public IReadOnlyList<PixelFormat> NativePixelFormats => _inner.NativePixelFormats;
+    public bool IsExhausted => _inner.IsExhausted;
+    public TimeSpan Duration => _inner.Duration;
+    public TimeSpan Position => _inner.Position;
+    public void SelectOutputFormat(PixelFormat format) => _inner.SelectOutputFormat(format);
+    public bool TryReadNextFrame(out VideoFrame frame) => _inner.TryReadNextFrame(out frame);
+
+    public void Seek(TimeSpan position) =>
+        throw new InvalidOperationException("synthetic seek fault (ThrowingSeekVideoSource)");
+}
+
 internal sealed class SyntheticLiveVideoSource : ILiveVideoSource
 {
     private long _next;

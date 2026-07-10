@@ -1200,10 +1200,10 @@ public sealed class ShowSession : IAsyncDisposable
                                 if (loops)
                                 {
                                     var masterBeforeLoop = group.Timeline.GetSnapshot().MasterTime;
-                                    player.SeekCoordinated(start);
-                                    if (!player.IsRunning)
-                                        player.Play();
-                                    group.Timeline.MarkDiscontinuity(masterBeforeLoop); // source wraps; master stays monotonic
+                                    // Restores play state even when the wrap-seek faults (same contract as
+                                    // SeekAsync) - a failed loop restart must not freeze the clip at the
+                                    // out-point with the monitor still believing it loops.
+                                    SeekCoordinatedRestoringPlayState(player, start, group, masterBeforeLoop, resume: true);
                                     return false; // keep looping
                                 }
                                 if (freezes)
@@ -1367,13 +1367,51 @@ public sealed class ShowSession : IAsyncDisposable
                 // and tears the deck down - i.e. seek "stops playback" (matches SeekManyAsync's resume).
                 var wasRunning = active.Player.IsRunning;
                 var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
-                active.Player.SeekCoordinated(position);
-                if (wasRunning)
-                    active.Player.Play();
-                group.Timeline.MarkDiscontinuity(masterBeforeSeek); // source jumps; master stays monotonic (NXT-04)
+                SeekCoordinatedRestoringPlayState(active.Player, position, group, masterBeforeSeek, resume: wasRunning);
             }
             return Task.CompletedTask;
         });
+
+    /// <summary>
+    /// Coordinated seek that can never strand the clip paused: <c>SeekCoordinated</c> pauses BEFORE it
+    /// seeks, so a decode/demux fault thrown by the seek (observed live: <c>avcodec_send_packet</c>
+    /// EINVAL on some codecs) used to skip the resume AND the discontinuity mark - the clip sat frozen
+    /// with no error shown, the deck's poll read it as ended, and every later seek failed the same way.
+    /// On failure this restores the pre-seek play state (best effort - the demux stays wherever the
+    /// failed seek left it) and still marks the discontinuity (the source position may have partially
+    /// moved), THEN rethrows so the caller's task surfaces the fault.
+    /// </summary>
+    private static void SeekCoordinatedRestoringPlayState(
+        S.Media.Players.MediaPlayer player,
+        TimeSpan position,
+        TransportGroup group,
+        TimeSpan masterBeforeSeek,
+        bool resume)
+    {
+        try
+        {
+            player.SeekCoordinated(position);
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, $"ShowSession: coordinated seek to {position} failed; restoring play state");
+            try
+            {
+                if (resume && !player.IsRunning)
+                    player.Play();
+            }
+            catch (Exception resumeEx)
+            {
+                MediaDiagnostics.LogError(resumeEx, "ShowSession: resume after a failed seek also failed");
+            }
+            group.Timeline.MarkDiscontinuity(masterBeforeSeek);
+            throw;
+        }
+
+        if (resume)
+            player.Play();
+        group.Timeline.MarkDiscontinuity(masterBeforeSeek); // source jumps; master stays monotonic (NXT-04)
+    }
 
     /// <summary>Seeks several groups together behind one shared epoch - the group-seek barrier (NXT-04 /
     /// old-engine <c>group_seek_barrier</c> parity). Every target group is paused first so its clock freezes,
@@ -1396,6 +1434,7 @@ public sealed class ShowSession : IAsyncDisposable
                 TimeSpan Position,
                 bool Resume,
                 TimeSpan MasterBeforeSeek)>(seeks.Count);
+            List<Exception>? errors = null;
             foreach (var (groupId, position) in seeks)
             {
                 var group = GetOrAddGroup(groupId);
@@ -1404,19 +1443,62 @@ public sealed class ShowSession : IAsyncDisposable
                 var wasRunning = active.Player.IsRunning;
                 var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
                 if (wasRunning)
-                    active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                {
+                    try
+                    {
+                        active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Skip this group's seek (its clock never froze) but keep the barrier for the rest.
+                        MediaDiagnostics.LogError(ex, $"ShowSession: group seek pause failed for group '{groupId}'; skipping its seek");
+                        (errors ??= []).Add(ex);
+                        continue;
+                    }
+                }
                 targets.Add((group, active.Player, position, wasRunning, masterBeforeSeek));
             }
 
             // 2) Seek all with clocks frozen, then 3) release the running ones together from the shared epoch.
+            // A failing seek must not break the barrier: the other groups still seek, and EVERY paused group
+            // still resumes (a faulted one from its pre-seek position) - a fault used to leave every
+            // not-yet-seeked group stranded paused with no error surfaced.
             foreach (var (_, player, position, _, _) in targets)
-                player.SeekCoordinated(position);
+            {
+                try
+                {
+                    player.SeekCoordinated(position);
+                }
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, $"ShowSession: group seek to {position} failed; the clip resumes from its pre-seek position");
+                    (errors ??= []).Add(ex);
+                }
+            }
             foreach (var (group, player, _, resume, masterBeforeSeek) in targets)
             {
                 if (resume)
-                    player.Play();
+                {
+                    try
+                    {
+                        player.Play();
+                    }
+                    catch (Exception ex)
+                    {
+                        MediaDiagnostics.LogError(ex, "ShowSession: group seek resume failed");
+                        (errors ??= []).Add(ex);
+                    }
+                }
                 group.Timeline.MarkDiscontinuity(masterBeforeSeek); // all masters preserve the shared pre-seek epoch
             }
+
+            if (errors is not null)
+            {
+                if (errors.Count == 1)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+                throw new AggregateException("One or more group seeks failed (play state was restored).", errors);
+            }
+
             return Task.CompletedTask;
         });
     }

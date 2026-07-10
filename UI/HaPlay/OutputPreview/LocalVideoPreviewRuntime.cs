@@ -6,6 +6,8 @@ using Avalonia.Threading;
 using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.Views;
+using Microsoft.Extensions.Logging;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Present.SDL3;
 
@@ -144,6 +146,8 @@ internal static class LocalVideoWindowPlacement
 
 internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.OutputPreview.SDLLocalVideoPreviewRuntime");
+
     private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
     private readonly OutputManagementViewModel _owner;
@@ -335,6 +339,19 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     private void OnSDLCloseRequested(object? sender, EventArgs e)
     {
+        // The X on a window a session is actively driving must NOT tear the sink down: disposing it here
+        // left the composition pump submitting into a disposed output (an exception per frame until the
+        // line teardown caught up) and silently killed a live show output. Swallow the request while
+        // playback holds the output - the operator detaches the line or stops playback from the app;
+        // once idle, the X closes (and removes) the line exactly as before.
+        if (Volatile.Read(ref _playbackHolders) != 0)
+        {
+            Trace.LogInformation(
+                "Local output '{Name}': window close ignored while a session is driving it - stop playback or remove the line instead",
+                _definition.DisplayName);
+            return;
+        }
+
         if (Interlocked.CompareExchange(ref _closeHandlerPosted, 1, 0) != 0)
             return;
 
@@ -382,6 +399,8 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
 internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.OutputPreview.AvaloniaLocalVideoPreviewRuntime");
+
     private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
     private readonly OutputManagementViewModel _owner;
@@ -427,6 +446,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             var format = PreviewVideoFrames.PreviewFormat(w, h);
             win.Video.Configure(format);
             win.Video.Submit(PreviewVideoFrames.CreateIdleFrame(format, _definition.BackgroundImagePath));
+            win.Closing += OnWindowClosing;
             win.Closed += OnWindowClosed;
             win.SizeChanged += OnWindowSizeChanged;
             _window = win;
@@ -533,12 +553,30 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
         Interlocked.Exchange(ref _playbackHolders, 0);
     }
 
+    private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        // Operator X while a session drives the embedded GL control: closing would pull the sink out from
+        // under the video router (an exception per submitted frame until the line teardown caught up) and
+        // silently kill a live show output. Veto it; programmatic teardown (Dispose sets _disposing) and
+        // idle closes proceed as before.
+        if (Volatile.Read(ref _disposing) == 0 && Volatile.Read(ref _playbackHolders) != 0)
+        {
+            e.Cancel = true;
+            Trace.LogInformation(
+                "Local output '{Name}': window close ignored while a session is driving it - stop playback or remove the line instead",
+                _definition.DisplayName);
+        }
+    }
+
     private void OnWindowClosed(object? sender, EventArgs e)
     {
         if (Interlocked.Exchange(ref _ended, 1) != 0)
             return;
         if (sender is LocalVideoPreviewWindow win)
+        {
+            win.Closing -= OnWindowClosing;
             win.SizeChanged -= OnWindowSizeChanged;
+        }
         _window = null;
         // _disposing is set only by our own Dispose(); a window the operator closes leaves it clear.
         var userInitiated = Volatile.Read(ref _disposing) == 0;

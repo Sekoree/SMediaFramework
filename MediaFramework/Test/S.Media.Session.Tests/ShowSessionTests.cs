@@ -482,6 +482,74 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task SeekAsync_WhenTheSeekFaults_RestoresPlayState_AndFaultsTheTask()
+    {
+        // A coordinated seek pauses BEFORE it seeks, so a decode/demux fault thrown by the seek used to
+        // skip the resume AND the discontinuity mark: the clip sat silently paused (the deck's poll read
+        // it as ended) and every later seek failed the same way. The session must restore the pre-seek
+        // play state, still bump the timeline generation, and fault the task so the caller sees the error.
+        var doc = new ShowDocument(
+            1,
+            [new CueDefinition("c", 1, "C")],
+            [new ShowClipBinding("c", "fake://v") { AudioRoutes = [] }],
+            [], []);
+        await using var session = new ShowSession(ThrowingSeekVideoProvider.Registry(frameCount: 900));
+        await session.LoadDocumentAsync(doc);
+        await session.GoAsync();
+        await Task.Delay(50);
+
+        var fired = Assert.Single(await session.SnapshotAsync());
+        Assert.True(fired.IsRunning);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.SeekAsync(TimeSpan.FromSeconds(5)));
+
+        var after = Assert.Single(await session.SnapshotAsync());
+        Assert.True(after.IsRunning, "a faulted seek must not strand the clip paused");
+        Assert.True(after.TimelineGeneration > fired.TimelineGeneration,
+            "the discontinuity must still be marked so pollers reset their transient windows");
+    }
+
+    [Fact]
+    public async Task SeekManyAsync_WhenOneSeekFaults_StillResumesEveryGroup()
+    {
+        // The group-seek barrier: one clip's seek fault must not leave ANY paused group stranded - the
+        // remaining groups still seek and every group resumes from the shared epoch; the task faults.
+        var doc = new ShowDocument(
+            1,
+            [
+                new CueDefinition("c1", 1, "C1", GroupId: "g1"),
+                new CueDefinition("c2", 2, "C2", GroupId: "g2"),
+            ],
+            [
+                new ShowClipBinding("c1", "fake://a") { AudioRoutes = [] },
+                new ShowClipBinding("c2", "fake://b") { AudioRoutes = [] },
+            ],
+            [], []);
+        await using var session = new ShowSession(ThrowingSeekVideoProvider.Registry(frameCount: 900));
+        await session.LoadDocumentAsync(doc);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1")); // group g1
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c2")); // group g2
+        await Task.Delay(50);
+
+        // The standalone session also carries an implicit empty "main" group; assert on the cue groups.
+        static bool Running(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).IsRunning;
+
+        var fired = await session.SnapshotAsync();
+        Assert.True(Running(fired, "g1"));
+        Assert.True(Running(fired, "g2"));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => session.SeekManyAsync(
+        [
+            ("g1", TimeSpan.FromSeconds(5)),
+            ("g2", TimeSpan.FromSeconds(5)),
+        ]));
+
+        var after = await session.SnapshotAsync();
+        Assert.True(Running(after, "g1"), "group g1 was left stranded paused by the faulted group seek");
+        Assert.True(Running(after, "g2"), "group g2 was left stranded paused by the faulted group seek");
+    }
+
+    [Fact]
     public async Task TransportTimeline_PublishesTrimmedCueCoordinates_AndReanchorsOnSeek()
     {
         var binding = new ShowClipBinding("c", "fake://v")
