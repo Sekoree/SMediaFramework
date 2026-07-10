@@ -1,0 +1,31 @@
+<Project>
+
+  <!-- MSBuild uses only the NEAREST Directory.Build.props, so chain up to the repo root one first. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- Native runtimes are APP-owned deployment assets (see UI/HaPlay.Desktop/HaPlay.Desktop.csproj):
+       the framework libraries carry only the managed bindings so packaged libraries never pull native
+       runtimes transitively. Every project in Tools/ is itself a final executable, so the same assets
+       are added here once for the whole tree — this is what puts libSDL3.so next to the CI smokes
+       (AbiGlSmoke etc.) and dev-run tools; without it SDL_Init dies with DllNotFoundException. -->
+  <ItemGroup>
+    <PackageReference Include="SDL3-CS.Linux" />
+    <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!-- FFmpeg 8.x native runtime, win-x64 publishes only (the package ships no other RIDs; Linux/macOS
+       use system/CI-provided FFmpeg). Mirrors the HaPlay.Desktop reference. -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PackageReference Include="FFmpeg.GPL" />
+  </ItemGroup>
+
+  <!-- RID-less Windows build (IDE Debug/run): the platform native package only places SDL3.dll through
+       runtimes/<rid>/native RID resolution; copy it next to the tool for the no-RID Windows case. -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+    <None Include="$(PkgSDL3-CS_Windows)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>SDL3.dll</Link>
+    </None>
+  </ItemGroup>
+
+</Project>
