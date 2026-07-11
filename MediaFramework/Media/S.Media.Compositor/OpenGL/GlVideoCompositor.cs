@@ -663,7 +663,10 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         var returnPrevious = previousPending is { Length: > 0 };
         var currentPending = new PboReadback[outputs.Count];
         var currentPendingCount = 0;
-        var frames = new VideoFrame[outputs.Count];
+        // Steady state (returnPrevious) returns the completed PREVIOUS readbacks, so the local frames
+        // array would go unused - only allocate it on the warm-up pass. The returned array escapes to
+        // the caller by contract (TryReadNextFrames hands it out), so it cannot be pooled/reused.
+        VideoFrame[] frames = returnPrevious ? [] : new VideoFrame[outputs.Count];
         var created = 0;
 
         try

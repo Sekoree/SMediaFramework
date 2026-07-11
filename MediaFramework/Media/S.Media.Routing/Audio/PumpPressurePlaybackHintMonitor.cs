@@ -15,6 +15,14 @@ namespace S.Media.Routing;
 /// conflated across outputs.
 /// </para>
 /// <para>
+/// <strong>Decay</strong>: while drops keep arriving the hint holds steady, but once the output goes
+/// quiet for <see cref="DecayGracePeriod"/> the <em>read</em> value eases exponentially back toward 0
+/// (half-life <see cref="DecayHalfLife"/>). Without this, one transient stall latched a bias on the
+/// wrapped output for the rest of the session. Decay is applied on read (pollers like the FFmpeg
+/// <c>AdaptiveRateAudioOutput</c> sample per chunk); <see cref="HintPpmBiasChanged"/> still fires only
+/// on observations.
+/// </para>
+/// <para>
 /// Coordinated <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong> policies across multiple outputs are out of scope here -
 /// this type only derives a scalar hint from queue pressure. Per-output rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioOutput</c> instead.
 /// </para>
@@ -30,8 +38,16 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
     private readonly double _maxAbsPpm;
     private readonly double _ppmPerDropPerSecond;
 
+    /// <summary>No decay while the last drop is at most this recent - sustained pressure holds the bias steady.</summary>
+    public static readonly TimeSpan DecayGracePeriod = TimeSpan.FromSeconds(2);
+
+    /// <summary>Half-life of the exponential ease back toward 0 once the grace period has passed.</summary>
+    public static readonly TimeSpan DecayHalfLife = TimeSpan.FromSeconds(5);
+
     private long _lastTotal;
     private DateTimeOffset _lastAt;
+    /// <summary>When the most recent observation with new drops arrived - the decay anchor.</summary>
+    private DateTimeOffset _lastDropAt;
     private double _hintPpm;
     private bool _disposed;
 
@@ -49,6 +65,7 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
         _maxAbsPpm = maxAbsPpm;
         _ppmPerDropPerSecond = ppmPerDropPerSecond;
         _lastAt = DateTimeOffset.UtcNow;
+        _lastDropAt = _lastAt;
         _router.PumpPressure += OnPumpPressure;
     }
 
@@ -69,15 +86,28 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
         _maxAbsPpm = maxAbsPpm;
         _ppmPerDropPerSecond = ppmPerDropPerSecond;
         _lastAt = DateTimeOffset.UtcNow;
+        _lastDropAt = _lastAt;
         _router.PumpPressure += OnPumpPressure;
     }
 
-    /// <summary>Latest suggested bias in ppm (negative ⇒ slow clock).</summary>
-    public double HintPpmBias
+    /// <summary>Latest suggested bias in ppm (negative ⇒ slow clock), decayed toward 0 when the
+    /// output has been quiet (see the class remarks).</summary>
+    public double HintPpmBias => GetHintPpmBias(DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// <see cref="HintPpmBias"/> evaluated at an explicit <paramref name="now"/> - use the same time base
+    /// as the <see cref="ApplyObservation"/> calls (tests / custom telemetry drive synthetic clocks).
+    /// </summary>
+    public double GetHintPpmBias(DateTimeOffset now)
     {
-        get
+        lock (_gate)
         {
-            lock (_gate) return _hintPpm;
+            if (_hintPpm == 0)
+                return 0;
+            var quietSeconds = (now - _lastDropAt - DecayGracePeriod).TotalSeconds;
+            if (quietSeconds <= 0)
+                return _hintPpm;
+            return _hintPpm * Math.Exp(-quietSeconds * Math.Log(2) / DecayHalfLife.TotalSeconds);
         }
     }
 
@@ -115,6 +145,10 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
 
             if (delta <= 0)
                 return;
+
+            // Fresh drops re-anchor the decay even when the computed hint value is unchanged, so a
+            // steadily dropping output holds its full bias while a quiet one eases back toward 0.
+            _lastDropAt = now;
 
             var dropsPerSec = delta / dt;
             var raw = -_ppmPerDropPerSecond * dropsPerSec;

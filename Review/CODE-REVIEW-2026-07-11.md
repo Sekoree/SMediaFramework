@@ -58,7 +58,7 @@ private static Action? ResolveFlushAction(PauseFlushPolicy policy) => null;
 
 Either wire the flush action for the registry/live path, or delete the parameter and the enum (keeping `PauseWithFlushAction` as the explicit escape hatch). As-is it misleads both callers and readers into believing a codec flush occurs by default.
 
-### 1.3 (M) ✅/📝 Intentional pump flushes latch a permanent adaptive-rate bias
+### 1.3 (M) ✅ Intentional pump flushes latch a permanent adaptive-rate bias
 
 Chain:
 
@@ -98,7 +98,7 @@ Consequences: (a) a route at uniform gain ≠ 1.0 with one of those six map shap
 
 Suggested shape: classify the map **once in the `ChannelMap` constructor** into a `FastPathKind` enum (+ any precomputed params like the packed-permutation indices), and make both `ApplyAdditive` and `ApplyRoute` a single `switch` on it with a `uniformGain` parameter. This removes the probe chain from the per-chunk path (routers run 100 chunks/s × routes), guarantees the two call sites can't drift, and makes the scalar fallback conditions explicit.
 
-### 2.2 (M) ✅(audio)/⏸(video) `MediaContainerSharedDemux` duplicates the standalone decoders' conversion code
+### 2.2 (M) ✅ `MediaContainerSharedDemux` duplicates the standalone decoders' conversion code
 
 - Audio: `MediaContainerSharedDemux.cs:1785-1885` (`ConvertAudioFrame`, `TryDrainAudioTailFrame`) is near-verbatim `AudioFileDecoder.cs:479-577`.
 - Video: the plane-pack / pooled-buffer emit code at `MediaContainerSharedDemux.cs:2319-2444` mirrors `VideoFileDecoder.cs:808-936`.
@@ -120,15 +120,15 @@ public static bool TryCreateNv12CpuFanOutViews(...) =>
 
 Identical `private static bool TryUpdateThrottle(ref long, TimeSpan)` in: `AudioFileDecoder.cs:399`, `VideoFileDecoder.cs:537`, `NDIAudioOutput.cs:177`, `NDIVideoSender.cs:577`, `VideoPlayer.cs:1041`, `AudioRouter.OutputPump.cs:305`, `VideoOutputPump.cs:566`, `VideoRouter.cs:520`. Move it into `MediaDiagnostics` (Core is referenced by all eight projects) as e.g. `MediaDiagnostics.TryEnterThrottledLog(ref long slot, TimeSpan interval)`.
 
-### 2.5 (L) ⏸ GL compositor multi-warp path allocates small arrays per composite
+### 2.5 (L) ✅(corrected) GL compositor multi-warp path allocates small arrays per composite
 
 `S.Media.Compositor/OpenGL/GlVideoCompositor.cs:626, 664-666, 763` — `new VideoFrame[outputs.Count]`, `new PboReadback[outputs.Count]`, and `SnapshotOutputRequests` allocate per read at output cadence (60 Hz). The single-output path and `VideoCompositorSource` already use reusable scratch; cache these arrays keyed on `outputs.Count` the same way (the read path is single-consumer, so a plain field is enough).
 
-### 2.6 (L) ⏸ Per-frame jagged-array wrappers in the CPU convert/emit paths
+### 2.6 (L) ✅(partial, corrected) Per-frame jagged-array wrappers in the CPU convert/emit paths
 
 `VideoCpuFrameConverter.cs:128` and `VideoFileDecoder.cs:880` (and the shared-demux twin) allocate `new byte[nDst][]` + a `ReadOnlyMemory<byte>[]` + `int[]` strides per converted frame. The plane data itself is pooled; only these small holder arrays churn (~3 small objects per frame, 60/s per converting branch). Converters are serialized (`_submitLock` / pump drain thread), so the holder arrays can be cached fields resized on reconfigure. Worth it only on the branch-convert path (NDI at high fps); skip if you value the current code's simplicity.
 
-### 2.7 (T) ✅(partial) Micro-notes
+### 2.7 (T) ✅ Micro-notes
 
 - `S.Control/ControlEventQueue.cs:158-173`: `CoalesceKeyFor` builds an interpolated string per control event (including the non-full-queue common case). A readonly record struct key (`(kind, node, ch, controller)`) in the `_coalesceIndex` dictionary would remove per-event string churn under MIDI floods. Low priority — events are human-scale most of the time.
 - `UI/HaPlay/ViewModels/MediaPlayerViewModel.cs:1265-1279`: `PollAudioMeters` snapshots `_meterTaps.ToArray()` per 250 ms tick; a reusable `List<>` copy would be allocation-free. Negligible.
@@ -204,3 +204,19 @@ test projects pass (1,735 passed, 0 failed, 9 skipped — including HaPlay.Tests
 Deferred items for a future pass: video-side demux/decoder plane-emit dedup (2.2), GL multi-warp
 array caching (2.5/2.6), `ControlEventQueue` struct coalesce keys (2.7), optional hint-monitor decay
 (1.3), `ControlWorkspaceViewModel` partial split (§4).
+
+---
+
+## Fix log, second pass (2026-07-11, deferred items)
+
+All previously deferred items were resolved the same day; full solution builds with **0 warnings /
+0 errors** and all 19 test projects pass (1,737 passed, 0 failed, 9 skipped).
+
+| Deferred item | Status | What was done |
+|---|---|---|
+| 2.2 video-side dedup | ✅ | New `S.Media.Decode.FFmpeg/Video/SwsFrameEmitter.cs` — one implementation of the packed and planar sws→pooled-`VideoFrame` emit paths (pin/rollback bookkeeping, release closures, `srcSliceHeight` parameterized for the demux's odd-dimension attached-pic path). `VideoFileDecoder.BuildConvertedFrame` and the demux's `BuildConvertedVideoFrame` are now one-line delegations; both files' private sws scratch arrays and `BuildConvertedPlanar*` copies are deleted (~250 duplicated lines removed). Small improvement folded in: the packed path now returns the rented buffer to the pool on an sws_scale error instead of leaking it to GC. |
+| 2.5 GL multi-warp arrays | ✅ corrected | **The original suggestion was wrong**: the `VideoFrame[]` results escape to the caller by contract (`TryReadNextFrames` hands them out) and the pending-readback array escapes into `PboReadbackState`, so they cannot be pooled. The one real win — the steady-state PBO path allocated a `frames` array it never used (always replaced by the completed previous readbacks) — is fixed (allocation skipped when `returnPrevious`). |
+| 2.6 converter holder arrays | ✅ partial, corrected | Same correction: `dstStrides`/`dstMemories`/`dstBuffers` escape into the returned frame and cannot be cached. What could be: `VideoCpuFrameConverter` now reuses its 8-slot line/stride swscale scratch across `Convert` calls and computes the destination plane strides/lengths **once per `Configure`** — the strides array is shared across emitted frames (`VideoFrame.Strides` is documented do-not-mutate) and *replaced* (never mutated) on reconfigure. Pin/handle arrays stay per-call deliberately (fresh defaults keep the finally-blocks trivially safe against double-free). |
+| 2.7 `ControlEventQueue` coalesce keys | ✅ | `CoalesceKey` readonly record struct (kind + source/origin Guids + channel/controller-or-note, `-1` mirroring the old string keys' empty segment for null payload fields) replaces per-event interpolated strings; the index dictionary, item record, and `EnqueueAsync` signature updated. Zero allocation per key derivation under MIDI/meter floods. |
+| 1.3 hint decay | ✅ | `PumpPressurePlaybackHintMonitor` now eases the hint back toward 0 after a quiet period: no decay within `DecayGracePeriod` (2 s) of the last drop, then exponential with `DecayHalfLife` (5 s). Decay is evaluated **on read** (`AdaptiveRateAudioOutput` polls per chunk); fresh drops re-anchor even when the hint value is unchanged, so sustained pressure holds the full bias. `GetHintPpmBias(DateTimeOffset now)` added so tests/telemetry share the observation time base. The pinned `KeepsPriorHint` test was replaced with grace-window / decay / re-anchor tests (4 new/updated tests, all green). |
+| §4 `ControlWorkspaceViewModel` split | ✅ | Split along its own section markers into partials (joining the pre-existing `.Persistence.cs`): main 854 + `.Layers` 238 + `.Osc` 351 + `.MidiDevices` 1,032 + `.MidiFallback` 385 + `.Learn` 424 lines. Pure mechanical move — no behavior change. |
