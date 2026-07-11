@@ -332,13 +332,18 @@ public partial class MediaPlayerViewModel
     /// report Idle because this probe was gated on the deck's VIDEO lines). Returns null when this deck isn't
     /// ShowSession-driving the line at all, so the caller falls back to the engine probe. Lock-free
     /// (composition stats + audio-pump snapshot), no marshaling.</summary>
+    // Previous cumulative counters per line for the health poll's recent-rate scoring (UI-thread only:
+    // the 1 Hz health DispatcherTimer is the sole caller).
+    private readonly Dictionary<Guid, long> _lineHealthPrevVideoLate = new();
+    private readonly Dictionary<Guid, long> _lineHealthPrevAudioDropped = new();
+
     internal OutputLineHealthEvaluator.LineHealthMetrics? TryGetShowSessionLineHealthMetrics(Guid outputLineId)
     {
         if (!ShowSessionActive || _playerShowSession is not { } session)
             return null;
 
         long videoSubmitted = 0;
-        long videoDropped = 0;
+        long videoLateRecent = 0;
         var driven = false;
         if (_playerAcquiredLines.Contains(outputLineId)
             && session.GetCompositionStats(MediaPlayerShowMapper.PlayerCompositionId) is { } stats
@@ -346,7 +351,12 @@ public partial class MediaPlayerViewModel
         {
             driven = true;
             videoSubmitted = stats.FramesSubmitted;
-            videoDropped = stats.PumpOverruns + stats.SlotOverflowFrames;
+            // Pump overruns only - composite ticks over the canvas budget, i.e. the output genuinely ran
+            // late. SlotOverflowFrames is deliberately excluded: master-aligned slots supersede a stale
+            // pending frame as part of normal pacing, so counting it reported a steady stream of phantom
+            // "drops" (and latched the LED red via the old lifetime >120 rule) on a perfectly smooth deck.
+            videoLateRecent = OutputLineHealthEvaluator.RecentDelta(
+                _lineHealthPrevVideoLate, outputLineId, stats.PumpOverruns);
         }
 
         // Audio: reverse-map the line to the device id the deck routes to - PortAudio lines by their backend
@@ -365,21 +375,16 @@ public partial class MediaPlayerViewModel
         {
             driven = true;
             audioEnqueued = audio.Enqueued;
-            audioDropped = audio.Dropped;
+            audioDropped = OutputLineHealthEvaluator.RecentDelta(
+                _lineHealthPrevAudioDropped, outputLineId, audio.Dropped);
         }
 
         if (!driven)
             return null;
 
-        var totalSubmitted = videoSubmitted + audioEnqueued;
-        var totalDropped = videoDropped + audioDropped;
-        var state = totalDropped == 0
-            ? OutputLineHealthState.Healthy
-            : totalDropped > 120 || (double)totalDropped / totalSubmitted > 0.05
-                ? OutputLineHealthState.Error
-                : OutputLineHealthState.Warning;
+        var state = OutputLineHealthEvaluator.Score(videoLateRecent, audioDropped);
         return new OutputLineHealthEvaluator.LineHealthMetrics(
-            state, videoSubmitted, videoDropped, 0, 0, audioEnqueued, audioDropped);
+            state, videoSubmitted, videoLateRecent, 0, 0, audioEnqueued, audioDropped);
     }
 
     /// <summary>Builds the deck's initial ShowSession audio routes from its selected PortAudio output bindings, so

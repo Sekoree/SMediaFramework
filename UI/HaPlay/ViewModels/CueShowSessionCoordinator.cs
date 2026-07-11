@@ -448,13 +448,18 @@ public sealed class CueShowSessionCoordinator
     /// health state that mirrors the engine. Both sides read the session's lock-free snapshots, so a video, audio,
     /// or audio-only cue line all light up. Null only when the line is genuinely undriven (the outputs panel then
     /// falls back to the media-player probe / Idle). Runs off the UI poll thread with no dispatcher marshaling.</summary>
+    // Previous cumulative counters per line for the health poll's recent-rate scoring (called only from
+    // the outputs panel's 1 Hz health refresh).
+    private readonly Dictionary<Guid, long> _lineHealthPrevVideoLate = new();
+    private readonly Dictionary<Guid, long> _lineHealthPrevAudioDropped = new();
+
     private OutputLineHealthEvaluator.LineHealthMetrics? TryGetCueShowLineHealthMetrics(Guid outputLineId)
     {
         if (_cueShowSession is not { } session)
             return null;
 
         long videoSubmitted = 0;
-        long videoDropped = 0;
+        long videoLateTotal = 0;
         var driven = false;
         foreach (var (compId, outs) in _cueVideoOutputs)
         {
@@ -464,8 +469,13 @@ public sealed class CueShowSessionCoordinator
                 continue;
             driven = true;
             videoSubmitted += stats.FramesSubmitted;
-            videoDropped += stats.PumpOverruns + stats.SlotOverflowFrames;
+            // Pump overruns only - SlotOverflowFrames is normal master-aligned pacing (see the deck's
+            // TryGetShowSessionLineHealthMetrics for the full rationale) and reported phantom drops.
+            videoLateTotal += stats.PumpOverruns;
         }
+        var videoLateRecent = driven
+            ? OutputLineHealthEvaluator.RecentDelta(_lineHealthPrevVideoLate, outputLineId, videoLateTotal)
+            : 0;
 
         // Audio: reverse-map the line to its PortAudio device and sum this line's active cue-audio pump chunks
         // (enqueued/dropped). Closes the "audio-only cue line reports Idle" gap - an audio-only line now lights up
@@ -480,21 +490,16 @@ public sealed class CueShowSessionCoordinator
         {
             driven = true;
             audioEnqueued = audio.Enqueued;
-            audioDropped = audio.Dropped;
+            audioDropped = OutputLineHealthEvaluator.RecentDelta(
+                _lineHealthPrevAudioDropped, outputLineId, audio.Dropped);
         }
 
-        var totalSubmitted = videoSubmitted + audioEnqueued;
-        if (!driven || totalSubmitted == 0)
+        if (!driven || videoSubmitted + audioEnqueued == 0)
             return null;
 
-        var totalDropped = videoDropped + audioDropped;
-        var state = totalDropped == 0
-            ? OutputLineHealthState.Healthy
-            : totalDropped > 120 || (double)totalDropped / totalSubmitted > 0.05
-                ? OutputLineHealthState.Error
-                : OutputLineHealthState.Warning;
+        var state = OutputLineHealthEvaluator.Score(videoLateRecent, audioDropped);
         return new OutputLineHealthEvaluator.LineHealthMetrics(
-            state, videoSubmitted, videoDropped, 0, 0, audioEnqueued, audioDropped);
+            state, videoSubmitted, videoLateRecent, 0, 0, audioEnqueued, audioDropped);
     }
 
     /// <summary>Watches structural parts of the selected cue list that are compiled into a ShowDocument:

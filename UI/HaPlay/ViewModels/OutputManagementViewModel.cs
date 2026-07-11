@@ -1215,7 +1215,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     private static string FormatCueHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
         m.State == OutputLineHealthState.Healthy
             ? $"Cues: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch"
-            : $"Cues: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
+            : $"Cues: {FormatDegradedDetail(m)}";
 
     private static string FormatShowSessionHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
         m.State == OutputLineHealthState.Healthy
@@ -1225,5 +1225,16 @@ public partial class OutputManagementViewModel : ViewModelBase
                 (_, > 0) => $"Player: {m.AudioEnqueued:N0} ch",
                 _ => $"Player: {m.VideoSubmitted:N0} f",
             }
-            : $"Player: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
+            : $"Player: {FormatDegradedDetail(m)}";
+
+    /// <summary>The degraded-state stats are RECENT rates (events since the previous 1 Hz health poll -
+    /// see <see cref="Playback.OutputLineHealthEvaluator.Score"/>), so say so: "video 12/s late" reads as
+    /// a live condition the operator can watch recover, unlike the old lifetime total that only ever grew.</summary>
+    private static string FormatDegradedDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
+        (m.VideoDropped, m.AudioDropped) switch
+        {
+            (> 0, > 0) => $"video {m.VideoDropped:N0}/s late · audio {m.AudioDropped:N0}/s dropped",
+            (> 0, _) => $"video {m.VideoDropped:N0}/s late",
+            _ => $"audio {m.AudioDropped:N0}/s dropped",
+        };
 }
