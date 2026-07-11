@@ -13,7 +13,7 @@ public sealed class SoundboardEmptyStateTests
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SoundboardEmptyStateTests).Assembly)
-            .Dispatch(async () =>
+            .DispatchAsync(async () =>
             {
                 var vm = new SoundboardWorkspaceViewModel();
 

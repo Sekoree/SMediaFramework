@@ -1249,6 +1249,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// audio-output factory on the session thread, read by the UI poll) - the deck's VU source.</summary>
     private readonly object _meterTapGate = new();
     private readonly List<Playback.MeteringAudioOutput> _meterTaps = [];
+    /// <summary>UI-poll-thread scratch snapshot of <see cref="_meterTaps"/> (reused per tick).</summary>
+    private readonly List<Playback.MeteringAudioOutput> _meterTapScratch = [];
 
     private void RegisterMeterTap(Playback.MeteringAudioOutput tap)
     {
@@ -1264,17 +1266,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void PollAudioMeters()
     {
-        Playback.MeteringAudioOutput[] taps;
+        _meterTapScratch.Clear();
         lock (_meterTapGate)
-            taps = _meterTaps.Count > 0 ? _meterTaps.ToArray() : [];
+            _meterTapScratch.AddRange(_meterTaps);
 
         var peak = double.NegativeInfinity;
-        foreach (var tap in taps)
+        foreach (var tap in _meterTapScratch)
         {
             var db = tap.ReadAndResetPeakDb();
             if (db > peak) peak = db;
         }
 
+        _meterTapScratch.Clear();
         PeakLevelDb = peak;
     }
 

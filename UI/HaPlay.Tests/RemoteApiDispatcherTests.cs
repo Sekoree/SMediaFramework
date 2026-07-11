@@ -215,7 +215,7 @@ public sealed class RemoteApiDispatcherTests
     {
         var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly);
         var (unauthorizedCode, statusCode, statusBody, tapCode, notFoundCode, getMutationCode, getMutationAllow) =
-            await session.Dispatch(async () =>
+            await session.DispatchAsync(async () =>
         {
             var cues = new CuePlayerViewModel();
             var soundboard = new SoundboardWorkspaceViewModel();
@@ -258,7 +258,7 @@ public sealed class RemoteApiDispatcherTests
     public async Task HttpServer_OptionalToken_OpenWhenUnset_RequiredWhenSet()
     {
         var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly);
-        var (noTokenStatus, tokenNoKeyStatus, tokenWithKeyStatus) = await session.Dispatch(async () =>
+        var (noTokenStatus, tokenNoKeyStatus, tokenWithKeyStatus) = await session.DispatchAsync(async () =>
         {
             var dispatcher = new RemoteApiDispatcher(
                 new CuePlayerViewModel(), () => [], new SoundboardWorkspaceViewModel(), null);

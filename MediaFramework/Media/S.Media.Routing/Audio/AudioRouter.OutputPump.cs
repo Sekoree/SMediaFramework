@@ -48,6 +48,11 @@ public sealed partial class AudioRouter
         private long _enqueued;
         private long _processed;
         private long _dropped;
+        // Chunks discarded by AbandonQueue (host-initiated pause/flush/remove). Kept separate from
+        // _dropped so intentional flushes never read as pump pressure: PumpPressure drives the
+        // adaptive-rate hint monitor, and counting abandons there latched a spurious ppm bias on
+        // non-master outputs after every pause/seek.
+        private long _abandoned;
         // Enqueued chunks evicted from _ready in Commit (pool-exhaustion drop) - they leave the queue without
         // ever being delivered, so WaitForIdle counts them as "no longer in flight" without inflating the
         // delivered (_processed) count that per-output pacing relies on.
@@ -64,6 +69,7 @@ public sealed partial class AudioRouter
             _pumpCapacityChunks)
         {
             IsStuck = Volatile.Read(ref _stuck) != 0,
+            Abandoned = Volatile.Read(ref _abandoned),
         };
 
         /// <summary>
@@ -204,7 +210,10 @@ public sealed partial class AudioRouter
         /// Discard every chunk currently queued. Does <em>not</em> interrupt an
         /// in-flight <see cref="IAudioOutput.Submit"/> on the drainer thread -
         /// the caller should follow with <see cref="WaitForIdle"/> if they
-        /// need quiescence guarantees.
+        /// need quiescence guarantees. Abandoned chunks are counted in
+        /// <see cref="OutputPumpStats.Abandoned"/>, NOT as drops: this is a
+        /// host-initiated flush, so it must not raise <see cref="PumpPressure"/>
+        /// (which would latch a spurious adaptive-rate bias after every pause/seek).
         /// </summary>
         public void AbandonQueue()
         {
@@ -215,7 +224,7 @@ public sealed partial class AudioRouter
                 // drainer, so count it as processed too - otherwise WaitForIdle sees
                 // processed < enqueued forever and blocks for the full timeout after a flush.
                 Interlocked.Increment(ref _processed);
-                RecordDrop();
+                Interlocked.Increment(ref _abandoned);
             }
         }
 
@@ -273,7 +282,7 @@ public sealed partial class AudioRouter
 
         private void MaybeLogBackpressureTimeout()
         {
-            if (!Trace.IsEnabled(LogLevel.Warning) || !TryUpdateThrottle(ref _lastBackpressureWarnTicks, TimeSpan.FromSeconds(2)))
+            if (!Trace.IsEnabled(LogLevel.Warning) || !MediaDiagnostics.TryUpdateThrottle(ref _lastBackpressureWarnTicks, TimeSpan.FromSeconds(2)))
                 return;
 
             Trace.LogWarning(
@@ -289,7 +298,7 @@ public sealed partial class AudioRouter
         {
             var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
             if (elapsedMs < SlowSubmitWarningMs ||
-                !TryUpdateThrottle(ref _lastSlowSubmitWarnTicks, TimeSpan.FromSeconds(2)))
+                !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowSubmitWarnTicks, TimeSpan.FromSeconds(2)))
                 return;
 
             Trace.LogWarning(
@@ -302,14 +311,6 @@ public sealed partial class AudioRouter
                 Volatile.Read(ref _dropped));
         }
 
-        private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-        {
-            var now = Stopwatch.GetTimestamp();
-            var prev = Volatile.Read(ref ticksSlot);
-            if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-                return false;
-            return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-        }
 
         public void Dispose()
         {

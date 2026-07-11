@@ -561,7 +561,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowSubmitWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -574,14 +574,6 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
             Interlocked.Read(ref _submittedCount));
     }
 
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 
     private static int StagingBytes(VideoFormat fmt) => fmt.PixelFormat switch
     {

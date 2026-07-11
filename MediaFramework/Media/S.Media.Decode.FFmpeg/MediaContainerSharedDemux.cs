@@ -5,6 +5,8 @@ using System.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Decode.FFmpeg.Video;
 using S.Media.Decode.FFmpeg.Video.Internal;
+// Alias: the demux's `Audio` track property shadows the `...FFmpeg.Audio` namespace segment.
+using SwrFrames = S.Media.Decode.FFmpeg.Audio.SwrPooledAudioFrames;
 
 namespace S.Media.Decode.FFmpeg;
 
@@ -1782,105 +1784,35 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         return false;
     }
 
-        private AudioFrame ConvertAudioFrame()
-        {
+    private AudioFrame ConvertAudioFrame()
+    {
         EnsureSwrMatchesDecodedAudioFrameLocked();
-        var srcSamples = _aFrame->nb_samples;
-        var outCapacity = (int)av_rescale_rnd(
-            swr_get_delay(_swr, Audio.Format.SampleRate) + srcSamples,
-            Audio.Format.SampleRate, Audio.Format.SampleRate, AVRounding.AV_ROUND_UP);
-
-        var totalFloats = outCapacity * Audio.Format.Channels;
-        var samples = ArrayPool<float>.Shared.Rent(totalFloats);
-        int converted;
-        fixed (float* outPtr = samples)
-        {
-            var outBuf = (byte*)outPtr;
-            converted = swr_convert(_swr, &outBuf, outCapacity, _aFrame->extended_data, srcSamples);
-        }
-        if (converted < 0)
-        {
-            ArrayPool<float>.Shared.Return(samples);
-            FFmpegException.ThrowIfError(converted, nameof(swr_convert));
-        }
-
         var pts = ResolveAudioPts();
+        var frame = SwrFrames.ConvertDecodedFrame(_swr, _aFrame, Audio.Format, pts, out var converted);
         Audio.Position = pts + TimeSpan.FromSeconds((double)converted / Audio.Format.SampleRate);
         _aSamplesEmitted += converted;
+        return frame;
+    }
 
-        var owned = samples;
-        // Idempotent single-shot Release: Interlocked guards double-Dispose from returning
-        // the same buffer twice (AudioFrame's XML doc promises multi-call safety).
-        var released = 0;
-            return new AudioFrame(
-                pts,
-                Audio.Format,
-                converted,
-                samples.AsMemory(0, converted * Audio.Format.Channels),
-                Release: DisposableRelease.Wrap(() =>
-                {
-                    if (Interlocked.Exchange(ref released, 1) == 0)
-                        ArrayPool<float>.Shared.Return(owned, clearArray: false);
-                }));
-        }
-
-        private bool TryDrainAudioTailFrame(out AudioFrame frame)
+    private bool TryDrainAudioTailFrame(out AudioFrame frame)
+    {
+        if (_aDrainedTail)
         {
-            if (_aDrainedTail)
-            {
-                frame = default;
-                return false;
-            }
-
-            var delay = swr_get_delay(_swr, Audio.Format.SampleRate);
-            var outCapacity = (int)av_rescale_rnd(delay, Audio.Format.SampleRate, Audio.Format.SampleRate, AVRounding.AV_ROUND_UP);
-            if (outCapacity <= 0)
-            {
-                _aDrainedTail = true;
-                frame = default;
-                return false;
-            }
-
-            var totalFloats = outCapacity * Audio.Format.Channels;
-            var samples = ArrayPool<float>.Shared.Rent(totalFloats);
-            int converted;
-            fixed (float* outPtr = samples)
-            {
-                var outBuf = (byte*)outPtr;
-                converted = swr_convert(_swr, &outBuf, outCapacity, null, 0);
-            }
-            if (converted < 0)
-            {
-                ArrayPool<float>.Shared.Return(samples);
-                FFmpegException.ThrowIfError(converted, nameof(swr_convert));
-            }
-
-            if (converted == 0)
-            {
-                ArrayPool<float>.Shared.Return(samples);
-                _aDrainedTail = true;
-                frame = default;
-                return false;
-            }
-
-            var pts = TimeSpan.FromSeconds((double)_aSamplesEmitted / Audio.Format.SampleRate);
-            Audio.Position = pts + TimeSpan.FromSeconds((double)converted / Audio.Format.SampleRate);
-            _aSamplesEmitted += converted;
-
-            var owned = samples;
-            var released = 0;
-            frame = new AudioFrame(
-                pts,
-                Audio.Format,
-                converted,
-                samples.AsMemory(0, converted * Audio.Format.Channels),
-                Release: DisposableRelease.Wrap(() =>
-                {
-                    if (Interlocked.Exchange(ref released, 1) == 0)
-                        ArrayPool<float>.Shared.Return(owned, clearArray: false);
-                }));
-            return true;
+            frame = default;
+            return false;
         }
+
+        var pts = TimeSpan.FromSeconds((double)_aSamplesEmitted / Audio.Format.SampleRate);
+        if (!SwrFrames.TryDrainTail(_swr, Audio.Format, pts, out frame, out var converted))
+        {
+            _aDrainedTail = true;
+            return false;
+        }
+
+        Audio.Position = pts + TimeSpan.FromSeconds((double)converted / Audio.Format.SampleRate);
+        _aSamplesEmitted += converted;
+        return true;
+    }
 
     internal void RequestVideoDecodeYield()
     {

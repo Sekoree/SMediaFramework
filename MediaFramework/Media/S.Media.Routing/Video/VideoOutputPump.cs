@@ -65,7 +65,6 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private long _lastSlowSubmitLogTicks;
     private long _lastSlowConvertLogTicks;
     private int _activeSubmits;
-    private int _firstSubmitLogged;
     private EventHandler<VideoOutputPumpPressureEventArgs>? _pumpPressure;
 
     // Optional branch conversion performed on THIS pump's drain thread instead of the router submit thread
@@ -418,10 +417,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                             MaybeLogSlowInnerSubmit(submitStarted);
                         var n = Interlocked.Increment(ref _submitted);
                         if (n == 1)
-                        {
-                            Interlocked.Exchange(ref _firstSubmitLogged, 1);
                             Trace.LogDebug("{Name}: first frame submitted to inner output", _name);
-                        }
                     }
                     catch (Exception ex)
                     {
@@ -533,7 +529,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowInnerSubmitWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -551,7 +547,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowBranchConvertWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowConvertLogTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowConvertLogTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -563,12 +559,4 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             Interlocked.Read(ref _dropped));
     }
 
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 }

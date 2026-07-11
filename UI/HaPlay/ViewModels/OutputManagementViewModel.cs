@@ -721,14 +721,6 @@ public partial class OutputManagementViewModel : ViewModelBase
         rt.ReleaseFromPlayback();
     }
 
-    /// <summary>Forwards optional hold-image size overrides to local preview runtimes.
-    /// Current runtime policy keeps window dimensions stable, so this is presently a no-op.</summary>
-    internal void ApplyHoldImageWindowSize(OutputLineViewModel line, int? width, int? height)
-    {
-        if (_localPreviews.TryGetValue(line, out var rt))
-            rt.ApplyHoldImageWindowSize(width, height);
-    }
-
     private void StopPortAudioOutput(OutputLineViewModel line)
     {
         PortAudioOutputRuntime? rt;

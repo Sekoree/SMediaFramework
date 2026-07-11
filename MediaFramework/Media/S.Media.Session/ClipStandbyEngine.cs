@@ -418,8 +418,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
                 await Task.Run(
                         () => session.Player.SeekCoordinated(
                             spec.Window.Start,
-                            cancellationToken,
-                            PauseFlushPolicy.SkipFlush),
+                            cancellationToken),
                         cancellationToken)
                     .ConfigureAwait(false);
             }

@@ -236,67 +236,16 @@ public sealed partial class VideoFrame : IDisposable
         VideoTransferHint hint,
         [NotNullWhen(true)] out VideoFrame[]? views)
     {
-        views = null;
-        if (viewCount < 2 || !IsNv12CpuFanOutEligible(source))
-            return false;
-
-        var inner = Interlocked.Exchange(ref source._release, null);
-        if (inner is null)
-            return false;
-
-        var viewsLocal = new VideoFrame[viewCount];
-        var countdown = DisposableRelease.SharedCountdown(inner, viewCount);
-        var viewMeta = source.Metadata with { ColorTransferHint = hint };
-        var created = 0;
-        try
+        // NV12-specific shape gate, then the generic CPU fan-out does the actual (rollback-safe)
+        // view construction - one implementation of the delicate release-swap/countdown logic.
+        if (source.Format.PixelFormat != PixelFormat.Nv12
+            || source._planes.Length != 2 || source._strides.Length != 2)
         {
-            for (; created < viewCount; created++)
-            {
-                viewsLocal[created] = new VideoFrame(
-                    source.PresentationTime,
-                    source.Format,
-                    source._planes,
-                    source._strides,
-                    viewMeta,
-                    release: DisposableRelease.Wrap(countdown.Dispose));
-            }
-
-            views = viewsLocal;
-            return true;
-        }
-        catch
-        {
-            if (created == 0)
-            {
-                if (Interlocked.CompareExchange(ref source._release, inner, null) is not null)
-                    inner.Dispose();
-            }
-            else
-            {
-                DisposableRelease.AdjustSharedCountdown(countdown, created - viewCount);
-                for (var j = 0; j < created; j++)
-                    viewsLocal[j].Dispose();
-            }
-
+            views = null;
             return false;
         }
-    }
 
-    private static bool IsNv12CpuFanOutEligible(VideoFrame source)
-    {
-        if (source.Format.PixelFormat != PixelFormat.Nv12)
-            return false;
-        if (source._hardwareBacking is not null)
-            return false;
-        if (source._planes.Length != 2 || source._strides.Length != 2)
-            return false;
-        foreach (var p in source._planes)
-        {
-            if (p.IsEmpty)
-                return false;
-        }
-
-        return true;
+        return TryCreateCpuFanOutViews(source, viewCount, hint, out views);
     }
 
     /// <summary>

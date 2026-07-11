@@ -521,7 +521,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowReadWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowReadLogTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowReadLogTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -534,14 +534,6 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             _framesEmitted);
     }
 
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 
     private void FeedDecoder()
     {

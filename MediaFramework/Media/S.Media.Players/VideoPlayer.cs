@@ -53,7 +53,9 @@ public sealed class VideoPlayer : IDisposable
     private readonly IMediaClock _clock;
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
     private readonly object _queueGate = new();
-    private SemaphoreSlim _slotsAvailable;
+    // Never dispose/recreate mid-flight: a clock tick may already be inside a dequeue loop
+    // after its IsRunning check (see DrainQueue).
+    private readonly SemaphoreSlim _slotsAvailable;
     private readonly int _queueCapacity;
     private readonly TimeSpan _decodePollInterval;
     private readonly VideoPresentationMode _presentationMode;
@@ -992,7 +994,7 @@ public sealed class VideoPlayer : IDisposable
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowDecodeReadWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowDecodeReadWarningTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowDecodeReadWarningTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -1009,7 +1011,7 @@ public sealed class VideoPlayer : IDisposable
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowQueueSlotWaitWarningMs ||
-            !TryUpdateThrottle(ref _lastQueueSlotWaitWarningTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastQueueSlotWaitWarningTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -1025,7 +1027,7 @@ public sealed class VideoPlayer : IDisposable
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowOutputSubmitWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowOutputSubmitWarningTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowOutputSubmitWarningTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -1038,14 +1040,6 @@ public sealed class VideoPlayer : IDisposable
             Volatile.Read(ref _droppedLate));
     }
 
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 
     private void ReleaseHeldFrame()
     {

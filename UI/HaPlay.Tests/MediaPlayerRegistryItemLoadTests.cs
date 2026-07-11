@@ -16,7 +16,7 @@ public sealed class MediaPlayerRegistryItemLoadTests
     private static Task DispatchUi(Func<Task> action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerRegistryItemLoadTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .DispatchAsync(action, CancellationToken.None);
 
     private static MediaPlayerViewModel CreatePlayer()
     {

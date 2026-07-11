@@ -1208,7 +1208,7 @@ public sealed class ShowSession : IAsyncDisposable
                                 }
                                 if (freezes)
                                 {
-                                    player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                                    player.Pause();
                                     group.Timeline.MarkDiscontinuity();
                                     return true; // held on the last frame
                                 }
@@ -1446,7 +1446,7 @@ public sealed class ShowSession : IAsyncDisposable
                 {
                     try
                     {
-                        active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                        active.Player.Pause();
                     }
                     catch (Exception ex)
                     {
@@ -1657,7 +1657,7 @@ public sealed class ShowSession : IAsyncDisposable
                 // their window at op START instead of only after the (potentially slow) apply.
                 group.Timeline.MarkDiscontinuity();
                 if (paused)
-                    active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                    active.Player.Pause();
                 else
                     active.Player.Play();
                 group.Timeline.MarkDiscontinuity(); // rate/state change re-anchors the contract (NXT-04)
@@ -1679,7 +1679,7 @@ public sealed class ShowSession : IAsyncDisposable
                     group.PausedByHost = paused; // see SetPausedAsync - keeps the end monitor's stall check honest
                     group.Timeline.MarkDiscontinuity(); // announce BEFORE the slow apply (see SetPausedAsync)
                     if (paused)
-                        active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                        active.Player.Pause();
                     else
                         active.Player.Play();
                     group.Timeline.MarkDiscontinuity(); // see SetPausedAsync (NXT-04)

@@ -55,7 +55,7 @@ public sealed class ProjectDirtyTrackingTests
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
-            .Dispatch(async () =>
+            .DispatchAsync(async () =>
         {
             var vm = new MainViewModel();
 
@@ -77,7 +77,7 @@ public sealed class ProjectDirtyTrackingTests
     {
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
-            .Dispatch(async () =>
+            .DispatchAsync(async () =>
         {
             var vm = new MainViewModel();
             // Simulate an open, saved project by assigning a path (not part of the document hash).
@@ -137,7 +137,7 @@ public sealed class ProjectDirtyTrackingTests
         {
             await HeadlessUnitTestSession
                 .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
-                .Dispatch(async () =>
+                .DispatchAsync(async () =>
                 {
                     var vm = new MainViewModel { AutoSaveEnabled = true }; // dirty untitled project
                     vm.UnsavedChangesPromptOverride = () =>
@@ -167,7 +167,7 @@ public sealed class ProjectDirtyTrackingTests
         {
             await HeadlessUnitTestSession
                 .GetOrStartForAssembly(typeof(ProjectDirtyTrackingTests).Assembly)
-                .Dispatch(async () =>
+                .DispatchAsync(async () =>
                 {
                     var vm = new MainViewModel { CurrentProjectPath = projectPath };
                     vm.Control.LoadConfig(new ControlSystemConfig
