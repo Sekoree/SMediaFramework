@@ -37,6 +37,10 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsNotLocalVideo));
         OnPropertyChanged(nameof(IsNDI));
         OnPropertyChanged(nameof(IsNotNDI));
+        OnPropertyChanged(nameof(IsFileRecord));
+        OnPropertyChanged(nameof(IsLiveStream));
+        OnPropertyChanged(nameof(IsArmableOutput));
+        OnPropertyChanged(nameof(RecordToggleLabel));
         OnPropertyChanged(nameof(IsClone));
         OnPropertyChanged(nameof(SupportsMediaPlayerRouting));
         OnPropertyChanged(nameof(IndentMargin));
@@ -77,6 +81,42 @@ public partial class OutputLineViewModel : ViewModelBase
     public bool IsNDI => Definition is NDIOutputDefinition;
 
     public bool IsNotNDI => Definition is not NDIOutputDefinition;
+
+    public bool IsFileRecord => Definition is FileOutputDefinition;
+
+    public bool IsLiveStream => Definition is LiveStreamOutputDefinition;
+
+    /// <summary>True for the armable encode kinds (file record / live stream) - shows the toggle button.</summary>
+    public bool IsArmableOutput => IsFileRecord || IsLiveStream;
+
+    /// <summary>True while the line's encode session is armed (recording a file / streaming live).
+    /// Set by <see cref="OutputManagementViewModel"/> after arm/disarm completes.</summary>
+    [ObservableProperty]
+    private bool _isRecordArmed;
+
+    /// <summary>The armed session's destination - the recording file path, or the LAN URLs while live.</summary>
+    [ObservableProperty]
+    private string? _recordFilePath;
+
+    [RelayCommand(CanExecute = nameof(CanToggleRecord))]
+    private Task ToggleRecord() =>
+        _host?.SetFileRecordArmedAsync(this, !IsRecordArmed) ?? Task.CompletedTask;
+
+    private bool CanToggleRecord() => IsArmableOutput && _host is not null;
+
+    public string RecordToggleLabel => (IsLiveStream, IsRecordArmed) switch
+    {
+        (true, true) => Strings.StopStreamButton,
+        (true, false) => Strings.GoLiveButton,
+        (false, true) => Strings.RecordDisarmButton,
+        _ => Strings.RecordArmButton,
+    };
+
+    partial void OnIsRecordArmedChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(RecordToggleLabel));
+    }
 
     /// <summary>True when this line is a clone of another local-video line (§3.4).</summary>
     public bool IsClone =>
@@ -234,6 +274,8 @@ public partial class OutputLineViewModel : ViewModelBase
         ManagedOutputKind.NDI => Strings.OutputKindNDIProgramLabel,
         ManagedOutputKind.SDLOpenGlVideo => Strings.EngineStandaloneWindowLabel,
         ManagedOutputKind.AvaloniaOpenGlVideo => Strings.EngineInAppPreviewLabel,
+        ManagedOutputKind.FileRecord => Strings.OutputKindFileRecordLabel,
+        ManagedOutputKind.LiveStream => Strings.OutputKindLiveStreamLabel,
         _ => Definition.Kind.ToString(),
     };
 
@@ -243,6 +285,8 @@ public partial class OutputLineViewModel : ViewModelBase
         NDIOutputDefinition => Strings.OutputKindTechnicalNDI,
         LocalVideoOutputDefinition { Engine: VideoOutputEngine.SDLOpenGl } => Strings.OutputKindTechnicalSDLOpenGl,
         LocalVideoOutputDefinition => Strings.OutputKindTechnicalAvaloniaOpenGl,
+        FileOutputDefinition => Strings.OutputKindTechnicalFileRecord,
+        LiveStreamOutputDefinition => Strings.OutputKindTechnicalLiveStream,
         _ => Definition.Kind.ToString(),
     };
 
@@ -267,6 +311,18 @@ public partial class OutputLineViewModel : ViewModelBase
             _ =>
                 Strings.Format(nameof(Strings.OutputSummaryNDIVideoAudioFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
         },
+        FileOutputDefinition f =>
+            Strings.Format(
+                nameof(Strings.OutputSummaryFileRecordFormat),
+                f.EffectiveEncode.Container,
+                f.EffectiveEncode.VideoCodec,
+                f.EffectiveEncode.AudioLegs.Count > 0 ? f.EffectiveEncode.AudioLegs[0].Codec : "-",
+                f.DirectoryPath),
+        LiveStreamOutputDefinition s =>
+            Strings.Format(
+                nameof(Strings.OutputSummaryLiveStreamFormat),
+                s.PushTargets.Count,
+                s.EffectiveLocalServer.Enabled ? $":{s.EffectiveLocalServer.Port}" : "off"),
         _ => Definition.DisplayName,
     };
 

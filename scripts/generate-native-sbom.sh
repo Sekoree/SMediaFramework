@@ -27,6 +27,8 @@ provenance() {
       echo "libass|distro/vcpkg|https://github.com/libass/libass|ISC" ;;
     libndi*|Processing.NDI*)
       echo "NDI SDK Runtime|v6|https://ndi.video|NDI-SDK-EULA (proprietary redist)" ;;
+    libprojectM*|projectM-4*)
+      echo "projectM|4.1.6|https://github.com/projectM-visualizer/projectm|LGPL-2.1 (dynamic link only)" ;;
     libmmd_bullet*|mmd_bullet*)
       echo "mmd_bullet (Bullet physics shim)|Bullet 3.25 (vendored)|MediaFramework/Native/mmd_bullet + External/bullet3|zlib" ;;
     *SDL3*|libSDL3*)

@@ -190,7 +190,10 @@ public sealed class MediaPlayer : IDisposable
             vp.DecodedCount,
             vp.DisplayedCount,
             vp.DroppedLate,
-            vp.DroppedDrain);
+            vp.DroppedDrain,
+            vp.DecodeTiming,
+            vp.QueuedFrameCount,
+            vp.QueueCapacity);
 
         AudioRouterMetricsSnapshot? audioRouterSnap = null;
         IReadOnlyList<AudioOutputPumpMetricsEntry> audioOutputs = [];
@@ -203,7 +206,8 @@ public sealed class MediaPlayer : IDisposable
                 agg.TotalEnqueued,
                 agg.TotalProcessed,
                 agg.TotalDropped,
-                agg.OutputCount);
+                agg.OutputCount,
+                ar.MixTiming);
             var ids = ar.GetRegisteredOutputIds();
             var list = new AudioOutputPumpMetricsEntry[ids.Count];
             for (var i = 0; i < ids.Count; i++)

@@ -104,6 +104,14 @@ public partial class MainViewModel : ViewModelBase
             line => Players.Any(p => p.IsActivelyPlayingThroughLine(line));
         OutputManagement.ActivePlayersProbe = () => Players;
 
+        // I/O Debug page: same probe family as the health poll, plus the cue session via its coordinator.
+        PipelineStats = new PipelineStatsViewModel
+        {
+            ActivePlayersProbe = () => Players,
+            CueSessionProbe = () => _cueShow.PipelineStatsSession,
+        };
+        PipelineStats.Start();
+
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
@@ -198,6 +206,9 @@ public partial class MainViewModel : ViewModelBase
         _endpointHealth.Dispose();
         _remoteApi.Dispose();
         _cueShow.ShutdownCleanup();
+        // Finalize armed file recordings LAST-ish but before the media host teardown: flushes encoders
+        // and writes container trailers so an exit mid-record never leaves a truncated file.
+        OutputManagement.FinishAllRecordingsForShutdown();
     }
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
@@ -511,6 +522,9 @@ public partial class MainViewModel : ViewModelBase
     }
 
     public OutputManagementViewModel OutputManagement { get; }
+
+    /// <summary>The I/O workspace's Debug page (1 Hz pipeline timings across decks + cues).</summary>
+    public PipelineStatsViewModel PipelineStats { get; }
     public CuePlayerViewModel CuePlayer { get; }
     public SoundboardWorkspaceViewModel Soundboard { get; }
     public ControlWorkspaceViewModel Control { get; }

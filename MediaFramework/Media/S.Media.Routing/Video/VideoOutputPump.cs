@@ -7,12 +7,14 @@ namespace S.Media.Routing;
 /// Snapshot counters for a <see cref="VideoOutputPump"/> (video analogue of audio <c>OutputPumpStats</c>).
 /// <see cref="MaxQueueDepth"/> is configured capacity (oldest dropped when enqueue would exceed it).
 /// <see cref="CurrentQueuedDepth"/> is frames waiting on the pump thread (approximate under concurrency).
+/// <see cref="SubmitTiming"/> measures the wrapped output's <see cref="IVideoOutput.Submit"/> on the drain thread.
 /// </summary>
 public readonly record struct VideoOutputPumpMetrics(
     long DroppedFrames,
     long SubmittedFrames,
     int MaxQueueDepth,
-    int CurrentQueuedDepth);
+    int CurrentQueuedDepth,
+    TimingSnapshot SubmitTiming);
 
 /// <summary>Optional <see cref="VideoOutputPump"/> wrapping when registering an output on <see cref="VideoRouter"/>.</summary>
 /// <param name="MaxQueuedFrames">Queue depth before drop-oldest (must be ≥ 1).</param>
@@ -95,6 +97,11 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
     public long DroppedFrames => Interlocked.Read(ref _dropped);
     public long SubmittedFrames => Interlocked.Read(ref _submitted);
+
+    /// <summary>Timing of the inner output's <see cref="IVideoOutput.Submit"/> calls on the drain thread.</summary>
+    public TimingSnapshot SubmitTiming => _submitTiming.Snapshot();
+
+    private readonly TimingAccumulator _submitTiming = new();
 
     /// <summary>Optional: raised on the <see cref="Submit"/> thread each time an oldest frame is dropped because the queue is full.</summary>
     public event EventHandler<VideoOutputPumpPressureEventArgs>? PumpPressure
@@ -411,9 +418,11 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
                     try
                     {
-                        var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+                        var logSlowSubmit = Trace.IsEnabled(LogLevel.Warning);
+                        var submitStarted = Stopwatch.GetTimestamp();
                         _inner.Submit(toSubmit);
-                        if (submitStarted != 0)
+                        _submitTiming.RecordSince(submitStarted);
+                        if (logSlowSubmit)
                             MaybeLogSlowInnerSubmit(submitStarted);
                         var n = Interlocked.Increment(ref _submitted);
                         if (n == 1)

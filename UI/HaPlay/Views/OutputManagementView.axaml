@@ -50,6 +50,10 @@
         <Button Content="{x:Static res:Strings.AddNDIButton}"
                 Command="{Binding AddNDICommand}"
                 IsVisible="{Binding IsNDIAvailable}" />
+        <Button Content="{x:Static res:Strings.AddFileOutputButton}"
+                Command="{Binding AddFileOutputCommand}" />
+        <Button Content="{x:Static res:Strings.AddLiveStreamButton}"
+                Command="{Binding AddLiveStreamCommand}" />
       </StackPanel>
     </Grid>
 
@@ -122,9 +126,17 @@
                     <Button Content="{x:Static res:Strings.WindowedPreviewMenuHeader}"
                             Command="{Binding WindowedPreviewCommand}"
                             IsVisible="{Binding IsLocalVideo}" />
+                    <Button Content="{Binding RecordToggleLabel}"
+                            Command="{Binding ToggleRecordCommand}"
+                            IsVisible="{Binding IsArmableOutput}" />
                     <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
                     <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
                   </StackPanel>
+
+                  <!-- Record status: current file while armed -->
+                  <TextBlock FontFamily="Consolas,monospace" FontSize="12" Opacity="0.8"
+                             Text="{Binding RecordFilePath}"
+                             IsVisible="{Binding IsRecordArmed}" />
 
                   <!-- Live stats card (plan §5): health + delivery counters + 60 s throughput. -->
                   <Border Classes="card">

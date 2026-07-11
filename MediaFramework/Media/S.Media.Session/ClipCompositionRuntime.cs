@@ -67,6 +67,8 @@ public sealed class ClipCompositionRuntime : IDisposable
     private readonly TimeSpan _canvasPeriod;
     private long _nextLayerSequence;
     private long _framesComposited;
+    private readonly TimingAccumulator _pumpTiming = new();
+    private readonly TimingAccumulator _compositeTiming = new();
     private long _framesSubmitted;
     private long _pumpOverruns;
     private long _lastPumpFrameTicks;
@@ -238,7 +240,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)),
             Volatile.Read(ref _framesBehindMaster),
             _master is not null,
-            layerCount);
+            layerCount,
+            _pumpTiming.Snapshot(),
+            _compositeTiming.Snapshot(),
+            _canvasPeriod);
     }
 
     public void EnsurePumpStarted()
@@ -846,8 +851,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (TryPumpIntegratedMultiWarp(masterPts, snapshot, sw))
             return;
 
+        var compositeStarted = Stopwatch.GetTimestamp();
         if (!_mixer.TryReadNextFrame(masterPts, out var frame))
             return;
+        _compositeTiming.RecordSince(compositeStarted);
         Interlocked.Increment(ref _framesComposited);
 
         var compositionStage = _compositionMappingStage;
@@ -976,6 +983,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             return false;
 
         IReadOnlyList<VideoFrame> frames;
+        var compositeStarted = Stopwatch.GetTimestamp();
         try
         {
             if (!_mixer.TryReadNextFrames(masterPts, requests, out frames))
@@ -1001,6 +1009,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             return false;
         }
 
+        _compositeTiming.RecordSince(compositeStarted);
         Interlocked.Increment(ref _framesComposited);
         for (var i = 0; i < snapshot.Count; i++)
             SubmitToOutput(snapshot[i], frames[i]);
@@ -1036,6 +1045,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     private void RecordPumpTiming(TimeSpan elapsed, TimeSpan budget)
     {
+        _pumpTiming.Record(elapsed);
         Volatile.Write(ref _lastPumpFrameTicks, elapsed.Ticks);
         UpdateMaxTicks(ref _maxPumpFrameTicks, elapsed.Ticks);
 
@@ -1752,7 +1762,10 @@ public readonly record struct ClipCompositionRuntimeStats(
     TimeSpan MaxPumpFrameTime,
     long FramesBehindMaster,
     bool ClockMastered,
-    int LayerCount = 0);
+    int LayerCount = 0,
+    TimingSnapshot PumpTiming = default,
+    TimingSnapshot CompositeTiming = default,
+    TimeSpan CanvasPeriod = default);
 
 public readonly record struct ClipCompositionDriftWarning(
     string CompositionId,

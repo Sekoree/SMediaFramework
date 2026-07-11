@@ -28,6 +28,16 @@ public sealed class ArchitectureTests
         // forward IPlaybackClock, which lives in S.Media.Time. Downward ref (Time is tier 2); the module
         // keeps the cohesive FFmpeg audio-processing set together rather than spinning up a new project.
         ["S.Media.Decode.FFmpeg"] = ["S.Media.Core", "S.Media.Time", "S.Media.FFmpeg.Common"],
+        // Encode module (Tier 3b slot from the rewrite docs): packet-producing encoders + mux sinks
+        // behind IVideoOutput/IAudioOutput. Never references Decode.FFmpeg - shared glue lives in Common.
+        ["S.Media.Encode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
+        // LAN streaming server over the encode module's packet-sink seam. Sockets stay OUT of the
+        // encode project; this is the one place HTTP meets the muxers.
+        ["S.Media.Stream.Http"] = ["S.Media.Core", "S.Media.Encode.FFmpeg"],
+        // projectM visualizer: an effect-bus visual source + NXT-10 GL layer surface (Compositor for
+        // the surface contract, like Source.MMD). ProjectMLib is its dedicated P/Invoke binding.
+        ["S.Media.Visualizer.ProjectM"] = ["S.Media.Core", "S.Media.Compositor", "ProjectMLib"],
+        ["ProjectMLib"] = [],
         // External-source module (Gate 5): YoutubeExplode is an out-of-tree LOCAL SOURCE reference
         // (Reference/YoutubeExplode-6.6) and deliberately not part of the layering table.
         ["S.Media.Source.YouTube"] =

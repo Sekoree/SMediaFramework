@@ -234,6 +234,9 @@
         <TabItem Header="{x:Static res:Strings.IoTabOSC}">
           <views:OSCConnectionsView />
         </TabItem>
+        <TabItem Header="{x:Static res:Strings.IoTabDebug}">
+          <views:PipelineStatsView DataContext="{Binding PipelineStats}" />
+        </TabItem>
       </TabControl>
 
       <!-- Cues workspace: the cue player. OSC/MIDI action targets open in the Action Targets

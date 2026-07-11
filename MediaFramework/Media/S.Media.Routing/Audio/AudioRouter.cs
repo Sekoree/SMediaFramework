@@ -134,6 +134,11 @@ public sealed partial class AudioRouter : IDisposable
     public bool CompletedNaturally { get; private set; }
     public long ChunksProduced => Volatile.Read(ref _chunksProduced);
 
+    /// <summary>Timing of one full mix cycle (source reads + matrix mix + pump commits) on the router thread.</summary>
+    public TimingSnapshot MixTiming => _mixTiming.Snapshot();
+
+    private readonly TimingAccumulator _mixTiming = new();
+
     /// <summary>
     /// When <c>true</c> (default), reaching natural end-of-stream flushes every output so smoke tools
     /// and one-shot hosts leave the device silent promptly. Hosts that share a <em>persistent</em>
@@ -1443,6 +1448,7 @@ public sealed partial class AudioRouter : IDisposable
                 // replace the whole RouterState atomically; this loop sees a
                 // consistent view per chunk.
                 var snapshot = Volatile.Read(ref _state);
+                var mixStarted = Stopwatch.GetTimestamp();
 
                 // Only consume sources that have at least one route this chunk. Registering a source must
                 // NOT drain it - a cue/soundboard can load a clip before routing/firing it (otherwise the
@@ -1510,6 +1516,7 @@ public sealed partial class AudioRouter : IDisposable
                 foreach (var (id, output) in snapshot.Outputs)
                     output.Pump.Commit(applyBackpressure: primaryPumpId is not null && id == primaryPumpId);
 
+                _mixTiming.RecordSince(mixStarted);
                 Interlocked.Increment(ref _chunksProduced);
                 if (!loggedFirstChunk)
                 {

@@ -495,7 +495,8 @@ public sealed class VideoRouter : IDisposable
             pump.DroppedFrames,
             pump.SubmittedFrames,
             pump.MaxQueueDepth,
-            pump.CurrentQueuedDepth);
+            pump.CurrentQueuedDepth,
+            pump.SubmitTiming);
         return true;
     }
 

@@ -1,0 +1,84 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:ctrls="using:HaPlay.Views.Controls"
+             xmlns:res="using:HaPlay.Resources"
+             mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
+             x:Class="HaPlay.Views.PipelineStatsView"
+             x:DataType="vm:PipelineStatsViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="BorderBrush" Value="#22808080" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="0" />
+      <Setter Property="Padding" Value="8" />
+      <Setter Property="Background" Value="#08808080" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.mono">
+      <Setter Property="FontFamily" Value="Consolas,monospace" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid Margin="16" RowDefinitions="Auto,*" RowSpacing="10">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+      <StackPanel Grid.Column="0" Spacing="2">
+        <TextBlock Text="{x:Static res:Strings.PipelineStatsHeader}" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock Classes="hint" Text="{x:Static res:Strings.PipelineStatsHint}" />
+      </StackPanel>
+      <Button Grid.Column="1" VerticalAlignment="Center"
+              Content="{x:Static res:Strings.ClearHealthButton}"
+              Command="{Binding ClearCommand}" />
+    </Grid>
+
+    <Grid Grid.Row="1">
+      <TextBlock Text="{x:Static res:Strings.PipelineStatsEmptyHint}"
+                 Opacity="0.55" TextWrapping="Wrap"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 IsVisible="{Binding !HasRows}" />
+      <ScrollViewer IsVisible="{Binding HasRows}">
+        <ItemsControl ItemsSource="{Binding Rows}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:PipelineStatsRowViewModel">
+              <Border Classes="card" Margin="0,0,0,8">
+                <Grid ColumnDefinitions="*,180" ColumnSpacing="12">
+                  <StackPanel Grid.Column="0" Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <Border Background="#1A808080" Padding="6,1" CornerRadius="0">
+                        <TextBlock Text="{Binding Kind}" FontSize="11" Opacity="0.8" />
+                      </Border>
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                 TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock Classes="mono" Text="{Binding PrimaryText}" />
+                    <TextBlock Classes="mono" Opacity="0.7" Text="{Binding SecondaryText}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                    <ctrls:SparklineControl Height="36" HorizontalAlignment="Stretch"
+                                            Samples="{Binding SparklineSamples}"
+                                            PeakSample="{Binding SparklinePeakSample}"
+                                            Revision="{Binding SparklineRevision}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                      <TextBlock Classes="mono" Opacity="0.6"
+                                 Text="{Binding SparklineLastSample, StringFormat={}{0:0.00}}" />
+                      <TextBlock Classes="mono" Opacity="0.6" Text="{Binding SparklineLabel}" />
+                    </StackPanel>
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Grid>
+  </Grid>
+</UserControl>

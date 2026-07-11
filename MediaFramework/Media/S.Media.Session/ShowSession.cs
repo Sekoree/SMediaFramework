@@ -237,7 +237,8 @@ public sealed class ShowSession : IAsyncDisposable
         Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null,
         Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? videoOutputFactory = null,
         Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null,
-        Func<string, AudioFormat, ClipAudioOutputLease?>? audioOutputFactory = null)
+        Func<string, AudioFormat, ClipAudioOutputLease?>? audioOutputFactory = null,
+        Func<string, S.Media.Core.Buses.MediaItemMetadata?>? metadataProbe = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
@@ -246,6 +247,7 @@ public sealed class ShowSession : IAsyncDisposable
         _videoOutputFactory = videoOutputFactory;
         _compositorFactory = compositorFactory;
         _audioOutputFactory = audioOutputFactory;
+        _metadataProbe = metadataProbe;
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
         if (audioBackend is not null)
         {
@@ -257,6 +259,197 @@ public sealed class ShowSession : IAsyncDisposable
         _voicePlayer = new VoicePlayer(this, _standby, audioBackend, _outputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
         _voicePlayer.VoiceEnded += id => VoiceEnded?.Invoke(id);
         _voicePlayer.PreviewEnded += id => PreviewEnded?.Invoke(id);
+    }
+
+    // --- effect buses & metadata (Phase 4) -----------------------------------
+
+    private readonly Func<string, S.Media.Core.Buses.MediaItemMetadata?>? _metadataProbe;
+    // Session-registered audio taps (visualizers, meters): attached as an extra router output+route on
+    // every clip that fires while registered. Dispatcher-confined list; the tap objects themselves are
+    // thread-safe outputs (their Submit runs on the router pump thread).
+    private readonly List<AudioTapRegistration> _audioTaps = [];
+
+    private sealed record AudioTapRegistration(Guid Id, IAudioOutput Tap, float Gain);
+
+    /// <summary>The session's metadata blackboard: item metadata published on every clip fire, frame
+    /// stats published by probe effects. Attach visualizer/effect sinks here.</summary>
+    public S.Media.Core.Buses.BusMetadataHub MetadataHub { get; } = new();
+
+    /// <summary>
+    /// Registers an audio tap (e.g. a visualizer's audio face): from now on every fired clip's audio
+    /// router feeds it a stereo-mapped copy of the clip's source, alongside the real outputs. The tap
+    /// must accept the clip mix rate at its declared channel count (taps with internal rings tolerate
+    /// rate drift). Takes effect for clips fired AFTER registration.
+    /// </summary>
+    public Task<Guid> RegisterAudioTapAsync(IAudioOutput tap, float gain = 1f)
+    {
+        ArgumentNullException.ThrowIfNull(tap);
+        var id = Guid.NewGuid();
+        return InvokeAsync(() =>
+        {
+            _audioTaps.Add(new AudioTapRegistration(id, tap, gain));
+            return Task.FromResult(id);
+        });
+    }
+
+    /// <summary>Unregisters a tap. Clips already playing keep feeding it until they stop (their routes
+    /// tear down with the clip); new fires exclude it.</summary>
+    public Task UnregisterAudioTapAsync(Guid id) =>
+        InvokeAsync(() =>
+        {
+            _audioTaps.RemoveAll(t => t.Id == id);
+            return Task.CompletedTask;
+        });
+
+    // compositionId → the held visualizer layer + its audio tap (removed together). Dispatcher-confined.
+    private readonly Dictionary<string, VisualizerSlot> _visualizerSlots = new(StringComparer.Ordinal);
+
+    private sealed record VisualizerSlot(
+        ClipCompositionRuntime.SurfaceLayerSlot Layer,
+        Guid TapId,
+        S.Media.Core.Buses.IAudioVisualSource Source);
+
+    /// <summary>
+    /// Attaches (or, with null, removes) a visualizer on a composition: the source's GL layer surface
+    /// renders as a held full-canvas layer just under the test-pattern layer, its audio face registers
+    /// as a session tap (fed by the CURRENT clip immediately and every later fire), and - when the
+    /// source is a metadata sink - it joins <see cref="MetadataHub"/>. Returns false when the
+    /// composition doesn't exist or its compositor can't host GL surfaces (CPU fallback). The session
+    /// owns the previous source's disposal on replace/remove.
+    /// </summary>
+    public Task<bool> SetCompositionVisualizerAsync(string compositionId, S.Media.Core.Buses.IAudioVisualSource? source) =>
+        InvokeAsync(async () =>
+        {
+            if (_visualizerSlots.Remove(compositionId, out var existing))
+            {
+                existing.Layer.Dispose();
+                _audioTaps.RemoveAll(t => t.Id == existing.TapId);
+                RemoveTapFromActiveClips(existing.TapId);
+                if (existing.Source is S.Media.Core.Buses.IBusMetadataSink oldSink)
+                    MetadataHub.Detach(oldSink);
+                if (existing.Source is IDisposable disposable)
+                    MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+            }
+
+            if (source is null)
+                return true;
+
+            if (!_compositions.TryGetValue(compositionId, out var composition)
+                || !composition.SupportsSurfaceLayers
+                || source is not Compositor.ILayerSurfaceVideoSource surfaceSource)
+            {
+                return false;
+            }
+
+            // Below the test pattern (int.MaxValue) but above every content layer.
+            var layer = composition.AddSurfaceLayer(
+                surfaceSource.CreateLayerSurface(),
+                new VideoPlacementSpec(compositionId, int.MaxValue - 1, Placement: "stretch"));
+            composition.EnsurePumpStarted();
+
+            var tapId = Guid.NewGuid();
+            _audioTaps.Add(new AudioTapRegistration(tapId, source, 1f));
+            AttachTapToActiveClips(tapId, source);
+            if (source is S.Media.Core.Buses.IBusMetadataSink sink)
+                MetadataHub.Attach(sink);
+
+            _visualizerSlots[compositionId] = new VisualizerSlot(layer, tapId, source);
+            await Task.CompletedTask;
+            return true;
+        });
+
+    /// <summary>Feeds a newly-registered tap from the clips that are ALREADY playing (dispatcher).</summary>
+    private void AttachTapToActiveClips(Guid tapId, IAudioOutput tap)
+    {
+        foreach (var group in _groups.Values)
+        {
+            if (group.Active?.Player is not { AudioRouter: not null, AudioSourceId: not null } player)
+                continue;
+            try
+            {
+                player.AttachAudioOutput(tap, $"tap-{tapId:N}", map: null, gain: 1f);
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning("ShowSession: visualizer tap could not attach to the active clip ({0}).", ex.Message);
+            }
+        }
+    }
+
+    private void RemoveTapFromActiveClips(Guid tapId)
+    {
+        foreach (var group in _groups.Values)
+        {
+            if (group.Active?.Player is not { AudioRouter: { } router })
+                continue;
+            try
+            {
+                router.RemoveOutput($"tap-{tapId:N}");
+            }
+            catch
+            {
+                // the clip may have re-fired without the tap - nothing to remove
+            }
+        }
+    }
+
+    /// <summary>Attaches the registered taps to a freshly-committed clip's router (dispatcher).</summary>
+    private void AttachAudioTaps(S.Media.Players.MediaPlayer player)
+    {
+        if (_audioTaps.Count == 0 || player.AudioRouter is null || player.AudioSourceId is null)
+            return; // no audio side (video-only clip) - nothing to tap
+        foreach (var tap in _audioTaps)
+        {
+            try
+            {
+                player.AttachAudioOutput(tap.Tap, $"tap-{tap.Id:N}", map: null, gain: tap.Gain);
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning(
+                    "ShowSession: audio tap {0} could not attach ({1}); the clip plays without it.", tap.Id, ex.Message);
+            }
+        }
+    }
+
+    /// <summary>Publishes what's playing to <see cref="MetadataHub"/>: an immediate filename-derived
+    /// entry, refined by the host's metadata probe (tags + cover art) off the dispatcher when set.</summary>
+    private void PublishItemMetadata(ShowClipBinding binding)
+    {
+        var fallbackTitle = TryGetFileTitle(binding.MediaPath) ?? binding.CueId;
+        MetadataHub.Publish(new S.Media.Core.Buses.MediaItemMetadata(fallbackTitle, SourceUri: binding.MediaPath));
+
+        if (_metadataProbe is not { } probe)
+            return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (probe(binding.MediaPath) is { } rich)
+                    MetadataHub.Publish(rich with
+                    {
+                        Title = rich.Title ?? fallbackTitle,
+                        SourceUri = rich.SourceUri ?? binding.MediaPath,
+                    });
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning("ShowSession: metadata probe failed for '{0}' ({1})", binding.MediaPath, ex.Message);
+            }
+        });
+    }
+
+    private static string? TryGetFileTitle(string mediaPath)
+    {
+        try
+        {
+            var name = Path.GetFileNameWithoutExtension(mediaPath);
+            return string.IsNullOrWhiteSpace(name) ? null : name;
+        }
+        catch
+        {
+            return null; // exotic URI - the cue id fallback covers it
+        }
     }
 
     /// <summary>The preview instance's spec for a loaded cue (a variant key distinct from the GO-prepared
@@ -442,6 +635,7 @@ public sealed class ShowSession : IAsyncDisposable
         PublishGroupViews();
 
         _testPatternSlots.Clear(); // slots are owned by their compositions (disposed below); drop stale refs
+        ClearVisualizerSlots();   // ditto - the surface layers die with their compositions, taps unhook
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
@@ -640,6 +834,11 @@ public sealed class ShowSession : IAsyncDisposable
                     }
                 }
             }
+
+            // Effect buses (Phase 4): registered audio taps ride along on every fired clip, and the
+            // metadata hub learns what's playing (visualizers/overlays pick both up).
+            AttachAudioTaps(player);
+            PublishItemMetadata(binding);
 
             armed.Start();
             await ReplaceActiveAsync(group, armed, outputs, layers, subtitleAttachments, binding).ConfigureAwait(false);
@@ -1915,6 +2114,57 @@ public sealed class ShowSession : IAsyncDisposable
         return found;
     }
 
+    /// <summary>One active clip's full pipeline snapshot for the debug-stats poll: the transport group it
+    /// plays in, the cue id, and the player's <see cref="S.Media.Players.MediaPlayerMetrics"/> (decode
+    /// timing, jitter-buffer depth, router mix timing, per-output pump queues/drops/submit timing).</summary>
+    public sealed record ActiveClipPipelineMetrics(
+        string GroupId,
+        string? CueId,
+        S.Media.Players.MediaPlayerMetrics Metrics);
+
+    /// <summary>Lock-free pipeline metrics for every group's active clip - the debug-stats analogue of
+    /// <see cref="GetActiveAudioPumpStatsByDevice"/>. Walks the published group view (no dispatcher
+    /// marshaling) and reads each player's own thread-safe counters. Empty when nothing is playing.</summary>
+    public IReadOnlyList<ActiveClipPipelineMetrics> GetActiveClipPipelineMetrics()
+    {
+        var views = _groupViews; // single volatile read of the published view
+        if (views.Count == 0)
+            return [];
+        var result = new List<ActiveClipPipelineMetrics>(views.Count);
+        foreach (var view in views)
+        {
+            if (view.Player is not { } player)
+                continue;
+            try
+            {
+                result.Add(new ActiveClipPipelineMetrics(
+                    view.GroupId,
+                    view.Group.ActiveBinding?.CueId,
+                    player.GetMetrics()));
+            }
+            catch (ObjectDisposedException) { /* clip retired between snapshot publish and read */ }
+        }
+
+        return result;
+    }
+
+    /// <summary>Lock-free stats for every loaded composition (id → runtime stats) - the multi-composition
+    /// variant of <see cref="GetCompositionStats"/> for the debug-stats poll.</summary>
+    public IReadOnlyList<ClipCompositionRuntimeStats> GetAllCompositionStats()
+    {
+        var view = _compositionsView;
+        if (view.Count == 0)
+            return [];
+        var result = new List<ClipCompositionRuntimeStats>(view.Count);
+        foreach (var runtime in view.Values)
+        {
+            try { result.Add(runtime.GetStats()); }
+            catch (ObjectDisposedException) { /* retired between snapshot publish and read */ }
+        }
+
+        return result;
+    }
+
     /// <summary>Republishes the lock-free composition view after a load/dispose changes <see cref="_compositions"/>.
     /// Call on the dispatcher (the only place <see cref="_compositions"/> is mutated).</summary>
     private void PublishCompositionsView() =>
@@ -1974,11 +2224,28 @@ public sealed class ShowSession : IAsyncDisposable
         _groups.Clear();
         PublishGroupViews();
         _testPatternSlots.Clear(); // slots are owned by their compositions (disposed below); drop stale refs
+        ClearVisualizerSlots();
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
         PublishCompositionsView(); // drop the health-poll view's references to the retired compositions
         await _standby.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Drops every visualizer slot (dispatcher): taps unregister, sources dispose; the surface
+    /// layers themselves die with their owning compositions (the callers dispose those next).</summary>
+    private void ClearVisualizerSlots()
+    {
+        foreach (var slot in _visualizerSlots.Values)
+        {
+            _audioTaps.RemoveAll(t => t.Id == slot.TapId);
+            if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
+                MetadataHub.Detach(sink);
+            if (slot.Source is IDisposable disposable)
+                MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+        }
+
+        _visualizerSlots.Clear();
     }
 
     /// <summary>One transport group: its session clock (D4), active clip, its audio outputs (D11 - first is

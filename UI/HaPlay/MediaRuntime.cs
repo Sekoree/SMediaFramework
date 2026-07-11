@@ -78,6 +78,20 @@ internal static class MediaRuntime
     /// resolves backends/decoders works whether or not <see cref="Initialize"/> ran first (tests, dialogs).</summary>
     public static IMediaRegistry Registry => Host.Registry;
 
+    /// <summary>Effect-bus capabilities (Phase 4/5): audio/video effect kinds + audio-visual sources
+    /// the UI's insertion menus enumerate. Built once; projectM registers only when its native lib is
+    /// present (same graceful gate as NDI).</summary>
+    public static S.Media.Core.Buses.IBusRegistry Buses => BusesLazy.Value;
+
+    private static readonly Lazy<S.Media.Core.Buses.IBusRegistry> BusesLazy = new(
+        static () => S.Media.Core.Buses.BusRegistryBuilder.Build(b =>
+        {
+            b.AddAudioEffect("gain", static _ => new S.Media.Routing.GainAudioEffect());
+            if (RuntimeModules.IsProjectMAvailable)
+                S.Media.Visualizer.ProjectM.ProjectMModule.Register(b);
+        }),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
     public static bool IsInitialized => _host is not null;
 
     /// <summary>AUDIO-02: per-module availability captured during the registry build, so HaPlay can SHOW which

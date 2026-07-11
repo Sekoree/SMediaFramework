@@ -378,6 +378,13 @@
                                       IsChecked="{Binding HoldFallbackVideo}"
                                       Content="{x:Static res:Strings.HoldButtonLabel}"
                                       ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
+                        <!-- VIZ: projectM audio visualizer layer over the deck composition (greyed
+                             without libprojectM-4; see scripts/build-projectm.sh). -->
+                        <ToggleButton Classes="Touch"
+                                      IsChecked="{Binding VisualizerEnabled}"
+                                      IsEnabled="{Binding IsVisualizerAvailable}"
+                                      Content="{x:Static res:Strings.VisualizerToggleLabel}"
+                                      ToolTip.Tip="{Binding VisualizerTooltip}" />
                         <Button Classes="Std" VerticalAlignment="Center"
                                 Click="OnHoldImageSetupClick"
                                 ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">

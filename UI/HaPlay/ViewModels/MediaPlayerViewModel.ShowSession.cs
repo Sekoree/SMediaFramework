@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Playback;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
@@ -22,6 +23,93 @@ public partial class MediaPlayerViewModel
     private static readonly ILogger ShowLog = MediaDiagnostics.CreateLogger("HaPlay.MediaPlayer.ShowSession");
 
     private ShowSession? _playerShowSession;
+
+    /// <summary>The deck's headless session for the Debug-stats poll (null while no session is built).
+    /// Read-only, lock-free consumers only - see <see cref="ShowSession.GetActiveClipPipelineMetrics"/>.</summary>
+    internal ShowSession? PipelineStatsSession => _playerShowSession;
+
+    // --- projectM visualizer (Phase 5): a session-held full-canvas GL layer fed by the deck's audio ---
+
+    /// <summary>Latched "VIZ" toggle: while on (and libprojectM-4 is present), a projectM layer covers
+    /// the deck's composition, audio-reactive to whatever the deck plays. Survives track changes (the
+    /// open path re-applies it after each document swap, like HOLD).</summary>
+    [ObservableProperty]
+    private bool _visualizerEnabled;
+
+    /// <summary>Preset directory for the visualizer (*.milk, scanned recursively). Defaults to the
+    /// build script's preset copy when MFP_PROJECTM_LIB points at a dev build.</summary>
+    [ObservableProperty]
+    private string? _visualizerPresetDirectory = DefaultPresetDirectory();
+
+    public bool IsVisualizerAvailable => RuntimeModules.IsProjectMAvailable;
+
+    public string? VisualizerUnavailableReason => RuntimeModules.ProjectMUnavailableReason;
+
+    public string VisualizerTooltip => RuntimeModules.IsProjectMAvailable
+        ? Resources.Strings.VisualizerToggleTooltip
+        : RuntimeModules.ProjectMUnavailableReason ?? Resources.Strings.VisualizerToggleTooltip;
+
+    partial void OnVisualizerEnabledChanged(bool value)
+    {
+        _ = value;
+        _ = ApplyShowSessionVisualizerAsync();
+    }
+
+    private static string? DefaultPresetDirectory()
+    {
+        // scripts/build-projectm.sh installs presets next to the lib dir it prints (…/<rid>/lib →
+        // …/<rid>/presets); a system install has no obvious preset home, so leave it unset there.
+        var libDir = Environment.GetEnvironmentVariable("MFP_PROJECTM_LIB");
+        if (string.IsNullOrWhiteSpace(libDir))
+            return null;
+        var root = Directory.Exists(libDir) ? Path.GetDirectoryName(libDir.TrimEnd(Path.DirectorySeparatorChar)) : null;
+        var presets = root is null ? null : Path.Combine(root, "presets");
+        return presets is not null && Directory.Exists(presets) ? presets : null;
+    }
+
+    /// <summary>Applies the VIZ toggle to the RUNNING session: attaches (or removes) the projectM layer
+    /// + audio tap on the deck's composition. Safe/idempotent; a failure just clears the toggle with a
+    /// log line (no crash when a preset dir is bogus or the compositor fell back to CPU).</summary>
+    internal async Task ApplyShowSessionVisualizerAsync()
+    {
+        if (_playerShowSession is not { } session)
+            return;
+        try
+        {
+            if (!VisualizerEnabled)
+            {
+                await session.SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, null)
+                    .ConfigureAwait(true);
+                return;
+            }
+
+            if (!RuntimeModules.IsProjectMAvailable)
+            {
+                ShowLog.LogWarning("visualizer unavailable: {Reason}", RuntimeModules.ProjectMUnavailableReason);
+                VisualizerEnabled = false;
+                return;
+            }
+
+            var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
+                1920, 1080, new S.Media.Core.Video.Rational(30, 1),
+                new S.Media.Visualizer.ProjectM.ProjectMOptions
+                {
+                    PresetDirectory = VisualizerPresetDirectory,
+                });
+            var attached = await session
+                .SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, source)
+                .ConfigureAwait(true);
+            if (!attached)
+            {
+                source.Dispose();
+                ShowLog.LogWarning("visualizer not attached: no GL composition is active (play a video/track first, CPU compositor cannot host it)");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowLog.LogWarning(ex, "visualizer apply failed");
+        }
+    }
     // Per-composition video outputs the deck drives, tagged with the OUTPUT LINE they belong to so each gets a
     // STABLE composition-output id (CompositionOutputId) - required for hot add/remove of a single line on a
     // live composition (index-based ids would shift when a line is added/removed).
@@ -121,7 +209,9 @@ public partial class MediaPlayerViewModel
                 // carrier audio is borrowed (held via _playerAcquiredAudioLines, released on stop) so the session
                 // never disposes it; only a per-fire resampler wrapper (when the carrier rate ≠ the clip rate) is
                 // session-owned. Pure lookup - the carrier was acquired on the UI thread during open.
-                audioOutputFactory: (deviceId, format) => BuildDeckAudioLease(deviceId, format));
+                audioOutputFactory: (deviceId, format) => BuildDeckAudioLease(deviceId, format),
+                // Effect buses (Phase 4): tags + cover art for the metadata hub (visualizers/overlays).
+                metadataProbe: S.Media.Decode.FFmpeg.MediaTagProbe.TryRead);
 
             // Switching from a currently-playing source: stop its poll and clip FIRST so the old clip releases its
             // audio DEVICE and borrowed video leases before we re-acquire and fire the new source. Without this the
@@ -203,11 +293,20 @@ public partial class MediaPlayerViewModel
                 _playerNDIAudioOutputs.Clear();
                 foreach (var line in lines)
                 {
-                    if (line.Definition is not NDIOutputDefinition nd || nd.StreamMode == NDIOutputStreamMode.VideoOnly)
+                    // Carrier-audio lines: NDI senders and ARMED file-record sessions both expose a
+                    // borrowed audio sink keyed by a stable device id the routes below resolve.
+                    var carrierKey = line.Definition switch
+                    {
+                        NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly =>
+                            NDIAudioDeviceId(line.Definition.Id),
+                        FileOutputDefinition or LiveStreamOutputDefinition => FileAudioDeviceId(line.Definition.Id),
+                        _ => null,
+                    };
+                    if (carrierKey is null)
                         continue;
                     if (_outputs.AcquireAudioOutputForLine(line.Definition.Id) is not { } audio)
                         continue;
-                    _playerNDIAudioOutputs[NDIAudioDeviceId(line.Definition.Id)] = audio;
+                    _playerNDIAudioOutputs[carrierKey] = audio;
                     _playerAcquiredAudioLines.Add(line.Definition.Id);
                 }
 
@@ -268,6 +367,9 @@ public partial class MediaPlayerViewModel
                 // hold top-layer), so re-cover the fresh canvas when the toggle is on.
                 if (HoldFallbackVideo)
                     _ = ApplyShowSessionHoldImageAsync();
+                // The visualizer layer likewise died with the replaced composition - re-attach it.
+                if (VisualizerEnabled)
+                    _ = ApplyShowSessionVisualizerAsync();
             });
             ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
             return true;
@@ -368,7 +470,9 @@ public partial class MediaPlayerViewModel
                 .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId
             ?? (_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(outputLineId))
                 ? NDIAudioDeviceId(outputLineId)
-                : null);
+                : _playerNDIAudioOutputs.ContainsKey(FileAudioDeviceId(outputLineId))
+                    ? FileAudioDeviceId(outputLineId)
+                    : null);
         if (deviceId is not null
             && session.TryGetActiveAudioPumpStats(deviceId, out var audio)
             && audio.Enqueued > 0)
@@ -436,6 +540,13 @@ public partial class MediaPlayerViewModel
                         routes.Add(Route(ndiDeviceId, CompoundEnvelope(binding),
                             nd.AudioSampleRate > 0 ? nd.AudioSampleRate : null));
                     break;
+                case FileOutputDefinition or LiveStreamOutputDefinition:
+                    // Armed encode line (recording or live stream): its primary encode track was acquired
+                    // on open like an NDI carrier.
+                    var fileDeviceId = FileAudioDeviceId(line.Definition.Id);
+                    if (_playerNDIAudioOutputs.ContainsKey(fileDeviceId))
+                        routes.Add(Route(fileDeviceId, CompoundEnvelope(binding), sampleRate: null));
+                    break;
             }
         }
         return routes;
@@ -445,6 +556,11 @@ public partial class MediaPlayerViewModel
     /// <see cref="BuildDeckShowAudioRoutes"/> (emits it), the <c>_playerNDIAudioOutputs</c> map (populated on
     /// open), and <see cref="BuildNDIAudioLease"/> (resolves it in the audio-output factory).</summary>
     private static string NDIAudioDeviceId(Guid lineId) => $"ndi-audio:{lineId}";
+
+    /// <summary>Stable route device id for an armed file-record line's primary encode track - same
+    /// carrier-audio pattern as <see cref="NDIAudioDeviceId"/> (emitted by the routes, resolved by the
+    /// audio-output factory via the borrowed-carrier map).</summary>
+    private static string FileAudioDeviceId(Guid lineId) => $"file-audio:{lineId}";
 
     /// <summary>Stable composition-output id for a driven output line - shared by the video-output factory (fire
     /// path) and hot add/remove, so a single line's composition output is attached/detached by a fixed id
@@ -676,12 +792,18 @@ public partial class MediaPlayerViewModel
             }
         }
 
-        // NDI audio: hold the carrier audio for an audio-capable NDI line so the rebuild's route can reach it.
-        if (line.Definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly }
-            && !_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(lineId))
+        // Carrier audio (NDI sender / armed file-record session): hold it so the rebuild's route can reach it.
+        var hotCarrierKey = line.Definition switch
+        {
+            NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly } => NDIAudioDeviceId(lineId),
+            FileOutputDefinition or LiveStreamOutputDefinition => FileAudioDeviceId(lineId),
+            _ => null,
+        };
+        if (hotCarrierKey is not null
+            && !_playerNDIAudioOutputs.ContainsKey(hotCarrierKey)
             && _outputs.AcquireAudioOutputForLine(lineId) is { } audio)
         {
-            _playerNDIAudioOutputs[NDIAudioDeviceId(lineId)] = audio;
+            _playerNDIAudioOutputs[hotCarrierKey] = audio;
             _playerAcquiredAudioLines.Add(lineId);
         }
 
@@ -710,8 +832,10 @@ public partial class MediaPlayerViewModel
             _playerAcquiredLines.Remove(lineId);
         }
 
-        // 2) Drop the NDI carrier from the audio map so the rebuild excludes its route (don't release it yet).
-        var hadNDIAudio = _playerNDIAudioOutputs.Remove(NDIAudioDeviceId(lineId));
+        // 2) Drop the carrier (NDI / file-record) from the audio map so the rebuild excludes its route
+        //    (don't release it yet).
+        var hadNDIAudio = _playerNDIAudioOutputs.Remove(NDIAudioDeviceId(lineId))
+                          | _playerNDIAudioOutputs.Remove(FileAudioDeviceId(lineId));
         if (hadNDIAudio)
             _playerAcquiredAudioLines.Remove(lineId);
 

@@ -2569,6 +2569,165 @@
   <data name="IoTabOSC" xml:space="preserve">
     <value>OSC</value>
   </data>
+  <data name="IoTabDebug" xml:space="preserve">
+    <value>Debug</value>
+  </data>
+  <data name="AddFileOutputButton" xml:space="preserve">
+    <value>Add file record</value>
+  </data>
+  <data name="OutputKindFileRecordLabel" xml:space="preserve">
+    <value>File record</value>
+  </data>
+  <data name="OutputKindTechnicalFileRecord" xml:space="preserve">
+    <value>FFmpeg encode</value>
+  </data>
+  <data name="OutputSummaryFileRecordFormat" xml:space="preserve">
+    <value>{0} · {1}/{2} → {3}</value>
+  </data>
+  <data name="RecordArmButton" xml:space="preserve">
+    <value>● Record</value>
+  </data>
+  <data name="RecordDisarmButton" xml:space="preserve">
+    <value>■ Stop recording</value>
+  </data>
+  <data name="RecordArmedBadge" xml:space="preserve">
+    <value>REC</value>
+  </data>
+  <data name="RecordArmFailedFormat" xml:space="preserve">
+    <value>Could not start recording: {0}</value>
+  </data>
+  <data name="AddFileOutputDialogTitle" xml:space="preserve">
+    <value>Add file record output</value>
+  </data>
+  <data name="EditFileOutputDialogTitle" xml:space="preserve">
+    <value>Edit file record output</value>
+  </data>
+  <data name="FileOutputDirectoryLabel" xml:space="preserve">
+    <value>Folder</value>
+  </data>
+  <data name="FileOutputPatternLabel" xml:space="preserve">
+    <value>File name ({timestamp} expands per recording)</value>
+  </data>
+  <data name="FileOutputContainerLabel" xml:space="preserve">
+    <value>Container</value>
+  </data>
+  <data name="FileOutputModeLabel" xml:space="preserve">
+    <value>Streams</value>
+  </data>
+  <data name="FileOutputVideoCodecLabel" xml:space="preserve">
+    <value>Video codec</value>
+  </data>
+  <data name="FileOutputRateControlLabel" xml:space="preserve">
+    <value>Rate control</value>
+  </data>
+  <data name="FileOutputCrfLabel" xml:space="preserve">
+    <value>Quality (CRF)</value>
+  </data>
+  <data name="FileOutputBitrateLabel" xml:space="preserve">
+    <value>Bitrate (kbit/s)</value>
+  </data>
+  <data name="FileOutputPresetLabel" xml:space="preserve">
+    <value>Encoder preset</value>
+  </data>
+  <data name="FileOutputScaleLabel" xml:space="preserve">
+    <value>Scale (0 = source)</value>
+  </data>
+  <data name="FileOutputAudioTracksLabel" xml:space="preserve">
+    <value>Audio tracks</value>
+  </data>
+  <data name="FileOutputAddTrackButton" xml:space="preserve">
+    <value>Add track</value>
+  </data>
+  <data name="FileOutputRemoveTrackButton" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="FileOutputAudioCodecLabel" xml:space="preserve">
+    <value>Codec</value>
+  </data>
+  <data name="FileOutputAudioChannelsLabel" xml:space="preserve">
+    <value>Channels</value>
+  </data>
+  <data name="FileOutputAudioBitrateLabel" xml:space="preserve">
+    <value>kbit/s</value>
+  </data>
+  <data name="FileOutputAudioNameLabel" xml:space="preserve">
+    <value>Track name</value>
+  </data>
+  <data name="FileOutputAudioLanguageLabel" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="FileOutputBrowseButton" xml:space="preserve">
+    <value>Browse…</value>
+  </data>
+  <data name="FileOutputValidationHeader" xml:space="preserve">
+    <value>Settings problems:</value>
+  </data>
+  <data name="AddLiveStreamButton" xml:space="preserve">
+    <value>Add live stream</value>
+  </data>
+  <data name="OutputKindLiveStreamLabel" xml:space="preserve">
+    <value>Live stream</value>
+  </data>
+  <data name="OutputKindTechnicalLiveStream" xml:space="preserve">
+    <value>FFmpeg encode + HTTP/RTMP/SRT/RTSP</value>
+  </data>
+  <data name="OutputSummaryLiveStreamFormat" xml:space="preserve">
+    <value>{0} push target(s) · LAN server {1}</value>
+  </data>
+  <data name="GoLiveButton" xml:space="preserve">
+    <value>● Go live</value>
+  </data>
+  <data name="StopStreamButton" xml:space="preserve">
+    <value>■ Stop stream</value>
+  </data>
+  <data name="AddLiveStreamDialogTitle" xml:space="preserve">
+    <value>Add live stream output</value>
+  </data>
+  <data name="EditLiveStreamDialogTitle" xml:space="preserve">
+    <value>Edit live stream output</value>
+  </data>
+  <data name="StreamPushTargetsLabel" xml:space="preserve">
+    <value>Push targets</value>
+  </data>
+  <data name="StreamAddPushTargetButton" xml:space="preserve">
+    <value>Add target</value>
+  </data>
+  <data name="StreamPushUrlWatermark" xml:space="preserve">
+    <value>rtmp://server/app/key · srt://host:port · rtsp://host/mount</value>
+  </data>
+  <data name="StreamLocalServerLabel" xml:space="preserve">
+    <value>Local LAN server</value>
+  </data>
+  <data name="StreamLocalServerEnable" xml:space="preserve">
+    <value>Enable built-in HTTP server</value>
+  </data>
+  <data name="StreamLocalServerPortLabel" xml:space="preserve">
+    <value>Port</value>
+  </data>
+  <data name="StreamLocalServerTs" xml:space="preserve">
+    <value>MPEG-TS stream (/stream.ts, VLC/mpv)</value>
+  </data>
+  <data name="StreamLocalServerHls" xml:space="preserve">
+    <value>HLS (/hls/live.m3u8, browsers/TVs)</value>
+  </data>
+  <data name="StreamRtmpSingleTrackHint" xml:space="preserve">
+    <value>An RTMP target limits the stream to one AAC audio track with H.264 video.</value>
+  </data>
+  <data name="VisualizerToggleLabel" xml:space="preserve">
+    <value>VIZ</value>
+  </data>
+  <data name="VisualizerToggleTooltip" xml:space="preserve">
+    <value>projectM audio visualizer: renders a Milkdrop-style layer over this deck's composition, reacting to the playing audio. Preset directory comes from the visualizer settings (scripts/build-projectm.sh installs a pack).</value>
+  </data>
+  <data name="PipelineStatsHeader" xml:space="preserve">
+    <value>Pipeline stats</value>
+  </data>
+  <data name="PipelineStatsHint" xml:space="preserve">
+    <value>Live per-stage timings and queues for every active playback pipeline: decode, audio mix, composition, and each video output. Refreshes once per second.</value>
+  </data>
+  <data name="PipelineStatsEmptyHint" xml:space="preserve">
+    <value>Nothing is playing. Start playback on a deck or fire a cue to see decode, mix, composition and output timings here.</value>
+  </data>
   <data name="ExportLayerMenuHeader" xml:space="preserve">
     <value>Export layer…</value>
   </data>

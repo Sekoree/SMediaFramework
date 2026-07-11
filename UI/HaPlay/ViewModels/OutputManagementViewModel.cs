@@ -52,6 +52,12 @@ public partial class OutputManagementViewModel : ViewModelBase
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
                 return ndi.AcquireForPlayback(needsVideo: true, needsAudio: false)?.Video;
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+                return file.AcquireForPlayback(needsVideo: true, needsAudio: false).Video; // null unless armed
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                return stream.AcquireForPlayback(needsVideo: true, needsAudio: false).Video; // null unless live
         return null;
     }
 
@@ -70,7 +76,19 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
+            {
                 ndi.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
+                return;
+            }
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+            {
+                file.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
+                return;
+            }
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                stream.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
     }
 
     /// <summary>Acquires the AUDIO side of an NDI output line's carrier - the SAME sender that carries the
@@ -86,6 +104,12 @@ public partial class OutputManagementViewModel : ViewModelBase
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
                 return ndi.AcquireForPlayback(needsVideo: false, needsAudio: true)?.Audio;
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+                return file.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio; // null unless armed
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                return stream.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio; // null unless live
         return null;
     }
 
@@ -98,15 +122,31 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
+            {
                 ndi.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                return;
+            }
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+            {
+                file.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                return;
+            }
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                stream.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
     }
 
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NDIOutputPreviewRuntime> _ndiOutputs = new();
     private readonly Dictionary<OutputLineViewModel, PortAudioOutputRuntime> _portAudioOutputs = new();
+    private readonly Dictionary<OutputLineViewModel, FileOutputRuntime> _fileOutputs = new();
+    private readonly Dictionary<OutputLineViewModel, LiveStreamOutputRuntime> _liveStreams = new();
     private readonly Lock _ndiOutputsGate = new();
     private readonly Lock _portAudioOutputsGate = new();
+    private readonly Lock _fileOutputsGate = new();
+    private readonly Lock _liveStreamsGate = new();
 
     /// <summary>
     /// Phase B (§3.6) - set by <c>MainViewModel</c> so the Edit flow can ask whether *any* player is
@@ -314,6 +354,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         StopLocalPreview(line);
         StopNDIOutput(line);
         StopPortAudioOutput(line);
+        StopFileOutput(line);
+        StopLiveStream(line);
         Outputs.Remove(line);
     }
 
@@ -434,6 +476,12 @@ public partial class OutputManagementViewModel : ViewModelBase
                         break;
                     case LocalVideoOutputDefinition:
                         await StartLocalPreviewAsync(line, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case FileOutputDefinition file:
+                        EnsureFileRuntime(line, file);
+                        break;
+                    case LiveStreamOutputDefinition stream:
+                        EnsureLiveStreamRuntime(line, stream);
                         break;
                 }
                 started++;
@@ -571,6 +619,22 @@ public partial class OutputManagementViewModel : ViewModelBase
                     _ndiOutputs.TryGetValue(line, out rt);
                 if (rt is not null)
                     await rt.ReconfigureAsync(nd, cancellationToken).ConfigureAwait(false);
+                break;
+            }
+            case FileOutputDefinition file:
+            {
+                FileOutputRuntime? rt;
+                lock (_fileOutputsGate)
+                    _fileOutputs.TryGetValue(line, out rt);
+                rt?.Reconfigure(file); // applies on the NEXT arm; an armed session keeps its open file
+                break;
+            }
+            case LiveStreamOutputDefinition stream:
+            {
+                LiveStreamOutputRuntime? rt;
+                lock (_liveStreamsGate)
+                    _liveStreams.TryGetValue(line, out rt);
+                rt?.Reconfigure(stream); // applies on the NEXT go-live
                 break;
             }
             default:
@@ -765,6 +829,195 @@ public partial class OutputManagementViewModel : ViewModelBase
         rt.ReleaseFromPlayback();
     }
 
+    private void EnsureFileRuntime(OutputLineViewModel line, FileOutputDefinition definition)
+    {
+        lock (_fileOutputsGate)
+        {
+            if (_fileOutputs.ContainsKey(line))
+                return;
+            _fileOutputs[line] = new FileOutputRuntime(definition);
+        }
+    }
+
+    /// <summary>App-shutdown: finalize every armed recording and live stream (flush encoders + write
+    /// trailers, stop the LAN server) so an exit mid-record never leaves a truncated file. Synchronous
+    /// best-effort; safe to call twice.</summary>
+    public void FinishAllRecordingsForShutdown()
+    {
+        List<FileOutputRuntime> runtimes;
+        lock (_fileOutputsGate)
+            runtimes = _fileOutputs.Values.ToList();
+        foreach (var rt in runtimes)
+        {
+            try { rt.Dispose(); }
+            catch { /* best effort */ }
+        }
+
+        List<LiveStreamOutputRuntime> streams;
+        lock (_liveStreamsGate)
+            streams = _liveStreams.Values.ToList();
+        foreach (var rt in streams)
+        {
+            try { rt.Dispose(); }
+            catch { /* best effort */ }
+        }
+    }
+
+    private void StopFileOutput(OutputLineViewModel line)
+    {
+        FileOutputRuntime? rt;
+        lock (_fileOutputsGate)
+        {
+            if (!_fileOutputs.Remove(line, out rt))
+                return;
+        }
+
+        try { rt.Dispose(); } // finishes an in-flight recording best-effort (trailer written)
+        catch { /* best effort */ }
+        line.IsRecordArmed = false;
+    }
+
+    /// <summary>
+    /// Arms/disarms the line's encode session: for a file-record line this starts/finishes the file, for
+    /// a live-stream line it goes live / stops the stream. Wrapped in the same reconfigure events an
+    /// Edit uses so a live playback session detaches its routes first and re-acquires afterwards -
+    /// arming mid-show starts capturing/streaming without a restart. Failures (bad folder, missing
+    /// encoder, port in use) surface on the line's health detail.
+    /// </summary>
+    public async Task SetFileRecordArmedAsync(OutputLineViewModel line, bool armed)
+    {
+        FileOutputRuntime? fileRt = null;
+        LiveStreamOutputRuntime? streamRt = null;
+        switch (line.Definition)
+        {
+            case FileOutputDefinition fileDef:
+                lock (_fileOutputsGate)
+                    _fileOutputs.TryGetValue(line, out fileRt);
+                if (fileRt is null)
+                {
+                    EnsureFileRuntime(line, fileDef);
+                    lock (_fileOutputsGate)
+                        _fileOutputs.TryGetValue(line, out fileRt);
+                }
+
+                if (fileRt is null || fileRt.IsArmed == armed)
+                    return;
+                break;
+            case LiveStreamOutputDefinition streamDef:
+                lock (_liveStreamsGate)
+                    _liveStreams.TryGetValue(line, out streamRt);
+                if (streamRt is null)
+                {
+                    EnsureLiveStreamRuntime(line, streamDef);
+                    lock (_liveStreamsGate)
+                        _liveStreams.TryGetValue(line, out streamRt);
+                }
+
+                if (streamRt is null || streamRt.IsLive == armed)
+                    return;
+                break;
+            default:
+                return;
+        }
+
+        await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(true);
+        try
+        {
+            if (armed)
+            {
+                if (fileRt is not null)
+                {
+                    fileRt.Arm();
+                    line.RecordFilePath = fileRt.CurrentFilePath;
+                }
+                else if (streamRt is not null)
+                {
+                    streamRt.GoLive();
+                    line.RecordFilePath = FormatStreamUrls(streamRt);
+                }
+
+                line.IsRecordArmed = true;
+                line.HealthDetail = null;
+            }
+            else
+            {
+                if (fileRt is not null)
+                    await fileRt.DisarmAsync().ConfigureAwait(true);
+                else if (streamRt is not null)
+                    await streamRt.StopStreamAsync().ConfigureAwait(true);
+                line.IsRecordArmed = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "record/stream arm failed for '{Name}'", line.Definition.DisplayName);
+            line.IsRecordArmed = fileRt?.IsArmed ?? streamRt?.IsLive ?? false;
+            line.Health = OutputLineHealthState.Error;
+            line.HealthDetail = Strings.Format(nameof(Strings.RecordArmFailedFormat), ex.Message);
+        }
+        finally
+        {
+            await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>The LAN URLs viewers open, shown in the detail pane while live.</summary>
+    private static string? FormatStreamUrls(LiveStreamOutputRuntime runtime)
+    {
+        var status = runtime.GetStatus();
+        if (status is null || status.LocalServerPort == 0)
+            return null;
+        var host = System.Net.Dns.GetHostName();
+        var parts = new List<string>(2);
+        if (status.TsUrlPath is { } ts)
+            parts.Add($"http://{host}:{status.LocalServerPort}{ts}");
+        if (status.HlsUrlPath is { } hls)
+            parts.Add($"http://{host}:{status.LocalServerPort}{hls}");
+        return parts.Count > 0 ? string.Join("\n", parts) : null;
+    }
+
+    private void EnsureLiveStreamRuntime(OutputLineViewModel line, LiveStreamOutputDefinition definition)
+    {
+        lock (_liveStreamsGate)
+        {
+            if (_liveStreams.ContainsKey(line))
+                return;
+            _liveStreams[line] = new LiveStreamOutputRuntime(definition);
+        }
+    }
+
+    private void StopLiveStream(OutputLineViewModel line)
+    {
+        LiveStreamOutputRuntime? rt;
+        lock (_liveStreamsGate)
+        {
+            if (!_liveStreams.Remove(line, out rt))
+                return;
+        }
+
+        try { rt.Dispose(); }
+        catch { /* best effort */ }
+        line.IsRecordArmed = false;
+    }
+
+    /// <summary>Live-stream session status for the debug/health polls (null when not live).</summary>
+    internal S.Media.Stream.Http.LiveStreamStatus? TryGetLiveStreamStatus(OutputLineViewModel line)
+    {
+        LiveStreamOutputRuntime? rt;
+        lock (_liveStreamsGate)
+            _liveStreams.TryGetValue(line, out rt);
+        return rt?.GetStatus();
+    }
+
+    /// <summary>Armed file-record session metrics for the debug/health polls (null when disarmed).</summary>
+    internal S.Media.Encode.FFmpeg.FFmpegEncodeSessionMetrics? TryGetFileRecordMetrics(OutputLineViewModel line)
+    {
+        FileOutputRuntime? rt;
+        lock (_fileOutputsGate)
+            _fileOutputs.TryGetValue(line, out rt);
+        return rt?.GetMetrics();
+    }
+
     private void StopNDIOutput(OutputLineViewModel line)
     {
         NDIOutputPreviewRuntime? rt;
@@ -851,6 +1104,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             PortAudioOutputDefinition pa => await ShowEditPortAudioAsync(owner, pa),
             LocalVideoOutputDefinition lv => await ShowEditLocalVideoAsync(owner, lv),
             NDIOutputDefinition nd => await ShowEditNDIAsync(owner, nd),
+            FileOutputDefinition file => await ShowEditFileOutputAsync(owner, file),
+            LiveStreamOutputDefinition stream => await ShowEditLiveStreamAsync(owner, stream),
             _ => null,
         };
 
@@ -918,6 +1173,24 @@ public partial class OutputManagementViewModel : ViewModelBase
         vm.InitializeExistingOutputNames(ExistingOutputNames(nd.Id));
         var dlg = new AddNDIOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<NDIOutputDefinition?>(owner);
+    }
+
+    private async Task<FileOutputDefinition?> ShowEditFileOutputAsync(Window owner, FileOutputDefinition file)
+    {
+        var vm = new AddFileOutputDialogViewModel();
+        vm.LoadFromExisting(file);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(file.Id));
+        var dlg = new AddFileOutputDialog { DataContext = vm };
+        return await dlg.ShowDialog<FileOutputDefinition?>(owner);
+    }
+
+    private async Task<LiveStreamOutputDefinition?> ShowEditLiveStreamAsync(Window owner, LiveStreamOutputDefinition stream)
+    {
+        var vm = new AddLiveStreamOutputDialogViewModel();
+        vm.LoadFromExisting(stream);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(stream.Id));
+        var dlg = new AddLiveStreamOutputDialog { DataContext = vm };
+        return await dlg.ShowDialog<LiveStreamOutputDefinition?>(owner);
     }
 
     /// <summary>Operator's answer to the "output in use" edit prompt.</summary>
@@ -1100,6 +1373,46 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     private bool CanAddNDI() => IsNDIAvailable;
+
+    [RelayCommand]
+    private async Task AddFileOutputAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var vm = new AddFileOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
+        var dlg = new AddFileOutputDialog { DataContext = vm };
+        var result = await dlg.ShowDialog<FileOutputDefinition?>(owner);
+        if (result is null)
+            return;
+
+        var line = new OutputLineViewModel(result, Remove, this);
+        Outputs.Add(line);
+        EnsureFileRuntime(line, result);
+    }
+
+    [RelayCommand]
+    private async Task AddLiveStreamAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var vm = new AddLiveStreamOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
+        var dlg = new AddLiveStreamOutputDialog { DataContext = vm };
+        var result = await dlg.ShowDialog<LiveStreamOutputDefinition?>(owner);
+        if (result is null)
+            return;
+
+        var line = new OutputLineViewModel(result, Remove, this);
+        Outputs.Add(line);
+        EnsureLiveStreamRuntime(line, result);
+    }
 
     [RelayCommand]
     private void ClearHealth()

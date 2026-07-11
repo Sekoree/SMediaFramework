@@ -10,6 +10,8 @@ public enum ManagedOutputKind
     NDI,
     SDLOpenGlVideo,
     AvaloniaOpenGlVideo,
+    FileRecord,
+    LiveStream,
 }
 
 public enum VideoOutputEngine
@@ -51,6 +53,8 @@ public enum LocalVideoFit
 [JsonDerivedType(typeof(PortAudioOutputDefinition), typeDiscriminator: "portAudio")]
 [JsonDerivedType(typeof(LocalVideoOutputDefinition), typeDiscriminator: "localVideo")]
 [JsonDerivedType(typeof(NDIOutputDefinition), typeDiscriminator: "ndi")]
+[JsonDerivedType(typeof(FileOutputDefinition), typeDiscriminator: "fileRecord")]
+[JsonDerivedType(typeof(LiveStreamOutputDefinition), typeDiscriminator: "liveStream")]
 public abstract record OutputDefinition(Guid Id, string DisplayName)
 {
     [JsonIgnore]
@@ -128,6 +132,82 @@ public sealed record LocalVideoOutputDefinition(
     [JsonIgnore]
     public override ManagedOutputKind Kind =>
         Engine == VideoOutputEngine.SDLOpenGl ? ManagedOutputKind.SDLOpenGlVideo : ManagedOutputKind.AvaloniaOpenGlVideo;
+}
+
+/// <summary>One audio track of an encode output (persisted). Channels 0 = stereo default.</summary>
+public sealed record EncodeAudioLegDefinition(
+    string Codec = "Aac",
+    long BitrateBps = 0,
+    int Channels = 2,
+    int SampleRate = 0,
+    string? Name = null,
+    string? Language = null);
+
+/// <summary>
+/// Persisted encode settings shared by the file-record output and (Phase 3) the live-stream output.
+/// Codec/container names are stored as strings so a project file survives enum growth in the encode
+/// module; the runtime maps them with TryParse and falls back to defaults on unknown values.
+/// </summary>
+public sealed record EncodeSettingsDefinition(
+    string Container = "Mp4",
+    string OutputMode = "VideoAndAudio",
+    string VideoCodec = "H264",
+    long VideoBitrateBps = 0,
+    int? VideoCrf = 23,
+    string? VideoPreset = "veryfast",
+    int GopSize = 0,
+    int ScaleWidth = 0,
+    int ScaleHeight = 0)
+{
+    public IReadOnlyList<EncodeAudioLegDefinition> AudioLegs { get; init; } = [new EncodeAudioLegDefinition()];
+}
+
+/// <summary>Record-to-file output line. The runtime is armed/disarmed explicitly (a recording is an
+/// operator action, not a side effect of the line existing).</summary>
+public sealed record FileOutputDefinition(
+    Guid Id,
+    string DisplayName,
+    string DirectoryPath,
+    // File name pattern; "{timestamp}" expands to yyyyMMdd_HHmmss at arm time so re-arming never overwrites.
+    string FileNamePattern = "recording_{timestamp}",
+    EncodeSettingsDefinition? Encode = null) : OutputDefinition(Id, DisplayName)
+{
+    [JsonIgnore]
+    public override ManagedOutputKind Kind => ManagedOutputKind.FileRecord;
+
+    [JsonIgnore]
+    public EncodeSettingsDefinition EffectiveEncode => Encode ?? new EncodeSettingsDefinition();
+}
+
+/// <summary>One push destination of a live-stream output (persisted). Protocol stored as string
+/// ("Rtmp"/"Srt"/"Rtsp") for the same enum-growth resilience as the codec names.</summary>
+public sealed record StreamPushTargetDefinition(string Protocol = "Rtmp", string Url = "");
+
+/// <summary>The built-in LAN server's persisted settings.</summary>
+public sealed record LocalStreamServerDefinition(
+    bool Enabled = true,
+    int Port = 8620,
+    bool EnableTs = true,
+    bool EnableHls = true);
+
+/// <summary>Live-stream output line: shared encode settings + N push targets + optional LAN server.
+/// Like the file record, streaming is explicitly started/stopped by the operator ("go live").</summary>
+public sealed record LiveStreamOutputDefinition(
+    Guid Id,
+    string DisplayName,
+    EncodeSettingsDefinition? Encode = null,
+    LocalStreamServerDefinition? LocalServer = null) : OutputDefinition(Id, DisplayName)
+{
+    public IReadOnlyList<StreamPushTargetDefinition> PushTargets { get; init; } = [];
+
+    [JsonIgnore]
+    public override ManagedOutputKind Kind => ManagedOutputKind.LiveStream;
+
+    [JsonIgnore]
+    public EncodeSettingsDefinition EffectiveEncode => Encode ?? new EncodeSettingsDefinition(Container: "MpegTs");
+
+    [JsonIgnore]
+    public LocalStreamServerDefinition EffectiveLocalServer => LocalServer ?? new LocalStreamServerDefinition();
 }
 
 public sealed record NDIOutputDefinition(

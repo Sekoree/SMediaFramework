@@ -31,6 +31,10 @@ public sealed class CueShowSessionCoordinator
     // The cue workspace's playback runtime: the headless per-app ShowSession (Phase-8 cutover complete - the
     // legacy CuePlaybackEngine/SoundboardEngine/HaPlayPlaybackSession fallbacks are deleted).
     private ShowSession? _cueShowSession;
+
+    /// <summary>The cue session for the I/O Debug page's poll (null until the cue workspace builds it).
+    /// Lock-free snapshot readers only - see <see cref="ShowSession.GetActiveClipPipelineMetrics"/>.</summary>
+    internal ShowSession? PipelineStatsSession => _cueShowSession;
     // compositionId → the real video outputs it renders to, acquired on the UI thread in the cue reload
     // so ShowSession's video factory is a pure lookup during LoadDocumentAsync.
     private Dictionary<string, CueShowVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
@@ -139,7 +143,9 @@ public sealed class CueShowSessionCoordinator
                         DisposeOutputOnRuntimeDispose: false,
                         Mapping: HaPlayShowMapper.ToClipOutputMapping(o.Mapping))).ToArray()
                     : Array.Empty<ClipCompositionOutputLease>(),
-                CueCompositionRuntime.CreateShowSessionCompositor);
+                CueCompositionRuntime.CreateShowSessionCompositor,
+                // Effect buses (Phase 4): tags + cover art for the metadata hub (visualizers/overlays).
+                metadataProbe: S.Media.Decode.FFmpeg.MediaTagProbe.TryRead);
 
             CuePlayer.CueStandbyInvalidated += (_, _) => ScheduleCueShowSessionReload();
             CuePlayer.PropertyChanged += (_, e) =>

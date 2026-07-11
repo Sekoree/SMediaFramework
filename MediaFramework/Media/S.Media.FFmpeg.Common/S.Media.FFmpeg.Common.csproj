@@ -23,7 +23,9 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.Decode.FFmpeg" />
+        <InternalsVisibleTo Include="S.Media.Encode.FFmpeg" />
         <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
+        <InternalsVisibleTo Include="S.Media.Encode.FFmpeg.Tests" />
     </ItemGroup>
 
 </Project>

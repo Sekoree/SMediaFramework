@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Encode.FFmpeg - libavcodec/libavformat encoders + muxers behind IVideoOutput/IAudioOutput
+         sinks (Tier 3b slot reserved by the rewrite docs). The encode side produces packets ONCE and fans
+         them out to N packet sinks (file mux today; RTMP/SRT/RTSP push + LAN TS/HLS broadcast next), so
+         record-to-file and live streaming share one encoder. Depends only on Core + FFmpeg.Common. -->
+
+    <PropertyGroup>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <Description>FFmpeg (libavcodec/libavformat) encode + mux outputs: record to file, push to stream targets.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="FFmpeg.AutoGen" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.FFmpeg.Common/S.Media.FFmpeg.Common.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="FFmpeg.AutoGen" />
+        <Using Include="FFmpeg.AutoGen.ffmpeg" Static="true" />
+        <Using Include="S.Media.Core" />
+        <Using Include="S.Media.Core.Audio" />
+        <Using Include="S.Media.Core.Video" />
+        <Using Include="S.Media.Core.Diagnostics" />
+        <Using Include="S.Media.FFmpeg.Common" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Encode.FFmpeg.Tests" />
+        <InternalsVisibleTo Include="S.Media.Stream.Http" />
+    </ItemGroup>
+
+</Project>

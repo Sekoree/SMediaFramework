@@ -169,6 +169,14 @@ public sealed class VideoPlayer : IDisposable
     /// <summary>Frames dropped on Stop/Pause/Seek (queue drain) before they could be displayed.</summary>
     public long DroppedDrain => Volatile.Read(ref _droppedQueueDrain);
 
+    /// <summary>Timing of successful <see cref="IVideoSource.TryReadNextFrame"/> calls on the decode thread.</summary>
+    public TimingSnapshot DecodeTiming => _decodeTiming.Snapshot();
+
+    /// <summary>Presentation-queue capacity (companion to <see cref="QueuedFrameCount"/> for depth gauges).</summary>
+    public int QueueCapacity => _queueCapacity;
+
+    private readonly TimingAccumulator _decodeTiming = new();
+
     /// <summary>
     /// A frame whose PTS is more than this far behind the playhead is
     /// dropped instead of submitted. Default 150 ms.
@@ -500,17 +508,19 @@ public sealed class VideoPlayer : IDisposable
                     return;
                 }
 
-                var readStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+                var logSlowRead = Trace.IsEnabled(LogLevel.Warning);
+                var readStarted = Stopwatch.GetTimestamp();
                 if (!_source.TryReadNextFrame(out var frame))
                 {
-                    if (readStarted != 0)
+                    if (logSlowRead)
                         MaybeLogSlowDecodeRead(readStarted, gotFrame: false);
                     // Live source not ready (or end-of-stream lag). Brief sleep
                     // so we don't spin; cancellation is honoured promptly.
                     if (token.WaitHandle.WaitOne(_decodePollInterval)) return;
                     continue;
                 }
-                if (readStarted != 0)
+                _decodeTiming.RecordSince(readStarted);
+                if (logSlowRead)
                     MaybeLogSlowDecodeRead(readStarted, gotFrame: true);
 
                 Interlocked.Increment(ref _decoded);
