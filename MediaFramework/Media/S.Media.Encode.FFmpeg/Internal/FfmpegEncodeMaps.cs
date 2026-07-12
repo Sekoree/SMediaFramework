@@ -28,36 +28,69 @@ internal static class FfmpegEncodeMaps
     {
         EncodeVideoCodec.H264 => AVCodecID.AV_CODEC_ID_H264,
         EncodeVideoCodec.Hevc => AVCodecID.AV_CODEC_ID_HEVC,
-        EncodeVideoCodec.ProRes422 => AVCodecID.AV_CODEC_ID_PRORES,
+        EncodeVideoCodec.Av1 => AVCodecID.AV_CODEC_ID_AV1,
+        EncodeVideoCodec.Vp9 => AVCodecID.AV_CODEC_ID_VP9,
+        EncodeVideoCodec.ProRes422 or EncodeVideoCodec.ProRes4444 => AVCodecID.AV_CODEC_ID_PRORES,
+        EncodeVideoCodec.DnxHr => AVCodecID.AV_CODEC_ID_DNXHD,
+        EncodeVideoCodec.Ffv1 => AVCodecID.AV_CODEC_ID_FFV1,
         EncodeVideoCodec.Mpeg4 => AVCodecID.AV_CODEC_ID_MPEG4,
         _ => throw new ArgumentOutOfRangeException(nameof(codec)),
     };
 
-    internal static string? VideoEncoderName(EncodeVideoCodec codec) => codec switch
+    /// <summary>Ordered encoder name candidates - the first one this build ships is used. AV1 in
+    /// particular has several implementations; libsvtav1 is the fast realtime-capable one.</summary>
+    internal static string[] VideoEncoderNames(EncodeVideoCodec codec) => codec switch
     {
-        EncodeVideoCodec.H264 => "libx264",
-        EncodeVideoCodec.Hevc => "libx265",
-        EncodeVideoCodec.ProRes422 => "prores_ks",
-        EncodeVideoCodec.Mpeg4 => null, // built-in mpeg4 encoder
-        _ => null,
+        EncodeVideoCodec.H264 => ["libx264"],
+        EncodeVideoCodec.Hevc => ["libx265"],
+        EncodeVideoCodec.Av1 => ["libsvtav1", "librav1e", "libaom-av1"],
+        EncodeVideoCodec.Vp9 => ["libvpx-vp9"],
+        EncodeVideoCodec.ProRes422 or EncodeVideoCodec.ProRes4444 => ["prores_ks", "prores"],
+        EncodeVideoCodec.DnxHr => ["dnxhd"],
+        EncodeVideoCodec.Ffv1 => ["ffv1"],
+        EncodeVideoCodec.Mpeg4 => [], // built-in mpeg4 encoder (by codec id)
+        _ => [],
+    };
+
+    /// <summary>Encoder-specific private options (av_opt_set on priv_data) applied at open. ProRes 4444
+    /// selects its profile; DNxHR picks an HR profile from the encode pixel format.</summary>
+    internal static IReadOnlyList<(string Key, string Value)> VideoEncoderPrivateOptions(
+        EncodeVideoCodec codec, PixelFormat encodePixel) => codec switch
+    {
+        EncodeVideoCodec.ProRes4444 => [("profile", "4444")],
+        EncodeVideoCodec.ProRes422 => [("profile", "standard")],
+        // DNxHR profile is driven by bit depth / chroma: 10-bit → hqx, 8-bit 4:2:2 → hq.
+        EncodeVideoCodec.DnxHr => encodePixel is PixelFormat.Yuv422P10Le
+            ? [("profile", "dnxhr_hqx")]
+            : [("profile", "dnxhr_hq")],
+        _ => [],
     };
 
     internal static AVCodecID AudioCodecId(EncodeAudioCodec codec) => codec switch
     {
         EncodeAudioCodec.Aac => AVCodecID.AV_CODEC_ID_AAC,
         EncodeAudioCodec.Opus => AVCodecID.AV_CODEC_ID_OPUS,
+        EncodeAudioCodec.Mp3 => AVCodecID.AV_CODEC_ID_MP3,
+        EncodeAudioCodec.Ac3 => AVCodecID.AV_CODEC_ID_AC3,
+        EncodeAudioCodec.Eac3 => AVCodecID.AV_CODEC_ID_EAC3,
         EncodeAudioCodec.Flac => AVCodecID.AV_CODEC_ID_FLAC,
+        EncodeAudioCodec.Alac => AVCodecID.AV_CODEC_ID_ALAC,
         EncodeAudioCodec.Pcm16 => AVCodecID.AV_CODEC_ID_PCM_S16LE,
+        EncodeAudioCodec.Pcm24 => AVCodecID.AV_CODEC_ID_PCM_S24LE,
         _ => throw new ArgumentOutOfRangeException(nameof(codec)),
     };
 
-    internal static string? AudioEncoderName(EncodeAudioCodec codec) => codec switch
+    internal static string[] AudioEncoderNames(EncodeAudioCodec codec) => codec switch
     {
-        EncodeAudioCodec.Aac => "aac",
-        EncodeAudioCodec.Opus => "libopus",
-        EncodeAudioCodec.Flac => "flac",
-        EncodeAudioCodec.Pcm16 => null, // built-in pcm encoder
-        _ => null,
+        EncodeAudioCodec.Aac => ["aac"],
+        EncodeAudioCodec.Opus => ["libopus", "opus"],
+        EncodeAudioCodec.Mp3 => ["libmp3lame"],
+        EncodeAudioCodec.Ac3 => ["ac3"],
+        EncodeAudioCodec.Eac3 => ["eac3"],
+        EncodeAudioCodec.Flac => ["flac"],
+        EncodeAudioCodec.Alac => ["alac"],
+        EncodeAudioCodec.Pcm16 or EncodeAudioCodec.Pcm24 => [], // built-in pcm encoder (by codec id)
+        _ => [],
     };
 
     internal static unsafe bool VideoEncoderAvailable(EncodeVideoCodec codec) =>
@@ -68,22 +101,26 @@ internal static class FfmpegEncodeMaps
 
     internal static unsafe AVCodec* FindVideoEncoder(EncodeVideoCodec codec)
     {
-        AVCodec* c = null;
-        if (VideoEncoderName(codec) is { } name)
-            c = avcodec_find_encoder_by_name(name);
-        if (c is null)
-            c = avcodec_find_encoder(VideoCodecId(codec));
-        return c;
+        foreach (var name in VideoEncoderNames(codec))
+        {
+            var byName = avcodec_find_encoder_by_name(name);
+            if (byName is not null)
+                return byName;
+        }
+
+        return avcodec_find_encoder(VideoCodecId(codec)); // built-in / codec-id fallback
     }
 
     internal static unsafe AVCodec* FindAudioEncoder(EncodeAudioCodec codec)
     {
-        AVCodec* c = null;
-        if (AudioEncoderName(codec) is { } name)
-            c = avcodec_find_encoder_by_name(name);
-        if (c is null)
-            c = avcodec_find_encoder(AudioCodecId(codec));
-        return c;
+        foreach (var name in AudioEncoderNames(codec))
+        {
+            var byName = avcodec_find_encoder_by_name(name);
+            if (byName is not null)
+                return byName;
+        }
+
+        return avcodec_find_encoder(AudioCodecId(codec)); // built-in / codec-id fallback
     }
 
     /// <summary>Picks the pixel format frames are converted to before hitting the encoder.</summary>
@@ -92,15 +129,36 @@ internal static class FfmpegEncodeMaps
         if (force is { } f)
             return f;
 
-        if (codec == EncodeVideoCodec.ProRes422)
-        {
-            if (input is PixelFormat.Yuv422P10Le or PixelFormat.Yuv422P12Le or PixelFormat.Yuv422P)
-                return input;
-            return PixelFormat.Yuv422P10Le;
-        }
+        var is10Bit = input is PixelFormat.Yuv420P10Le or PixelFormat.P010 or PixelFormat.Yuv420P12Le
+            or PixelFormat.Yuv422P10Le or PixelFormat.Yuv444P12Le or PixelFormat.Yuva444P12Le;
 
-        if (codec == EncodeVideoCodec.Mpeg4)
-            return PixelFormat.I420; // the built-in mpeg4 encoder is yuv420p-only
+        switch (codec)
+        {
+            case EncodeVideoCodec.ProRes422:
+                if (input is PixelFormat.Yuv422P10Le or PixelFormat.Yuv422P12Le or PixelFormat.Yuv422P)
+                    return input;
+                return PixelFormat.Yuv422P10Le;
+
+            case EncodeVideoCodec.ProRes4444:
+                // 4444 keeps alpha: 12-bit alpha source stays, else 10-bit 4:4:4 (no alpha).
+                return input is PixelFormat.Yuva444P12Le ? PixelFormat.Yuva444P12Le : PixelFormat.Yuv444P12Le;
+
+            case EncodeVideoCodec.DnxHr:
+                // dnxhr_hqx = 10-bit 4:2:2; dnxhr_hq = 8-bit 4:2:2 (profile set in private options).
+                return is10Bit ? PixelFormat.Yuv422P10Le : PixelFormat.Yuv422P;
+
+            case EncodeVideoCodec.Ffv1:
+                // Lossless: preserve the source layout when FFmpeg can map it, else I420.
+                return FfmpegVideoPixelMaps.ToAvPixelFormat(input) is not null ? input : PixelFormat.I420;
+
+            case EncodeVideoCodec.Mpeg4:
+                return PixelFormat.I420; // the built-in mpeg4 encoder is yuv420p-only
+
+            case EncodeVideoCodec.Av1:
+            case EncodeVideoCodec.Vp9:
+                // Both accept 8-bit and 10-bit 4:2:0; keep 10-bit sources, else I420.
+                return is10Bit ? PixelFormat.Yuv420P10Le : PixelFormat.I420;
+        }
 
         return input switch
         {

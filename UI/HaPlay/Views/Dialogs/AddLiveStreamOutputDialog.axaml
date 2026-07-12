@@ -33,15 +33,22 @@
         <ItemsControl ItemsSource="{Binding PushTargets}">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:StreamPushTargetRowViewModel">
-              <Grid ColumnDefinitions="110,8,*,8,Auto" Margin="0,0,0,6">
-                <ComboBox Grid.Column="0" ItemsSource="{Binding Protocols}" SelectedItem="{Binding Protocol}"
-                          HorizontalAlignment="Stretch" />
-                <TextBox Grid.Column="2" Text="{Binding Url}"
-                         Watermark="{x:Static res:Strings.StreamPushUrlWatermark}" />
-                <Button Grid.Column="4" Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
-                        Command="{Binding $parent[ItemsControl].((vm:AddLiveStreamOutputDialogViewModel)DataContext).RemovePushTargetCommand}"
-                        CommandParameter="{Binding}" />
-              </Grid>
+              <Border BorderBrush="#22808080" BorderThickness="1" Padding="8" Margin="0,0,0,6">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="110,8,*,8,Auto">
+                    <ComboBox Grid.Column="0" ItemsSource="{Binding Protocols}"
+                              SelectedValue="{Binding Protocol}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                              HorizontalAlignment="Stretch" />
+                    <TextBox Grid.Column="2" Text="{Binding Url}"
+                             Watermark="{x:Static res:Strings.StreamPushUrlWatermark}" />
+                    <Button Grid.Column="4" Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
+                            Command="{Binding $parent[ItemsControl].((vm:AddLiveStreamOutputDialogViewModel)DataContext).RemovePushTargetCommand}"
+                            CommandParameter="{Binding}" />
+                  </Grid>
+                  <TextBox Text="{Binding StreamKey}"
+                           Watermark="{x:Static res:Strings.StreamPushKeyWatermark}" />
+                </StackPanel>
+              </Border>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
@@ -60,6 +67,14 @@
                 <NumericUpDown Grid.Column="2" Minimum="1" Maximum="65535" FormatString="0"
                                Value="{Binding LocalServerPort}" />
               </Grid>
+              <Grid ColumnDefinitions="Auto,8,*">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StreamLocalServerMountLabel}"
+                           VerticalAlignment="Center" />
+                <TextBox Grid.Column="2" Text="{Binding LocalServerMountName}"
+                         Watermark="{x:Static res:Strings.StreamLocalServerMountWatermark}" />
+              </Grid>
+              <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                         Text="{x:Static res:Strings.StreamLocalServerMountHint}" />
               <CheckBox Content="{x:Static res:Strings.StreamLocalServerTs}" IsChecked="{Binding LocalServerTs}" />
               <CheckBox Content="{x:Static res:Strings.StreamLocalServerHls}" IsChecked="{Binding LocalServerHls}" />
             </StackPanel>
@@ -69,11 +84,15 @@
         <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Padding="0,8,0,0">
           <StackPanel Spacing="8">
             <TextBlock Text="{x:Static res:Strings.FileOutputModeLabel}" FontWeight="SemiBold" />
-            <ComboBox ItemsSource="{Binding OutputModes}" SelectedItem="{Binding OutputMode}" HorizontalAlignment="Stretch" />
+            <ComboBox ItemsSource="{Binding OutputModes}"
+                      SelectedValue="{Binding OutputMode}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                      HorizontalAlignment="Stretch" />
 
             <StackPanel Spacing="8" IsVisible="{Binding ShowVideoSettings}">
               <TextBlock Text="{x:Static res:Strings.FileOutputVideoCodecLabel}" FontWeight="SemiBold" />
-              <ComboBox ItemsSource="{Binding VideoCodecs}" SelectedItem="{Binding VideoCodec}" HorizontalAlignment="Stretch" />
+              <ComboBox ItemsSource="{Binding VideoCodecs}"
+                        SelectedValue="{Binding VideoCodec}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                        HorizontalAlignment="Stretch" />
 
               <TextBlock Text="{x:Static res:Strings.FileOutputBitrateLabel}" FontWeight="SemiBold" />
               <NumericUpDown FormatString="0" Minimum="200" Maximum="60000" Increment="500" Value="{Binding VideoBitrateKbps}" />
@@ -81,15 +100,20 @@
               <TextBlock Text="{x:Static res:Strings.FileOutputPresetLabel}" FontWeight="SemiBold" />
               <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding VideoPreset}" HorizontalAlignment="Stretch" />
 
-              <TextBlock Text="{x:Static res:Strings.FileOutputScaleLabel}" FontWeight="SemiBold" />
-              <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*">
+              <TextBlock Text="{x:Static res:Strings.StreamOutputResolutionLabel}" FontWeight="SemiBold" />
+              <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*,14,Auto,8,90">
                 <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
-                <NumericUpDown Grid.Column="2" Minimum="0" Maximum="7680" Increment="2" FormatString="0"
+                <NumericUpDown Grid.Column="2" Minimum="2" Maximum="7680" Increment="2" FormatString="0"
                                Value="{Binding ScaleWidth}" />
                 <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
-                <NumericUpDown Grid.Column="6" Minimum="0" Maximum="4320" Increment="2" FormatString="0"
+                <NumericUpDown Grid.Column="6" Minimum="2" Maximum="4320" Increment="2" FormatString="0"
                                Value="{Binding ScaleHeight}" />
+                <TextBlock Grid.Column="8" Text="FPS" VerticalAlignment="Center" />
+                <NumericUpDown Grid.Column="10" Minimum="1" Maximum="240" Increment="1" FormatString="0"
+                               Value="{Binding Fps}" />
               </Grid>
+              <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                         Text="{x:Static res:Strings.StreamOutputResolutionHint}" />
             </StackPanel>
 
             <StackPanel Spacing="8" IsVisible="{Binding ShowAudioSettings}">
@@ -105,7 +129,8 @@
                     <Border BorderBrush="#22808080" BorderThickness="1" Padding="8" Margin="0,0,0,6">
                       <StackPanel Spacing="6">
                         <Grid ColumnDefinitions="*,8,Auto,8,Auto,8,Auto">
-                          <ComboBox Grid.Column="0" ItemsSource="{Binding AudioCodecs}" SelectedItem="{Binding Codec}"
+                          <ComboBox Grid.Column="0" ItemsSource="{Binding $parent[ItemsControl].((vm:AddLiveStreamOutputDialogViewModel)DataContext).AudioCodecs}"
+                                    SelectedValue="{Binding Codec}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
                                     HorizontalAlignment="Stretch"
                                     ToolTip.Tip="{x:Static res:Strings.FileOutputAudioCodecLabel}" />
                           <NumericUpDown Grid.Column="2" Minimum="1" Maximum="16" FormatString="0" Width="110"

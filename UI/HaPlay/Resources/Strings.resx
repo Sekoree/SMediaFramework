@@ -2630,7 +2630,10 @@
     <value>Encoder preset</value>
   </data>
   <data name="FileOutputScaleLabel" xml:space="preserve">
-    <value>Scale (0 = source)</value>
+    <value>Scale and frame rate (0 = source)</value>
+  </data>
+  <data name="FileOutputFpsHint" xml:space="preserve">
+    <value>Output frame rate (0 = follow the source).</value>
   </data>
   <data name="FileOutputAudioTracksLabel" xml:space="preserve">
     <value>Audio tracks</value>
@@ -2705,16 +2708,79 @@
     <value>Port</value>
   </data>
   <data name="StreamLocalServerTs" xml:space="preserve">
-    <value>MPEG-TS stream (/stream.ts, VLC/mpv)</value>
+    <value>MPEG-TS stream (/&lt;mount&gt;.ts, VLC/mpv)</value>
   </data>
   <data name="StreamLocalServerHls" xml:space="preserve">
-    <value>HLS (/hls/live.m3u8, browsers/TVs)</value>
+    <value>HLS (/&lt;mount&gt;/hls/live.m3u8, browsers/TVs)</value>
+  </data>
+  <data name="StreamLocalServerMountLabel" xml:space="preserve">
+    <value>Endpoint name</value>
+  </data>
+  <data name="StreamLocalServerMountWatermark" xml:space="preserve">
+    <value>stream</value>
+  </data>
+  <data name="StreamLocalServerMountHint" xml:space="preserve">
+    <value>The URL path segment for this stream. Several streams can share one port under different endpoint names (e.g. /stage.ts, /booth.ts).</value>
+  </data>
+  <data name="StreamPushKeyWatermark" xml:space="preserve">
+    <value>Stream key / auth token (optional — folded into the URL)</value>
+  </data>
+  <data name="StreamOutputResolutionLabel" xml:space="preserve">
+    <value>Output resolution and frame rate (required)</value>
+  </data>
+  <data name="StreamOutputResolutionHint" xml:space="preserve">
+    <value>A live stream must declare a fixed resolution and frame rate so clients (and the blank keep-alive before media plays) see one unchanging format.</value>
   </data>
   <data name="StreamRtmpSingleTrackHint" xml:space="preserve">
     <value>An RTMP target limits the stream to one AAC audio track with H.264 video.</value>
   </data>
   <data name="VisualizerToggleLabel" xml:space="preserve">
     <value>VIZ</value>
+  </data>
+  <data name="OutputEffectsHeader" xml:space="preserve">
+    <value>Effects</value>
+  </data>
+  <data name="VisualizerNextPresetTooltip" xml:space="preserve">
+    <value>Next visualizer preset</value>
+  </data>
+  <data name="VisualizerPresetPickerTooltip" xml:space="preserve">
+    <value>Choose the visualizer preset folder (*.milk, scanned recursively)</value>
+  </data>
+  <data name="VisualizerPresetPickerMenuHeader" xml:space="preserve">
+    <value>Choose preset folder…</value>
+  </data>
+  <data name="VisualizerSettingsMenuHeader" xml:space="preserve">
+    <value>Visualizer settings…</value>
+  </data>
+  <data name="VisualizerSettingsDialogTitle" xml:space="preserve">
+    <value>Visualizer settings</value>
+  </data>
+  <data name="VisualizerPresetFolderLabel" xml:space="preserve">
+    <value>Preset folder (*.milk, scanned recursively)</value>
+  </data>
+  <data name="VisualizerPresetFolderPlaceholder" xml:space="preserve">
+    <value>Built-in idle preset only — choose a folder for real presets</value>
+  </data>
+  <data name="VisualizerResolutionHint" xml:space="preserve">
+    <value>0 = match the output (the deck's output preset / driven display). A fixed size renders the visualizer at that resolution regardless of cover art or source video.</value>
+  </data>
+  <data name="VisualizerResMatchOutput" xml:space="preserve">
+    <value>Match output</value>
+  </data>
+  <data name="VisualizerResolutionHeader" xml:space="preserve">
+    <value>Render resolution</value>
+  </data>
+  <data name="VisualizerNextPresetMenuHeader" xml:space="preserve">
+    <value>Next preset</value>
+  </data>
+  <data name="HoldImageSetupMenuHeader" xml:space="preserve">
+    <value>Set hold image…</value>
+  </data>
+  <data name="OutputEffectsPickerPlaceholder" xml:space="preserve">
+    <value>Insert effect…</value>
+  </data>
+  <data name="OutputEffectsAddButton" xml:space="preserve">
+    <value>Add</value>
   </data>
   <data name="VisualizerToggleTooltip" xml:space="preserve">
     <value>projectM audio visualizer: renders a Milkdrop-style layer over this deck's composition, reacting to the playing audio. Preset directory comes from the visualizer settings (scripts/build-projectm.sh installs a pack).</value>

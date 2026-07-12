@@ -185,16 +185,29 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
         _codec->height = _encodeHeight;
         _codec->pix_fmt = avPix;
         _codec->time_base = VideoTimeBase;
-        _codec->framerate = FfmpegEncodeMaps.ToAvRational(_sourceFormat.FrameRate);
+        _codec->framerate = _options.Fps > 0
+            ? new AVRational { num = _options.Fps, den = 1 }
+            : FfmpegEncodeMaps.ToAvRational(_sourceFormat.FrameRate);
         if (_options.BitrateBps > 0)
             _codec->bit_rate = _options.BitrateBps;
         if (_options.GopSize > 0)
             _codec->gop_size = _options.GopSize;
 
+        // CRF (quality target): x264/x265/AV1/VP9 accept a "crf" priv option. On encoders that don't
+        // (ProRes/DNxHR/FFV1) av_opt_set silently no-ops - those are bitrate/profile driven.
         if (_options.Crf is { } crf)
             av_opt_set(_codec->priv_data, "crf", crf.ToString(System.Globalization.CultureInfo.InvariantCulture), 0);
-        if (_options.Preset is { Length: > 0 } preset)
+        // Named speed presets are an x264/x265 concept ("veryfast" …). AV1/VP9 use numeric presets and
+        // reject the names, so only pass the string to the codecs that understand it.
+        if (_options.Preset is { Length: > 0 } preset
+            && _options.Codec is EncodeVideoCodec.H264 or EncodeVideoCodec.Hevc)
+        {
             av_opt_set(_codec->priv_data, "preset", preset, 0);
+        }
+
+        // Encoder-specific profile/private options (ProRes 4444 alpha, DNxHR HR profile, …).
+        foreach (var (key, value) in FfmpegEncodeMaps.VideoEncoderPrivateOptions(_options.Codec, _encodePixel))
+            av_opt_set(_codec->priv_data, key, value, 0);
 
         // GLOBAL_HEADER unconditionally: the session's packets fan out to N muxers and mp4/mov/flv
         // demand out-of-band extradata. Muxers that don't need it (mpegts) ignore it.

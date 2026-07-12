@@ -18,10 +18,10 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
     private Guid? _existingId;
     private IReadOnlyCollection<string> _existingOutputNames = Array.Empty<string>();
 
-    public string[] OutputModes { get; } = ["VideoAndAudio", "VideoOnly", "AudioOnly"];
-    public string[] VideoCodecs { get; } = ["H264", "Hevc"];
-    public string[] AudioCodecs { get; } = ["Aac", "Opus"];
-    public string[] Presets { get; } = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"];
+    public EncodeChoice[] OutputModes { get; } = EncodeChoices.OutputModes;
+    public EncodeChoice[] VideoCodecs { get; } = EncodeChoices.StreamVideoCodecs;
+    public EncodeChoice[] AudioCodecs { get; } = EncodeChoices.StreamAudioCodecs;
+    public string[] Presets { get; } = EncodeChoices.Presets;
 
     public AddLiveStreamOutputDialogViewModel()
     {
@@ -41,8 +41,11 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
     [ObservableProperty] private string _videoCodec = "H264";
     [ObservableProperty] private int _videoBitrateKbps = 6000;
     [ObservableProperty] private string _videoPreset = "veryfast";
-    [ObservableProperty] private int _scaleWidth;
-    [ObservableProperty] private int _scaleHeight;
+    // A live stream demands an explicit, locked output resolution + frame rate (clients can't follow a
+    // renegotiating stream) - defaulted to 1080p30 so the dialog is valid out of the box.
+    [ObservableProperty] private int _scaleWidth = 1920;
+    [ObservableProperty] private int _scaleHeight = 1080;
+    [ObservableProperty] private int _fps = 30;
 
     public ObservableCollection<AudioLegRowViewModel> AudioLegs { get; } = [new AudioLegRowViewModel()];
 
@@ -52,6 +55,9 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
     [ObservableProperty] private int _localServerPort = 8620;
     [ObservableProperty] private bool _localServerTs = true;
     [ObservableProperty] private bool _localServerHls = true;
+    // The URL path segment for this stream's endpoint; several streams can share one port under
+    // different mount names (e.g. "/stage.ts", "/booth.ts").
+    [ObservableProperty] private string _localServerMountName = "stream";
 
     [ObservableProperty] private string? _validationMessage;
 
@@ -108,8 +114,9 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
         VideoCodec = encode.VideoCodec;
         VideoBitrateKbps = encode.VideoBitrateBps > 0 ? (int)(encode.VideoBitrateBps / 1000) : 6000;
         VideoPreset = encode.VideoPreset ?? "veryfast";
-        ScaleWidth = encode.ScaleWidth;
-        ScaleHeight = encode.ScaleHeight;
+        ScaleWidth = encode.ScaleWidth > 0 ? encode.ScaleWidth : 1920;
+        ScaleHeight = encode.ScaleHeight > 0 ? encode.ScaleHeight : 1080;
+        Fps = encode.Fps > 0 ? encode.Fps : 30;
 
         AudioLegs.Clear();
         foreach (var leg in encode.AudioLegs)
@@ -119,13 +126,17 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
 
         PushTargets.Clear();
         foreach (var target in existing.PushTargets)
-            PushTargets.Add(new StreamPushTargetRowViewModel { Protocol = target.Protocol, Url = target.Url });
+            PushTargets.Add(new StreamPushTargetRowViewModel
+            {
+                Protocol = target.Protocol, Url = target.Url, StreamKey = target.StreamKey ?? "",
+            });
 
         var server = existing.EffectiveLocalServer;
         LocalServerEnabled = server.Enabled;
         LocalServerPort = server.Port;
         LocalServerTs = server.EnableTs;
         LocalServerHls = server.EnableHls;
+        LocalServerMountName = string.IsNullOrWhiteSpace(server.MountName) ? "stream" : server.MountName;
 
         OnPropertyChanged(nameof(IsEditing));
         OnPropertyChanged(nameof(DialogTitle));
@@ -159,17 +170,22 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
                 VideoBitrateKbps * 1000L, // live streams are bitrate-driven (CBR-ish for network pacing)
                 VideoCrf: null,
                 VideoPreset,
-                GopSize: 60, // ~2 s at 30 fps - keyframe cadence for joiners/segments
+                GopSize: Math.Max(1, Fps) * 2, // ~2 s keyframe cadence for joiners/segments
                 ScaleWidth,
-                ScaleHeight)
+                ScaleHeight,
+                Fps)
             {
                 AudioLegs = AudioLegs.Select(l => l.ToDefinition()).ToArray(),
             },
-            new LocalStreamServerDefinition(LocalServerEnabled, LocalServerPort, LocalServerTs, LocalServerHls))
+            new LocalStreamServerDefinition(
+                LocalServerEnabled, LocalServerPort, LocalServerTs, LocalServerHls,
+                string.IsNullOrWhiteSpace(LocalServerMountName) ? "stream" : LocalServerMountName.Trim()))
         {
             PushTargets = PushTargets
                 .Where(t => !string.IsNullOrWhiteSpace(t.Url))
-                .Select(t => new StreamPushTargetDefinition(t.Protocol, t.Url.Trim()))
+                .Select(t => new StreamPushTargetDefinition(
+                    t.Protocol, t.Url.Trim(),
+                    string.IsNullOrWhiteSpace(t.StreamKey) ? null : t.StreamKey.Trim()))
                 .ToArray(),
         };
 
@@ -184,11 +200,14 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
     }
 }
 
-/// <summary>One editable push destination row.</summary>
+/// <summary>One editable push destination row. <see cref="StreamKey"/> is the ingest key/auth token
+/// (Twitch/YouTube-style); the runtime folds it into the URL per protocol so it never has to be typed
+/// into the URL by hand. Leave blank when the key is already in the URL or the endpoint needs none.</summary>
 public partial class StreamPushTargetRowViewModel : ViewModelBase
 {
-    public string[] Protocols { get; } = ["Rtmp", "Srt", "Rtsp"];
+    public EncodeChoice[] Protocols { get; } = EncodeChoices.PushProtocols;
 
     [ObservableProperty] private string _protocol = "Rtmp";
     [ObservableProperty] private string _url = "";
+    [ObservableProperty] private string _streamKey = "";
 }

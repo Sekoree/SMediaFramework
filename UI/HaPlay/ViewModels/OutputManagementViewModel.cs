@@ -41,12 +41,19 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <summary>Acquires the real <see cref="IVideoOutput"/> for an output line so a playback engine can render
     /// onto it - the ShowSession cue re-back's video-output seam (mirrors how the cue engine acquires outputs).
     /// MUST be called on the UI thread (realizes the SDL window / NDI sender). Returns null for a non-video line
-    /// or one with no realized runtime.</summary>
+    /// or one with no realized runtime. The line's persisted VIDEO effects wrap the returned output
+    /// (disposed with <see cref="ReleaseVideoOutputForLine"/>).</summary>
     public IVideoOutput? AcquireVideoOutputForLine(Guid lineId)
     {
         var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
         if (line is null)
             return null;
+        var raw = AcquireRawVideoOutputForLine(line);
+        return raw is null ? null : WrapVideoEffects(lineId, line.Definition, raw);
+    }
+
+    private IVideoOutput? AcquireRawVideoOutputForLine(OutputLineViewModel line)
+    {
         if (_localPreviews.TryGetValue(line, out var local))
             return local.AcquireForPlayback();
         lock (_ndiOutputsGate)
@@ -61,11 +68,81 @@ public partial class OutputManagementViewModel : ViewModelBase
         return null;
     }
 
+    // Per-line video effect wrappers handed out by AcquireVideoOutputForLine; the wrapper (and its
+    // effect instances) dispose on release, the wrapped runtime output is released separately.
+    private readonly Dictionary<Guid, S.Media.Routing.VideoEffectBusOutput> _videoEffectWrappers = new();
+
+    private IVideoOutput WrapVideoEffects(Guid lineId, OutputDefinition definition, IVideoOutput inner)
+    {
+        var effects = BuildVideoEffects(definition);
+        if (effects.Count == 0)
+            return inner;
+        var wrapper = new S.Media.Routing.VideoEffectBusOutput(inner, effects);
+        _videoEffectWrappers[lineId] = wrapper;
+        return wrapper;
+    }
+
+    /// <summary>Instantiates the line's persisted VIDEO effect chain from the bus registry (unknown
+    /// kinds are skipped with a log line so an old project file never blocks playback).</summary>
+    internal static IReadOnlyList<S.Media.Core.Buses.IVideoBusEffect> BuildVideoEffects(OutputDefinition definition)
+    {
+        List<S.Media.Core.Buses.IVideoBusEffect>? effects = null;
+        foreach (var def in definition.Effects)
+        {
+            if (def.Target != OutputEffectTarget.Video)
+                continue;
+            if (MediaRuntime.Buses.TryCreateVideoEffect(def.Kind, def.ConfigJson, out var effect))
+                (effects ??= []).Add(effect);
+            else
+                Trace.LogWarning("output '{Name}': unknown video effect kind '{Kind}' skipped", definition.DisplayName, def.Kind);
+        }
+
+        return effects ?? (IReadOnlyList<S.Media.Core.Buses.IVideoBusEffect>)[];
+    }
+
+    /// <summary>Instantiates the line's persisted AUDIO effect chain (see <see cref="BuildVideoEffects"/>).</summary>
+    internal static IReadOnlyList<S.Media.Core.Buses.IAudioBusEffect> BuildAudioEffects(OutputDefinition definition)
+    {
+        List<S.Media.Core.Buses.IAudioBusEffect>? effects = null;
+        foreach (var def in definition.Effects)
+        {
+            if (def.Target != OutputEffectTarget.Audio)
+                continue;
+            if (MediaRuntime.Buses.TryCreateAudioEffect(def.Kind, def.ConfigJson, out var effect))
+                (effects ??= []).Add(effect);
+            else
+                Trace.LogWarning("output '{Name}': unknown audio effect kind '{Kind}' skipped", definition.DisplayName, def.Kind);
+        }
+
+        return effects ?? (IReadOnlyList<S.Media.Core.Buses.IAudioBusEffect>)[];
+    }
+
+    /// <summary>Wraps an audio sink resolved OUTSIDE this VM (deck route factory, cue lease factory)
+    /// with the owning line's persisted audio effects. Thread-safe (reads the definitions snapshot);
+    /// returns the inner unchanged when the line has no audio effects. The wrapper owns the effect
+    /// instances and is disposal-transparent for the inner sink.</summary>
+    internal IAudioOutput WrapAudioEffectsForLine(Guid lineId, IAudioOutput inner)
+    {
+        var definition = DefinitionsSnapshot.FirstOrDefault(d => d.Id == lineId);
+        if (definition is null)
+            return inner;
+        var effects = BuildAudioEffects(definition);
+        return effects.Count == 0 ? inner : new S.Media.Routing.AudioEffectOutput(inner, effects);
+    }
+
     /// <summary>Releases a video output acquired via <see cref="AcquireVideoOutputForLine"/> (single-holder, so
     /// the ShowSession cue re-back MUST release before re-acquiring on a reload, else the line stays held). UI
     /// thread. No-op for an unknown/non-video line.</summary>
     public void ReleaseVideoOutputForLine(Guid lineId)
     {
+        // Dispose the per-acquire effect wrapper first (its effect instances die here); the wrapped
+        // runtime output is released below and survives for the next acquire.
+        if (_videoEffectWrappers.Remove(lineId, out var wrapper))
+        {
+            try { wrapper.Dispose(); }
+            catch { /* best effort */ }
+        }
+
         var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
         if (line is null)
             return;
@@ -1007,6 +1084,76 @@ public partial class OutputManagementViewModel : ViewModelBase
         lock (_liveStreamsGate)
             _liveStreams.TryGetValue(line, out rt);
         return rt?.GetStatus();
+    }
+
+    /// <summary>
+    /// Thread-safe acquire of an encode line's audio side by line id (the cue session's audio-output
+    /// factory runs on the SESSION dispatcher, so it must not touch the UI-bound <see cref="Outputs"/>
+    /// collection - this walks only the gated runtime dictionaries). Returns the armed session's
+    /// combined multi-track sink, or null when the line is unknown/disarmed/already held.
+    /// </summary>
+    internal IAudioOutput? TryAcquireEncodeAudioByLineId(Guid lineId)
+    {
+        lock (_fileOutputsGate)
+        {
+            foreach (var (line, rt) in _fileOutputs)
+                if (line.Definition.Id == lineId)
+                    return rt.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio;
+        }
+
+        lock (_liveStreamsGate)
+        {
+            foreach (var (line, rt) in _liveStreams)
+                if (line.Definition.Id == lineId)
+                    return rt.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio;
+        }
+
+        return null;
+    }
+
+    /// <summary>Thread-safe release pair of <see cref="TryAcquireEncodeAudioByLineId"/>.</summary>
+    internal void ReleaseEncodeAudioByLineId(Guid lineId)
+    {
+        lock (_fileOutputsGate)
+        {
+            foreach (var (line, rt) in _fileOutputs)
+                if (line.Definition.Id == lineId)
+                {
+                    rt.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                    return;
+                }
+        }
+
+        lock (_liveStreamsGate)
+        {
+            foreach (var (line, rt) in _liveStreams)
+                if (line.Definition.Id == lineId)
+                {
+                    rt.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                    return;
+                }
+        }
+    }
+
+    /// <summary>
+    /// Replaces a line's effect-insert list. Runs through <see cref="ReconfigureLineAsync"/> with
+    /// route detach so a LIVE deck/cue rewires and the next acquire builds the new chain (an edit
+    /// mid-show costs the same brief reconnect as any structural output edit).
+    /// </summary>
+    public Task UpdateLineEffectsAsync(OutputLineViewModel line, IReadOnlyList<OutputEffectDefinition> effects) =>
+        ReconfigureLineAsync(line, line.Definition with { Effects = effects.ToArray() });
+
+    /// <summary>The insertable effect kinds for the Effects picker (bus registry enumeration).</summary>
+    public static IReadOnlyList<OutputEffectChoice> AvailableEffectChoices { get; } = BuildEffectChoices();
+
+    private static OutputEffectChoice[] BuildEffectChoices()
+    {
+        var choices = new List<OutputEffectChoice>();
+        foreach (var kind in MediaRuntime.Buses.AudioEffectKinds.Order(StringComparer.OrdinalIgnoreCase))
+            choices.Add(new OutputEffectChoice($"{kind} (audio)", kind, OutputEffectTarget.Audio));
+        foreach (var kind in MediaRuntime.Buses.VideoEffectKinds.Order(StringComparer.OrdinalIgnoreCase))
+            choices.Add(new OutputEffectChoice($"{kind} (video)", kind, OutputEffectTarget.Video));
+        return choices.ToArray();
     }
 
     /// <summary>Armed file-record session metrics for the debug/health polls (null when disarmed).</summary>

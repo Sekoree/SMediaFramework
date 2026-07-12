@@ -92,6 +92,9 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         }
 
         AudioSinks = audioSinks;
+        CombinedAudioSink = audioSinks.Length > 0
+            ? new FFmpegEncodeCombinedAudioSink(this, audioSinks.Select(s => s.Format).ToArray())
+            : null;
 
         if (options.IncludesVideo)
             VideoSink = new FFmpegEncodeVideoSink(this);
@@ -146,6 +149,10 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     /// <summary>One audio sink per configured track, in options order. Attach each to the audio router
     /// with the channel map that produces that track's layout.</summary>
     public IReadOnlyList<FFmpegEncodeAudioSink> AudioSinks { get; }
+
+    /// <summary>Every track as one sink with concatenated channels (tracks route via the standard N→M
+    /// channel matrix: combined ch 0..k-1 = track 1, k.. = track 2, …). Null for video-only sessions.</summary>
+    public FFmpegEncodeCombinedAudioSink? CombinedAudioSink { get; }
 
     /// <summary>Completes when the trailer of every healthy sink is written.</summary>
     public Task Completion => _finished.Task;
@@ -234,10 +241,22 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_videoCore is not null)
             {
+                // FORMAT LOCK: the encoder's OUTPUT format is fixed at first configure (explicit scale
+                // options, else derived from the first-seen input); a mid-recording INPUT change (track
+                // switch resizing the auto-sized canvas, live source renegotiation) only re-keys the
+                // sws conversion - the core scales each frame from the frame's own geometry, so nothing
+                // else has to change. The file/stream stays one continuous, single-format stream.
                 if (format != _videoInputFormat)
-                    throw new InvalidOperationException(
-                        "encode session cannot change video format mid-recording - finish and re-arm.");
-                return; // same-format re-configure (router re-fans) is a no-op
+                {
+                    _videoInputFormat = format;
+                    if (format.FrameRate.Numerator > 0)
+                        _videoFrameDuration90k = 90_000L * format.FrameRate.Denominator / format.FrameRate.Numerator;
+                    Trace.LogInformation(
+                        "encode session: input format changed to {Format} - output stays locked at {Locked}",
+                        format, _videoCore.EncodedFormat);
+                }
+
+                return;
             }
 
             _videoCore = new FfmpegVideoEncoderCore(_options.Video, format);

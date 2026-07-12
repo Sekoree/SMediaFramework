@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -5,48 +6,118 @@ using Microsoft.Extensions.Logging;
 
 namespace S.Media.Stream.Http;
 
+/// <summary>One named endpoint on a shared server: its TS broadcast buffer and/or HLS scratch dir.</summary>
+internal sealed class HttpMount
+{
+    public required string Name { get; init; }
+    public TsFanOutBuffer? TsBuffer { get; init; }
+    public string? HlsDirectory { get; init; }
+    public long BytesServed;
+    public int Refs = 1;
+}
+
 /// <summary>
-/// Minimal raw-socket HTTP/1.1 server for LAN playback - deliberately not ASP.NET (AOT-safe, two
-/// routes). Serves the live MPEG-TS broadcast at <c>/stream.ts</c> (close-delimited stream, plays in
-/// VLC/mpv/ffplay) and the FFmpeg hls muxer's output at <c>/hls/live.m3u8</c> + segments. GET/HEAD
-/// only; anything else is 404/405. One task per connection, capped.
+/// Minimal raw-socket HTTP/1.1 server for LAN playback - deliberately not ASP.NET (AOT-safe). ONE
+/// server per port, MULTIPLEXING several named mounts so multiple live streams can share a port under
+/// different names: <c>/&lt;mount&gt;.ts</c> (MPEG-TS broadcast, plays in VLC/mpv/ffplay) and
+/// <c>/&lt;mount&gt;/hls/live.m3u8</c> (+ segments). GET/HEAD only. Reference-counted per mount; the
+/// listener stops when its last mount is released. Acquire via <see cref="AcquireMount"/>.
 /// </summary>
 internal sealed class HttpMediaServer : IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Stream.Http.HttpMediaServer");
+    private const int MaxConcurrentClients = 64;
 
-    private const int MaxConcurrentClients = 32;
+    // One server per bound port, shared across streams. Keyed by the REQUESTED port (0 excluded - an
+    // ephemeral-port server is never shared since its port isn't known in advance).
+    private static readonly Lock ServersGate = new();
+    private static readonly Dictionary<int, HttpMediaServer> ServersByPort = new();
 
-    private readonly TsFanOutBuffer? _tsBuffer;
-    private readonly string? _hlsDirectory;
+    private readonly ConcurrentDictionary<string, HttpMount> _mounts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int _requestedPort;
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _acceptLoop;
     private int _activeClients;
-    private long _bytesServed;
+    private bool _disposed;
 
-    public HttpMediaServer(int port, TsFanOutBuffer? tsBuffer, string? hlsDirectory, IPAddress? bindAddress = null)
+    private HttpMediaServer(int requestedPort, IPAddress bindAddress)
     {
-        if (tsBuffer is null && hlsDirectory is null)
-            throw new ArgumentException("server needs at least one of: TS buffer, HLS directory.");
-        _tsBuffer = tsBuffer;
-        _hlsDirectory = hlsDirectory;
-        _listener = new TcpListener(bindAddress ?? IPAddress.Any, port);
+        _requestedPort = requestedPort;
+        _listener = new TcpListener(bindAddress, requestedPort);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _acceptLoop = Task.Run(AcceptLoopAsync);
-        Trace.LogInformation("LAN media server listening on port {Port} (ts={Ts} hls={Hls})",
-            Port, tsBuffer is not null, hlsDirectory is not null);
+        Trace.LogInformation("LAN media server listening on port {Port}", Port);
     }
 
-    /// <summary>Actual bound port (relevant when constructed with port 0).</summary>
     public int Port { get; }
 
     public int ActiveClients => Volatile.Read(ref _activeClients);
 
-    public long BytesServed => Interlocked.Read(ref _bytesServed);
+    /// <summary>Registers a mount, creating/sharing the port's server. Dispose the handle to release
+    /// it; the server stops when its last mount is released. Throws when the mount name is already in
+    /// use on that port (two streams can't claim the same endpoint).</summary>
+    public static MountHandle AcquireMount(
+        int port, string mountName, TsFanOutBuffer? tsBuffer, string? hlsDirectory, IPAddress? bindAddress = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mountName);
+        if (tsBuffer is null && hlsDirectory is null)
+            throw new ArgumentException("a mount needs at least one of: TS buffer, HLS directory.");
+        var normalized = NormalizeMount(mountName);
 
-    public long TsClientsEvicted => _tsBuffer?.EvictedClients ?? 0;
+        lock (ServersGate)
+        {
+            // Ephemeral (port 0) servers are never shared - each gets its own instance.
+            HttpMediaServer server;
+            if (port == 0)
+            {
+                server = new HttpMediaServer(0, bindAddress ?? IPAddress.Any);
+            }
+            else if (ServersByPort.TryGetValue(port, out var existing))
+            {
+                server = existing;
+            }
+            else
+            {
+                server = new HttpMediaServer(port, bindAddress ?? IPAddress.Any);
+                ServersByPort[port] = server;
+            }
+
+            var mount = new HttpMount { Name = normalized, TsBuffer = tsBuffer, HlsDirectory = hlsDirectory };
+            if (!server._mounts.TryAdd(normalized, mount))
+            {
+                if (port == 0)
+                    server.DisposeInternal();
+                throw new InvalidOperationException(
+                    $"the endpoint '/{normalized}' is already served on port {server.Port} - choose a different endpoint name.");
+            }
+
+            Trace.LogInformation("mount '/{Mount}' registered on port {Port} (ts={Ts} hls={Hls})",
+                normalized, server.Port, tsBuffer is not null, hlsDirectory is not null);
+            return new MountHandle(server, normalized);
+        }
+    }
+
+    private static string NormalizeMount(string name)
+    {
+        var trimmed = new string(name.Trim().Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray());
+        return trimmed.Length == 0 ? "stream" : trimmed.ToLowerInvariant();
+    }
+
+    private void ReleaseMount(string mountName)
+    {
+        lock (ServersGate)
+        {
+            _mounts.TryRemove(mountName, out _);
+            if (!_mounts.IsEmpty)
+                return;
+            // Last mount gone - retire the server.
+            if (_requestedPort != 0)
+                ServersByPort.Remove(_requestedPort);
+            DisposeInternal();
+        }
+    }
 
     private async Task AcceptLoopAsync()
     {
@@ -97,21 +168,39 @@ internal sealed class HttpMediaServer : IDisposable
             }
 
             var headOnly = method == "HEAD";
-            switch (path)
+            if (path is "/" or "/index.html" or "/status")
             {
-                case "/stream.ts" when _tsBuffer is not null:
-                    await ServeTsStreamAsync(stream, headOnly).ConfigureAwait(false);
-                    break;
-                case "/" or "/index.html" or "/status":
-                    await ServeStatusAsync(stream).ConfigureAwait(false);
-                    break;
-                default:
-                    if (_hlsDirectory is not null && path.StartsWith("/hls/", StringComparison.Ordinal))
-                        await ServeHlsFileAsync(stream, path, headOnly).ConfigureAwait(false);
-                    else
-                        await WriteSimpleResponseAsync(stream, "404 Not Found", "text/plain", "not found"u8.ToArray()).ConfigureAwait(false);
-                    break;
+                await ServeStatusAsync(stream).ConfigureAwait(false);
+                return;
             }
+
+            // /<mount>.ts  → TS broadcast for that mount.
+            if (path.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains("/hls/", StringComparison.OrdinalIgnoreCase))
+            {
+                var mountName = path.Trim('/');
+                mountName = mountName[..^3]; // strip ".ts"
+                if (_mounts.TryGetValue(mountName, out var mount) && mount.TsBuffer is not null)
+                {
+                    await ServeTsStreamAsync(stream, mount, headOnly).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            // /<mount>/hls/<file>  → the mount's HLS scratch dir.
+            var hlsIndex = path.IndexOf("/hls/", StringComparison.OrdinalIgnoreCase);
+            if (hlsIndex > 0)
+            {
+                var mountName = path[1..hlsIndex];
+                var fileName = path[(hlsIndex + "/hls/".Length)..];
+                if (_mounts.TryGetValue(mountName, out var mount) && mount.HlsDirectory is not null)
+                {
+                    await ServeHlsFileAsync(stream, mount, fileName, headOnly).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            await WriteSimpleResponseAsync(stream, "404 Not Found", "text/plain", "not found"u8.ToArray()).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or ObjectDisposedException)
         {
@@ -129,7 +218,6 @@ internal sealed class HttpMediaServer : IDisposable
 
     private static async Task<(string? Method, string? Path)> ReadRequestAsync(NetworkStream stream, CancellationToken token)
     {
-        // Read until the blank line ending the header block (tiny requests; 8 KB cap).
         var buffer = new byte[8192];
         var used = 0;
         while (true)
@@ -155,7 +243,7 @@ internal sealed class HttpMediaServer : IDisposable
         }
     }
 
-    private async Task ServeTsStreamAsync(NetworkStream stream, bool headOnly)
+    private async Task ServeTsStreamAsync(NetworkStream stream, HttpMount mount, bool headOnly)
     {
         var headers =
             "HTTP/1.1 200 OK\r\n" +
@@ -167,25 +255,24 @@ internal sealed class HttpMediaServer : IDisposable
         if (headOnly)
             return;
 
-        var reader = _tsBuffer!.Register(out var registration);
+        var reader = mount.TsBuffer!.Register(out var registration);
         try
         {
             await foreach (var chunk in reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
             {
                 await stream.WriteAsync(chunk, _cts.Token).ConfigureAwait(false);
-                Interlocked.Add(ref _bytesServed, chunk.Length);
+                Interlocked.Add(ref mount.BytesServed, chunk.Length);
             }
         }
         finally
         {
-            _tsBuffer.Unregister(registration);
+            mount.TsBuffer.Unregister(registration);
         }
     }
 
-    private async Task ServeHlsFileAsync(NetworkStream stream, string path, bool headOnly)
+    private async Task ServeHlsFileAsync(NetworkStream stream, HttpMount mount, string fileName, bool headOnly)
     {
         // Strict allowlist: file name only (no separators/dot-dot), known extensions, inside the scratch dir.
-        var fileName = path["/hls/".Length..];
         if (fileName.Length == 0
             || fileName.Contains('/') || fileName.Contains('\\') || fileName.Contains("..", StringComparison.Ordinal)
             || !(fileName.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)))
@@ -194,11 +281,10 @@ internal sealed class HttpMediaServer : IDisposable
             return;
         }
 
-        var fullPath = Path.Combine(_hlsDirectory!, fileName);
+        var fullPath = Path.Combine(mount.HlsDirectory!, fileName);
         byte[] content;
         try
         {
-            // Segments rotate (delete_segments) - a read can race deletion; treat as 404.
             content = await File.ReadAllBytesAsync(fullPath, _cts.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException)
@@ -211,17 +297,22 @@ internal sealed class HttpMediaServer : IDisposable
             ? "application/vnd.apple.mpegurl"
             : "video/mp2t";
         await WriteSimpleResponseAsync(stream, "200 OK", mime, headOnly ? [] : content, content.Length).ConfigureAwait(false);
-        Interlocked.Add(ref _bytesServed, content.Length);
+        Interlocked.Add(ref mount.BytesServed, content.Length);
     }
 
     private async Task ServeStatusAsync(NetworkStream stream)
     {
-        var body = Encoding.UTF8.GetBytes(
-            $"HaPlay LAN stream\n" +
-            $"ts: {(_tsBuffer is not null ? "/stream.ts" : "off")}\n" +
-            $"hls: {(_hlsDirectory is not null ? "/hls/live.m3u8" : "off")}\n" +
-            $"clients: {ActiveClients}\n");
-        await WriteSimpleResponseAsync(stream, "200 OK", "text/plain; charset=utf-8", body).ConfigureAwait(false);
+        var sb = new StringBuilder($"HaPlay LAN stream server (port {Port}, {ActiveClients} clients)\n\n");
+        foreach (var mount in _mounts.Values)
+        {
+            if (mount.TsBuffer is not null)
+                sb.Append($"  /{mount.Name}.ts\n");
+            if (mount.HlsDirectory is not null)
+                sb.Append($"  /{mount.Name}/hls/live.m3u8\n");
+        }
+
+        await WriteSimpleResponseAsync(stream, "200 OK", "text/plain; charset=utf-8",
+            Encoding.UTF8.GetBytes(sb.ToString())).ConfigureAwait(false);
     }
 
     private async Task WriteSimpleResponseAsync(
@@ -241,11 +332,47 @@ internal sealed class HttpMediaServer : IDisposable
 
     public void Dispose()
     {
+        // Public Dispose is a no-op safety net: lifetime is refcount-driven via ReleaseMount. A stream
+        // that leaks its MountHandle won't kill the shared server for others.
+    }
+
+    private void DisposeInternal()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
         _cts.Cancel();
         try { _listener.Stop(); }
         catch { /* best effort */ }
         try { _acceptLoop.Wait(TimeSpan.FromSeconds(2)); }
         catch { /* best effort */ }
         _cts.Dispose();
+        Trace.LogInformation("LAN media server on port {Port} stopped (no mounts left)", Port);
+    }
+
+    /// <summary>A registered mount; dispose to release it (refcounted at the server).</summary>
+    internal sealed class MountHandle : IDisposable
+    {
+        private readonly HttpMediaServer _server;
+        private readonly string _mount;
+        private int _released;
+
+        internal MountHandle(HttpMediaServer server, string mount)
+        {
+            _server = server;
+            _mount = mount;
+        }
+
+        public int Port => _server.Port;
+
+        public int ActiveClients => _server.ActiveClients;
+
+        public string MountName => _mount;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                _server.ReleaseMount(_mount);
+        }
     }
 }

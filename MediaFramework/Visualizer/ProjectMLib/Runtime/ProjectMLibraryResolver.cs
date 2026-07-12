@@ -53,7 +53,9 @@ public static class ProjectMLibraryResolver
         return nint.Zero;
     }
 
-    /// <summary>Env-override paths first (exact file, then dir + per-OS names), then the system names.</summary>
+    /// <summary>Probe order: env override (exact file, then dir + per-OS names), the repo's dev build
+    /// (<c>External/projectm/&lt;rid&gt;</c> from scripts/build-projectm.sh, discovered by walking up
+    /// from the app directory - zero-setup for dev runs), then the system names.</summary>
     internal static IEnumerable<string> GetCandidates()
     {
         var names = OperatingSystem.IsWindows() ? ProjectMLibraryNames.WindowsCandidates
@@ -68,14 +70,61 @@ public static class ProjectMLibraryResolver
             else if (Directory.Exists(overridePath))
             {
                 foreach (var name in names)
-                {
-                    var fileName = OperatingSystem.IsWindows() ? name + ".dll" : name;
-                    yield return Path.Combine(overridePath, fileName);
-                }
+                    yield return Path.Combine(overridePath, LibraryFileName(name));
             }
+        }
+
+        if (TryFindDevBuildRoot() is { } devRoot)
+        {
+            foreach (var libDir in DevLibDirectories(devRoot))
+            foreach (var name in names)
+                yield return Path.Combine(libDir, LibraryFileName(name));
         }
 
         foreach (var name in names)
             yield return name;
+    }
+
+    private static string LibraryFileName(string name) =>
+        OperatingSystem.IsWindows() ? name + ".dll" : name;
+
+    private static IEnumerable<string> DevLibDirectories(string devRoot)
+    {
+        var lib = Path.Combine(devRoot, "lib");
+        if (Directory.Exists(lib))
+            yield return lib;
+        var lib64 = Path.Combine(devRoot, "lib64");
+        if (Directory.Exists(lib64))
+            yield return lib64;
+        var bin = Path.Combine(devRoot, "bin"); // windows installs DLLs under bin/
+        if (Directory.Exists(bin))
+            yield return bin;
+    }
+
+    /// <summary>The scripts/build-projectm.sh install root for this platform
+    /// (<c>External/projectm/&lt;rid&gt;</c>), found by walking up from the app base directory. Also
+    /// used by the UI for the default preset directory (<c>&lt;root&gt;/presets</c>). Null when no dev
+    /// build exists (deployed installs rely on the env override or the system library).</summary>
+    public static string? TryFindDevBuildRoot()
+    {
+        var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+            _ => "x64",
+        };
+        var rid = OperatingSystem.IsWindows() ? $"win-{arch}"
+            : OperatingSystem.IsMacOS() ? $"osx-{arch}"
+            : $"linux-{arch}";
+
+        var dir = AppContext.BaseDirectory;
+        for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(dir); depth++)
+        {
+            var candidate = Path.Combine(dir, "External", "projectm", rid);
+            if (Directory.Exists(candidate))
+                return candidate;
+            dir = Path.GetDirectoryName(dir.TrimEnd(Path.DirectorySeparatorChar));
+        }
+
+        return null;
     }
 }

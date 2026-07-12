@@ -54,6 +54,13 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
 
         try
         {
+            // Defensive pixel-store reset (belt & braces beside the host's own reset): projectM's
+            // texture preloads assume GL defaults; a stale UNPACK_ROW_LENGTH from a host's frame
+            // uploads makes the driver read past SOIL's source buffers - an uncatchable segfault.
+            gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+            gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+            gl.BindBuffer(BufferTargetARB.PixelUnpackBuffer, 0);
+
             // projectm_create requires a CURRENT GL context (it resolves GL entry points through it) -
             // guaranteed here by the IVideoCompositorLayerSurface contract.
             _projectM = Native.projectm_create();
@@ -64,11 +71,19 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
                 return;
             }
 
-            _sceneWidth = canvas.Width;
-            _sceneHeight = canvas.Height;
+            // Render at the configured resolution (decoupled from the canvas) when set, else follow the
+            // canvas. The blit into the canvas scales, so a high internal res stays crisp even on a
+            // small canvas, and vice-versa.
+            _sceneWidth = _options.RenderWidth > 0 ? _options.RenderWidth : canvas.Width;
+            _sceneHeight = _options.RenderHeight > 0 ? _options.RenderHeight : canvas.Height;
             Native.projectm_set_window_size(_projectM, (nuint)_sceneWidth, (nuint)_sceneHeight);
-            if (canvas.FrameRate.Numerator > 0 && canvas.FrameRate.Denominator > 0)
-                Native.projectm_set_fps(_projectM, Math.Max(1, canvas.FrameRate.Numerator / canvas.FrameRate.Denominator));
+            var fps = _options.Fps > 0
+                ? _options.Fps
+                : canvas.FrameRate.Numerator > 0 && canvas.FrameRate.Denominator > 0
+                    ? canvas.FrameRate.Numerator / canvas.FrameRate.Denominator
+                    : 0;
+            if (fps > 0)
+                Native.projectm_set_fps(_projectM, Math.Max(1, fps));
             Native.projectm_set_preset_duration(_projectM, double.MaxValue); // rotation is ours (no playlist lib)
             Native.projectm_set_soft_cut_duration(_projectM, Math.Max(0, _options.TransitionSeconds));
             Native.projectm_set_beat_sensitivity(_projectM, (float)Math.Clamp(_options.BeatSensitivity, 0.0, 5.0));
@@ -76,6 +91,7 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
             Native.projectm_set_preset_locked(_projectM, true); // no self-switching; NextPreset drives rotation
 
             _presets = EnumeratePresets(_options.PresetDirectory);
+            _source.ReportLegacyPresets(_presets.Length);
             if (_presets.Length > 0)
                 LoadNextPreset(smooth: false);
             Trace.LogInformation("projectM {Version} surface ready ({Presets} presets, {W}x{H})",
@@ -109,16 +125,23 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
                 break;
         }
 
-        // Manual preset rotation (the playlist library stays off).
-        if (_presets.Length > 1
-            && System.Diagnostics.Stopwatch.GetElapsedTime(_lastPresetSwitchTimestamp).TotalSeconds
-               >= Math.Max(5, _options.PresetDurationSeconds))
+        // Manual preset rotation (the playlist library stays off) + operator "next preset" requests.
+        var operatorSkip = _source.ConsumeNextPresetRequest();
+        if (_presets.Length > 0
+            && (operatorSkip
+                || (_presets.Length > 1
+                    && System.Diagnostics.Stopwatch.GetElapsedTime(_lastPresetSwitchTimestamp).TotalSeconds
+                       >= Math.Max(5, _options.PresetDurationSeconds))))
         {
-            LoadNextPreset(smooth: true);
+            LoadNextPreset(smooth: !operatorSkip); // a manual skip cuts hard - the operator wants it NOW
             _lastPresetSwitchTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         }
 
         // --- projectM pass into the private FBO ---------------------------------
+        // Same defensive reset as ConfigureGl: presets can load textures lazily on ANY frame.
+        gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+        gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        gl.BindBuffer(BufferTargetARB.PixelUnpackBuffer, 0);
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         gl.Viewport(0, 0, (uint)_sceneWidth, (uint)_sceneHeight);
         gl.Disable(EnableCap.ScissorTest);
@@ -173,6 +196,7 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
         try
         {
             Native.projectm_load_preset_file(_projectM, _presets[_presetIndex], smooth);
+            _source.ReportLegacyPresetName(Path.GetFileNameWithoutExtension(_presets[_presetIndex]));
         }
         catch (Exception ex)
         {

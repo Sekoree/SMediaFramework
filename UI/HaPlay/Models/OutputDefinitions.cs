@@ -48,6 +48,32 @@ public enum LocalVideoFit
     Stretch,
 }
 
+/// <summary>Which sink of a line an effect wraps.</summary>
+public enum OutputEffectTarget
+{
+    Audio,
+    Video,
+}
+
+/// <summary>One persisted effect insert on an output line (kind resolved via the bus registry).</summary>
+public sealed record OutputEffectDefinition(
+    string Kind,
+    OutputEffectTarget Target,
+    string? ConfigJson = null)
+{
+    /// <summary>Row label for the Effects list ("gain (audio) {…}" when configured).</summary>
+    [JsonIgnore]
+    public string DisplayLabel =>
+        $"{Kind} ({(Target == OutputEffectTarget.Audio ? "audio" : "video")})"
+        + (string.IsNullOrWhiteSpace(ConfigJson) ? "" : $" {ConfigJson}");
+}
+
+/// <summary>Picker row for the Effects insert combo (registry kind + which sink it wraps).</summary>
+public sealed record OutputEffectChoice(string Label, string Kind, OutputEffectTarget Target)
+{
+    public override string ToString() => Label;
+}
+
 /// <summary>User-defined output entry (playback wiring consumes this later).</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(PortAudioOutputDefinition), typeDiscriminator: "portAudio")]
@@ -59,6 +85,14 @@ public abstract record OutputDefinition(Guid Id, string DisplayName)
 {
     [JsonIgnore]
     public abstract ManagedOutputKind Kind { get; }
+
+    /// <summary>
+    /// Effect-bus inserts on this line, applied in order when playback acquires the output (audio
+    /// effects wrap the audio sink, video effects wrap the video sink). Kinds come from the bus
+    /// registry (<c>MediaRuntime.Buses</c>); <see cref="OutputEffectDefinition.ConfigJson"/> is the
+    /// kind's opaque config blob. Absent in older project files (deserializes empty).
+    /// </summary>
+    public IReadOnlyList<OutputEffectDefinition> Effects { get; init; } = [];
 
     /// <summary>
     /// Operator-given name (UI rewrite P2, plan §5): the single naming truth shown wherever this
@@ -157,7 +191,10 @@ public sealed record EncodeSettingsDefinition(
     string? VideoPreset = "veryfast",
     int GopSize = 0,
     int ScaleWidth = 0,
-    int ScaleHeight = 0)
+    int ScaleHeight = 0,
+    // Declared output frame rate (0 = follow the source). Locked recordings and live streams pin this
+    // so the encoded output never renegotiates mid-session. Absent in pre-Fps project files (0 = source).
+    int Fps = 0)
 {
     public IReadOnlyList<EncodeAudioLegDefinition> AudioLegs { get; init; } = [new EncodeAudioLegDefinition()];
 }
@@ -180,15 +217,18 @@ public sealed record FileOutputDefinition(
 }
 
 /// <summary>One push destination of a live-stream output (persisted). Protocol stored as string
-/// ("Rtmp"/"Srt"/"Rtsp") for the same enum-growth resilience as the codec names.</summary>
-public sealed record StreamPushTargetDefinition(string Protocol = "Rtmp", string Url = "");
+/// ("Rtmp"/"Srt"/"Rtsp") for the same enum-growth resilience as the codec names. <see cref="StreamKey"/>
+/// is the ingest key/auth token folded into the URL per protocol when the server needs one (may be blank).</summary>
+public sealed record StreamPushTargetDefinition(string Protocol = "Rtmp", string Url = "", string? StreamKey = null);
 
-/// <summary>The built-in LAN server's persisted settings.</summary>
+/// <summary>The built-in LAN server's persisted settings. <see cref="MountName"/> is the URL path segment
+/// (e.g. "stage" → <c>/stage.ts</c>) so several streams can share one server on the same port.</summary>
 public sealed record LocalStreamServerDefinition(
     bool Enabled = true,
     int Port = 8620,
     bool EnableTs = true,
-    bool EnableHls = true);
+    bool EnableHls = true,
+    string MountName = "stream");
 
 /// <summary>Live-stream output line: shared encode settings + N push targets + optional LAN server.
 /// Like the file record, streaming is explicitly started/stopped by the operator ("go live").</summary>

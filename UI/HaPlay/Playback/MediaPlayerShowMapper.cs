@@ -45,7 +45,8 @@ public static class MediaPlayerShowMapper
         int? audioStreamIndex = null,
         int canvasFrameRateNum = 30,
         int canvasFrameRateDen = 1,
-        string videoFit = DefaultVideoFit)
+        string videoFit = DefaultVideoFit,
+        bool includeCanvas = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
 
@@ -78,7 +79,9 @@ public static class MediaPlayerShowMapper
                     Placement = hasVideo ? new ShowVideoPlacement(Fit: videoFit) : null,
                 },
             ],
-            Compositions = hasVideo
+            // includeCanvas: a canvas WITHOUT a video clip - the visualizer path for audio-only media
+            // (the clip does not bind it; a held surface layer becomes its content).
+            Compositions = hasVideo || includeCanvas
                 ? [new ShowComposition(
                     PlayerCompositionId, "Player", canvasWidth, canvasHeight,
                     canvasFrameRateNum > 0 ? canvasFrameRateNum : 30,

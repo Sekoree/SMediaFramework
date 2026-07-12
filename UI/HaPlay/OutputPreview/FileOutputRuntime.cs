@@ -121,10 +121,12 @@ internal sealed class FileOutputRuntime : IDisposable
                 video = vs;
             }
 
-            if (needsAudio && !_audioAcquired && _session.AudioSinks.Count > 0)
+            if (needsAudio && !_audioAcquired && _session.CombinedAudioSink is { } combined)
             {
+                // The COMBINED sink: all tracks as concatenated channels, so a deck/cue channel matrix
+                // routes source channels onto specific tracks (ch 0..k-1 = track 1, k.. = track 2, …).
                 _audioAcquired = true;
-                audio = _session.AudioSinks[0]; // deck routes drive the primary track; extra tracks are cue/scene fed
+                audio = combined;
             }
 
             return (video, audio);
@@ -168,6 +170,7 @@ internal sealed class FileOutputRuntime : IDisposable
                 GopSize = encode.GopSize,
                 ScaleWidth = encode.ScaleWidth,
                 ScaleHeight = encode.ScaleHeight,
+                Fps = encode.Fps,
             },
             AudioLegs = legs.Select(l => new AudioLegOptions
             {

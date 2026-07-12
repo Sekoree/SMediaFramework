@@ -165,6 +165,15 @@ public partial class MediaPlayerView : UserControl
         dialog.Show(owner);
     }
 
+    private void OnVisualizerSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm
+            || TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+        var dialog = new Dialogs.VisualizerSettingsDialog { DataContext = vm };
+        dialog.Show(owner);
+    }
+
     private void OnPlayerNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is TextBox tb)

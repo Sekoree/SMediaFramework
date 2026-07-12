@@ -68,3 +68,63 @@ public sealed class FFmpegEncodeAudioSink : IAudioOutput
 
     public void Submit(ReadOnlySpan<float> packedSamples) => _session.SubmitAudio(_legIndex, packedSamples);
 }
+
+/// <summary>
+/// All audio tracks of an <see cref="FFmpegEncodeSession"/> as ONE router-attachable sink whose channel
+/// layout is the concatenation of every leg's channels (tracks [stereo "Program", mono "Commentary"]
+/// ⇒ a 3-channel sink: ch 0-1 → track 1, ch 2 → track 2). This is what makes multi-track encodes
+/// routable with the EXISTING N→M channel-matrix editors - the operator routes source channels onto
+/// the combined channels; the splitter fans each chunk out to the per-track encoders.
+/// </summary>
+public sealed class FFmpegEncodeCombinedAudioSink : IAudioOutput, IAudioOutputChannelCapabilities
+{
+    private readonly FFmpegEncodeSession _session;
+    private readonly int[] _legChannels;
+    private readonly float[][] _legScratch;
+
+    internal FFmpegEncodeCombinedAudioSink(FFmpegEncodeSession session, IReadOnlyList<AudioFormat> legFormats)
+    {
+        _session = session;
+        _legChannels = legFormats.Select(f => f.Channels).ToArray();
+        _legScratch = new float[legFormats.Count][];
+        for (var i = 0; i < legFormats.Count; i++)
+            _legScratch[i] = [];
+        Format = new AudioFormat(legFormats[0].SampleRate, _legChannels.Sum());
+    }
+
+    public AudioFormat Format { get; }
+
+    public AudioOutputChannelCapabilities ChannelCapabilities =>
+        AudioOutputChannelCapabilities.Fixed(Format.Channels);
+
+    /// <summary>Combined channel offset of each track (for UIs labelling the matrix columns).</summary>
+    public IReadOnlyList<int> LegChannelCounts => _legChannels;
+
+    public void Submit(ReadOnlySpan<float> packedSamples)
+    {
+        var totalChannels = Format.Channels;
+        if (packedSamples.Length % totalChannels != 0)
+            throw new ArgumentException(
+                $"packedSamples length {packedSamples.Length} is not a multiple of the combined channel count {totalChannels}.",
+                nameof(packedSamples));
+
+        var frames = packedSamples.Length / totalChannels;
+        var channelOffset = 0;
+        for (var leg = 0; leg < _legChannels.Length; leg++)
+        {
+            var legChannels = _legChannels[leg];
+            var needed = frames * legChannels;
+            if (_legScratch[leg].Length < needed)
+                _legScratch[leg] = new float[needed];
+            var dst = _legScratch[leg].AsSpan(0, needed);
+            for (var f = 0; f < frames; f++)
+            {
+                var src = packedSamples.Slice(f * totalChannels + channelOffset, legChannels);
+                src.CopyTo(dst.Slice(f * legChannels, legChannels));
+            }
+
+            _session.SubmitAudio(leg, dst);
+            channelOffset += legChannels;
+        }
+    }
+}

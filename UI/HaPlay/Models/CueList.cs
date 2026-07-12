@@ -75,6 +75,15 @@ public sealed record CueComposition
 
     /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
     public bool VideoFxEnabled { get; init; }
+
+    /// <summary>Runs a projectM audio visualizer on this composition as a persistent full-canvas layer.
+    /// Because a cue composition persists across every cue fire, the visualizer runs CONTINUOUSLY while the
+    /// cue list plays - each fired clip's audio feeds it via a session tap. Absent in older projects
+    /// (deserializes false).</summary>
+    public bool VisualizerEnabled { get; init; }
+
+    /// <summary>Optional *.milk preset folder for this composition's visualizer (null = built-in idle preset).</summary>
+    public string? VisualizerPresetDirectory { get; init; }
 }
 
 public sealed record CueVideoOutputBinding

@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using HaPlay.Playback;
 using HaPlay.Resources;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Interop;
@@ -35,6 +36,36 @@ public sealed class CueShowSessionCoordinator
     /// <summary>The cue session for the I/O Debug page's poll (null until the cue workspace builds it).
     /// Lock-free snapshot readers only - see <see cref="ShowSession.GetActiveClipPipelineMetrics"/>.</summary>
     internal ShowSession? PipelineStatsSession => _cueShowSession;
+
+    /// <summary>The cue session's audio-output factory arm for encode ("file-audio:{lineId}") routes.
+    /// Runs on the session dispatcher: resolves through OutputManagement's THREAD-SAFE runtime lookup
+    /// (never the UI-bound Outputs collection). Rate mismatches get a per-fire resampler the session
+    /// owns; the carrier itself is borrowed and released via the lease hook.</summary>
+    private ClipAudioOutputLease? BuildCueEncodeAudioLease(string deviceId, AudioFormat format)
+    {
+        if (!deviceId.StartsWith("file-audio:", StringComparison.Ordinal)
+            || !Guid.TryParse(deviceId["file-audio:".Length..], out var lineId))
+        {
+            return null; // not an encode route - the session opens it as a normal backend device
+        }
+
+        if (OutputManagement.TryAcquireEncodeAudioByLineId(lineId) is not { } rawCarrier)
+            return null; // disarmed/unknown - the cue plays without this route
+
+        // Line audio effects run between the route and the encoder (same insert point as the deck).
+        var carrier = OutputManagement.WrapAudioEffectsForLine(lineId, rawCarrier);
+
+        void Release() => OutputManagement.ReleaseEncodeAudioByLineId(lineId);
+        if (carrier.Format.SampleRate == format.SampleRate && carrier.Format.Channels == format.Channels)
+            return new ClipAudioOutputLease(carrier, DisposeOutputOnRuntimeDispose: false, Release: Release);
+
+        // Rate (or short-matrix channel) mismatch: adapt the clip into the carrier's format. Dispose
+        // frees only the wrapper - the borrowed carrier is released via the hook.
+        return new ClipAudioOutputLease(
+            S.Media.Decode.FFmpeg.Audio.ResamplingAudioOutput.Wrap(carrier, format),
+            DisposeOutputOnRuntimeDispose: true,
+            Release: Release);
+    }
     // compositionId → the real video outputs it renders to, acquired on the UI thread in the cue reload
     // so ShowSession's video factory is a pure lookup during LoadDocumentAsync.
     private Dictionary<string, CueShowVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
@@ -144,6 +175,11 @@ public sealed class CueShowSessionCoordinator
                         Mapping: HaPlayShowMapper.ToClipOutputMapping(o.Mapping))).ToArray()
                     : Array.Empty<ClipCompositionOutputLease>(),
                 CueCompositionRuntime.CreateShowSessionCompositor,
+                // Encode lines as cue audio targets: "file-audio:{lineId}" routes resolve to the ARMED
+                // session's combined multi-track sink (borrowed - the runtime owns it; a per-fire
+                // resampler adapts the clip rate when needed). Disarmed line ⇒ null ⇒ the cue plays
+                // without that route, exactly like an unopenable device.
+                audioOutputFactory: BuildCueEncodeAudioLease,
                 // Effect buses (Phase 4): tags + cover art for the metadata hub (visualizers/overlays).
                 metadataProbe: S.Media.Decode.FFmpeg.MediaTagProbe.TryRead);
 
@@ -700,6 +736,47 @@ public sealed class CueShowSessionCoordinator
                    $"->dst({s.DestX:0.#},{s.DestY:0.#},{s.DestWidth:0.#},{s.DestHeight:0.#})"))}]";
     }
 
+    /// <summary>Attaches a persistent projectM visualizer to every composition that enabled one (fresh each
+    /// reload; runs continuously across cue fires). No-op when projectM is unavailable - the checkbox greys
+    /// out with a reason, same as the deck.</summary>
+    private async Task ApplyCueCompositionVisualizersAsync(CueList model, ShowSession session)
+    {
+        if (!RuntimeModules.IsProjectMAvailable)
+            return;
+
+        foreach (var comp in model.Compositions.Where(c => c.VisualizerEnabled))
+        {
+            try
+            {
+                var renderW = comp.Width > 0 ? comp.Width : 1920;
+                var renderH = comp.Height > 0 ? comp.Height : 1080;
+                var fps = comp.FrameRateDen > 0 && comp.FrameRateNum > 0 ? comp.FrameRateNum / comp.FrameRateDen : 60;
+                var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
+                    renderW, renderH, new Rational(fps > 0 ? fps : 60, 1),
+                    new S.Media.Visualizer.ProjectM.ProjectMOptions
+                    {
+                        PresetDirectory = string.IsNullOrWhiteSpace(comp.VisualizerPresetDirectory)
+                            ? null
+                            : comp.VisualizerPresetDirectory,
+                        RenderWidth = renderW,
+                        RenderHeight = renderH,
+                        Fps = fps,
+                        Shuffle = true,
+                    });
+                if (!await session.SetCompositionVisualizerAsync(comp.Id.ToString(), source).ConfigureAwait(true))
+                {
+                    source.Dispose();
+                    Trace.LogWarning(
+                        "HaPlay: cue composition {Comp} visualizer not attached (no GL surface host)", comp.Id);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "HaPlay: cue composition {Comp} visualizer attach failed", comp.Id);
+            }
+        }
+    }
+
     private async Task ApplyCueShowCompositionMappingAsync(Guid compositionId, CueOutputMapping? mapping)
     {
         if (_cueShowSession is null
@@ -998,6 +1075,11 @@ public sealed class CueShowSessionCoordinator
             // NXT-21: await the load - blocking the UI thread on the session dispatcher would turn any
             // dispatcher stall into a whole-app freeze.
             await session.LoadDocumentAsync(doc).ConfigureAwait(true);
+            // Attach a persistent visualizer to each composition that asked for one. A cue composition
+            // survives every cue FIRE, so the visualizer runs continuously while the list plays - each
+            // fired clip's audio feeds it via the session tap. (It re-attaches on an edit reload; that's a
+            // deliberate config boundary, not per-fire.)
+            await ApplyCueCompositionVisualizersAsync(model, session).ConfigureAwait(true);
             // Map each cue → its transport group so the progress poll can attribute per-group snapshot state.
             var groupByCue = new Dictionary<Guid, string>();
             foreach (var c in doc.Cues)

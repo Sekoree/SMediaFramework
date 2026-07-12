@@ -50,6 +50,19 @@ public sealed class AppSettings
     /// </summary>
     public bool PreferLiveUyvyPassthrough { get; set; }
 
+    /// <summary>The projectM visualizer's *.milk preset folder (per-machine; the VIZ ▾ picker sets
+    /// it). Null = auto-discover the dev build's fetched pack, else projectM's built-in idle preset.</summary>
+    public string? VisualizerPresetDirectory { get; set; }
+
+    /// <summary>Visualizer render width/height (per-machine). 0 = follow the output preset / driven
+    /// output resolution (the deck's normal canvas sizing).</summary>
+    public int VisualizerWidth { get; set; }
+
+    public int VisualizerHeight { get; set; }
+
+    /// <summary>Visualizer target FPS. 0 = follow the canvas rate.</summary>
+    public int VisualizerFps { get; set; }
+
     /// <summary>HTTP remote API listener (per-machine, off by default). Requests require
     /// <see cref="RestApiAccessToken"/>; LAN binding is opt-in via <see cref="RestApiAllowLan"/>.</summary>
     public bool RestApiEnabled { get; set; }

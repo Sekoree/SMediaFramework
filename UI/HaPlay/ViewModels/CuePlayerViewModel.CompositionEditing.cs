@@ -126,8 +126,17 @@ public partial class CuePlayerViewModel
             Models.PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
             Models.NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly =>
                 Math.Max(1, nd.AudioChannelCount),
+            // Encode lines expose the COMBINED track layout: the matrix columns are the concatenated
+            // per-track channels (tracks [stereo, mono] ⇒ 3 columns; ch 1-2 = track 1, ch 3 = track 2).
+            Models.FileOutputDefinition f => Math.Max(1, EncodeCombinedChannels(f.EffectiveEncode)),
+            Models.LiveStreamOutputDefinition s => Math.Max(1, EncodeCombinedChannels(s.EffectiveEncode)),
             _ => 2,
         };
+
+    private static int EncodeCombinedChannels(EncodeSettingsDefinition encode) =>
+        encode.OutputMode == "VideoOnly"
+            ? 0
+            : encode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2);
 
     private bool CanAddAudioRoute() => SelectedCueNode is { Kind: CueNodeKind.Media };
 

@@ -35,11 +35,13 @@
         <Grid ColumnDefinitions="*,14,*">
           <StackPanel Grid.Column="0" Spacing="6">
             <TextBlock Text="{x:Static res:Strings.FileOutputContainerLabel}" FontWeight="SemiBold" />
-            <ComboBox ItemsSource="{Binding Containers}" SelectedItem="{Binding Container}" HorizontalAlignment="Stretch" />
+            <ComboBox ItemsSource="{Binding Containers}" SelectedValue="{Binding Container}"
+                      SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
           </StackPanel>
           <StackPanel Grid.Column="2" Spacing="6">
             <TextBlock Text="{x:Static res:Strings.FileOutputModeLabel}" FontWeight="SemiBold" />
-            <ComboBox ItemsSource="{Binding OutputModes}" SelectedItem="{Binding OutputMode}" HorizontalAlignment="Stretch" />
+            <ComboBox ItemsSource="{Binding OutputModes}" SelectedValue="{Binding OutputMode}"
+                      SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
           </StackPanel>
         </Grid>
 
@@ -47,7 +49,8 @@
                 IsVisible="{Binding ShowVideoSettings}">
           <StackPanel Spacing="8">
             <TextBlock Text="{x:Static res:Strings.FileOutputVideoCodecLabel}" FontWeight="SemiBold" />
-            <ComboBox ItemsSource="{Binding VideoCodecs}" SelectedItem="{Binding VideoCodec}" HorizontalAlignment="Stretch" />
+            <ComboBox ItemsSource="{Binding VideoCodecs}" SelectedValue="{Binding VideoCodec}"
+                      SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
 
             <TextBlock Text="{x:Static res:Strings.FileOutputRateControlLabel}" FontWeight="SemiBold" />
             <StackPanel Orientation="Horizontal" Spacing="14">
@@ -65,13 +68,16 @@
             <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding VideoPreset}" HorizontalAlignment="Stretch" />
 
             <TextBlock Text="{x:Static res:Strings.FileOutputScaleLabel}" FontWeight="SemiBold" />
-            <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*">
+            <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*,14,Auto,8,90">
               <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
               <NumericUpDown Grid.Column="2" Minimum="0" Maximum="7680" Increment="2" FormatString="0"
                              Value="{Binding ScaleWidth}" />
               <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
               <NumericUpDown Grid.Column="6" Minimum="0" Maximum="4320" Increment="2" FormatString="0"
                              Value="{Binding ScaleHeight}" />
+              <TextBlock Grid.Column="8" Text="FPS" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="10" Minimum="0" Maximum="240" Increment="1" FormatString="0"
+                             Value="{Binding Fps}" ToolTip.Tip="{x:Static res:Strings.FileOutputFpsHint}" />
             </Grid>
           </StackPanel>
         </Border>
@@ -91,8 +97,8 @@
                   <Border BorderBrush="#22808080" BorderThickness="1" Padding="8" Margin="0,0,0,6">
                     <StackPanel Spacing="6">
                       <Grid ColumnDefinitions="*,8,Auto,8,Auto,8,Auto">
-                        <ComboBox Grid.Column="0" ItemsSource="{Binding AudioCodecs}" SelectedItem="{Binding Codec}"
-                                  HorizontalAlignment="Stretch"
+                        <ComboBox Grid.Column="0" ItemsSource="{Binding AudioCodecs}" SelectedValue="{Binding Codec}"
+                                  SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch"
                                   ToolTip.Tip="{x:Static res:Strings.FileOutputAudioCodecLabel}" />
                         <NumericUpDown Grid.Column="2" Minimum="1" Maximum="16" FormatString="0" Width="110"
                                        Value="{Binding Channels}"

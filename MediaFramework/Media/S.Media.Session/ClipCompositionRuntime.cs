@@ -458,6 +458,32 @@ public sealed class ClipCompositionRuntime : IDisposable
             CompositionName);
     }
 
+    /// <summary>
+    /// Releases the current clock master so the NEXT clip can re-master this composition. The pump keeps
+    /// running, free-running on its own clock in the meantime (surface layers - e.g. a persistent
+    /// visualizer - keep rendering). This is the escape hatch for the "one clock domain until rebuilt"
+    /// contract: a PRESERVED composition (kept alive across a document reload) calls this once the outgoing
+    /// clip's group is torn down, so the incoming clip's <see cref="SetTransportTimeline"/> takes effect
+    /// instead of being ignored. Normal (non-preserved) compositions never call this - they are rebuilt.
+    /// </summary>
+    public void ResetClockMaster()
+    {
+        MediaClock? clockToClear;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _master = null;
+            _transportTimeline = null;
+            _timeline = null;
+            clockToClear = _slaveClock;
+        }
+
+        clockToClear?.SetMaster(null); // free-run until the next clip masters it
+        Trace.LogInformation(
+            "ClipCompositionRuntime: composition {Composition} clock master released (preserved across reload)",
+            CompositionName);
+    }
+
     public LayerSlot AddLayer(
         VideoFormat sourceFormat, VideoPlacementSpec placement,
         SlotKeepPolicy keepPolicy = SlotKeepPolicy.MasterAligned)

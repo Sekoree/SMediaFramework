@@ -1,0 +1,32 @@
+Render projectM's final pass into the framebuffer bound at RenderFrame entry instead of the
+hard-coded default framebuffer 0 (upstream's own "ToDo: Allow external apps to provide a custom
+target framebuffer", ProjectM.cpp). Without this, embedding projectM as an offscreen layer (the
+HaPlay compositor surface) renders black: the preset passes run, but the visible copy lands on the
+window framebuffer. Applied by scripts/build-projectm.sh; upstream-compatible (a host that renders
+to the window binds 0 anyway).
+
+--- a/src/libprojectM/ProjectM.cpp
++++ b/src/libprojectM/ProjectM.cpp
+@@ -92,6 +92,11 @@
+
+ void ProjectM::RenderFrame()
+ {
++    // MFPlayer patch (render-to-bound-fbo): remember the host's draw framebuffer so the final
++    // output lands where the embedder pointed us, not on the window (framebuffer 0).
++    GLint hostDrawFramebuffer = 0;
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &hostDrawFramebuffer);
++
+     // Don't render if window area is zero.
+     if (m_windowWidth == 0 || m_windowHeight == 0)
+     {
+@@ -166,8 +171,8 @@
+     // ToDo: Call the to-be-implemented render method in Renderer
+     m_activePreset->RenderFrame(audioData, renderContext);
+
+-    // ToDo: Allow external apps to provide a custom target framebuffer.
+-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
++    // MFPlayer patch (render-to-bound-fbo): the embedder's framebuffer is the output target.
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(hostDrawFramebuffer));
+
+     if (m_transition != nullptr && m_transitioningPreset != nullptr)
+     {

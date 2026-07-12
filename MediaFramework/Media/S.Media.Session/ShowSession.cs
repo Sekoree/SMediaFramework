@@ -307,17 +307,21 @@ public sealed class ShowSession : IAsyncDisposable
     private sealed record VisualizerSlot(
         ClipCompositionRuntime.SurfaceLayerSlot Layer,
         Guid TapId,
-        S.Media.Core.Buses.IAudioVisualSource Source);
+        S.Media.Core.Buses.IAudioVisualSource Source,
+        bool DisposeSource);
 
     /// <summary>
     /// Attaches (or, with null, removes) a visualizer on a composition: the source's GL layer surface
     /// renders as a held full-canvas layer just under the test-pattern layer, its audio face registers
     /// as a session tap (fed by the CURRENT clip immediately and every later fire), and - when the
     /// source is a metadata sink - it joins <see cref="MetadataHub"/>. Returns false when the
-    /// composition doesn't exist or its compositor can't host GL surfaces (CPU fallback). The session
-    /// owns the previous source's disposal on replace/remove.
+    /// composition doesn't exist or its compositor can't host GL surfaces (CPU fallback).
+    /// <paramref name="disposeSourceOnRemove"/>: true (default) = the session owns the source's disposal
+    /// on replace/remove/reload; false = the CALLER owns it - used for a persistent (continuously
+    /// rendering) source that must survive document reloads and be re-attached to each new composition.
     /// </summary>
-    public Task<bool> SetCompositionVisualizerAsync(string compositionId, S.Media.Core.Buses.IAudioVisualSource? source) =>
+    public Task<bool> SetCompositionVisualizerAsync(
+        string compositionId, S.Media.Core.Buses.IAudioVisualSource? source, bool disposeSourceOnRemove = true) =>
         InvokeAsync(async () =>
         {
             if (_visualizerSlots.Remove(compositionId, out var existing))
@@ -327,7 +331,7 @@ public sealed class ShowSession : IAsyncDisposable
                 RemoveTapFromActiveClips(existing.TapId);
                 if (existing.Source is S.Media.Core.Buses.IBusMetadataSink oldSink)
                     MetadataHub.Detach(oldSink);
-                if (existing.Source is IDisposable disposable)
+                if (existing.DisposeSource && existing.Source is IDisposable disposable)
                     MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
             }
 
@@ -353,10 +357,16 @@ public sealed class ShowSession : IAsyncDisposable
             if (source is S.Media.Core.Buses.IBusMetadataSink sink)
                 MetadataHub.Attach(sink);
 
-            _visualizerSlots[compositionId] = new VisualizerSlot(layer, tapId, source);
+            _visualizerSlots[compositionId] = new VisualizerSlot(layer, tapId, source, disposeSourceOnRemove);
             await Task.CompletedTask;
             return true;
         });
+
+    /// <summary>True when <paramref name="compositionId"/> currently has a visualizer attached. A caller that
+    /// reloads with <c>preserveMatchingCompositions</c> uses this to tell whether its persistent visualizer
+    /// carried over (preserved) or was dropped (composition rebuilt) so it can decide whether to re-attach.</summary>
+    public Task<bool> HasCompositionVisualizerAsync(string compositionId) =>
+        InvokeAsync(() => Task.FromResult(_visualizerSlots.ContainsKey(compositionId)));
 
     /// <summary>Feeds a newly-registered tap from the clips that are ALREADY playing (dispatcher).</summary>
     private void AttachTapToActiveClips(Guid tapId, IAudioOutput tap)
@@ -558,14 +568,23 @@ public sealed class ShowSession : IAsyncDisposable
         LoadDocumentAsync(document).GetAwaiter().GetResult();
 
     /// <summary>Asynchronously loads a show document on the session dispatcher.</summary>
-    public Task LoadDocumentAsync(ShowDocument document)
+    /// <param name="preserveMatchingCompositions">
+    /// Opt-in: when true, a composition in the new document whose id + width + height + frame rate matches
+    /// a currently-live one is REUSED in place - its <see cref="ClipCompositionRuntime"/> (GL thread /
+    /// context) and any attached visualizer (surface + audio tap + source) are kept alive across the reload
+    /// instead of being disposed and rebuilt. The outgoing clip's layers still clear (its group is torn
+    /// down) and the incoming clip re-masters the composition, so content swaps while a persistent
+    /// visualizer keeps running. Default false ⇒ the historical full teardown/rebuild (cue-player behaviour
+    /// is unchanged unless it opts in).
+    /// </param>
+    public Task LoadDocumentAsync(ShowDocument document, bool preserveMatchingCompositions = false)
     {
         ArgumentNullException.ThrowIfNull(document);
         _fires.CancelActiveFire(); // a reload must not wait behind a long in-flight fire (NXT-03)
-        return InvokeAsync(() => LoadDocumentCoreAsync(document));
+        return InvokeAsync(() => LoadDocumentCoreAsync(document, preserveMatchingCompositions));
     }
 
-    private async Task LoadDocumentCoreAsync(ShowDocument document)
+    private async Task LoadDocumentCoreAsync(ShowDocument document, bool preserveMatchingCompositions = false)
     {
         // Normalize null collections FIRST (NXT-12): a minimal/older JSON simply omits arrays the document
         // gained later, and source-gen leaves missing positional params null. Every consumer below (and at
@@ -583,6 +602,25 @@ public sealed class ShowSession : IAsyncDisposable
         // references, a cyclic auto-continue chain) must never destroy the running show (NXT-12 / NXT-07).
         ShowDocumentValidator.ThrowIfInvalid(document);
 
+        // Preservation (opt-in): a live composition whose id + raster + rate match an incoming one is kept
+        // alive across the reload (its GL thread/context + any attached visualizer). We reuse it instead of
+        // building a replacement, and skip disposing it below.
+        var preservedIds = new HashSet<string>(StringComparer.Ordinal);
+        if (preserveMatchingCompositions)
+        {
+            foreach (var comp in document.Compositions)
+            {
+                if (_compositions.TryGetValue(comp.Id, out var live)
+                    && live.CanvasFormat.Width == comp.Width
+                    && live.CanvasFormat.Height == comp.Height
+                    && live.CanvasFormat.FrameRate.Numerator == comp.FrameRateNum
+                    && live.CanvasFormat.FrameRate.Denominator == comp.FrameRateDen)
+                {
+                    preservedIds.Add(comp.Id);
+                }
+            }
+        }
+
         // Stage the replacement graph in locals. If a composition fails to construct (or the host video factory
         // throws), dispose only the partially-built NEW compositions and rethrow - the live show is untouched.
         var newCompositions = new Dictionary<string, ClipCompositionRuntime>(StringComparer.Ordinal);
@@ -590,6 +628,9 @@ public sealed class ShowSession : IAsyncDisposable
         {
             foreach (var comp in document.Compositions)
             {
+                if (preservedIds.Contains(comp.Id))
+                    continue; // reuse the live runtime - do not build a replacement
+
                 var definition = new ClipCompositionDefinition(
                     comp.Id, comp.Name, comp.Width, comp.Height, comp.FrameRateNum, comp.FrameRateDen);
                 // Host-provided leases (the GUI's NDI/SDL/local lines for this composition). The host owns each
@@ -629,16 +670,32 @@ public sealed class ShowSession : IAsyncDisposable
 
         // Commit (atomic on the dispatcher): retire the running show, then swap in the staged graph. Nothing
         // below can fail, so the swap can't leave a half-built replacement.
+        // Disposing the groups tears down the outgoing clips - this also disposes their layer slots, so a
+        // PRESERVED composition is left with only its persistent surface layers (e.g. the visualizer).
         foreach (var group in _groups.Values)
             await group.DisposeAsync().ConfigureAwait(false);
         _groups.Clear();
         PublishGroupViews();
 
-        _testPatternSlots.Clear(); // slots are owned by their compositions (disposed below); drop stale refs
-        ClearVisualizerSlots();   // ditto - the surface layers die with their compositions, taps unhook
-        foreach (var composition in _compositions.Values)
-            composition.Dispose();
+        // Test-pattern + visualizer slots die with their compositions - EXCEPT on preserved compositions,
+        // whose slots (and, for the visualizer, its audio tap + source) are kept alive.
+        RetainSlotsForPreservedCompositionsOnly(preservedIds);
+        foreach (var (id, composition) in _compositions)
+        {
+            if (!preservedIds.Contains(id))
+                composition.Dispose();
+        }
+
+        // Rebuild the map: preserved live runtimes stay, everything else is the freshly-built set. A preserved
+        // composition releases its clock master so the INCOMING clip re-masters it (the pump free-runs - and
+        // keeps rendering its visualizer - in between).
+        var preserved = _compositions.Where(kv => preservedIds.Contains(kv.Key)).ToList();
         _compositions.Clear();
+        foreach (var (id, runtime) in preserved)
+        {
+            runtime.ResetClockMaster();
+            _compositions[id] = runtime;
+        }
         foreach (var (id, runtime) in newCompositions)
             _compositions[id] = runtime;
         PublishCompositionsView(); // refresh the lock-free health-poll view for the new composition set
@@ -2241,11 +2298,42 @@ public sealed class ShowSession : IAsyncDisposable
             _audioTaps.RemoveAll(t => t.Id == slot.TapId);
             if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
                 MetadataHub.Detach(sink);
-            if (slot.Source is IDisposable disposable)
+            if (slot.DisposeSource && slot.Source is IDisposable disposable)
                 MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
         }
 
         _visualizerSlots.Clear();
+    }
+
+    /// <summary>Reload-time slot cleanup that SPARES the preserved compositions. Test-pattern + visualizer
+    /// slots belonging to compositions about to be disposed are dropped/torn down (identical to the old
+    /// unconditional clear when <paramref name="preservedIds"/> is empty); slots on a preserved composition
+    /// are left intact - its surface layer stays on the still-live composition, and its visualizer's audio
+    /// tap + source are kept alive so it keeps running while the next clip feeds it.</summary>
+    private void RetainSlotsForPreservedCompositionsOnly(HashSet<string> preservedIds)
+    {
+        // Test-pattern slots: drop refs only for compositions that are going away.
+        if (preservedIds.Count == 0)
+        {
+            _testPatternSlots.Clear();
+        }
+        else
+        {
+            foreach (var id in _testPatternSlots.Keys.Where(k => !preservedIds.Contains(k)).ToList())
+                _testPatternSlots.Remove(id);
+        }
+
+        // Visualizer slots: dispose + unhook only the ones whose composition is going away (a
+        // caller-owned source is unhooked but NOT disposed - the caller re-attaches it after the load).
+        foreach (var (id, slot) in _visualizerSlots.Where(kv => !preservedIds.Contains(kv.Key)).ToList())
+        {
+            _audioTaps.RemoveAll(t => t.Id == slot.TapId);
+            if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
+                MetadataHub.Detach(sink);
+            if (slot.DisposeSource && slot.Source is IDisposable disposable)
+                MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+            _visualizerSlots.Remove(id);
+        }
     }
 
     /// <summary>One transport group: its session clock (D4), active clip, its audio outputs (D11 - first is

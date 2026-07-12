@@ -13,6 +13,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../Media/S.Media.Visualizer.ProjectM/S.Media.Visualizer.ProjectM.csproj" />
+    <!-- Continuous-renderer smoke: the SDL3 offscreen GL context factory (skip-if-unavailable at runtime). -->
+    <ProjectReference Include="../../Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
   </ItemGroup>
 
   <ItemGroup>

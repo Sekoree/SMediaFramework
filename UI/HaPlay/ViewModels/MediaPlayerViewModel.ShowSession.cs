@@ -36,10 +36,96 @@ public partial class MediaPlayerViewModel
     [ObservableProperty]
     private bool _visualizerEnabled;
 
-    /// <summary>Preset directory for the visualizer (*.milk, scanned recursively). Defaults to the
-    /// build script's preset copy when MFP_PROJECTM_LIB points at a dev build.</summary>
+    // One settings read for all visualizer fields (avoids 4× disk reads + FileGate contention on the
+    // UI thread during VM construction).
+    private static readonly Models.AppSettings VisualizerSettingsSeed = Models.AppSettings.Load();
+
+    /// <summary>Preset directory for the visualizer (*.milk, scanned recursively). Persisted
+    /// per-machine (AppSettings, set via the VIZ ▾ picker); defaults to the dev build's fetched pack.</summary>
     [ObservableProperty]
-    private string? _visualizerPresetDirectory = DefaultPresetDirectory();
+    private string? _visualizerPresetDirectory =
+        VisualizerSettingsSeed.VisualizerPresetDirectory is { Length: > 0 } saved && Directory.Exists(saved)
+            ? saved
+            : DefaultPresetDirectory();
+
+    partial void OnVisualizerPresetDirectoryChanged(string? value)
+    {
+        _ = value;
+        // Live re-apply: a new folder replaces the running surface (fresh preset scan).
+        if (VisualizerEnabled)
+            _ = ApplyShowSessionVisualizerAsync();
+    }
+
+    /// <summary>Visualizer render width (0 = follow the canvas / output preset). Persisted per-machine.</summary>
+    [ObservableProperty]
+    private int _visualizerWidth = VisualizerSettingsSeed.VisualizerWidth;
+
+    /// <summary>Visualizer render height (0 = follow the canvas / output preset).</summary>
+    [ObservableProperty]
+    private int _visualizerHeight = VisualizerSettingsSeed.VisualizerHeight;
+
+    /// <summary>Visualizer target FPS (0 = follow the canvas rate).</summary>
+    [ObservableProperty]
+    private int _visualizerFps = VisualizerSettingsSeed.VisualizerFps;
+
+    /// <summary>A human summary of the visualizer resolution for the settings UI ("Match output" when 0).</summary>
+    public string VisualizerResolutionLabel =>
+        VisualizerWidth > 0 && VisualizerHeight > 0
+            ? $"{VisualizerWidth}×{VisualizerHeight}" + (VisualizerFps > 0 ? $" @ {VisualizerFps} fps" : "")
+            : "Match output";
+
+    /// <summary>VIZ ▾: applies (and persists) the visualizer render resolution + fps. 0/0 = follow the
+    /// deck's normal canvas sizing. Re-applies a live visualizer (reopens when it owns the canvas).</summary>
+    internal void SetVisualizerResolution(int width, int height, int fps)
+    {
+        VisualizerWidth = Math.Max(0, width);
+        VisualizerHeight = Math.Max(0, height);
+        VisualizerFps = Math.Max(0, fps);
+        OnPropertyChanged(nameof(VisualizerResolutionLabel));
+        PersistVisualizerSettings();
+
+        if (VisualizerEnabled)
+            _ = ApplyShowSessionVisualizerAsync();
+    }
+
+    /// <summary>The visualizer's fixed render size + rate (explicit setting, else 1080p60 as the default).
+    /// Also drives the deck canvas while VIZ owns it, so every track's canvas is identical - the invariant
+    /// that lets one visualizer run across track changes.</summary>
+    private (int Width, int Height, int Fps) ResolveVisualizerRenderSize() =>
+        (VisualizerWidth > 0 ? VisualizerWidth : 1920,
+         VisualizerHeight > 0 ? VisualizerHeight : 1080,
+         VisualizerFps > 0 ? VisualizerFps : 60);
+
+    /// <summary>VIZ ▾: pick the preset folder (persisted per-machine, re-applies a live visualizer).</summary>
+    internal void SetVisualizerPresetDirectory(string path)
+    {
+        VisualizerPresetDirectory = path;
+        PersistVisualizerSettings();
+    }
+
+    /// <summary>Persists the deck's visualizer settings OFF the UI thread - Save() does synchronous
+    /// disk I/O (temp-file write + atomic move, with retry sleeps) that must never stall the UI.</summary>
+    private void PersistVisualizerSettings()
+    {
+        var dir = VisualizerPresetDirectory;
+        var (w, h, fps) = (VisualizerWidth, VisualizerHeight, VisualizerFps);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var settings = Models.AppSettings.Load();
+                settings.VisualizerPresetDirectory = dir;
+                settings.VisualizerWidth = w;
+                settings.VisualizerHeight = h;
+                settings.VisualizerFps = fps;
+                settings.Save();
+            }
+            catch (Exception ex)
+            {
+                ShowLog.LogWarning(ex, "visualizer settings not persisted");
+            }
+        });
+    }
 
     public bool IsVisualizerAvailable => RuntimeModules.IsProjectMAvailable;
 
@@ -49,28 +135,79 @@ public partial class MediaPlayerViewModel
         ? Resources.Strings.VisualizerToggleTooltip
         : RuntimeModules.ProjectMUnavailableReason ?? Resources.Strings.VisualizerToggleTooltip;
 
+    // The attached source, kept ONLY for the next-preset request (the session owns its lifetime).
+    private S.Media.Visualizer.ProjectM.ProjectMVisualSource? _visualizerSource;
+
+    // The current open has the visualizer owning a FIXED canvas (any video/cover-art base layer swapped
+    // out, audio drives the viz). Toggling VIZ reopens in place when this must flip: ON → make the canvas
+    // viz-owned; OFF → restore the native content. This is what "restart on enable/disable, continuous
+    // while on" hangs off of. Set at open, read by the toggle handler.
+    private bool _playerShowVizOwnsCanvas;
+
     partial void OnVisualizerEnabledChanged(bool value)
     {
-        _ = value;
+        if (!value)
+        {
+            // The deck owns the persistent source (disposeSourceOnRemove: false at attach) - VIZ-off is
+            // the "restart boundary": stop the continuous renderer here. The apply below detaches the
+            // session side (which won't double-dispose).
+            _visualizerSource?.Dispose();
+            _visualizerSource = null;
+        }
+
         _ = ApplyShowSessionVisualizerAsync();
     }
 
+    [CommunityToolkit.Mvvm.Input.RelayCommand]
+    private void NextVisualizerPreset() => _visualizerSource?.RequestNextPreset();
+
     private static string? DefaultPresetDirectory()
     {
-        // scripts/build-projectm.sh installs presets next to the lib dir it prints (…/<rid>/lib →
-        // …/<rid>/presets); a system install has no obvious preset home, so leave it unset there.
-        var libDir = Environment.GetEnvironmentVariable("MFP_PROJECTM_LIB");
-        if (string.IsNullOrWhiteSpace(libDir))
-            return null;
-        var root = Directory.Exists(libDir) ? Path.GetDirectoryName(libDir.TrimEnd(Path.DirectorySeparatorChar)) : null;
-        var presets = root is null ? null : Path.Combine(root, "presets");
-        return presets is not null && Directory.Exists(presets) ? presets : null;
+        // scripts/build-projectm.sh installs a preset pack under its install root (…/<rid>/presets).
+        // Prefer the explicit env override's sibling, else the auto-discovered dev build; a plain
+        // system install has no obvious preset home, so leave it unset there.
+        var libDir = Environment.GetEnvironmentVariable(ProjectMLib.Runtime.ProjectMLibraryResolver.EnvironmentOverride);
+        if (!string.IsNullOrWhiteSpace(libDir) && Directory.Exists(libDir))
+        {
+            var root = Path.GetDirectoryName(libDir.TrimEnd(Path.DirectorySeparatorChar));
+            var presets = root is null ? null : Path.Combine(root, "presets");
+            if (presets is not null && Directory.Exists(presets))
+                return presets;
+        }
+
+        if (ProjectMLib.Runtime.ProjectMLibraryResolver.TryFindDevBuildRoot() is { } devRoot)
+        {
+            var presets = Path.Combine(devRoot, "presets");
+            if (Directory.Exists(presets))
+                return presets;
+        }
+
+        return null;
     }
 
     /// <summary>Applies the VIZ toggle to the RUNNING session: attaches (or removes) the projectM layer
     /// + audio tap on the deck's composition. Safe/idempotent; a failure just clears the toggle with a
     /// log line (no crash when a preset dir is bogus or the compositor fell back to CPU).</summary>
+    // Serializes visualizer applies: a rapid toggle / preset-change / resolution-change (or a
+    // reopen's re-apply racing a manual toggle) must not stack overlapping reopens or attach twice.
+    private readonly SemaphoreSlim _visualizerApplyGate = new(1, 1);
+
     internal async Task ApplyShowSessionVisualizerAsync()
+    {
+        if (_playerShowSession is null)
+            return;
+        await _visualizerApplyGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await ApplyShowSessionVisualizerCoreAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _visualizerApplyGate.Release();
+        }
+    }
+
+    private async Task ApplyShowSessionVisualizerCoreAsync()
     {
         if (_playerShowSession is not { } session)
             return;
@@ -78,6 +215,16 @@ public partial class MediaPlayerViewModel
         {
             if (!VisualizerEnabled)
             {
+                ClearVisualizerWarning();
+                // If the visualizer owned the canvas (a video/cover-art base layer was swapped out, or a
+                // pure viz canvas on audio), reopen in place so the native content returns now that VIZ is
+                // off. Otherwise just detach the surface.
+                if (ShowSessionActive && IsMediaLoaded && !IsLiveSource && _playerShowVizOwnsCanvas)
+                {
+                    await ReopenInPlacePreservingPositionAsync().ConfigureAwait(true);
+                    return;
+                }
+
                 await session.SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, null)
                     .ConfigureAwait(true);
                 return;
@@ -86,29 +233,119 @@ public partial class MediaPlayerViewModel
             if (!RuntimeModules.IsProjectMAvailable)
             {
                 ShowLog.LogWarning("visualizer unavailable: {Reason}", RuntimeModules.ProjectMUnavailableReason);
+                SetVisualizerWarning($"Visualizer unavailable: {RuntimeModules.ProjectMUnavailableReason}");
                 VisualizerEnabled = false;
                 return;
             }
 
-            var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
-                1920, 1080, new S.Media.Core.Video.Rational(30, 1),
+            // Mid-play enable: if the current open isn't already visualizer-owned (plain audio with no
+            // canvas, cover art, OR real video), reopen the item IN PLACE (position + play state preserved)
+            // so the open path builds the fixed viz canvas with the base video layer swapped out; its
+            // completion re-enters here and attaches the surface normally.
+            if (ShowSessionActive && IsMediaLoaded && !IsLiveSource && !_playerShowVizOwnsCanvas)
+            {
+                const string rebuilding = "Visualizer: rebuilding the canvas…";
+                SetVisualizerWarning(rebuilding);
+                await ReopenInPlacePreservingPositionAsync().ConfigureAwait(true);
+                // Clear only OUR banner - the reopen's completion may have posted its own (idle preset hint).
+                if (StatusMessage == rebuilding)
+                    StatusMessage = null;
+                return; // the reopen completion applied the visualizer on the fresh canvas
+            }
+
+            var presetDir = VisualizerPresetDirectory;
+            // Count the presets off-thread (a large pack stats thousands of files - never on the
+            // dispatcher). The count feeds the status banner so the operator can verify their folder.
+            var presetCount = presetDir is { Length: > 0 } && Directory.Exists(presetDir)
+                ? await Task.Run(() =>
+                {
+                    try { return Directory.EnumerateFiles(presetDir, "*.milk", SearchOption.AllDirectories).Count(); }
+                    catch { return 0; }
+                }).ConfigureAwait(true)
+                : 0;
+
+            // PERSISTENT source: reuse the running one across track changes (that's the continuity - its
+            // renderer thread never stops); recreate only when its settings changed (resolution/fps/preset
+            // dir) - the documented "restarts on settings change" boundary.
+            var (renderW, renderH, renderFps) = ResolveVisualizerRenderSize();
+            if (_visualizerSource is { } running
+                && (running.Options.RenderWidth != renderW
+                    || running.Options.RenderHeight != renderH
+                    || running.Options.Fps != renderFps
+                    || !string.Equals(running.Options.PresetDirectory, presetDir, StringComparison.Ordinal)))
+            {
+                running.Dispose();
+                _visualizerSource = null;
+            }
+
+            var source = _visualizerSource ?? new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
+                renderW, renderH, new S.Media.Core.Video.Rational(renderFps > 0 ? renderFps : 30, 1),
                 new S.Media.Visualizer.ProjectM.ProjectMOptions
                 {
-                    PresetDirectory = VisualizerPresetDirectory,
+                    PresetDirectory = presetDir,
+                    RenderWidth = renderW,
+                    RenderHeight = renderH,
+                    Fps = renderFps,
+                    Shuffle = true,
                 });
+            // disposeSourceOnRemove: false - the DECK owns this source's lifetime (VIZ-off / settings
+            // change / deck teardown), so the per-track document reload only unhooks it and this method
+            // re-attaches the SAME source to the fresh composition: the visuals continue mid-stream.
             var attached = await session
-                .SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, source)
+                .SetCompositionVisualizerAsync(
+                    MediaPlayerShowMapper.PlayerCompositionId, source, disposeSourceOnRemove: false)
                 .ConfigureAwait(true);
             if (!attached)
             {
-                source.Dispose();
-                ShowLog.LogWarning("visualizer not attached: no GL composition is active (play a video/track first, CPU compositor cannot host it)");
+                // Keep the source alive (its renderer keeps running) - the next successful open attaches it.
+                _visualizerSource = source;
+                ShowLog.LogWarning("visualizer not attached: no active canvas/GL composition");
+                // Enabling VIZ during audio-only playback that was OPENED without it: the canvas only
+                // exists when the open declared it - a replay picks it up.
+                SetVisualizerWarning(
+                    "Visualizer will start with the next track: press ▶ (or restart the current item) so the canvas is created.");
+            }
+            else
+            {
+                _visualizerSource = source;
+                if (presetCount <= 0)
+                    SetVisualizerWarning(
+                        "Visualizer running with the built-in idle preset only - pick a *.milk preset folder via the VIZ ▾ button.");
+                else
+                    SetVisualizerWarning($"Visualizer: {presetCount} presets loaded from {Path.GetFileName(presetDir!.TrimEnd(Path.DirectorySeparatorChar))}.");
             }
         }
         catch (Exception ex)
         {
             ShowLog.LogWarning(ex, "visualizer apply failed");
+            SetVisualizerWarning($"Visualizer failed: {ex.Message}");
         }
+    }
+
+    /// <summary>Reopens the current item in place, preserving the play position. Used by the VIZ toggle
+    /// to flip the canvas between viz-owned and native content. The live Duration/CurrentPosition reset
+    /// during the close, so the seek uses snapshots taken BEFORE the reopen (a live-Duration gate would
+    /// see 0 and skip the seek, replaying from the start).</summary>
+    private async Task ReopenInPlacePreservingPositionAsync()
+    {
+        var resumePosition = CurrentPosition;
+        var knownDuration = Duration;
+        await OpenOrReloadAsync().ConfigureAwait(true);
+        if (resumePosition > TimeSpan.FromSeconds(1)
+            && (knownDuration <= TimeSpan.Zero || resumePosition < knownDuration))
+        {
+            await ShowSessionSeekAsync(resumePosition).ConfigureAwait(true); // SeekAsync clamps
+        }
+    }
+
+    private const string VisualizerWarningPrefix = "Visualizer";
+
+    private void SetVisualizerWarning(string message) => StatusMessage = message;
+
+    private void ClearVisualizerWarning()
+    {
+        if (StatusMessage is not null && StatusMessage.StartsWith(VisualizerWarningPrefix, StringComparison.Ordinal))
+            StatusMessage = null;
     }
     // Per-composition video outputs the deck drives, tagged with the OUTPUT LINE they belong to so each gets a
     // STABLE composition-output id (CompositionOutputId) - required for hot add/remove of a single line on a
@@ -189,6 +426,18 @@ public partial class MediaPlayerViewModel
                 return false;
         }
 
+        // Visualizer owns the canvas: when VIZ is on it fills the frame, so swap out ANY base video layer
+        // (cover art OR a real video file/stream) and play the track audio-only - its audio drives the
+        // visualizer and still reaches the speakers, and the cover art/tags still flow to the metadata hub.
+        // This makes the visualizer work over video, and keeps the canvas identical across every track (the
+        // invariant the continuous-across-tracks behaviour depends on). Scoped to file/YouTube media; live
+        // capture (NDI/PortAudio) and MMD keep their own pipeline.
+        if (hasVideo && VisualizerEnabled && IsVisualizerAvailable
+            && item is FilePlaylistItem or YouTubePlaylistItem)
+        {
+            hasVideo = false;
+        }
+
         try
         {
             _playerShowSession ??= new ShowSession(
@@ -249,6 +498,8 @@ public partial class MediaPlayerViewModel
             IReadOnlyList<ShowClipAudioRoute> audioRoutes = [];
             var canvas = (Width: 1920, Height: 1080);
             var canvasFps = (Num: 30, Den: 1);
+            var canvasDeclared = false;
+            var vizOwnsCanvasResult = false;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
@@ -258,7 +509,10 @@ public partial class MediaPlayerViewModel
 
                 var outputs = new List<(Guid LineId, IVideoOutput Output)>();
                 var resolutions = new List<(int Width, int Height)>();
-                if (hasVideo)
+                // The visualizer needs the canvas + video lines even for audio-only media (its surface
+                // becomes the canvas content); a plain audio open keeps skipping them.
+                var wantsCanvas = hasVideo || (VisualizerEnabled && IsVisualizerAvailable);
+                if (wantsCanvas)
                 {
                     foreach (var line in lines)
                     {
@@ -273,11 +527,32 @@ public partial class MediaPlayerViewModel
                     // fixed preset - and the OUTPUT letterboxes into each display. This replaces the old
                     // "canvas = largest output resolution + Cover fit", which cropped differing-aspect media to
                     // cover the screen. A live input with no known raster still falls back to the driven outputs.
-                    var resolved = ResolveDeckCanvas(
-                        OutputPreset, SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight(),
-                        srcWidth, srcHeight, srcFpsNum, srcFpsDen, resolutions);
-                    canvas = (resolved.Width, resolved.Height);
-                    canvasFps = (resolved.FpsNum, resolved.FpsDen);
+                    // When VIZ is on it already suppressed the base video layer (hasVideo == false), so the
+                    // visualizer owns the canvas at its own FIXED resolution.
+                    var sizeFromSource = hasVideo;
+                    var vizOwnsCanvas = !sizeFromSource && VisualizerEnabled && IsVisualizerAvailable;
+                    if (vizOwnsCanvas)
+                    {
+                        // Fixed visualizer canvas (1080p60 default, tunable). The deck rebuilds this canvas per
+                        // track - continuous-across-tracks preservation was reverted (it wedged the dispatcher;
+                        // see the composition-preservation notes). Use the cue player for a continuous visualizer.
+                        var (vw, vh, vf) = ResolveVisualizerRenderSize();
+                        canvas = (vw, vh);
+                        canvasFps = (vf, 1);
+                    }
+                    else
+                    {
+                        var resolved = ResolveDeckCanvas(
+                            OutputPreset, SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight(),
+                            sizeFromSource ? srcWidth : 0, sizeFromSource ? srcHeight : 0,
+                            sizeFromSource ? srcFpsNum : 0, sizeFromSource ? srcFpsDen : 0, resolutions);
+                        canvas = (resolved.Width, resolved.Height);
+                        canvasFps = (resolved.FpsNum, resolved.FpsDen);
+                    }
+
+                    canvasDeclared = true;
+                    // Remembered so the VIZ toggle knows whether the canvas is viz-owned (reopen to flip).
+                    vizOwnsCanvasResult = vizOwnsCanvas;
                 }
                 _playerVideoOutputs = new Dictionary<string, List<(Guid, IVideoOutput)>>(StringComparer.Ordinal)
                 {
@@ -329,13 +604,20 @@ public partial class MediaPlayerViewModel
                     // The compositor runs at the source (or preset) rate, not a hardcoded 30 - so 50/60 fps
                     // content is composited frame-for-frame instead of being decimated to 30.
                     canvasFrameRateNum: canvasFps.Num,
-                    canvasFrameRateDen: canvasFps.Den)).ConfigureAwait(true);
+                    canvasFrameRateDen: canvasFps.Den,
+                    // VIZ on an audio-only track: declare the canvas anyway so the visualizer surface
+                    // has something to render onto (the clip itself stays audio-only).
+                    includeCanvas: canvasDeclared),
+                // Deck always rebuilds the composition per track (preservation reverted - it wedged the
+                // dispatcher when the projectM pump stalled; see the composition-preservation notes).
+                preserveMatchingCompositions: false).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
 
             _playerShowCanvas = canvas; // the HOLD top-layer renders at this canvas size
             _playerShowHasVideo = hasVideo;
+            _playerShowVizOwnsCanvas = vizOwnsCanvasResult;
 
             // UI thread: flip the deck into the playing state (observable-property writes).
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -367,10 +649,22 @@ public partial class MediaPlayerViewModel
                 // hold top-layer), so re-cover the fresh canvas when the toggle is on.
                 if (HoldFallbackVideo)
                     _ = ApplyShowSessionHoldImageAsync();
-                // The visualizer layer likewise died with the replaced composition - re-attach it.
-                if (VisualizerEnabled)
-                    _ = ApplyShowSessionVisualizerAsync();
             });
+
+            // Visualizer re-attach (continuous mode): the reload rebuilt the composition, unhooking the
+            // visualizer's surface + tap - but NOT the source: the deck owns it (disposeSourceOnRemove:
+            // false) and its offscreen renderer kept running through the swap. Re-attaching the SAME
+            // source gives the fresh composition a blit surface that picks the stream up mid-flow, so the
+            // visuals are continuous across the track change. The session query guards against
+            // double-attach in case a future path ever carries the slot over.
+            if (VisualizerEnabled)
+            {
+                var alreadyAttached = await _playerShowSession
+                    .HasCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId).ConfigureAwait(true);
+                if (!alreadyAttached)
+                    await ApplyShowSessionVisualizerAsync().ConfigureAwait(true);
+            }
+
             ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
             return true;
         }
@@ -562,6 +856,26 @@ public partial class MediaPlayerViewModel
     /// audio-output factory via the borrowed-carrier map).</summary>
     private static string FileAudioDeviceId(Guid lineId) => $"file-audio:{lineId}";
 
+    /// <summary>Maps a route device id back to its output LINE (for the line's audio-effect inserts):
+    /// carrier ids ("ndi-audio:{id}" / "file-audio:{id}") parse directly; PortAudio backend device ids
+    /// reverse-look-up through the definitions snapshot. Null for default-device routes.</summary>
+    private Guid? TryResolveLineIdForAudioDevice(string deviceId)
+    {
+        foreach (var prefix in (ReadOnlySpan<string>)["ndi-audio:", "file-audio:"])
+        {
+            if (deviceId.StartsWith(prefix, StringComparison.Ordinal)
+                && Guid.TryParse(deviceId[prefix.Length..], out var carrierLineId))
+            {
+                return carrierLineId;
+            }
+        }
+
+        return _outputs.DefinitionsSnapshot
+            .OfType<PortAudioOutputDefinition>()
+            .FirstOrDefault(d => string.Equals(d.EffectiveAudioBackendDeviceId, deviceId, StringComparison.Ordinal))
+            ?.Id;
+    }
+
     /// <summary>Stable composition-output id for a driven output line - shared by the video-output factory (fire
     /// path) and hot add/remove, so a single line's composition output is attached/detached by a fixed id
     /// (index-based ids would shift when a line is added or removed).</summary>
@@ -576,7 +890,12 @@ public partial class MediaPlayerViewModel
     {
         if (BuildDeckAudioLeaseCore(deviceId, format) is not { } lease)
             return null;
-        var tap = MeteringAudioOutput.Wrap(lease.Output);
+        // Line audio effects (Phase 4/5 inserts) run before the meter so the VU shows the processed
+        // signal. The wrapper is disposal-transparent like the meter, so lease ownership is unchanged.
+        var effectWrapped = TryResolveLineIdForAudioDevice(deviceId) is { } effectLineId
+            ? _outputs.WrapAudioEffectsForLine(effectLineId, lease.Output)
+            : lease.Output;
+        var tap = MeteringAudioOutput.Wrap(effectWrapped);
         RegisterMeterTap(tap);
         return lease with
         {
@@ -953,6 +1272,7 @@ public partial class MediaPlayerViewModel
                 _outputs.ReleaseVideoOutputForLine(held);
             _playerAcquiredLines.Clear();
             _playerVideoOutputs = new(StringComparer.Ordinal);
+            _playerShowVizOwnsCanvas = false;
             foreach (var held in _playerAcquiredAudioLines)
                 _outputs.ReleaseAudioOutputForLine(held);
             _playerAcquiredAudioLines.Clear();

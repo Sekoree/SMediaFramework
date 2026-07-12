@@ -17,11 +17,11 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
     private Guid? _existingId;
     private IReadOnlyCollection<string> _existingOutputNames = Array.Empty<string>();
 
-    public string[] Containers { get; } = ["Mp4", "Matroska", "Mov"];
-    public string[] OutputModes { get; } = ["VideoAndAudio", "VideoOnly", "AudioOnly"];
-    public string[] VideoCodecs { get; } = ["H264", "Hevc", "ProRes422", "Mpeg4"];
-    public string[] AudioCodecs { get; } = ["Aac", "Opus", "Flac", "Pcm16"];
-    public string[] Presets { get; } = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"];
+    public EncodeChoice[] Containers { get; } = EncodeChoices.Containers;
+    public EncodeChoice[] OutputModes { get; } = EncodeChoices.OutputModes;
+    public EncodeChoice[] VideoCodecs { get; } = EncodeChoices.VideoCodecs;
+    public EncodeChoice[] AudioCodecs { get; } = EncodeChoices.AudioCodecs;
+    public string[] Presets { get; } = EncodeChoices.Presets;
 
     [ObservableProperty] private string _displayName = Strings.OutputKindFileRecordLabel;
     [ObservableProperty] private string _directoryPath =
@@ -52,6 +52,8 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
     [ObservableProperty] private string _videoPreset = "veryfast";
     [ObservableProperty] private int _scaleWidth;
     [ObservableProperty] private int _scaleHeight;
+    // Output frame rate; 0 = follow the source. Set to pin a fixed rate into the recording.
+    [ObservableProperty] private int _fps;
 
     public ObservableCollection<AudioLegRowViewModel> AudioLegs { get; } = [new AudioLegRowViewModel()];
 
@@ -96,6 +98,7 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
         VideoPreset = encode.VideoPreset ?? "veryfast";
         ScaleWidth = encode.ScaleWidth;
         ScaleHeight = encode.ScaleHeight;
+        Fps = encode.Fps;
 
         AudioLegs.Clear();
         foreach (var leg in encode.AudioLegs)
@@ -144,7 +147,8 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
                 VideoPreset,
                 GopSize: 0,
                 ScaleWidth,
-                ScaleHeight)
+                ScaleHeight,
+                Fps)
             {
                 AudioLegs = AudioLegs.Select(l => l.ToDefinition()).ToArray(),
             });
@@ -164,7 +168,7 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
 /// <summary>One editable audio track row of the file/stream output dialogs.</summary>
 public partial class AudioLegRowViewModel : ViewModelBase
 {
-    public string[] AudioCodecs { get; } = ["Aac", "Opus", "Flac", "Pcm16"];
+    public EncodeChoice[] AudioCodecs { get; } = EncodeChoices.AudioCodecs;
 
     [ObservableProperty] private string _codec = "Aac";
     [ObservableProperty] private int _channels = 2;

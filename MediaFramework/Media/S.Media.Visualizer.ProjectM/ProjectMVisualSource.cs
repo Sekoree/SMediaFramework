@@ -19,13 +19,25 @@ namespace S.Media.Visualizer.ProjectM;
 /// </summary>
 public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVideoSource, IBusMetadataSink, IDisposable
 {
+    /// <summary>
+    /// App-wired factory for a dedicated offscreen GL context (called ON the render thread). When set,
+    /// every new source runs the CONTINUOUS mode: projectM renders on its own thread for the source's
+    /// whole lifetime, and composition surfaces just blit the latest frame - so the visualizer survives
+    /// composition rebuilds (track changes) and a stalling preset load can never block a composition
+    /// pump or the session dispatcher. Null (default) keeps the legacy in-composition rendering.
+    /// </summary>
+    public static Func<S.Media.Compositor.IOffscreenGlContext?>? OffscreenGlContextFactory { get; set; }
+
     private readonly ProjectMOptions _options;
     private readonly AudioBus _pcmRing;
     private readonly VideoFormat _videoFormat;
+    private readonly ProjectMOffscreenRenderer? _renderer;
     private byte[]? _transparentFrame;
     private long _frameIndex;
     private volatile MediaItemMetadata? _currentItem;
     private volatile bool _disposed;
+    private volatile int _legacyPresetCount = -1;
+    private volatile string? _legacyPresetName;
 
     public ProjectMVisualSource(int width, int height, Rational frameRate, ProjectMOptions? options = null)
     {
@@ -44,9 +56,39 @@ public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVide
         _pcmRing = new AudioBus(
             new AudioFormat(_options.AudioSampleRate, 2),
             TimeSpan.FromSeconds(1));
+
+        // Continuous mode: the renderer starts NOW and runs until Dispose - independent of any
+        // composition. Render at the configured size (options override the placement size).
+        if (OffscreenGlContextFactory is { } factory)
+        {
+            _renderer = new ProjectMOffscreenRenderer(
+                this, _options,
+                _options.RenderWidth > 0 ? _options.RenderWidth : _videoFormat.Width,
+                _options.RenderHeight > 0 ? _options.RenderHeight : _videoFormat.Height,
+                _options.Fps > 0 ? _options.Fps : _videoFormat.FrameRate.Numerator / Math.Max(1, _videoFormat.FrameRate.Denominator),
+                factory);
+        }
     }
 
     public ProjectMOptions Options => _options;
+
+    /// <summary>Presets found in the configured directory (-1 until enumerated; continuous mode
+    /// enumerates on its render thread shortly after construction, legacy mode at first GL configure).</summary>
+    public int PresetCount => _renderer?.PresetCount ?? _legacyPresetCount;
+
+    /// <summary>The currently playing preset's file name (null before the first load).</summary>
+    public string? CurrentPresetName => _renderer?.CurrentPresetName ?? _legacyPresetName;
+
+    /// <summary>True when this source renders continuously on its own thread (survives track changes).</summary>
+    public bool IsContinuous => _renderer is not null;
+
+    internal void ReportLegacyPresets(int count) => _legacyPresetCount = count;
+
+    internal void ReportLegacyPresetName(string? name) => _legacyPresetName = name;
+
+    /// <summary>Test seam: copies the continuous renderer's newest frame (false in legacy mode).</summary>
+    internal bool TryCopyLatestFrameForTest(byte[] destination, ref long lastSeenVersion) =>
+        _renderer?.TryCopyLatestFrame(destination, ref lastSeenVersion) ?? false;
 
     /// <summary>What's playing, per the session metadata hub (for future preset/overlay reactions).</summary>
     public MediaItemMetadata? CurrentItem => _currentItem;
@@ -94,7 +136,12 @@ public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVide
 
     // --- ILayerSurfaceVideoSource (the real GPU render path) -----------------
 
-    public IVideoCompositorLayerSurface CreateLayerSurface() => new ProjectMGlLayerSurface(this);
+    /// <summary>Continuous mode: a thin blit of the persistent renderer's frames (a NEW composition picks
+    /// the stream up mid-flow - no restart). Legacy mode: projectM renders in the composition's context.</summary>
+    public IVideoCompositorLayerSurface CreateLayerSurface() =>
+        _renderer is not null
+            ? new ProjectMFrameBlitSurface(_renderer)
+            : new ProjectMGlLayerSurface(this);
 
     // --- IBusMetadataSink ------------------------------------------------------
 
@@ -109,5 +156,29 @@ public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVide
     /// <summary>Drains up to <paramref name="destination"/>.Length floats of tapped PCM (render thread).</summary>
     internal int DrainPcm(Span<float> destination) => _pcmRing.ReadInto(destination);
 
-    public void Dispose() => _disposed = true;
+    private int _nextPresetRequests;
+
+    /// <summary>Requests a preset advance from any thread (UI hotkey/button); the GL surface consumes
+    /// it on its next render.</summary>
+    public void RequestNextPreset() => Interlocked.Increment(ref _nextPresetRequests);
+
+    internal bool ConsumeNextPresetRequest()
+    {
+        while (true)
+        {
+            var pending = Volatile.Read(ref _nextPresetRequests);
+            if (pending <= 0)
+                return false;
+            if (Interlocked.CompareExchange(ref _nextPresetRequests, 0, pending) == pending)
+                return true;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        _renderer?.Dispose(); // stops the continuous render thread + its GL context
+    }
 }

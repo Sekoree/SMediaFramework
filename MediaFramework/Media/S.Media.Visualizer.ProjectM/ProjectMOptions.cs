@@ -27,6 +27,16 @@ public sealed record ProjectMOptions
     /// <summary>Sample rate the audio tap declares (the router resamples/maps into it).</summary>
     public int AudioSampleRate { get; init; } = 48_000;
 
+    /// <summary>projectM's internal render resolution (its own FBO), decoupled from the canvas: the
+    /// surface blits the result scaled into whatever canvas it's placed on. 0 = follow the canvas.
+    /// Set this to render crisp visuals independent of a small canvas (e.g. cover-art sized).</summary>
+    public int RenderWidth { get; init; }
+
+    public int RenderHeight { get; init; }
+
+    /// <summary>projectM's target FPS (affects its internal animation timing). 0 = follow the canvas rate.</summary>
+    public int Fps { get; init; }
+
     public static ProjectMOptions FromJson(string? configJson)
     {
         if (string.IsNullOrWhiteSpace(configJson))

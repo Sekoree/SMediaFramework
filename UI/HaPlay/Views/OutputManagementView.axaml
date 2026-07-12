@@ -138,6 +138,41 @@
                              Text="{Binding RecordFilePath}"
                              IsVisible="{Binding IsRecordArmed}" />
 
+                  <!-- Effect inserts (Phase 4/5): per-line audio/video bus effects, applied when
+                       playback (re)acquires the line. Editing mid-show reconnects the route briefly. -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="{x:Static res:Strings.OutputEffectsHeader}" FontWeight="SemiBold" />
+                      <ItemsControl ItemsSource="{Binding Effects}" IsVisible="{Binding HasEffects}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Grid ColumnDefinitions="*,8,Auto" Margin="0,0,0,4">
+                              <TextBlock Grid.Column="0" FontFamily="Consolas,monospace" FontSize="12"
+                                         VerticalAlignment="Center" Text="{Binding DisplayLabel}" />
+                              <Button Grid.Column="2" FontSize="11" Padding="6,2"
+                                      Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
+                                      Command="{Binding $parent[ItemsControl].((vm:OutputLineViewModel)DataContext).RemoveEffectCommand}"
+                                      CommandParameter="{Binding}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <Grid ColumnDefinitions="*,8,Auto,8,Auto">
+                        <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding AvailableEffectChoices}"
+                                  SelectedItem="{Binding SelectedEffectChoice}"
+                                  PlaceholderText="{x:Static res:Strings.OutputEffectsPickerPlaceholder}" />
+                        <NumericUpDown Grid.Column="2" Width="120" FormatString="0.0" Increment="1"
+                                       Minimum="-60" Maximum="12"
+                                       Value="{Binding EffectGainDbInput}"
+                                       IsVisible="{Binding SelectedEffectIsGain}"
+                                       ToolTip.Tip="dB" />
+                        <Button Grid.Column="4" Content="{x:Static res:Strings.OutputEffectsAddButton}"
+                                Command="{Binding AddEffectCommand}" />
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+
                   <!-- Live stats card (plan §5): health + delivery counters + 60 s throughput. -->
                   <Border Classes="card">
                     <StackPanel Spacing="6">

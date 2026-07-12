@@ -536,6 +536,14 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         {
             RenderLayersToCanvas(frameLayers, savedScissor);
 
+            // Surfaces get DEFAULT pixel-store state: the layer uploads above set GL_UNPACK_ROW_LENGTH
+            // to each frame's stride, and a surface that uploads its own textures during ConfigureGl
+            // (projectM's preloads, MMD's material textures) would inherit that stale row stride - the
+            // driver then reads past the surface's (smaller) source buffer and SEGFAULTS (2026-07-11:
+            // cover-art layer + visualizer crash). The host's own values are restored in finally.
+            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+
             // Surface layers render on top of the frame layers, directly into the canvas FBO, each in the
             // compositor's GL context/thread (the "3D object layer" seam, Doc 04 §5).
             for (var i = 0; i < surfaceLayers.Count; i++)

@@ -373,22 +373,44 @@
                                 <TextBlock Text="{Binding PlayPauseLabel}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
-                        <!-- HOLD (latched amber via ToggleButton.Warn) + its image-setup ▾, next to Play. -->
+                        <!-- HOLD (latched amber via ToggleButton.Warn) + a ▾ menu with its
+                             configuration - the anonymous setup buttons scattered through the strip
+                             confused operators; each toggle now owns a labelled dropdown. -->
                         <ToggleButton Classes="Touch Warn"
                                       IsChecked="{Binding HoldFallbackVideo}"
                                       Content="{x:Static res:Strings.HoldButtonLabel}"
                                       ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
+                        <Button Classes="Std" VerticalAlignment="Center"
+                                ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
+                            <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuItem Header="{x:Static res:Strings.HoldImageSetupMenuHeader}"
+                                              Click="OnHoldImageSetupClick" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
                         <!-- VIZ: projectM audio visualizer layer over the deck composition (greyed
-                             without libprojectM-4; see scripts/build-projectm.sh). -->
+                             without libprojectM-4; see scripts/build-projectm.sh). Toggle + ▾ menu
+                             (preset folder / next preset), mirroring HOLD. -->
                         <ToggleButton Classes="Touch"
                                       IsChecked="{Binding VisualizerEnabled}"
                                       IsEnabled="{Binding IsVisualizerAvailable}"
                                       Content="{x:Static res:Strings.VisualizerToggleLabel}"
                                       ToolTip.Tip="{Binding VisualizerTooltip}" />
                         <Button Classes="Std" VerticalAlignment="Center"
-                                Click="OnHoldImageSetupClick"
-                                ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
+                                IsEnabled="{Binding IsVisualizerAvailable}"
+                                ToolTip.Tip="{Binding VisualizerTooltip}">
                             <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuItem Header="{x:Static res:Strings.VisualizerSettingsMenuHeader}"
+                                              Click="OnVisualizerSettingsClick" />
+                                    <MenuItem Header="{x:Static res:Strings.VisualizerNextPresetMenuHeader}"
+                                              Command="{Binding NextVisualizerPresetCommand}"
+                                              IsEnabled="{Binding VisualizerEnabled}" />
+                                </MenuFlyout>
+                            </Button.Flyout>
                         </Button>
                         <Button Classes="Touch"
                                 Command="{Binding NextTrackCommand}"

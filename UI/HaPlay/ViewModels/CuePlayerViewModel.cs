@@ -19,6 +19,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 {
     public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
+    /// <summary>Whether the projectM visualizer is available - gates the per-composition VIZ toggle.</summary>
+    public bool IsProjectMAvailable => RuntimeModules.IsProjectMAvailable;
+
     private CancellationTokenSource? _transportRunCts;
 
     /// <summary>
@@ -213,6 +216,25 @@ public partial class CuePlayerViewModel : ViewModelBase
                 if (ndi.StreamMode != NDIOutputStreamMode.VideoOnly)
                     AvailableAudioOutputs.Add(line);
                 if (ndi.StreamMode != NDIOutputStreamMode.AudioOnly)
+                    AvailableVideoOutputs.Add(line);
+            }
+            else if (line.Definition is Models.FileOutputDefinition file)
+            {
+                // Encode lines route like NDI carriers: cues bind video and matrix-route audio onto the
+                // pre-defined tracks (the combined sink's concatenated channels). Frames/samples only
+                // flow while the line is ARMED - a disarmed line is a silent target, not an error.
+                var mode = file.EffectiveEncode.OutputMode;
+                if (mode != "VideoOnly")
+                    AvailableAudioOutputs.Add(line);
+                if (mode != "AudioOnly")
+                    AvailableVideoOutputs.Add(line);
+            }
+            else if (line.Definition is Models.LiveStreamOutputDefinition stream)
+            {
+                var mode = stream.EffectiveEncode.OutputMode;
+                if (mode != "VideoOnly")
+                    AvailableAudioOutputs.Add(line);
+                if (mode != "AudioOnly")
                     AvailableVideoOutputs.Add(line);
             }
         }

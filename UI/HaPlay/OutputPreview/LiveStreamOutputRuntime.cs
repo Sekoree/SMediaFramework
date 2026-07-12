@@ -106,12 +106,16 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
                 video = vs;
             }
 
-            if (needsAudio && !_audioAcquired && _session.AudioSinks.Count > 0)
+            if (needsAudio && !_audioAcquired && _session.CombinedAudioSink is { } combined)
             {
+                // Combined multi-track sink - see FileOutputRuntime; the route's channel matrix
+                // decides which source channels land on which stream track.
                 _audioAcquired = true;
-                audio = _session.AudioSinks[0]; // deck routes drive the primary track (multi-track via scenes)
+                audio = combined;
             }
 
+            // Real playback now drives the sinks - tell the blank keep-alive to yield those legs.
+            _session.SetPlaybackActive(_videoAcquired, _audioAcquired);
             return (video, audio);
         }
     }
@@ -124,6 +128,9 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
                 _videoAcquired = false;
             if (releaseAudio)
                 _audioAcquired = false;
+            // Playback let go of these legs - the keep-alive resumes filling them with blank/silence
+            // so the stream stays live between tracks instead of going dead.
+            _session?.SetPlaybackActive(_videoAcquired, _audioAcquired);
         }
     }
 
@@ -149,7 +156,8 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
             .Where(t => !string.IsNullOrWhiteSpace(t.Url))
             .Select(t => new PushTarget(
                 Enum.TryParse<PushProtocol>(t.Protocol, ignoreCase: true, out var p) ? p : PushProtocol.Rtmp,
-                t.Url.Trim()))
+                t.Url.Trim(),
+                string.IsNullOrWhiteSpace(t.StreamKey) ? null : t.StreamKey!.Trim()))
             .ToArray();
 
         var server = definition.EffectiveLocalServer;
@@ -157,7 +165,10 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
         {
             Encode = encode,
             PushTargets = pushTargets,
-            LocalServer = server.Enabled ? new LocalServerOptions(server.Port, server.EnableTs, server.EnableHls) : null,
+            LocalServer = server.Enabled
+                ? new LocalServerOptions(server.Port, server.EnableTs, server.EnableHls,
+                    string.IsNullOrWhiteSpace(server.MountName) ? "stream" : server.MountName)
+                : null,
         };
     }
 

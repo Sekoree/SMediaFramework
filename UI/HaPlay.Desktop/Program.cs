@@ -12,13 +12,30 @@ sealed class Program
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
+    // Resolved log destination (set by ConfigureLogging), reused by the UI-hang watchdog for its dumps.
+    private static string _logDirectory = Path.Combine(Directory.GetCurrentDirectory(), "logs");
+
     [STAThread]
     public static void Main(string[] args)
     {
         try
         {
             ConfigureLogging(args);
-            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+
+            var app = BuildAvaloniaApp();
+
+            // UI-hang watchdog: skip under the CI smoke gate (the app self-exits after one frame, which
+            // would read as a stall). AfterSetup runs on the UI thread with the dispatcher ready, so the
+            // heartbeat timer binds correctly. Chained here (not inside BuildAvaloniaApp) so the visual
+            // designer, which also calls BuildAvaloniaApp, never arms it.
+            var smoke = Environment.GetEnvironmentVariable("HAPLAY_SMOKE");
+            if (string.IsNullOrEmpty(smoke))
+            {
+                var threshold = UiHangWatchdog.ResolveThreshold(GetArg(args, "--ui-hang-timeout"));
+                app = app.AfterSetup(_ => UiHangWatchdog.Install(_logDirectory, threshold));
+            }
+
+            app.StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
         {
@@ -59,6 +76,7 @@ sealed class Program
         {
             var crashDir = GetArg(args, "--media-log-dir")
                            ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
+            _logDirectory = crashDir;
             DesktopCrashDiagnostics.Install(crashDir, rollingLogFilePath: null, args);
             Console.WriteLine("HaPlay.Desktop logging disabled via --media-log off");
             return;
@@ -67,6 +85,7 @@ sealed class Program
         var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Trace);
         var dir = GetArg(args, "--media-log-dir")
                   ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
+        _logDirectory = dir;
         // Operational defaults match RollingFileLoggerOptions: enough burst headroom without retaining tens of
         // megabytes of formatted strings when a native backend floods logs (LOG-01).
         var queueCapacity = GetIntArg(args, "--media-log-queue", fallback: 2_048, min: 64);

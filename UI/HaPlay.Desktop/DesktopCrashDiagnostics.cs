@@ -53,6 +53,16 @@ internal static class DesktopCrashDiagnostics
             _firstChanceEnabled);
     }
 
+    /// <summary>Appends a free-form diagnostic report (heading + optional body) to the crash log. Used by
+    /// the UI-hang watchdog to persist its findings alongside crash records, so a freeze leaves a durable
+    /// trail in the same file even when nothing throws.</summary>
+    public static void AppendReport(string heading, string body)
+    {
+        WriteSync(heading);
+        if (!string.IsNullOrEmpty(body))
+            WriteSync(body);
+    }
+
     public static void RecordFatalException(string source, Exception exception)
     {
         EnsureCrashFile();

@@ -27,6 +27,21 @@ if [[ ! -f "$src_dir/CMakeLists.txt" ]]; then
     exit 1
 fi
 
+# The vendored tree was copied without git submodules; projectm-eval (the Milkdrop expression
+# compiler) is required. Fetch it once when the directory is empty.
+if [[ ! -f "$src_dir/vendor/projectm-eval/CMakeLists.txt" ]]; then
+    echo "== fetching missing projectm-eval submodule =="
+    git clone --depth 1 https://github.com/projectM-visualizer/projectm-eval.git \
+        "$src_dir/vendor/projectm-eval"
+fi
+
+# Offscreen-embedding patch: upstream hard-codes the final output to framebuffer 0 (the window),
+# which renders BLACK when projectM lives inside the compositor's private FBO. Idempotent.
+if ! grep -q "render-to-bound-fbo" "$src_dir/src/libprojectM/ProjectM.cpp"; then
+    echo "== applying render-to-bound-fbo patch =="
+    patch -p1 -d "$src_dir" < "$repo_root/scripts/patches/projectm-render-to-bound-fbo.patch"
+fi
+
 echo "== configuring projectM 4.1.6 ($rid) =="
 cmake -S "$src_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -45,12 +60,18 @@ cmake --install "$build_dir"
 lib_dir="$install_dir/lib"
 [[ -d "$install_dir/lib64" ]] && lib_dir="$install_dir/lib64"
 
-# Presets: the source tree ships a small pack; copy it next to the lib for the UI's default preset dir.
-presets_src="$src_dir/presets"
+# Presets: the source tree only carries minimal TEST presets; fetch the classic Milkdrop pack
+# (552 presets, ~7 MB, projectM-visualizer/presets-milkdrop-original) as the real default.
 presets_dst="$install_dir/presets"
-if [[ -d "$presets_src" && ! -d "$presets_dst" ]]; then
-    echo "== copying bundled presets =="
-    cp -r "$presets_src" "$presets_dst"
+if [[ ! -d "$presets_dst" ]]; then
+    echo "== fetching the classic Milkdrop preset pack =="
+    if git clone --depth 1 https://github.com/projectM-visualizer/presets-milkdrop-original.git "$presets_dst.tmp"; then
+        rm -rf "$presets_dst.tmp/.git"
+        mv "$presets_dst.tmp" "$presets_dst"
+    else
+        echo "WARN: preset pack fetch failed - falling back to the source tree's test presets" >&2
+        cp -r "$src_dir/presets" "$presets_dst"
+    fi
 fi
 
 echo

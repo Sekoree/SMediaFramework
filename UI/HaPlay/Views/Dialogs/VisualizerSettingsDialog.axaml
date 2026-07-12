@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels"
+        xmlns:res="using:HaPlay.Resources"
+        x:Class="HaPlay.Views.Dialogs.VisualizerSettingsDialog"
+        x:DataType="vm:MediaPlayerViewModel"
+        Title="{x:Static res:Strings.VisualizerSettingsDialogTitle}"
+        Width="520" Height="320"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="440" MinHeight="280">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CloseButton}" Click="CloseClick" IsDefault="True" IsCancel="True" />
+    </StackPanel>
+
+    <StackPanel Spacing="12">
+      <!-- Preset folder -->
+      <StackPanel Spacing="4">
+        <TextBlock Text="{x:Static res:Strings.VisualizerPresetFolderLabel}" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+          <TextBox Grid.Column="0" IsReadOnly="True"
+                   Text="{Binding VisualizerPresetDirectory}"
+                   PlaceholderText="{x:Static res:Strings.VisualizerPresetFolderPlaceholder}" />
+          <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}"
+                  Click="BrowseFolderClick" />
+        </Grid>
+      </StackPanel>
+
+      <!-- Resolution -->
+      <StackPanel Spacing="4">
+        <TextBlock Text="{x:Static res:Strings.VisualizerResolutionHeader}" FontWeight="SemiBold" />
+        <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                   Text="{x:Static res:Strings.VisualizerResolutionHint}" />
+        <Grid ColumnDefinitions="Auto,8,120,14,Auto,8,120,14,Auto,8,110" VerticalAlignment="Center">
+          <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="2" Minimum="0" Maximum="7680" Increment="2" FormatString="0"
+                         Value="{Binding VisualizerWidth}" />
+          <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="6" Minimum="0" Maximum="4320" Increment="2" FormatString="0"
+                         Value="{Binding VisualizerHeight}" />
+          <TextBlock Grid.Column="8" Text="FPS" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="10" Minimum="0" Maximum="240" FormatString="0"
+                         Value="{Binding VisualizerFps}" />
+        </Grid>
+        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+          <Button Content="{x:Static res:Strings.VisualizerResMatchOutput}" Click="MatchOutputClick" />
+          <Button Content="720p" Click="Preset720Click" />
+          <Button Content="1080p" Click="Preset1080Click" />
+          <Button Content="1440p" Click="Preset1440Click" />
+          <Button Content="4K" Click="Preset4kClick" />
+        </StackPanel>
+        <TextBlock Text="{Binding VisualizerResolutionLabel}" Opacity="0.6" FontSize="12" Margin="0,4,0,0" />
+      </StackPanel>
+    </StackPanel>
+  </DockPanel>
+</Window>

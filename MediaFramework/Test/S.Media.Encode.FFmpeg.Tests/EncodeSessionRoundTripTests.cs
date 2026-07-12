@@ -282,6 +282,112 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
     }
 
     [Fact]
+    public async Task InputFormatChange_MidRecording_KeepsTheLockedOutputFormat()
+    {
+        var outPath = TempPath(".mp4");
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.Mp4,
+            OutputMode = EncodeOutputMode.VideoOnly,
+            Video = new VideoEncodeOptions { Codec = EncodeVideoCodec.H264, Crf = 30, Preset = "ultrafast" },
+        };
+        if (options.Validate().Count > 0)
+            return;
+
+        var fps = new Rational(30, 1);
+        using (var session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(outPath)))
+        {
+            // First format locks the output (128x96); the mid-recording switch to a larger source must
+            // reconvert instead of faulting (the auto-sized deck canvas resizes on track changes).
+            session.VideoSink!.Configure(new VideoFormat(128, 96, PixelFormat.Bgra32, fps));
+            for (var i = 0; i < 10; i++)
+                session.VideoSink.Submit(MakeBgraFrame(128, 96, i, fps));
+
+            session.VideoSink.Configure(new VideoFormat(192, 144, PixelFormat.Bgra32, fps));
+            for (var i = 10; i < 20; i++)
+                session.VideoSink.Submit(MakeBgraFrame(192, 144, i, fps));
+
+            await FinishAsync(session);
+            var metrics = session.GetMetrics();
+            Assert.Equal(20, metrics.VideoFramesEncoded);
+            Assert.All(metrics.Sinks, s => Assert.True(s.Healthy, s.Error));
+        }
+
+        using var dec = MediaContainerDecoder.Open(outPath, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+        Assert.Equal(128, dec.Video.Format.Width); // locked to the FIRST format
+        Assert.Equal(96, dec.Video.Format.Height);
+    }
+
+    [Fact]
+    public async Task CombinedAudioSink_SplitsConcatenatedChannelsOntoTracks()
+    {
+        var outPath = TempPath(".mka");
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.Matroska,
+            OutputMode = EncodeOutputMode.AudioOnly,
+            AudioLegs =
+            [
+                new AudioLegOptions { Codec = EncodeAudioCodec.Flac, Channels = 2, Name = "Program" },
+                new AudioLegOptions { Codec = EncodeAudioCodec.Flac, Channels = 1, Name = "Commentary" },
+            ],
+        };
+        if (options.Validate().Count > 0)
+            return;
+
+        const int sampleRate = 48_000;
+        const float amp = 0.25f;
+        using (var session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(outPath), sampleRate))
+        {
+            var combined = session.CombinedAudioSink!;
+            Assert.Equal(3, combined.Format.Channels); // stereo track + mono track, concatenated
+
+            // Combined ch 0-1 (track 1) carries a sine; ch 2 (track 2) stays silent.
+            const int frames = sampleRate / 2;
+            var interleaved = new float[frames * 3];
+            for (var i = 0; i < frames; i++)
+            {
+                var s = amp * MathF.Sin(2f * MathF.PI * 440f * i / sampleRate);
+                interleaved[i * 3] = s;
+                interleaved[i * 3 + 1] = s;
+                interleaved[i * 3 + 2] = 0f;
+            }
+
+            const int chunkFrames = 1024;
+            for (var off = 0; off < frames; off += chunkFrames)
+            {
+                var n = Math.Min(chunkFrames, frames - off);
+                combined.Submit(interleaved.AsSpan(off * 3, n * 3));
+            }
+
+            await FinishAsync(session);
+        }
+
+        var (audioStreams, _) = ProbeStreamCounts(outPath);
+        Assert.Equal(2, audioStreams);
+
+        // The primary decoded track (track 1, stereo) must carry the sine, proving the split kept the
+        // signal on the right side of the concatenation.
+        using var dec = MediaContainerDecoder.Open(outPath, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+        Assert.Equal(2, dec.Audio.Format.Channels);
+        var buf = new float[4096];
+        double sumSq = 0;
+        long count = 0;
+        int read;
+        while ((read = dec.Audio.ReadInto(buf)) > 0)
+        {
+            for (var i = 0; i < read; i++)
+            {
+                sumSq += buf[i] * (double)buf[i];
+                count++;
+            }
+        }
+
+        var rms = Math.Sqrt(sumSq / Math.Max(1, count));
+        Assert.InRange(rms, amp / Math.Sqrt(2) * 0.6, amp / Math.Sqrt(2) * 1.4);
+    }
+
+    [Fact]
     public void Validate_RejectsFlvWithTwoAudioTracks()
     {
         var options = new EncodeSessionOptions

@@ -235,14 +235,32 @@ public static class HaPlayShowMapper
             // Treating the persisted value as an array index turned a normal stereo 1/2 route into
             // a three-channel [-1, L, R] output. PortAudio then rejected that format on a 2-channel
             // device, so the ShowSession cue faulted as soon as it was fired.
-            var matrix = new int[lineRoutes.Max(r => r.OutputChannel)];
+            outputsById.TryGetValue(line.Key, out var def);
+
+            // Encode lines: the matrix MUST span the sink's full combined track layout - a matrix
+            // sized only to the highest routed channel would force a channel-count adapter whose
+            // default mixing bleeds audio across tracks. Unrouted combined channels stay silent (-1).
+            var minChannels = def switch
+            {
+                FileOutputDefinition f when f.EffectiveEncode.OutputMode != "VideoOnly" =>
+                    f.EffectiveEncode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2),
+                LiveStreamOutputDefinition s when s.EffectiveEncode.OutputMode != "VideoOnly" =>
+                    s.EffectiveEncode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2),
+                _ => 0,
+            };
+            var matrix = new int[Math.Max(lineRoutes.Max(r => r.OutputChannel), minChannels)];
             Array.Fill(matrix, -1); // ChannelMap.Silence - channels with no route stay silent
             foreach (var r in lineRoutes)
                 if (r.SourceChannel >= 0)
                     matrix[r.OutputChannel - 1] = r.SourceChannel;
-
-            outputsById.TryGetValue(line.Key, out var def);
-            var deviceId = (def as PortAudioOutputDefinition)?.EffectiveAudioBackendDeviceId;
+            var deviceId = def switch
+            {
+                PortAudioOutputDefinition pa => pa.EffectiveAudioBackendDeviceId,
+                // Encode lines resolve through the cue session's audio-output factory (the armed
+                // session's combined multi-track sink) - same carrier pattern as the deck.
+                FileOutputDefinition or LiveStreamOutputDefinition => $"file-audio:{line.Key}",
+                _ => null,
+            };
             var sampleRate = def switch
             {
                 PortAudioOutputDefinition pa => pa.SampleRate,

@@ -41,6 +41,14 @@ public sealed partial class CueCompositionViewModel : ObservableObject
     [ObservableProperty]
     private bool _videoFxEnabled;
 
+    /// <summary>Run a persistent projectM visualizer on this composition (continuous across cue fires).</summary>
+    [ObservableProperty]
+    private bool _visualizerEnabled;
+
+    /// <summary>Optional *.milk preset folder for this composition's visualizer.</summary>
+    [ObservableProperty]
+    private string? _visualizerPresetDirectory;
+
     public string Summary =>
         $"{Width}×{Height} @ {(FrameRateDen > 0 ? FrameRateNum / (double)FrameRateDen : 0):0.##}fps";
 
@@ -97,6 +105,8 @@ public sealed partial class CueCompositionViewModel : ObservableObject
         FrameRateDen = FrameRateDen,
         VideoFx = VideoFx,
         VideoFxEnabled = VideoFxEnabled,
+        VisualizerEnabled = VisualizerEnabled,
+        VisualizerPresetDirectory = VisualizerPresetDirectory,
     };
 
     public static CueCompositionViewModel FromModel(CueComposition model) => new()
@@ -109,6 +119,8 @@ public sealed partial class CueCompositionViewModel : ObservableObject
         FrameRateDen = model.FrameRateDen,
         VideoFx = model.VideoFx,
         VideoFxEnabled = model.VideoFxEnabled,
+        VisualizerEnabled = model.VisualizerEnabled,
+        VisualizerPresetDirectory = model.VisualizerPresetDirectory,
     };
 }
 

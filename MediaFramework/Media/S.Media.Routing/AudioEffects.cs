@@ -89,9 +89,30 @@ public sealed class AudioEffectOutput : IAudioOutput, IAudioOutputChannelCapabil
 }
 
 /// <summary>The proof-of-concept audio effect: a click-free smoothed gain (also genuinely useful as a
-/// bus trim). Set <see cref="GainDb"/> from any thread; the ramp applies over ~10 ms of samples.</summary>
+/// bus trim). Set <see cref="GainDb"/> from any thread; the ramp applies over ~10 ms of samples.
+/// Registry config blob: <c>{"gainDb": -6.0}</c>.</summary>
 public sealed class GainAudioEffect : IAudioBusEffect
 {
+    /// <summary>Builds from the registry's opaque config blob (unknown/absent fields = unity).</summary>
+    public static GainAudioEffect FromJson(string? configJson)
+    {
+        var effect = new GainAudioEffect();
+        if (string.IsNullOrWhiteSpace(configJson))
+            return effect;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(configJson);
+            if (doc.RootElement.TryGetProperty("gainDb", out var gain) && gain.TryGetDouble(out var db))
+                effect.GainDb = db;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // opaque blob didn't parse - unity gain beats faulting the line
+        }
+
+        return effect;
+    }
+
     private float _targetLinear = 1f;
     private float _currentLinear = 1f;
     private float _rampPerSample;

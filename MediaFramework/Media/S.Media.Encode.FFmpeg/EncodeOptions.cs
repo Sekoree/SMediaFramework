@@ -13,20 +13,45 @@ public enum EncodeContainer
 
 public enum EncodeVideoCodec
 {
+    // Consumer / delivery
     H264,
     Hevc,
+    /// <summary>AV1 (libsvtav1 preferred, else libaom-av1/librav1e). Modern, efficient; encoder must be in the build.</summary>
+    Av1,
+    /// <summary>VP9 (libvpx-vp9) - web/WebM/Matroska.</summary>
+    Vp9,
+    // Professional / mastering
+    /// <summary>Apple ProRes 422 (prores_ks) - MOV/Matroska.</summary>
     ProRes422,
+    /// <summary>Apple ProRes 4444 with alpha (prores_ks) - MOV/Matroska.</summary>
+    ProRes4444,
+    /// <summary>Avid DNxHR (dnxhd encoder, HR profiles) - MOV/Matroska.</summary>
+    DnxHr,
+    /// <summary>FFV1 lossless (archival) - Matroska/MOV.</summary>
+    Ffv1,
     /// <summary>Always-available fallback when no libx264/libx265 is in the FFmpeg build.</summary>
     Mpeg4,
 }
 
 public enum EncodeAudioCodec
 {
+    // Consumer / delivery
     Aac,
     Opus,
+    /// <summary>MP3 (libmp3lame).</summary>
+    Mp3,
+    /// <summary>Dolby Digital AC-3 (broadcast/surround).</summary>
+    Ac3,
+    /// <summary>Dolby Digital Plus E-AC-3.</summary>
+    Eac3,
+    // Professional / lossless
     Flac,
-    /// <summary>Uncompressed PCM (s16), Matroska/Mov only.</summary>
+    /// <summary>Apple Lossless (ALAC) - MOV/Matroska/M4A.</summary>
+    Alac,
+    /// <summary>Uncompressed PCM 16-bit, Matroska/MOV.</summary>
     Pcm16,
+    /// <summary>Uncompressed PCM 24-bit, Matroska/MOV.</summary>
+    Pcm24,
 }
 
 /// <summary>Which legs an encode session carries.</summary>
@@ -65,6 +90,10 @@ public sealed record VideoEncodeOptions
 
     /// <summary>Output height in pixels (0 = source height, or derived from <see cref="ScaleWidth"/> preserving aspect).</summary>
     public int ScaleHeight { get; init; }
+
+    /// <summary>Declared output frame rate (0 = follow the source). Fixes the encoder's advertised rate
+    /// so a locked recording/stream presents a stable cadence to players regardless of source jitter.</summary>
+    public int Fps { get; init; }
 
     /// <summary>When set, forces the encode pixel format; otherwise derived from the source format and codec.</summary>
     public PixelFormat? EncodePixelFormat { get; init; }
@@ -129,22 +158,29 @@ public sealed record EncodeSessionOptions
         if (Container is EncodeContainer.Flv && AudioLegs.Count > 1 && IncludesAudio)
             errors.Add("FLV (RTMP) carries a single audio track - remove the extra tracks or switch container.");
 
+        // Mastering codecs (intra-frame, huge bitrates) don't belong in delivery containers.
+        var professionalVideo = Video.Codec is EncodeVideoCodec.ProRes422 or EncodeVideoCodec.ProRes4444
+            or EncodeVideoCodec.DnxHr or EncodeVideoCodec.Ffv1;
+
         if (IncludesVideo)
         {
             if (Video.BitrateBps > 0 && Video.Crf is not null)
                 errors.Add("Video rate control: set either a bitrate or a CRF, not both.");
-            if (Video.Crf is < 0 or > 51)
-                errors.Add("Video CRF must be between 0 and 51.");
+            if (Video.Crf is < 0 or > 63)
+                errors.Add("Video CRF must be between 0 and 63.");
             if (Video.ScaleWidth < 0 || Video.ScaleHeight < 0)
                 errors.Add("Video scale dimensions cannot be negative.");
             if (Container is EncodeContainer.Flv && Video.Codec is not EncodeVideoCodec.H264)
                 errors.Add("FLV (RTMP) requires H.264 video.");
-            if (Container is EncodeContainer.Mp4 && Video.Codec is EncodeVideoCodec.ProRes422)
-                errors.Add("ProRes belongs in MOV or Matroska, not MP4.");
+            if (professionalVideo && Container is EncodeContainer.Mp4 or EncodeContainer.MpegTs or EncodeContainer.Flv)
+                errors.Add($"{Video.Codec} is a mastering codec - use MOV or Matroska (not {Container}).");
+            if (Video.Codec is EncodeVideoCodec.Vp9 && Container is EncodeContainer.Flv or EncodeContainer.MpegTs or EncodeContainer.Mov)
+                errors.Add("VP9 belongs in Matroska/WebM (not " + Container + ").");
         }
 
         if (IncludesAudio)
         {
+            var lossless = new[] { EncodeAudioCodec.Flac, EncodeAudioCodec.Alac, EncodeAudioCodec.Pcm16, EncodeAudioCodec.Pcm24 };
             for (var i = 0; i < AudioLegs.Count; i++)
             {
                 var leg = AudioLegs[i];
@@ -152,10 +188,13 @@ public sealed record EncodeSessionOptions
                     errors.Add($"Audio track {i + 1}: channel count {leg.Channels} is out of range.");
                 if (leg.SampleRate is < 0 or > 384_000)
                     errors.Add($"Audio track {i + 1}: sample rate {leg.SampleRate} is out of range.");
-                if (Container is EncodeContainer.Flv && leg.Codec is not EncodeAudioCodec.Aac)
-                    errors.Add("FLV (RTMP) requires AAC audio.");
-                if (Container is EncodeContainer.Mp4 && leg.Codec is EncodeAudioCodec.Pcm16)
-                    errors.Add("PCM audio belongs in Matroska or MOV, not MP4.");
+                if (Container is EncodeContainer.Flv && leg.Codec is not EncodeAudioCodec.Aac and not EncodeAudioCodec.Mp3)
+                    errors.Add("FLV (RTMP) requires AAC or MP3 audio.");
+                if (Container is EncodeContainer.Mp4 && lossless.Contains(leg.Codec) && leg.Codec is not EncodeAudioCodec.Alac)
+                    errors.Add($"{leg.Codec} audio belongs in Matroska or MOV, not MP4.");
+                if (Container is EncodeContainer.MpegTs && leg.Codec is EncodeAudioCodec.Flac or EncodeAudioCodec.Alac
+                    or EncodeAudioCodec.Pcm16 or EncodeAudioCodec.Pcm24 or EncodeAudioCodec.Opus)
+                    errors.Add($"{leg.Codec} audio is not carried in MPEG-TS - use AAC/AC-3/MP3.");
             }
         }
 

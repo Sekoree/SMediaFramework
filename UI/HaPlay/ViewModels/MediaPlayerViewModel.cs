@@ -197,8 +197,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
             PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
             NDIOutputDefinition { StreamMode: NDIOutputStreamMode.VideoOnly } => 0,
             NDIOutputDefinition nd => Math.Max(1, nd.AudioChannelCount),
+            // Encode lines expose the combined multi-track layout (concatenated per-track channels),
+            // so the deck matrix can route source channels onto specific tracks.
+            FileOutputDefinition f => EncodeCombinedChannelsOrZero(f.EffectiveEncode),
+            LiveStreamOutputDefinition s => EncodeCombinedChannelsOrZero(s.EffectiveEncode),
             _ => 0,
         };
+
+        static int EncodeCombinedChannelsOrZero(EncodeSettingsDefinition encode) =>
+            encode.OutputMode == "VideoOnly" ? 0 : encode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2);
     }
 
     private static string OutputChannelSuffix(int outputChannels, int outputChannel) =>
@@ -346,6 +353,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             try { await playerSession.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession dispose"); }
         }
+
+        // The deck owns the persistent visualizer source (disposeSourceOnRemove: false) - stop its
+        // continuous render thread with the deck. Session dispose above only unhooked it.
+        try { _visualizerSource?.Dispose(); }
+        catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: visualizer source dispose"); }
+        _visualizerSource = null;
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var held in _playerAcquiredLines)

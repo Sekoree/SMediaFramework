@@ -41,6 +41,8 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsLiveStream));
         OnPropertyChanged(nameof(IsArmableOutput));
         OnPropertyChanged(nameof(RecordToggleLabel));
+        OnPropertyChanged(nameof(Effects));
+        OnPropertyChanged(nameof(HasEffects));
         OnPropertyChanged(nameof(IsClone));
         OnPropertyChanged(nameof(SupportsMediaPlayerRouting));
         OnPropertyChanged(nameof(IndentMargin));
@@ -97,6 +99,66 @@ public partial class OutputLineViewModel : ViewModelBase
     /// <summary>The armed session's destination - the recording file path, or the LAN URLs while live.</summary>
     [ObservableProperty]
     private string? _recordFilePath;
+
+    // --- effect inserts (Phase 4/5): kind picker + per-line chain, applied on next acquire ---------
+
+    /// <summary>The line's persisted effect chain (audio + video inserts, in order).</summary>
+    public IReadOnlyList<OutputEffectDefinition> Effects => Definition.Effects;
+
+    public bool HasEffects => Definition.Effects.Count > 0;
+
+    /// <summary>Registry-enumerated kinds for the picker.</summary>
+    public IReadOnlyList<OutputEffectChoice> AvailableEffectChoices => OutputManagementViewModel.AvailableEffectChoices;
+
+    [ObservableProperty]
+    private OutputEffectChoice? _selectedEffectChoice;
+
+    /// <summary>dB value composed into the config blob when adding a "gain" insert.</summary>
+    [ObservableProperty]
+    private double _effectGainDbInput;
+
+    public bool SelectedEffectIsGain =>
+        SelectedEffectChoice is { Kind: "gain", Target: OutputEffectTarget.Audio };
+
+    partial void OnSelectedEffectChoiceChanged(OutputEffectChoice? value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(SelectedEffectIsGain));
+        AddEffectCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAddEffect))]
+    private async Task AddEffect()
+    {
+        if (_host is null || SelectedEffectChoice is not { } choice)
+            return;
+        var config = SelectedEffectIsGain && Math.Abs(EffectGainDbInput) > 0.001
+            ? $"{{\"gainDb\": {EffectGainDbInput.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}"
+            : null;
+        var next = Definition.Effects
+            .Append(new OutputEffectDefinition(choice.Kind, choice.Target, config))
+            .ToArray();
+        await _host.UpdateLineEffectsAsync(this, next);
+        NotifyEffectsChanged();
+    }
+
+    private bool CanAddEffect() => _host is not null && SelectedEffectChoice is not null;
+
+    [RelayCommand]
+    private async Task RemoveEffect(OutputEffectDefinition effect)
+    {
+        if (_host is null)
+            return;
+        var next = Definition.Effects.Where(e => !ReferenceEquals(e, effect) && e != effect).ToArray();
+        await _host.UpdateLineEffectsAsync(this, next);
+        NotifyEffectsChanged();
+    }
+
+    private void NotifyEffectsChanged()
+    {
+        OnPropertyChanged(nameof(Effects));
+        OnPropertyChanged(nameof(HasEffects));
+    }
 
     [RelayCommand(CanExecute = nameof(CanToggleRecord))]
     private Task ToggleRecord() =>
