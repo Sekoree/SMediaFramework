@@ -32,7 +32,9 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
     private readonly int _fps;
     private readonly float[] _pcmScratch = new float[4096];
     private readonly CancellationTokenSource _cts = new();
+    private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread _thread;
+    private int _disposeStarted;
 
     private readonly object _frameGate = new();
     private readonly byte[] _latestFrame;
@@ -261,6 +263,7 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             catch (Exception ex) { Trace.LogWarning(ex, "projectm_destroy"); }
             try { context?.Dispose(); }
             catch (Exception ex) { Trace.LogWarning(ex, "offscreen context dispose"); }
+            _completion.TrySetResult();
         }
     }
 
@@ -307,9 +310,21 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
 
     public void Dispose()
     {
-        _cts.Cancel();
-        try { _thread.Join(TimeSpan.FromSeconds(5)); }
-        catch { /* best effort */ }
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+            return;
+
+        // Native preset compilation/rendering is not cancellable. Dispose is routinely initiated by the
+        // Avalonia dispatcher (toggle/settings/deck teardown), so joining this thread here can freeze the UI
+        // for the full timeout. Signal cancellation and let owner-thread teardown complete asynchronously.
+        // The CTS must remain alive until the render loop exits because that loop waits on Token.WaitHandle.
+        try { _cts.Cancel(); }
+        catch (ObjectDisposedException) { /* completion cleanup won the race */ }
+        _ = DisposeCancellationWhenStoppedAsync();
+    }
+
+    private async Task DisposeCancellationWhenStoppedAsync()
+    {
+        await _completion.Task.ConfigureAwait(false);
         _cts.Dispose();
     }
 }

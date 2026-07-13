@@ -32,12 +32,16 @@ public partial class MainViewModel
     {
         if (!await ConfirmCanReplaceProjectAsync().ConfigureAwait(true))
             return;
-        NewProjectCore();
+        await NewProjectCoreAsync().ConfigureAwait(true);
     }
 
-    private void NewProjectCore()
+    private async Task NewProjectCoreAsync()
     {
-        ApplyProjectSnapshot(new HaPlayProject());
+        var project = new HaPlayProject();
+        var outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
+        ApplyProjectSnapshot(project);
+        if (outputsReplaced)
+            await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
         CurrentProjectPath = null;
         ProjectStatus = null;
         AutoSaveEnabled = false;
@@ -104,9 +108,12 @@ public partial class MainViewModel
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var missing = requestedRoutes.Where(r => !availableNames.Contains(r)).ToList();
 
+        var outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
         ApplyProjectSnapshot(project);
         _ = RefreshCuePreRollAsync();
         var outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync();
+        if (outputsReplaced)
+            await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
         if (project.SavedSections is { Count: > 0 } imported)
         {
             // Partial file = a section import into the current show, not a project switch: keep the
@@ -144,6 +151,28 @@ public partial class MainViewModel
         if (outputStartErrors.Count > 0)
             statusParts.Add(Strings.Format(nameof(Strings.ProjectOutputRuntimesStartFailedFormat), outputStartErrors.Count, string.Join("; ", outputStartErrors)));
         ProjectStatus = string.Join(" ", statusParts);
+    }
+
+    private async Task<bool> PrepareForProjectOutputReplacementAsync(HaPlayProject project)
+    {
+        var sections = project.SavedSections;
+        var replacesOutputs = ProjectSections.Includes(sections, ProjectSections.OutputsAudio)
+                              || ProjectSections.Includes(sections, ProjectSections.OutputsVideo);
+        if (!replacesOutputs)
+            return false;
+
+        // A project switch is a transport boundary. Stop the old document first, then await every output
+        // subscriber's detach before ReplaceDefinitionsForLoad disposes the backing runtimes.
+        foreach (var player in Players)
+        {
+            if (player.StopCommand.CanExecute(null))
+                await player.StopCommand.ExecuteAsync(null).ConfigureAwait(true);
+        }
+
+        CuePlayer.StopCommand.Execute(null);
+        await _cueShow.StopAllPlaybackAsync().ConfigureAwait(true);
+        await OutputManagement.PrepareForDefinitionsReplacementAsync().ConfigureAwait(true);
+        return true;
     }
 
     /// <summary>One Save / Discard / Cancel gate for Close, New, Open, Open Recent, and recovery replacement.</summary>

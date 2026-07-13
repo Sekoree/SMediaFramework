@@ -60,6 +60,9 @@ public sealed class CueVideoOutputFanoutTests
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync(cue.Id.ToString()));
         Assert.True(await WaitUntilAsync(() => screen.Count > 0, TimeSpan.FromSeconds(3)));
         Assert.Equal((16, 16), (screen.Format.Width, screen.Format.Height));
+        var initialFarEdge = screen.BottomRight;
+        Assert.InRange(initialFarEdge.R, (byte)130, (byte)210);
+        Assert.InRange(initialFarEdge.B, (byte)130, (byte)210);
 
         var moved = initialMapping with
         {
@@ -73,6 +76,12 @@ public sealed class CueVideoOutputFanoutTests
             compId.ToString(), lineId.ToString("N"), HaPlayShowMapper.ToClipOutputMapping(moved)));
         Assert.True(await WaitUntilAsync(() => screen.Count > before, TimeSpan.FromSeconds(3)));
         Assert.Equal((16, 16), (screen.Format.Width, screen.Format.Height));
+        var movedNearEdge = screen.TopLeft;
+        var movedFarEdge = screen.BottomRight;
+        Assert.InRange(movedNearEdge.R, (byte)45, (byte)125);
+        Assert.InRange(movedNearEdge.B, (byte)45, (byte)125);
+        Assert.InRange(movedFarEdge.R, (byte)220, byte.MaxValue);
+        Assert.InRange(movedFarEdge.B, (byte)220, byte.MaxValue);
     }
 
     [Fact]
@@ -163,10 +172,20 @@ public sealed class CueVideoOutputFanoutTests
                 return false;
             }
 
+            var pixels = new byte[16 * 16 * 4];
+            for (var y = 0; y < 16; y++)
+            for (var x = 0; x < 16; x++)
+            {
+                var offset = (y * 16 + x) * 4;
+                pixels[offset] = (byte)(255 * y / 15);
+                pixels[offset + 2] = (byte)(255 * x / 15);
+                pixels[offset + 3] = 255;
+            }
+
             frame = new VideoFrame(
                 TimeSpan.FromTicks(TimeSpan.TicksPerSecond * index / 30),
                 Format,
-                [new byte[16 * 16 * 4]],
+                [pixels],
                 [16 * 4]);
             return true;
         }
@@ -175,14 +194,26 @@ public sealed class CueVideoOutputFanoutTests
     private sealed class CountingVideoOutput : IVideoOutput
     {
         private int _count;
+        private int _topLeft;
+        private int _bottomRight;
         public VideoFormat Format { get; private set; } = new(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats => [];
         public int Count => Volatile.Read(ref _count);
+        public (byte B, byte R) TopLeft => Unpack(Volatile.Read(ref _topLeft));
+        public (byte B, byte R) BottomRight => Unpack(Volatile.Read(ref _bottomRight));
         public void Configure(VideoFormat format) => Format = format;
         public void Submit(VideoFrame frame)
         {
+            var pixels = frame.Planes[0].Span;
+            Volatile.Write(ref _topLeft, Pack(pixels[0], pixels[2]));
+            var bottomRight = (frame.Format.Height - 1) * frame.Strides[0] + (frame.Format.Width - 1) * 4;
+            Volatile.Write(ref _bottomRight, Pack(pixels[bottomRight], pixels[bottomRight + 2]));
             Interlocked.Increment(ref _count);
             frame.Dispose();
         }
+
+        private static int Pack(byte b, byte r) => b | (r << 8);
+
+        private static (byte B, byte R) Unpack(int value) => ((byte)value, (byte)(value >> 8));
     }
 }

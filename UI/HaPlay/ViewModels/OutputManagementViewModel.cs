@@ -409,29 +409,25 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B follow-up - raised *before* a line's runtime is torn down so any active playback
-    /// can detach its route to that line first and avoid Submit'ing to a disposed output.
-    /// Subscribers must run synchronously: by the time the event returns, the runtime
-    /// stop / dispose path is about to run.
-    /// </summary>
-    public event EventHandler<OutputLineViewModel>? OutputLineRemoving;
-
-    /// <summary>
-    /// Raised around hot output edits so active players can drop and then re-acquire the line against
-    /// the newly configured runtime. This keeps reconfigure-in-place from leaving routes pointed at a
-    /// disposed PortAudio stream / NDI sender.
+    /// Awaited around output removal/replacement/edit so active players can drop and then, for an edit,
+    /// re-acquire the line against the newly configured runtime. This keeps live routes from retaining a
+    /// disposed PortAudio stream, video presenter, encoder, or NDI sender.
     /// </summary>
     public event Func<OutputLineViewModel, Task>? OutputLineReconfiguringAsync;
 
     public event Func<OutputLineViewModel, Task>? OutputLineReconfiguredAsync;
 
+    /// <summary>Detaches every live playback route before a project load replaces the output-line objects and
+    /// disposes their runtimes. Project restore must await this before <see cref="ReplaceDefinitionsForLoad"/>;
+    /// otherwise an unchanged persisted line id can leave a session holding the disposed pre-load sink.</summary>
+    public async Task PrepareForDefinitionsReplacementAsync()
+    {
+        foreach (var line in Outputs.ToList())
+            await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(true);
+    }
+
     private void Remove(OutputLineViewModel line)
     {
-        // Let sessions unwire their routes first - otherwise the AudioRouter pump keeps pushing chunks
-        // into a PortAudioOutput we're about to Dispose, producing the spammed ObjectDisposedException
-        // observed when the user clicked Remove during active playback.
-        OutputLineRemoving?.Invoke(this, line);
-
         StopLocalPreview(line);
         StopNDIOutput(line);
         StopPortAudioOutput(line);
@@ -456,6 +452,9 @@ public partial class OutputManagementViewModel : ViewModelBase
             await StopPlayersUsingLineAsync(line);
         }
 
+        // Cue compositions are not covered by PlaybackUsageProbe. Await the shared hot-detach hook before
+        // Remove disposes the runtime, matching the ordering used by output reconfigure and project restore.
+        await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(true);
         Remove(line);
     }
 
@@ -752,8 +751,8 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// A local video preview window stopped. <paramref name="userInitiated"/> is <see langword="true"/>
     /// only when the operator closed the OS window (clicked the title-bar X / quit), as opposed to our
     /// own programmatic teardown (Remove, reconfigure, shutdown). A user-closed window means the operator
-    /// is done with that output, so we drop the whole line from the I/O page - which also raises
-    /// <see cref="OutputLineRemoving"/> so any active playback session unwires its route first.
+    /// is done with that output, so we drop the whole line from the I/O page through the same awaited
+    /// detach path as the Remove command.
     /// </summary>
     internal void NotifyLocalPreviewEnded(OutputLineViewModel line, bool userInitiated = false)
     {
@@ -763,7 +762,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         // Removing the line re-enters StopLocalPreview, but _localPreviews no longer holds this line
         // (removed just above) so that path is a no-op for the already-closed window - no double dispose.
         if (userInitiated && Outputs.Contains(line))
-            Remove(line);
+            _ = RemoveLineAsync(line);
     }
 
     internal void NotifyLocalPreviewResized(OutputLineViewModel line, int width, int height)

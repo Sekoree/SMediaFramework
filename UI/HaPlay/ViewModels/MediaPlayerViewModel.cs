@@ -268,10 +268,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged += OnOutputNamingChanged;
-        // Phase B follow-up - unwire from the active session BEFORE the runtime is disposed (§4.3.3).
-        // Without this the AudioRouter pump keeps Submit'ing to a disposed PortAudioOutput and spams
-        // ObjectDisposedException until the session is torn down.
-        _outputs.OutputLineRemoving += OnOutputLineRemoving;
         _outputs.OutputLineReconfiguringAsync += OnOutputLineReconfiguringAsync;
         _outputs.OutputLineReconfiguredAsync += OnOutputLineReconfiguredAsync;
         _idleSlateSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -356,9 +352,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         // The deck owns the persistent visualizer source (disposeSourceOnRemove: false) - stop its
         // continuous render thread with the deck. Session dispose above only unhooked it.
-        try { _visualizerSource?.Dispose(); }
-        catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: visualizer source dispose"); }
-        _visualizerSource = null;
+        await _visualizerApplyGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            try { _visualizerSource?.Dispose(); }
+            catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: visualizer source dispose"); }
+            _visualizerSource = null;
+        }
+        finally
+        {
+            _visualizerApplyGate.Release();
+        }
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var held in _playerAcquiredLines)
@@ -423,7 +427,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _outputs.Outputs.CollectionChanged -= OnSharedOutputsCollectionChanged;
         _outputs.RoutingTopologyChanged -= OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged -= OnOutputNamingChanged;
-        _outputs.OutputLineRemoving -= OnOutputLineRemoving;
         _outputs.OutputLineReconfiguringAsync -= OnOutputLineReconfiguringAsync;
         _outputs.OutputLineReconfiguredAsync -= OnOutputLineReconfiguredAsync;
     }
@@ -2041,16 +2044,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     add ? HotAddOutputToShowSessionAsync(t) : HotRemoveOutputFromShowSessionAsync(t));
             }
         }).ConfigureAwait(false);
-    }
-
-    private void OnOutputLineRemoving(object? sender, OutputLineViewModel line)
-    {
-        // The management VM is about to dispose the runtime: detach the line from the live composition +
-        // release it now so nothing submits into an output that's seconds away from disposal. The detach hops
-        // the session dispatcher (best-effort, fire-and-forget) but the runtime is only disposed "seconds
-        // away", so it completes first. Clones tied to this parent route through this handler in turn.
-        if (ShowSessionHotSwapActive)
-            _ = HotRemoveOutputFromShowSessionAsync(line);
     }
 
     /// <summary>

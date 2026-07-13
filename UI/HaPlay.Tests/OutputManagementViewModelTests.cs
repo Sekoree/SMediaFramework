@@ -7,6 +7,38 @@ namespace HaPlay.Tests;
 
 public sealed class OutputManagementViewModelTests
 {
+    [Fact]
+    public async Task PrepareForDefinitionsReplacementAsync_AwaitsDetachBeforeDefinitionsCanBeReplaced()
+    {
+        var vm = new OutputManagementViewModel();
+        var lineId = Guid.NewGuid();
+        vm.ReplaceDefinitionsForLoad(
+        [
+            new LocalVideoOutputDefinition(
+                lineId, "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
+                ScreenIndex: 0, WindowWidth: 1280, WindowHeight: 720),
+        ]);
+        var detachEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDetach = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.OutputLineReconfiguringAsync += async line =>
+        {
+            Assert.Equal(lineId, line.Definition.Id);
+            detachEntered.SetResult();
+            await allowDetach.Task;
+        };
+
+        var prepare = vm.PrepareForDefinitionsReplacementAsync();
+        await detachEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(prepare.IsCompleted);
+        Assert.Single(vm.Outputs);
+
+        allowDetach.SetResult();
+        await prepare.WaitAsync(TimeSpan.FromSeconds(2));
+        vm.ReplaceDefinitionsForLoad([]);
+
+        Assert.Empty(vm.Outputs);
+    }
+
     /// <summary>Phase E (§8.1) - the sparkline ring on <see cref="OutputLineViewModel"/> stores
     /// per-tick deltas. Three ticks of growing cumulative counters must produce three positive
     /// samples whose peak matches the largest delta.</summary>

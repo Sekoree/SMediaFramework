@@ -73,6 +73,24 @@ public class GlCompositorOrientationTests
             new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(60, 1)), buf, stride, release: null);
     }
 
+    private static VideoFrame CoordinateGradientBgra(int w, int h)
+    {
+        var stride = w * 4;
+        var buf = new byte[stride * h];
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+        {
+            var o = y * stride + x * 4;
+            buf[o] = (byte)(255 * y / Math.Max(1, h - 1));
+            buf[o + 1] = 0;
+            buf[o + 2] = (byte)(255 * x / Math.Max(1, w - 1));
+            buf[o + 3] = 255;
+        }
+
+        return new VideoFrame(TimeSpan.Zero,
+            new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(60, 1)), buf, stride, release: null);
+    }
+
     private static (byte B, byte G, byte R) Sample(VideoFrame frame, double nx, double ny)
     {
         var x = Math.Clamp((int)(nx * frame.Format.Width), 0, frame.Format.Width - 1);
@@ -237,6 +255,15 @@ public class GlCompositorOrientationTests
         Assert.Equal(((byte)0, (byte)255, (byte)0), Sample(outFrame, 0.9, 0.2));
         Assert.Equal(((byte)255, (byte)0, (byte)0), Sample(outFrame, 0.2, 0.9));
         Assert.Equal(((byte)255, (byte)255, (byte)255), Sample(outFrame, 0.9, 0.9));
+
+        // Quadrants alone cannot distinguish a 2/3 crop from a full-frame scale because both cross the
+        // quadrant boundaries. A coordinate gradient proves the far edge samples around 2/3 of the canvas.
+        using var gradient = CoordinateGradientBgra(canvas.Width, canvas.Height);
+        var gradientLayer = new CompositorLayer(gradient, transform, 1f, BlendMode.SourceOver) { SourceCrop = crop };
+        using var gradientOutput = comp.Composite([gradientLayer], TimeSpan.Zero);
+        var farEdge = Sample(gradientOutput, 0.95, 0.95);
+        Assert.InRange(farEdge.R, (byte)145, (byte)180);
+        Assert.InRange(farEdge.B, (byte)145, (byte)180);
     }
 
     [Fact]
@@ -325,7 +352,7 @@ public class GlCompositorOrientationTests
         using var comp = new SDL3GLVideoCompositor(canvas);
         var (transform, crop) = PlacementResolver.Resolve(
             RectNormalized.Full, PlacementFit.Stretch, 0, 0, 0, 0, canvas, canvas);
-        using var srcFrame = QuadrantsBgra(canvas.Width, canvas.Height);
+        using var srcFrame = CoordinateGradientBgra(canvas.Width, canvas.Height);
         var layer = new CompositorLayer(srcFrame, transform, 1f, BlendMode.SourceOver) { SourceCrop = crop };
 
         // Initialize first, as the running ShowSession does before the layout dialog applies a live edit.
@@ -346,13 +373,16 @@ public class GlCompositorOrientationTests
         using (var sliced = comp.Composite([layer], TimeSpan.Zero))
         {
             Assert.Equal(output, sliced.Format);
-            Assert.Equal(((byte)255, (byte)255, (byte)255), Sample(sliced, 0.9, 0.9));
+            var farEdge = Sample(sliced, 0.95, 0.95);
+            Assert.InRange(farEdge.R, (byte)145, (byte)180);
+            Assert.InRange(farEdge.B, (byte)145, (byte)180);
         }
 
         comp.SetWarpPass(output, Resolve(canvas, 1, 1, output));
         using var full = comp.Composite([layer], TimeSpan.Zero);
         Assert.Equal(output, full.Format);
-        Assert.Equal(((byte)0, (byte)0, (byte)255), Sample(full, 0.25, 0.25));
-        Assert.Equal(((byte)255, (byte)255, (byte)255), Sample(full, 0.75, 0.75));
+        var fullFarEdge = Sample(full, 0.95, 0.95);
+        Assert.InRange(fullFarEdge.R, (byte)225, byte.MaxValue);
+        Assert.InRange(fullFarEdge.B, (byte)225, byte.MaxValue);
     }
 }

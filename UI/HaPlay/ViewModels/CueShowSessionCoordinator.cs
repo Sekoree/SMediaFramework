@@ -211,6 +211,8 @@ public sealed class CueShowSessionCoordinator
             // Cue output-line health comes from the session's composition throughput, so a cue-driven line's
             // health LED keeps working.
             OutputManagement.CueLineMetricsProbe = TryGetCueShowLineHealthMetrics;
+            OutputManagement.OutputLineReconfiguringAsync += OnOutputLineReconfiguringAsync;
+            OutputManagement.OutputLineReconfiguredAsync += OnOutputLineReconfiguredAsync;
 
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
             // them to the executors, so we fire by id (FireCueAsync) - independent of ShowSession's GO anchor.
@@ -851,6 +853,108 @@ public sealed class CueShowSessionCoordinator
         }
     }
 
+    /// <summary>Detaches a cue-held output before its backing runtime is reconfigured or destroyed. The output
+    /// manager awaits this callback, so no composition pump can submit into the old sink after teardown starts.</summary>
+    private Task OnOutputLineReconfiguringAsync(OutputLineViewModel line) =>
+        RunOnUiThreadAsync(() => DetachCueOutputLineAsync(line.Definition.Id));
+
+    /// <summary>Reacquires a hot-reconfigured output without rebuilding the show document or interrupting active
+    /// cues. Project restore uses <see cref="ReloadAfterOutputRestoreAsync"/> after all new runtimes have started.</summary>
+    private Task OnOutputLineReconfiguredAsync(OutputLineViewModel line) =>
+        RunOnUiThreadAsync(() => AttachCueOutputLineAsync(line.Definition.Id));
+
+    private static async Task RunOnUiThreadAsync(Func<Task> action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            await action().ConfigureAwait(true);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(action);
+    }
+
+    private async Task DetachCueOutputLineAsync(Guid lineId)
+    {
+        if (_cueShowSession is not { } session || !_cueAcquiredVideoLines.Contains(lineId))
+            return;
+
+        foreach (var (compositionId, outputs) in _cueVideoOutputs.ToArray())
+        {
+            if (!outputs.Any(output => output.LineId == lineId))
+                continue;
+            await session.RemoveCompositionOutputAsync(compositionId, lineId.ToString("N"))
+                .ConfigureAwait(true);
+
+            var remaining = outputs.Where(output => output.LineId != lineId).ToArray();
+            if (remaining.Length == 0)
+                _cueVideoOutputs.Remove(compositionId);
+            else
+                _cueVideoOutputs[compositionId] = remaining;
+        }
+
+        OutputManagement.ReleaseVideoOutputForLine(lineId);
+        _cueAcquiredVideoLines.Remove(lineId);
+        Trace.LogInformation("HaPlay: cue output detached before runtime teardown - line={Line}", lineId);
+    }
+
+    private async Task AttachCueOutputLineAsync(Guid lineId)
+    {
+        if (_cueShowSession is not { } session || _cueAcquiredVideoLines.Contains(lineId))
+            return;
+        var model = CuePlayer.SelectedCueList?.ToModel();
+        var binding = model?.VideoOutputs.FirstOrDefault(candidate => candidate.OutputLineId == lineId);
+        if (model is null || binding is null)
+            return;
+
+        var output = OutputManagement.AcquireVideoOutputForLine(lineId);
+        if (output is null)
+        {
+            Trace.LogWarning("HaPlay: cue output could not be reacquired after runtime reconfigure - line={Line}", lineId);
+            return;
+        }
+
+        var effectiveMappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(
+            model, OutputManagement.DefinitionsSnapshot);
+        var mapping = effectiveMappings.GetValueOrDefault(binding.Id);
+        var compositionId = binding.CompositionId.ToString();
+        var lease = new ClipCompositionOutputLease(
+            lineId.ToString("N"),
+            OutputManagement.DefinitionsSnapshot.FirstOrDefault(definition => definition.Id == lineId)?.DisplayName
+                ?? lineId.ToString("N"),
+            output,
+            DisposeOutputOnRuntimeDispose: false,
+            Mapping: HaPlayShowMapper.ToClipOutputMapping(mapping));
+
+        if (!await session.AddCompositionOutputAsync(compositionId, lease).ConfigureAwait(true))
+        {
+            OutputManagement.ReleaseVideoOutputForLine(lineId);
+            Trace.LogWarning(
+                "HaPlay: cue output reattach missed composition {Composition} after runtime reconfigure - line={Line}",
+                compositionId, lineId);
+            return;
+        }
+
+        _cueAcquiredVideoLines.Add(lineId);
+        var attached = new CueShowVideoOutput(lineId, output, mapping);
+        _cueVideoOutputs[compositionId] = _cueVideoOutputs.TryGetValue(compositionId, out var existing)
+            ? [.. existing, attached]
+            : [attached];
+        Trace.LogInformation(
+            "HaPlay: cue output reattached after runtime reconfigure - composition={Composition} line={Line}",
+            compositionId, lineId);
+    }
+
+    /// <summary>Forces a document/output-lease rebuild after project restore has created all output runtimes.</summary>
+    public Task ReloadAfterOutputRestoreAsync() => RunOnUiThreadAsync(async () =>
+    {
+        _cueShowGraphDirty = true;
+        _cueReloadDebounce?.Stop();
+        await ReloadCueShowSessionAsync().ConfigureAwait(true);
+        if (_cueShowGraphDirty)
+            throw new InvalidOperationException("The cue session could not attach the restored output runtimes.");
+    });
+
     /// <summary>Preserves the cue graph's actual failure message when its policy returns a Failed status
     /// instead of throwing. Without this lookup the UI and console only said "not ready (Failed)", hiding
     /// device/open errors that explain an immediate cue termination.</summary>
@@ -1200,6 +1304,10 @@ public sealed class CueShowSessionCoordinator
     public Task StopAllVoicesAsync() =>
         _cueShowSession is { } session ? session.StopAllVoicesAsync() : Task.CompletedTask;
 
+    /// <summary>Stops active cue clips before a full project replacement changes their document and outputs.</summary>
+    public Task StopAllPlaybackAsync() =>
+        _cueShowSession is { } session ? session.StopAllAsync() : Task.CompletedTask;
+
     /// <summary>Best-effort shutdown teardown of the cue re-back (no-op when unavailable): release its video
     /// leases (UI thread) and dispose the headless <see cref="ShowSession"/>. The session disposes on its own
     /// dispatcher (no Avalonia marshalling), so the bounded block here can't deadlock the UI thread. Players are
@@ -1210,6 +1318,8 @@ public sealed class CueShowSessionCoordinator
             return;
         try
         {
+            OutputManagement.OutputLineReconfiguringAsync -= OnOutputLineReconfiguringAsync;
+            OutputManagement.OutputLineReconfiguredAsync -= OnOutputLineReconfiguredAsync;
             foreach (var held in _cueAcquiredVideoLines)
                 OutputManagement.ReleaseVideoOutputForLine(held);
             _cueAcquiredVideoLines.Clear();

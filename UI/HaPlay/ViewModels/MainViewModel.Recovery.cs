@@ -114,6 +114,7 @@ public partial class MainViewModel
             }
         }
 
+        var outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
         ApplyProjectSnapshot(project);
         CurrentProjectPath = targetPath;
 
@@ -140,6 +141,8 @@ public partial class MainViewModel
 
         _ = RefreshCuePreRollAsync();
         var outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync();
+        if (outputsReplaced)
+            await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
         CuePlayer.RefreshBrokenEndpointFlags();
         await PromptRebindMissingActionEndpointsAsync();
         _ = RefreshAllEndpointHealthAsync();

@@ -13,6 +13,42 @@ namespace S.Media.Visualizer.ProjectM.Tests;
 public sealed class ContinuousRendererSmokeTests
 {
     [Fact]
+    public void Dispose_DoesNotWaitForBlockedNativeRenderThread()
+    {
+        if (!ProjectMRuntime.IsAvailable)
+            return;
+
+        var previous = ProjectMVisualSource.OffscreenGlContextFactory;
+        using var enteredFactory = new ManualResetEventSlim();
+        using var releaseFactory = new ManualResetEventSlim();
+        ProjectMVisualSource? source = null;
+        try
+        {
+            ProjectMVisualSource.OffscreenGlContextFactory = () =>
+            {
+                enteredFactory.Set();
+                releaseFactory.Wait();
+                return null;
+            };
+            source = new ProjectMVisualSource(64, 64, new Rational(30, 1));
+            Assert.True(enteredFactory.Wait(TimeSpan.FromSeconds(2)));
+
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            source.Dispose();
+            started.Stop();
+
+            Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250),
+                $"Dispose blocked for {started.Elapsed.TotalMilliseconds:0} ms");
+        }
+        finally
+        {
+            releaseFactory.Set();
+            source?.Dispose();
+            ProjectMVisualSource.OffscreenGlContextFactory = previous;
+        }
+    }
+
+    [Fact]
     public void ContinuousSource_RendersFramesWithoutAnyComposition_AndSurvivesSurfaceChurn()
     {
         if (!ProjectMRuntime.IsAvailable)

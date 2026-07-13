@@ -148,15 +148,9 @@ public partial class MediaPlayerViewModel
 
     partial void OnVisualizerEnabledChanged(bool value)
     {
-        if (!value)
-        {
-            // The deck owns the persistent source (disposeSourceOnRemove: false at attach) - VIZ-off is
-            // the "restart boundary": stop the continuous renderer here. The apply below detaches the
-            // session side (which won't double-dispose).
-            _visualizerSource?.Dispose();
-            _visualizerSource = null;
-        }
-
+        _ = value;
+        // Attach/detach and source disposal are serialized by _visualizerApplyGate. Disposing here used to
+        // race an in-flight enable and synchronously joined the native renderer on the Avalonia dispatcher.
         _ = ApplyShowSessionVisualizerAsync();
     }
 
@@ -192,11 +186,38 @@ public partial class MediaPlayerViewModel
     /// log line (no crash when a preset dir is bogus or the compositor fell back to CPU).</summary>
     // Serializes visualizer applies: a rapid toggle / preset-change / resolution-change (or a
     // reopen's re-apply racing a manual toggle) must not stack overlapping reopens or attach twice.
+    private readonly SemaphoreSlim _visualizerReconcileGate = new(1, 1);
     private readonly SemaphoreSlim _visualizerApplyGate = new(1, 1);
 
     internal async Task ApplyShowSessionVisualizerAsync()
     {
-        if (_playerShowSession is null)
+        if (Volatile.Read(ref _disposeStarted) != 0 || _playerShowSession is null)
+            return;
+
+        await _visualizerReconcileGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (Volatile.Read(ref _disposeStarted) != 0 || _playerShowSession is null)
+                return;
+
+            // Never hold _visualizerApplyGate while reopening: OpenOrReload owns _playbackArc and its completion
+            // re-attaches the visualizer. The former visualizer-gate -> playback-arc order inverted the normal
+            // track-open playback-arc -> visualizer-gate order and could deadlock both operations permanently.
+            // Re-check after every reopen so a toggle/settings change made during that async rebuild wins.
+            while (VisualizerCanvasNeedsReopen())
+                await ReopenInPlacePreservingPositionAsync().ConfigureAwait(true);
+
+            await ApplyShowSessionVisualizerUnderGateAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _visualizerReconcileGate.Release();
+        }
+    }
+
+    private async Task ApplyShowSessionVisualizerUnderGateAsync()
+    {
+        if (Volatile.Read(ref _disposeStarted) != 0 || _playerShowSession is null)
             return;
         await _visualizerApplyGate.WaitAsync().ConfigureAwait(true);
         try
@@ -218,17 +239,10 @@ public partial class MediaPlayerViewModel
             if (!VisualizerEnabled)
             {
                 ClearVisualizerWarning();
-                // If the visualizer owned the canvas (a video/cover-art base layer was swapped out, or a
-                // pure viz canvas on audio), reopen in place so the native content returns now that VIZ is
-                // off. Otherwise just detach the surface.
-                if (ShowSessionActive && IsMediaLoaded && !IsLiveSource && _playerShowVizOwnsCanvas)
-                {
-                    await ReopenInPlacePreservingPositionAsync().ConfigureAwait(true);
-                    return;
-                }
-
                 await session.SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, null)
                     .ConfigureAwait(true);
+                _visualizerSource?.Dispose();
+                _visualizerSource = null;
                 return;
             }
 
@@ -238,21 +252,6 @@ public partial class MediaPlayerViewModel
                 SetVisualizerWarning($"Visualizer unavailable: {RuntimeModules.ProjectMUnavailableReason}");
                 VisualizerEnabled = false;
                 return;
-            }
-
-            // Mid-play enable: if the current open isn't already visualizer-owned (plain audio with no
-            // canvas, cover art, OR real video), reopen the item IN PLACE (position + play state preserved)
-            // so the open path builds the fixed viz canvas with the base video layer swapped out; its
-            // completion re-enters here and attaches the surface normally.
-            if (ShowSessionActive && IsMediaLoaded && !IsLiveSource && !_playerShowVizOwnsCanvas)
-            {
-                const string rebuilding = "Visualizer: rebuilding the canvas…";
-                SetVisualizerWarning(rebuilding);
-                await ReopenInPlacePreservingPositionAsync().ConfigureAwait(true);
-                // Clear only OUR banner - the reopen's completion may have posted its own (idle preset hint).
-                if (StatusMessage == rebuilding)
-                    StatusMessage = null;
-                return; // the reopen completion applied the visualizer on the fresh canvas
             }
 
             var presetDir = VisualizerPresetDirectory;
@@ -276,6 +275,8 @@ public partial class MediaPlayerViewModel
                     || running.Options.Fps != renderFps
                     || !string.Equals(running.Options.PresetDirectory, presetDir, StringComparison.Ordinal)))
             {
+                await session.SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, null)
+                    .ConfigureAwait(true);
                 running.Dispose();
                 _visualizerSource = null;
             }
@@ -322,6 +323,25 @@ public partial class MediaPlayerViewModel
             ShowLog.LogWarning(ex, "visualizer apply failed");
             SetVisualizerWarning($"Visualizer failed: {ex.Message}");
         }
+    }
+
+    private bool VisualizerCanvasNeedsReopen()
+    {
+        if (!ShowSessionActive || !IsMediaLoaded || IsLiveSource)
+            return false;
+
+        // Only file/YouTube playback can swap its base video for the fixed visualizer canvas. MMD and
+        // live-input pipelines keep their native canvas and must not enter an endless reopen cycle.
+        var canOwnCanvas = _currentPlaylistItem is FilePlaylistItem or YouTubePlaylistItem
+                           || (_currentPlaylistItem is null && !string.IsNullOrWhiteSpace(MediaFilePath));
+        var wantsVisualizerCanvas = canOwnCanvas && VisualizerEnabled && IsVisualizerAvailable;
+        if (wantsVisualizerCanvas != _playerShowVizOwnsCanvas)
+            return true;
+        if (!wantsVisualizerCanvas)
+            return false;
+
+        var (width, height, fps) = ResolveVisualizerRenderSize();
+        return _playerShowCanvas != (width, height) || _playerShowCanvasFrameRate != (fps, 1);
     }
 
     /// <summary>Reopens the current item in place, preserving the play position. Used by the VIZ toggle
@@ -375,6 +395,7 @@ public partial class MediaPlayerViewModel
     // The current show's composition canvas size (set at open) - the HOLD image renders at this size so the
     // top layer covers the canvas exactly.
     private (int Width, int Height) _playerShowCanvas = (1920, 1080);
+    private (int Num, int Den) _playerShowCanvasFrameRate = (30, 1);
     // Whether the current source opened with a video composition (the file probe / live stream selection at
     // open) - drives the SourceKindLabel readout.
     private bool _playerShowHasVideo;
@@ -650,6 +671,7 @@ public partial class MediaPlayerViewModel
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
 
             _playerShowCanvas = canvas; // the HOLD top-layer renders at this canvas size
+            _playerShowCanvasFrameRate = canvasFps;
             _playerShowHasVideo = hasVideo;
             _playerShowVizOwnsCanvas = vizOwnsCanvasResult;
 
@@ -691,12 +713,12 @@ public partial class MediaPlayerViewModel
             // source gives the fresh composition a blit surface that picks the stream up mid-flow, so the
             // visuals are continuous across the track change. The session query guards against
             // double-attach in case a future path ever carries the slot over.
-            if (VisualizerEnabled)
+            if (VisualizerEnabled || _visualizerSource is not null)
             {
                 var alreadyAttached = await _playerShowSession
                     .HasCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId).ConfigureAwait(true);
-                if (!alreadyAttached)
-                    await ApplyShowSessionVisualizerAsync().ConfigureAwait(true);
+                if (!alreadyAttached || !VisualizerEnabled)
+                    await ApplyShowSessionVisualizerUnderGateAsync().ConfigureAwait(true);
             }
 
             ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
