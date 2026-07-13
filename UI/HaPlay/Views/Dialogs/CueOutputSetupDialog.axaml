@@ -29,7 +29,7 @@
                    SelectedItem="{Binding SelectedComposition, Mode=TwoWay}">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:CueCompositionViewModel">
-                <Grid ColumnDefinitions="*,Auto,120,Auto,120,Auto,110,Auto,Auto,Auto"
+                <Grid ColumnDefinitions="*,Auto,120,Auto,120,Auto,110,Auto,Auto"
                       ColumnSpacing="8"
                       Margin="0,3">
                   <TextBox Grid.Column="0" Text="{Binding Name, Mode=TwoWay}" MinWidth="180" />
@@ -45,10 +45,6 @@
                   <Button Grid.Column="8" Content="FX…"
                           ToolTip.Tip="Split or mesh-warp this composition before it is sent to outputs."
                           Click="CompositionFxClick" />
-                  <CheckBox Grid.Column="9" Content="VIZ"
-                            IsChecked="{Binding VisualizerEnabled, Mode=TwoWay}"
-                            IsEnabled="{Binding $parent[Window].((vm:CuePlayerViewModel)DataContext).IsProjectMAvailable}"
-                            ToolTip.Tip="Run a continuous projectM audio visualizer on this composition. It fires once and keeps running while cues play - each fired cue's audio feeds it. Requires the projectM native library." />
                 </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>

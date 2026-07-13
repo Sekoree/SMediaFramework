@@ -173,6 +173,11 @@ public sealed class LiveStreamSession : IDisposable
                     PushProtocol.Rtsp => UrlEncodeTarget.Rtsp(url),
                     _ => throw new ArgumentOutOfRangeException(nameof(options), $"unknown protocol {push.Protocol}"),
                 };
+                // Redacted display name (review H9): sink names flow into metrics, warnings, and
+                // exceptions - never with the folded stream key. The operator-entered URL is shown as-is
+                // (a key they typed INTO the URL is their choice; the key FIELD stays out of logs).
+                if (!string.IsNullOrWhiteSpace(push.StreamKey))
+                    target = target with { DisplayName = $"{push.Url} (+key)" };
                 var container = push.Protocol == PushProtocol.Rtmp ? EncodeContainer.Flv : EncodeContainer.MpegTs;
                 sinks.Add(new AsyncPacketSink(new MuxPacketSink(target, container)));
             }

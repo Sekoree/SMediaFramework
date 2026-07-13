@@ -15,15 +15,16 @@ public partial class VisualizerSettingsDialog : Window
     {
         InitializeComponent();
         DialogStatePersister.Attach(this, nameof(VisualizerSettingsDialog), MinWidth, MinHeight);
+        // Persist direct numeric edits on ANY close, including the title-bar X (review H5: only the
+        // Close button used to persist them). Idempotent when the button already ran.
+        Closing += (_, _) =>
+        {
+            if (DataContext is MediaPlayerViewModel vm)
+                vm.SetVisualizerResolution(vm.VisualizerWidth, vm.VisualizerHeight, vm.VisualizerFps);
+        };
     }
 
-    private void CloseClick(object? sender, RoutedEventArgs e)
-    {
-        // Persist whatever's in the numeric fields (the buttons persist immediately; direct edits on close).
-        if (DataContext is MediaPlayerViewModel vm)
-            vm.SetVisualizerResolution(vm.VisualizerWidth, vm.VisualizerHeight, vm.VisualizerFps);
-        Close();
-    }
+    private void CloseClick(object? sender, RoutedEventArgs e) => Close(); // Closing handler persists
 
     private async void BrowseFolderClick(object? sender, RoutedEventArgs e)
     {
@@ -42,7 +43,9 @@ public partial class VisualizerSettingsDialog : Window
             vm.SetVisualizerPresetDirectory(path);
     }
 
-    private void MatchOutputClick(object? sender, RoutedEventArgs e) => Apply(0, 0, 0);
+    // The default preset writes the REAL values (review H5: the old 0-sentinel was shown as "Match
+    // output" while actually resolving to fixed 1080p60 - the label lied).
+    private void MatchOutputClick(object? sender, RoutedEventArgs e) => Apply(1920, 1080, 60);
     private void Preset720Click(object? sender, RoutedEventArgs e) => Apply(1280, 720, 60);
     private void Preset1080Click(object? sender, RoutedEventArgs e) => Apply(1920, 1080, 60);
     private void Preset1440Click(object? sender, RoutedEventArgs e) => Apply(2560, 1440, 60);

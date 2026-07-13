@@ -135,13 +135,16 @@ internal static class FfmpegEncodeMaps
         switch (codec)
         {
             case EncodeVideoCodec.ProRes422:
-                if (input is PixelFormat.Yuv422P10Le or PixelFormat.Yuv422P12Le or PixelFormat.Yuv422P)
-                    return input;
+                // prores_ks accepts ONLY 10-bit (yuv422p10le / yuv444p10le / yuva444p10le); an 8- or
+                // 12-bit format fails avcodec_open2 (review H8, verified against FFmpeg 8.1.2).
                 return PixelFormat.Yuv422P10Le;
 
             case EncodeVideoCodec.ProRes4444:
-                // 4444 keeps alpha: 12-bit alpha source stays, else 10-bit 4:4:4 (no alpha).
-                return input is PixelFormat.Yuva444P12Le ? PixelFormat.Yuva444P12Le : PixelFormat.Yuv444P12Le;
+                // 4444 keeps alpha when the source carries it; 10-bit is the encoder's only depth.
+                return input is PixelFormat.Yuva444P12Le or PixelFormat.Yuva444P10Le
+                    or PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Abgr32
+                    ? PixelFormat.Yuva444P10Le
+                    : PixelFormat.Yuv444P10Le;
 
             case EncodeVideoCodec.DnxHr:
                 // dnxhr_hqx = 10-bit 4:2:2; dnxhr_hq = 8-bit 4:2:2 (profile set in private options).

@@ -32,6 +32,16 @@ public partial class CuePlayerViewModel
         var result = await dialog.ShowDialog<Dialogs.RenameCueDialogResult?>(owner);
         if (result is null) return;
 
+        // Unique cue numbers (#27): number-based references (jump targets) need unambiguous numbers,
+        // so a rename that would duplicate an existing number anywhere in the list is rejected.
+        if (!string.IsNullOrWhiteSpace(result.Number)
+            && EnumerateAllCueNodes().Any(c => !ReferenceEquals(c, SelectedCueNode)
+                && string.Equals(c.Number?.Trim(), result.Number.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            StatusMessage = Strings.Format(nameof(Strings.CueNumberDuplicateFormat), result.Number.Trim());
+            return;
+        }
+
         var oldDisplay = CueDisplay(SelectedCueNode);
         SelectedCueNode.Number = result.Number;
         SelectedCueNode.Label = result.Label;

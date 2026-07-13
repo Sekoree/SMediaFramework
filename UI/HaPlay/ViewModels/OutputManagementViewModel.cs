@@ -121,13 +121,17 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// with the owning line's persisted audio effects. Thread-safe (reads the definitions snapshot);
     /// returns the inner unchanged when the line has no audio effects. The wrapper owns the effect
     /// instances and is disposal-transparent for the inner sink.</summary>
-    internal IAudioOutput WrapAudioEffectsForLine(Guid lineId, IAudioOutput inner)
+    /// <summary>Wraps <paramref name="inner"/> in the line's configured audio-effect chain (no-op when the
+    /// line has none). Uses the capability-preserving <c>Wrap</c> so a hardware sink behind effects still
+    /// exposes its clock/stats to the router (review H3). <paramref name="disposeInner"/> hands terminal
+    /// ownership to the wrapper (session-owned device) or keeps the inner borrowed (review H4).</summary>
+    internal IAudioOutput WrapAudioEffectsForLine(Guid lineId, IAudioOutput inner, bool disposeInner = false)
     {
         var definition = DefinitionsSnapshot.FirstOrDefault(d => d.Id == lineId);
         if (definition is null)
             return inner;
         var effects = BuildAudioEffects(definition);
-        return effects.Count == 0 ? inner : new S.Media.Routing.AudioEffectOutput(inner, effects);
+        return effects.Count == 0 ? inner : S.Media.Routing.AudioEffectOutput.Wrap(inner, effects, disposeInner);
     }
 
     /// <summary>Releases a video output acquired via <see cref="AcquireVideoOutputForLine"/> (single-holder, so

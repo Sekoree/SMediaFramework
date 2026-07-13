@@ -324,6 +324,60 @@ static const MfpLayerSurfaceFactoryVTable g_ls_factory_vt = {
     .create = ls_create, .surface_vtable = &g_ls_vt, .destroy = ls_factory_destroy
 };
 
+/* --- audio effect: a fixed 0.5x gain, configured channels recorded for the test ------------------ */
+static uint32_t g_fx_channels = 0;
+static int fx_configure(void* effect, const MfpAudioFormat* format) {
+    (void)effect;
+    g_fx_channels = format->channels;
+    return MFP_OK;
+}
+static int fx_process(void* effect, float* interleaved, int32_t count, int64_t frame_position) {
+    (void)effect; (void)frame_position;
+    for (int32_t i = 0; i < count; i++) interleaved[i] *= 0.5f;
+    return MFP_OK;
+}
+static void fx_destroy(void* effect) { (void)effect; }
+static const MfpAudioEffectVTable g_fx_vt = {
+    MFP_VTABLE(MfpAudioEffectVTable),
+    .configure = fx_configure, .process = fx_process, .destroy = fx_destroy
+};
+static void* fx_create(void* self, const char* config_json) {
+    (void)self; (void)config_json;
+    return (void*)&g_fx_vt; /* non-null instance handle */
+}
+static void fx_factory_destroy(void* self) { (void)self; g_capability_destroy_count++; }
+static const MfpAudioEffectFactoryVTable g_fx_factory_vt = {
+    MFP_VTABLE(MfpAudioEffectFactoryVTable),
+    .create = fx_create, .effect_vtable = &g_fx_vt, .destroy = fx_factory_destroy
+};
+
+/* --- video effect: inverts every CPU byte in place (asserted exactly by the host test) ---------- */
+static int vfx_configure(void* effect, const MfpVideoFormat* format) { (void)effect; (void)format; return MFP_OK; }
+static int vfx_process(void* effect, const MfpVideoFrame* frame, int64_t pts_ticks) {
+    (void)effect; (void)pts_ticks;
+    if (frame->kind != MFP_FRAME_CPU) return MFP_ERR_UNSUPPORTED;
+    for (int p = 0; p < frame->u.cpu.plane_count && p < 4; p++) {
+        unsigned char* plane = (unsigned char*)frame->u.cpu.planes[p];
+        if (!plane) continue;
+        int rows = (int)frame->height; /* full-height planes only in this test (BGRA) */
+        for (int y = 0; y < rows; y++)
+            for (int x = 0; x < frame->u.cpu.strides[p]; x++)
+                plane[y * frame->u.cpu.strides[p] + x] = (unsigned char)(255 - plane[y * frame->u.cpu.strides[p] + x]);
+    }
+    return MFP_OK;
+}
+static void vfx_destroy(void* effect) { (void)effect; }
+static const MfpVideoEffectVTable g_vfx_vt = {
+    MFP_VTABLE(MfpVideoEffectVTable),
+    .configure = vfx_configure, .process = vfx_process, .destroy = vfx_destroy
+};
+static void* vfx_create(void* self, const char* config_json) { (void)self; (void)config_json; return (void*)&g_vfx_vt; }
+static void vfx_factory_destroy(void* self) { (void)self; g_capability_destroy_count++; }
+static const MfpVideoEffectFactoryVTable g_vfx_factory_vt = {
+    MFP_VTABLE(MfpVideoEffectFactoryVTable),
+    .create = vfx_create, .effect_vtable = &g_vfx_vt, .destroy = vfx_factory_destroy
+};
+
 int mfp_plugin_register(const MfpHostApi* host, MfpPluginInfo* out_info, MfpRegistrar* reg) {
     if (MFP_ABI_VERSION_MAJOR(host->abi_version) != MFP_ABI_VERSION_MAJOR(MFP_PLUGIN_ABI_VERSION)
         || host->struct_size < sizeof(MfpHostApi)
@@ -336,14 +390,16 @@ int mfp_plugin_register(const MfpHostApi* host, MfpPluginInfo* out_info, MfpRegi
     out_info->id           = "com.example.testplugin";
     out_info->display_name = "Test Plugin";
     out_info->capabilities = MFP_CAP_VIDEO_SOURCE | MFP_CAP_AUDIO_SOURCE | MFP_CAP_CONTROL_DECODER | MFP_CAP_AUDIO_BACKEND
-                           | MFP_CAP_VIDEO_OUTPUT | MFP_CAP_SUBTITLE | MFP_CAP_LAYER_SURFACE;
+                           | MFP_CAP_VIDEO_OUTPUT | MFP_CAP_SUBTITLE | MFP_CAP_LAYER_SURFACE | MFP_CAP_AUDIO_EFFECT | MFP_CAP_VIDEO_EFFECT;
 
     if (reg->add_media_source_provider(reg->ctx, "testsrc", &g_provider_vt, (void*)&g_provider_vt) != MFP_OK
         || reg->add_control_decoder(reg->ctx, "test.decoder", &g_decoder_vt, (void*)&g_decoder_vt) != MFP_OK
         || reg->add_audio_backend(reg->ctx, "testaudio", &g_audio_vt, (void*)&g_audio_vt) != MFP_OK
         || reg->add_video_output(reg->ctx, "testvout", &g_vout_vt, (void*)&g_vout_vt) != MFP_OK
         || reg->add_subtitle_provider(reg->ctx, "testsub", &g_sub_provider_vt, (void*)&g_sub_provider_vt) != MFP_OK
-        || reg->add_layer_surface(reg->ctx, "testlayer", &g_ls_factory_vt, (void*)&g_ls_factory_vt) != MFP_OK) {
+        || reg->add_layer_surface(reg->ctx, "testlayer", &g_ls_factory_vt, (void*)&g_ls_factory_vt) != MFP_OK
+        || reg->add_audio_effect(reg->ctx, "test.gain", &g_fx_factory_vt, (void*)&g_fx_factory_vt) != MFP_OK
+        || reg->add_video_effect(reg->ctx, "test.invert", &g_vfx_factory_vt, (void*)&g_vfx_factory_vt) != MFP_OK) {
         if (host->set_last_error) host->set_last_error("capability registration failed");
         return MFP_ERR_ABI_MISMATCH;
     }
@@ -352,7 +408,7 @@ int mfp_plugin_register(const MfpHostApi* host, MfpPluginInfo* out_info, MfpRegi
 
 void mfp_plugin_unregister(void) {
     if (g_host && g_host->log)
-        g_host->log(MFP_LOG_INFO, g_capability_destroy_count == 6 ? "unregister:ok" : "unregister:destroy-missing");
+        g_host->log(MFP_LOG_INFO, g_capability_destroy_count == 8 ? "unregister:ok" : "unregister:destroy-missing");
     if (g_dmabuf_fd >= 0) { close(g_dmabuf_fd); g_dmabuf_fd = -1; }
     g_host = 0;
 }

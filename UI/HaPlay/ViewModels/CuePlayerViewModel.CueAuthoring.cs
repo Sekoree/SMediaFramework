@@ -495,6 +495,79 @@ public partial class CuePlayerViewModel
         StatusMessage = null;
     }
 
+    /// <summary>Adds a Jump (control-flow) cue after the selection. When a cue is selected it becomes
+    /// the jump's initial target - the natural "loop back to this" gesture: select the section start,
+    /// add a jump at the end, set the jump's trigger to auto-follow/continue, and the section loops.
+    /// Targets are stable cue IDs, so renumbering/auto-reorder never retargets the jump.</summary>
+    [RelayCommand]
+    private void AddJumpCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var target = SelectedCueNode is { } sel && sel.Kind != CueNodeKind.Comment ? sel : null;
+        var row = new CueNodeViewModel(CueNodeKind.Jump)
+        {
+            Number = NextNumber(parent),
+            Label = target is null
+                ? Strings.CueKindJumpLabel
+                : $"{Strings.CueKindJumpLabel} → {(string.IsNullOrWhiteSpace(target.Number) ? target.Label : target.Number)}",
+            Extra = "Always",
+            SourceOrAction = "fire",
+        };
+        if (target is not null)
+            row.JumpTargetIds.Add(target.Id);
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
+    /// <summary>With a Jump cue selected earlier and any other cue selected NOW: adds the current
+    /// selection to the most recently selected jump's target pool (multi-target/random authoring).</summary>
+    [RelayCommand]
+    private void AddSelectedCueAsJumpTarget()
+    {
+        if (SelectedCueNode is not { } target || target.Kind is CueNodeKind.Group or CueNodeKind.Jump)
+            return;
+        var jump = EnumerateAllCueNodes().LastOrDefault(c => c.Kind == CueNodeKind.Jump);
+        if (jump is null || jump.JumpTargetIds.Contains(target.Id))
+            return;
+        jump.JumpTargetIds.Add(target.Id);
+        StatusMessage = Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{jump.Label}: +{CueDisplay(target)}");
+    }
+
+    /// <summary>Adds a Visualizer cue (#26): fire = start (or stop) the projectM layer on a chosen
+    /// composition at a configurable section of the frame. Defaults to the selected composition
+    /// full-canvas; edit placement in the drawer.</summary>
+    [RelayCommand]
+    private void AddVisualizerCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var row = new CueNodeViewModel(CueNodeKind.Visualizer)
+        {
+            Number = NextNumber(parent),
+            Label = Strings.CueKindVisualizerLabel,
+            Extra = "Start",
+            VisualizerRenderWidth = 1920,
+            VisualizerRenderHeight = 1080,
+            VisualizerRenderFps = 60,
+        };
+        // Seed a full-canvas placement on the selected (or first) composition - edit it on the Video tab
+        // exactly like a media cue's placement (#26 v3).
+        var seedComp = SelectedComposition?.Id ?? SelectedCueList?.Compositions.FirstOrDefault()?.Id;
+        if (seedComp is { } compId && compId != Guid.Empty)
+            row.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement { CompositionId = compId }));
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
     [RelayCommand]
     private void AddCommentCue()
     {

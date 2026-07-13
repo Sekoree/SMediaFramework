@@ -462,6 +462,7 @@ public static class Strings
     public static string NowPlayingCancelTooltip => Get(nameof(NowPlayingCancelTooltip));
     public static string StopAllNowPlayingButton => Get(nameof(StopAllNowPlayingButton));
     public static string UpcomingCuesHeader => Get(nameof(UpcomingCuesHeader));
+    public static string NowPlayingStartsInFormat => Get(nameof(NowPlayingStartsInFormat));
     public static string CloseButton => Get(nameof(CloseButton));
     public static string SkipButton => Get(nameof(SkipButton));
     public static string TargetConfigurationTitle => Get(nameof(TargetConfigurationTitle));
@@ -926,6 +927,17 @@ public static class Strings
     public static string CueKindMediaLabel => Get(nameof(CueKindMediaLabel));
     public static string CueKindActionLabel => Get(nameof(CueKindActionLabel));
     public static string CueKindCommentLabel => Get(nameof(CueKindCommentLabel));
+    public static string CueKindJumpLabel => Get(nameof(CueKindJumpLabel));
+    public static string CueKindVisualizerLabel => Get(nameof(CueKindVisualizerLabel));
+    public static string AddVisualizerCueButton => Get(nameof(AddVisualizerCueButton));
+    public static string CueJumpNoTargets => Get(nameof(CueJumpNoTargets));
+    public static string CueJumpTargetMissing => Get(nameof(CueJumpTargetMissing));
+    public static string CueNumberDuplicateFormat => Get(nameof(CueNumberDuplicateFormat));
+    public static string CueJumpUnknownNumbersFormat => Get(nameof(CueJumpUnknownNumbersFormat));
+    public static string CueJumpTargetsLabel => Get(nameof(CueJumpTargetsLabel));
+    public static string CueJumpRandomLabel => Get(nameof(CueJumpRandomLabel));
+    public static string CueJumpFireLabel => Get(nameof(CueJumpFireLabel));
+    public static string AddJumpCueButton => Get(nameof(AddJumpCueButton));
     public static string CueKindDefaultLabel => Get(nameof(CueKindDefaultLabel));
     public static string CueRouteCountFormat => Get(nameof(CueRouteCountFormat));
     public static string CueVirtualOutputListFormat => Get(nameof(CueVirtualOutputListFormat));

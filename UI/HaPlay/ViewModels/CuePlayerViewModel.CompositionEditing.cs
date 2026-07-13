@@ -354,15 +354,15 @@ public partial class CuePlayerViewModel
         SuggestPreRollRefresh();
     }
 
-    private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media };
+    private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer };
 
     /// <summary>Media cues in the current multi-selection. Falls back to the singular
     /// <see cref="SelectedCueNode"/> when only one row is selected (the common case).</summary>
     private List<CueNodeViewModel> MediaCuesInSelection()
     {
         if (_selectedCueNodes.Count > 1)
-            return _selectedCueNodes.Where(n => n.Kind == CueNodeKind.Media).ToList();
-        return SelectedCueNode is { Kind: CueNodeKind.Media } single
+            return _selectedCueNodes.Where(n => n.Kind is CueNodeKind.Media or CueNodeKind.Visualizer).ToList();
+        return SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } single
             ? new List<CueNodeViewModel> { single }
             : new List<CueNodeViewModel>();
     }
@@ -370,7 +370,7 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanRemoveVideoPlacement))]
     private void RemoveVideoPlacement()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedVideoPlacement is null) return;
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } media || SelectedVideoPlacement is null) return;
         if (media.VideoPlacements.Remove(SelectedVideoPlacement))
         {
             SelectedVideoPlacement = media.VideoPlacements.FirstOrDefault();
@@ -380,7 +380,7 @@ public partial class CuePlayerViewModel
     }
 
     private bool CanRemoveVideoPlacement() =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedVideoPlacement is not null;
+        SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } && SelectedVideoPlacement is not null;
 
     [RelayCommand(CanExecute = nameof(CanEditSelectedPlacement))]
     private void EditSelectedPlacementVideoFx()

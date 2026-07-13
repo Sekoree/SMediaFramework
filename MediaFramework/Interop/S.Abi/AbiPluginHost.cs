@@ -191,6 +191,8 @@ public static unsafe class AbiPluginHost
                     AddLayerSurface = &AddLayerSurface,
                     AddSubtitleProvider = &AddSubtitleProvider,
                     AddControlDecoder = &AddControlDecoder,
+                    AddAudioEffect = &AddAudioEffect,
+                    AddVideoEffect = &AddVideoEffect,
                 };
 
                 var info = new MfpPluginInfo
@@ -296,11 +298,32 @@ public static unsafe class AbiPluginHost
         return result;
     }
 
+    public static IReadOnlyList<(string Kind, NativeAudioEffectFactory Factory)> BindAudioEffects(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+        var result = new List<(string, NativeAudioEffectFactory)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "audio-effect")
+                result.Add((cap.Id, new NativeAudioEffectFactory(cap.VTable, cap.Self, plugin.AcquireLease())));
+        return result;
+    }
+
+    public static IReadOnlyList<(string Kind, NativeVideoEffectFactory Factory)> BindVideoEffects(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+        var result = new List<(string, NativeVideoEffectFactory)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "video-effect")
+                result.Add((cap.Id, new NativeVideoEffectFactory(cap.VTable, cap.Self, plugin.AcquireLease())));
+        return result;
+    }
+
     public static void RegisterInto(
         AbiLoadedPlugin plugin,
         IMediaRegistryBuilder? media = null,
         ControlMeterBlobDecoderRegistry? control = null,
-        ICompositorRegistryBuilder? compositor = null)
+        ICompositorRegistryBuilder? compositor = null,
+        S.Media.Core.Buses.IBusRegistryBuilder? buses = null)
     {
         ArgumentNullException.ThrowIfNull(plugin);
 
@@ -321,6 +344,14 @@ public static unsafe class AbiPluginHost
                 compositor.AddLayerSurface(kind, cfg =>
                     factory.Create(cfg) ?? throw new InvalidOperationException(
                         $"plugin layer surface '{kind}' returned no instance."));
+
+        if (buses is not null)
+        {
+            foreach (var (kind, factory) in BindAudioEffects(plugin))
+                buses.AddAudioEffect(kind, factory.Create);
+            foreach (var (kind, factory) in BindVideoEffects(plugin))
+                buses.AddVideoEffect(kind, factory.Create);
+        }
     }
 
     internal static void ClearLastError() => t_lastErrorMessage = null;
@@ -368,6 +399,14 @@ public static unsafe class AbiPluginHost
                 case "control-decoder":
                     var control = (MfpControlDecoderVTable*)cap.VTable;
                     if (control->Destroy != null) control->Destroy(self);
+                    break;
+                case "audio-effect":
+                    var audioEffectFactory = (MfpAudioEffectFactoryVTable*)cap.VTable;
+                    if (audioEffectFactory->Destroy != null) audioEffectFactory->Destroy(self);
+                    break;
+                case "video-effect":
+                    var videoEffectFactory = (MfpVideoEffectFactoryVTable*)cap.VTable;
+                    if (videoEffectFactory->Destroy != null) videoEffectFactory->Destroy(self);
                     break;
             }
         }
@@ -437,6 +476,20 @@ public static unsafe class AbiPluginHost
                 Require(videoOutput->Submit != null, "video-output must provide submit");
                 Require(videoOutput->AcceptedFrameKinds != 0, "video-output must advertise accepted_frame_kinds");
                 Require(videoOutput->AcceptedSyncKinds != 0, "video-output must advertise accepted_sync_kinds");
+                break;
+            case "audio-effect":
+                main = NormalizeTable<MfpAudioEffectFactoryVTable>(vt, nameof(MfpAudioEffectFactoryVTable.Destroy), capability, owned);
+                var audioEffect = (MfpAudioEffectFactoryVTable*)main;
+                Require(audioEffect->Create != null, "audio-effect must provide create");
+                Require(audioEffect->EffectVTable != null, "audio-effect must provide effect_vtable");
+                Require(audioEffect->EffectVTable->Process != null, "audio-effect instances must provide process");
+                break;
+            case "video-effect":
+                main = NormalizeTable<MfpVideoEffectFactoryVTable>(vt, nameof(MfpVideoEffectFactoryVTable.Destroy), capability, owned);
+                var videoEffect = (MfpVideoEffectFactoryVTable*)main;
+                Require(videoEffect->Create != null, "video-effect must provide create");
+                Require(videoEffect->EffectVTable != null, "video-effect must provide effect_vtable");
+                Require(videoEffect->EffectVTable->Process != null, "video-effect instances must provide process");
                 break;
             case "control-decoder":
                 main = NormalizeTable<MfpControlDecoderVTable>(vt, nameof(MfpControlDecoderVTable.Destroy), capability, owned);
@@ -568,6 +621,14 @@ public static unsafe class AbiPluginHost
     [UnmanagedCallersOnly]
     private static int AddControlDecoder(void* ctx, byte* id, void* vt, void* self) =>
         Record(ctx, id, vt, self, "control-decoder");
+
+    [UnmanagedCallersOnly]
+    private static int AddAudioEffect(void* ctx, byte* id, void* vt, void* self) =>
+        Record(ctx, id, vt, self, "audio-effect");
+
+    [UnmanagedCallersOnly]
+    private static int AddVideoEffect(void* ctx, byte* id, void* vt, void* self) =>
+        Record(ctx, id, vt, self, "video-effect");
 
     [UnmanagedCallersOnly]
     private static void HostLog(int level, byte* msg) => LastLogMessage = Utf8(msg);

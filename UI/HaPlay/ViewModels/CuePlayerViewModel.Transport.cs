@@ -120,6 +120,7 @@ public partial class CuePlayerViewModel
     {
         CancelTransportRun();
         _ = StopPlaybackCallback?.Invoke();
+        StopAllVisualizers(); // viz layers are not session clips - stop them explicitly
         if (CurrentCueNode is null && StandbyCueNode is null && !IsTransportPaused)
             return;
         CurrentCueNode = null;
@@ -132,6 +133,7 @@ public partial class CuePlayerViewModel
     {
         CancelTransportRun();
         _ = StopPlaybackCallback?.Invoke();
+        StopAllVisualizers(); // viz layers are not session clips - stop them explicitly
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;

@@ -81,7 +81,15 @@ internal static class MediaRuntime
     /// <summary>Effect-bus capabilities (Phase 4/5): audio/video effect kinds + audio-visual sources
     /// the UI's insertion menus enumerate. Built once; projectM registers only when its native lib is
     /// present (same graceful gate as NDI).</summary>
-    public static S.Media.Core.Buses.IBusRegistry Buses => BusesLazy.Value;
+    public static S.Media.Core.Buses.IBusRegistry Buses
+    {
+        get
+        {
+            _ = Host; // plugins (and module probes) load during the host build - deterministic, not
+                      // dependent on which static the UI happens to touch first (review M2)
+            return BusesLazy.Value;
+        }
+    }
 
     private static readonly Lazy<S.Media.Core.Buses.IBusRegistry> BusesLazy = new(
         static () => S.Media.Core.Buses.BusRegistryBuilder.Build(b =>
@@ -97,6 +105,20 @@ internal static class MediaRuntime
                 // when GL is unavailable at runtime - the source then falls back to in-composition render.
                 S.Media.Visualizer.ProjectM.ProjectMVisualSource.OffscreenGlContextFactory =
                     S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
+            }
+
+            // Plugin audio effects register LAST (same rule as the media registries: a plugin extends but
+            // never silently pre-empts a built-in kind - AddAudioEffect throws on a duplicate kind).
+            if (_plugins is { } plugins)
+            {
+                try
+                {
+                    plugins.RegisterInto(buses: b);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "MediaRuntime: plugin bus-effect registration failed - continuing");
+                }
             }
         }),
         LazyThreadSafetyMode.ExecutionAndPublication);

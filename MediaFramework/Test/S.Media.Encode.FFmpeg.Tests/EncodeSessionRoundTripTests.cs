@@ -216,6 +216,86 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(EncodeVideoCodec.ProRes422)]
+    [InlineData(EncodeVideoCodec.ProRes4444)]
+    public async Task ProRes_EncoderOpens_AndProducesFrames(EncodeVideoCodec codec)
+    {
+        // Review H8 regression guard: prores_ks accepts ONLY 10-bit pixel formats. The old mapping
+        // handed it 8/12-bit variants and avcodec_open2 failed the moment an operator picked ProRes.
+        var outPath = TempPath(".mov");
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.Mov,
+            OutputMode = EncodeOutputMode.VideoOnly,
+            Video = new VideoEncodeOptions { Codec = codec, BitrateBps = 20_000_000 },
+        };
+        if (options.Validate() is { Count: > 0 })
+            return; // no ProRes encoder in this FFmpeg build
+
+        var fps = new Rational(30, 1);
+        using (var session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(outPath)))
+        {
+            session.VideoSink!.Configure(new VideoFormat(160, 120, PixelFormat.Bgra32, fps));
+            for (var i = 0; i < 10; i++)
+                session.VideoSink.Submit(MakeBgraFrame(160, 120, i, fps));
+            await FinishAsync(session);
+
+            var metrics = session.GetMetrics();
+            // The guard is "the encoder OPENED and frames flow" (the H8 bug failed avcodec_open2 with
+            // zero frames). ProRes is slow enough that the bounded submit queue may drop a frame or two
+            // under a burst - that's the drop-oldest contract, not a regression.
+            Assert.True(metrics.VideoFramesEncoded >= 5, $"only {metrics.VideoFramesEncoded} frames encoded");
+            Assert.All(metrics.Sinks, s => Assert.True(s.Healthy, s.Error));
+        }
+
+        Assert.True(new FileInfo(outPath).Length > 256);
+    }
+
+    [Theory]
+    [InlineData(60, 30, 60, 28, 33)]   // faster input: ~half the frames are DROPPED onto the 30 fps grid
+    [InlineData(15, 30, 30, 55, 62)]   // slower input: gaps are FILLED by re-encoding the held frame
+    public async Task FixedFps_ReallyConvertsTheFrameRate(
+        int inputFps, int targetFps, int submitted, int minEncoded, int maxEncoded)
+    {
+        // Review H7: a configured FPS used to be metadata only - 60 fps input "configured as 30" still
+        // encoded ~60 frames/s. The tick scheduler now drops/duplicates onto the target timebase.
+        var outPath = TempPath(".mp4");
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.Mp4,
+            OutputMode = EncodeOutputMode.VideoOnly,
+            Video = new VideoEncodeOptions
+            {
+                Codec = EncodeVideoCodec.H264, Crf = 35, Preset = "ultrafast", GopSize = 10, Fps = targetFps,
+            },
+        };
+        if (options.Validate() is { Count: > 0 })
+            return; // no H.264 in this build
+
+        var fps = new Rational(inputFps, 1);
+        using (var session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(outPath)))
+        {
+            session.VideoSink!.Configure(new VideoFormat(160, 120, PixelFormat.Bgra32, fps));
+            for (var i = 0; i < submitted; i++)
+            {
+                session.VideoSink.Submit(MakeBgraFrame(160, 120, i, fps));
+                await Task.Delay(2); // pace: the submit queue is bounded drop-oldest - a burst would race it
+            }
+
+            await FinishAsync(session);
+
+            var metrics = session.GetMetrics();
+            Assert.InRange(metrics.VideoFramesEncoded, minEncoded, maxEncoded);
+        }
+
+        // The produced stream carries (approximately - container duration rounding) the TARGET rate.
+        using var dec = MediaContainerDecoder.Open(outPath, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+        var rate = dec.Video.Format.FrameRate;
+        var actualFps = (double)rate.Numerator / Math.Max(1, rate.Denominator);
+        Assert.InRange(actualFps, targetFps - 2.0, targetFps + 2.0);
+    }
+
     [Fact]
     public async Task AudioOnly_Flac_PreservesSignalRms()
     {

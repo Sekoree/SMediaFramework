@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -246,28 +247,84 @@ internal static partial class UiHangWatchdog
             psi.ArgumentList.Add(dumpPath);
             psi.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-            using var p = Process.Start(psi);
-            if (p is null)
-                return null;
-            if (!p.WaitForExit(30_000))
+            try
             {
-                try { p.Kill(); } catch { /* already gone */ }
-                Trace.LogWarning("createdump timed out after 30s");
-                return null;
+                using var p = Process.Start(psi);
+                if (p is null)
+                    return null;
+                if (!p.WaitForExit(30_000))
+                {
+                    try { p.Kill(); } catch { /* already gone */ }
+                    Trace.LogWarning("createdump timed out after 30s");
+                    return null;
+                }
+
+                if (p.ExitCode != 0)
+                {
+                    Trace.LogWarning("createdump exited {Code}: {Err}", p.ExitCode, p.StandardError.ReadToEnd().Trim());
+                    return null;
+                }
+            }
+            finally
+            {
+                // Review M11: re-lock ptrace when the capture is over (success, failure, or timeout) -
+                // process memory contains stream/REST credentials, so "any tracer may attach" must not
+                // outlive the dump.
+                if (OperatingSystem.IsLinux())
+                    ResetPtracer();
             }
 
-            if (p.ExitCode != 0)
-            {
-                Trace.LogWarning("createdump exited {Code}: {Err}", p.ExitCode, p.StandardError.ReadToEnd().Trim());
+            if (!File.Exists(dumpPath))
                 return null;
-            }
 
-            return File.Exists(dumpPath) ? dumpPath : null;
+            var size = new FileInfo(dumpPath).Length;
+            Trace.LogInformation(
+                "UI hang dump captured: {Path} ({SizeMb:0} MB, type {Type})",
+                dumpPath, size / 1024.0 / 1024.0, DumpTypeFlag());
+            PruneOldDumps(keep: dumpPath);
+            return dumpPath;
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "createdump attempt failed");
             return null;
+        }
+    }
+
+    /// <summary>Retention (review M11): keep the newest few hang dumps and cap their total bytes so a
+    /// recurring hang cannot fill the show machine's disk. The just-written dump is always kept.</summary>
+    private static void PruneOldDumps(string keep)
+    {
+        const int maxDumps = 3;
+        const long maxTotalBytes = 2L * 1024 * 1024 * 1024; // 2 GB across all retained dumps
+        try
+        {
+            var dumps = Directory.GetFiles(_logDirectory, "haplay-uihang-*.dmp")
+                .Select(f => new FileInfo(f))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .ToList();
+            long total = 0;
+            var kept = 0;
+            foreach (var dump in dumps)
+            {
+                total += dump.Length;
+                kept++;
+                var isNewest = string.Equals(dump.FullName, Path.GetFullPath(keep), StringComparison.Ordinal);
+                if (!isNewest && (kept > maxDumps || total > maxTotalBytes))
+                {
+                    try
+                    {
+                        dump.Delete();
+                        Trace.LogInformation("pruned old hang dump {Path} ({SizeMb:0} MB)",
+                            dump.FullName, dump.Length / 1024.0 / 1024.0);
+                    }
+                    catch (Exception ex) { Trace.LogWarning(ex, "hang-dump prune failed for {Path}", dump.FullName); }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "hang-dump retention sweep failed");
         }
     }
 
@@ -287,6 +344,13 @@ internal static partial class UiHangWatchdog
     {
         try { prctl(PR_SET_PTRACER, new IntPtr(-1) /* PR_SET_PTRACER_ANY */, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero); }
         catch (Exception) { /* not Linux / libc shape differs - createdump may still work as a descendant */ }
+    }
+
+    /// <summary>Revokes the temporary any-tracer grant (0 = no extra tracer beyond yama defaults).</summary>
+    private static void ResetPtracer()
+    {
+        try { prctl(PR_SET_PTRACER, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero); }
+        catch (Exception) { /* best effort */ }
     }
 
     [LibraryImport("libc", SetLastError = true)]

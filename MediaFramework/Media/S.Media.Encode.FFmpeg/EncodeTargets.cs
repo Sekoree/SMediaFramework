@@ -16,6 +16,11 @@ public abstract record EncodeIoTarget
 
     /// <summary>Muxer av_dict options passed to write_header (e.g. HLS segmenting knobs).</summary>
     public IReadOnlyDictionary<string, string>? MuxerOptions { get; init; }
+
+    /// <summary>Credential-free name for metrics/logs/exceptions. When the opened URL carries an auth
+    /// token (stream key, user:pass), set this to the redacted form - sink names, warnings, and status
+    /// otherwise leak the credential (review H9). Null = the AvioUrl is safe to display.</summary>
+    public string? DisplayName { get; init; }
 }
 
 /// <summary>Record to a local file. The container's default muxer is chosen from the path/options.</summary>

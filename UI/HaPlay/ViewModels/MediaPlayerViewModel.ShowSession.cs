@@ -68,11 +68,12 @@ public partial class MediaPlayerViewModel
     [ObservableProperty]
     private int _visualizerFps = VisualizerSettingsSeed.VisualizerFps;
 
-    /// <summary>A human summary of the visualizer resolution for the settings UI ("Match output" when 0).</summary>
+    /// <summary>A human summary of the visualizer resolution for the settings UI. Zero (older settings
+    /// files) resolves to the real default, so the label says so instead of the old "Match output" lie.</summary>
     public string VisualizerResolutionLabel =>
         VisualizerWidth > 0 && VisualizerHeight > 0
             ? $"{VisualizerWidth}×{VisualizerHeight}" + (VisualizerFps > 0 ? $" @ {VisualizerFps} fps" : "")
-            : "Match output";
+            : "Default (1920×1080 @ 60 fps)";
 
     /// <summary>VIZ ▾: applies (and persists) the visualizer render resolution + fps. 0/0 = follow the
     /// deck's normal canvas sizing. Re-applies a live visualizer (reopens when it owns the canvas).</summary>
@@ -113,12 +114,13 @@ public partial class MediaPlayerViewModel
         {
             try
             {
-                var settings = Models.AppSettings.Load();
-                settings.VisualizerPresetDirectory = dir;
-                settings.VisualizerWidth = w;
-                settings.VisualizerHeight = h;
-                settings.VisualizerFps = fps;
-                settings.Save();
+                Models.AppSettings.Update(settings =>
+                {
+                    settings.VisualizerPresetDirectory = dir;
+                    settings.VisualizerWidth = w;
+                    settings.VisualizerHeight = h;
+                    settings.VisualizerFps = fps;
+                });
             }
             catch (Exception ex)
             {
@@ -385,6 +387,10 @@ public partial class MediaPlayerViewModel
     /// retry and return true.</summary>
     private async Task<bool> TryOpenViaShowSessionAsync(PlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
     {
+        // Every open bumps the play generation FIRST: any natural-end event raised for the previous
+        // track is dropped at delivery (see the ClipNaturallyEnded subscription).
+        Interlocked.Increment(ref _playGeneration);
+
         // Resolve the registry URI + whether there's a video composition. Files probe for a video stream;
         // live inputs map to their option-carrying ndi:/padev: descriptor URIs.
         string mediaPath;
@@ -462,6 +468,29 @@ public partial class MediaPlayerViewModel
                 // Effect buses (Phase 4): tags + cover art for the metadata hub (visualizers/overlays).
                 metadataProbe: S.Media.Decode.FFmpeg.MediaTagProbe.TryRead);
 
+            // Review M4: event-driven advancement (primary; the 250ms poll stays as fallback with a shared
+            // advance-once gate). Raised on the SESSION dispatcher - never for loops or operator stops -
+            // so end detection no longer depends on UI poll heuristics. Subscribed once per session.
+            if (!_naturalEndHooked)
+            {
+                _naturalEndHooked = true;
+                var hookedSession = _playerShowSession;
+                hookedSession.ClipNaturallyEnded += cueId =>
+                {
+                    if (!string.Equals(cueId, MediaPlayerShowMapper.PlayerCueId, StringComparison.Ordinal))
+                        return;
+                    var generationAtRaise = Volatile.Read(ref _playGeneration);
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (ReferenceEquals(_playerShowSession, hookedSession)
+                            && generationAtRaise == Volatile.Read(ref _playGeneration))
+                        {
+                            _ = HandleShowSessionNaturalEndAsync("event");
+                        }
+                    });
+                };
+            }
+
             // Switching from a currently-playing source: stop its poll and clip FIRST so the old clip releases its
             // audio DEVICE and borrowed video leases before we re-acquire and fire the new source. Without this the
             // reuse-in-place path (a) leaves the old poll running so it sees the intermediate stopped state and
@@ -503,6 +532,10 @@ public partial class MediaPlayerViewModel
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
+                // #25 REVERTED (2nd attempt): holding output leases across the track change removed the
+                // black gap but the user hit a freeze during song change - the held-output/composition-swap
+                // interaction needs live debugging before another attempt. Release/re-acquire is the
+                // proven-stable path; the black gap is the accepted cost until then.
                 foreach (var held in _playerAcquiredLines)
                     _outputs.ReleaseVideoOutputForLine(held);
                 _playerAcquiredLines.Clear();
@@ -554,6 +587,7 @@ public partial class MediaPlayerViewModel
                     // Remembered so the VIZ toggle knows whether the canvas is viz-owned (reopen to flip).
                     vizOwnsCanvasResult = vizOwnsCanvas;
                 }
+
                 _playerVideoOutputs = new Dictionary<string, List<(Guid, IVideoOutput)>>(StringComparer.Ordinal)
                 {
                     [MediaPlayerShowMapper.PlayerCompositionId] = outputs,
@@ -891,9 +925,12 @@ public partial class MediaPlayerViewModel
         if (BuildDeckAudioLeaseCore(deviceId, format) is not { } lease)
             return null;
         // Line audio effects (Phase 4/5 inserts) run before the meter so the VU shows the processed
-        // signal. The wrapper is disposal-transparent like the meter, so lease ownership is unchanged.
+        // signal. Ownership (review H4): for a SESSION-OWNED terminal (DisposeOutputOnRuntimeDispose)
+        // the wrapper chain is disposal-transparent - session disposes meter → effects → device. For a
+        // BORROWED carrier the session never disposes the chain, so the Release hook retires the
+        // wrappers itself (the effect wrapper holds disposeInner:false and stops at the carrier).
         var effectWrapped = TryResolveLineIdForAudioDevice(deviceId) is { } effectLineId
-            ? _outputs.WrapAudioEffectsForLine(effectLineId, lease.Output)
+            ? _outputs.WrapAudioEffectsForLine(effectLineId, lease.Output, disposeInner: lease.DisposeOutputOnRuntimeDispose)
             : lease.Output;
         var tap = MeteringAudioOutput.Wrap(effectWrapped);
         RegisterMeterTap(tap);
@@ -903,6 +940,16 @@ public partial class MediaPlayerViewModel
             Release = () =>
             {
                 UnregisterMeterTap(tap);
+                if (!lease.DisposeOutputOnRuntimeDispose && !ReferenceEquals(effectWrapped, lease.Output))
+                {
+                    // Borrowed terminal WITH effects: retire OUR wrappers - meter → effect chain, which
+                    // holds disposeInner:false and stops at the carrier. Without effects the meter is a
+                    // stateless shell and must NOT be disposed (it is disposal-transparent and would
+                    // reach the borrowed carrier).
+                    try { tap.Dispose(); }
+                    catch { /* best effort */ }
+                }
+
                 lease.Release?.Invoke();
             },
         };
@@ -1291,6 +1338,7 @@ public partial class MediaPlayerViewModel
     {
         _showSessionEndConfirmTicks = 0;
         _showSessionLastTimelineGeneration = -1;
+        _naturalEndHandled = false; // fresh track - the advance-once gate re-arms (review M4)
         _playerShowPoll ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _playerShowPoll.Tick -= OnShowSessionPollTick;
         _playerShowPoll.Tick += OnShowSessionPollTick;
@@ -1348,22 +1396,46 @@ public partial class MediaPlayerViewModel
                     snap.TimelineGeneration, ref _showSessionLastTimelineGeneration,
                     ref _showSessionEndConfirmTicks))
             {
-                StopShowSessionPoll();
-                // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches
-                // this branch (the clip's Loop flag restarts it seamlessly inside the session); this
-                // replay covers loop toggled ON mid-play, when the running clip predates the flag.
-                if (IsLooping && AutoAdvancePlaylist && _currentPlaylistItem is { } current)
-                    await PlayPlaylistItemAsync(current).ConfigureAwait(true);
-                else if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
-                    await PlayPlaylistItemAsync(next).ConfigureAwait(true);
-                else
-                    await ShowSessionStopAsync().ConfigureAwait(true);
+                await HandleShowSessionNaturalEndAsync("poll").ConfigureAwait(true);
             }
         }
         catch (Exception ex)
         {
             ShowLog.LogTrace("MediaPlayer: ShowSession poll: {Message}", ex.Message);
         }
+    }
+
+    // Review M4: single advance-once gate shared by the event path (ClipNaturallyEnded, primary) and
+    // the poll path (fallback) - both run on the UI thread, so a plain bool suffices. Reset when the
+    // poll (re)starts after each successful open.
+    private bool _naturalEndHandled;
+    private bool _naturalEndHooked; // ClipNaturallyEnded subscribed once per player session
+    // Monotonic play generation: bumped at the START of every open. A ClipNaturallyEnded event captures
+    // the generation when RAISED (session dispatcher) and is dropped at UI delivery if a newer open
+    // started in between - a stale end event for the PREVIOUS track must never advance again (the
+    // double-play regression: track N ends → advance to N+1 → stale N event lands after N+1's open
+    // completed and the boolean gate was re-armed → N+2 started on top of N+1).
+    private int _playGeneration;
+
+    /// <summary>The ONE natural-end/advance entry (review M4). Primary trigger: the session's
+    /// ClipNaturallyEnded event (precise, raised by the end-of-clip machinery, never for loops or
+    /// operator stops). Fallback: the poll's confirmed-stopped heuristic. Idempotent per track.</summary>
+    private async Task HandleShowSessionNaturalEndAsync(string source)
+    {
+        if (_naturalEndHandled || !ShowSessionActive)
+            return;
+        _naturalEndHandled = true;
+        ShowLog.LogDebug("MediaPlayer: natural end via {Source} - advancing", source);
+        StopShowSessionPoll();
+        // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches this
+        // (the clip's Loop flag restarts it seamlessly inside the session); this replay covers loop
+        // toggled ON mid-play, when the running clip predates the flag.
+        if (IsLooping && AutoAdvancePlaylist && _currentPlaylistItem is { } current)
+            await PlayPlaylistItemAsync(current).ConfigureAwait(true);
+        else if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
+            await PlayPlaylistItemAsync(next).ConfigureAwait(true);
+        else
+            await ShowSessionStopAsync().ConfigureAwait(true);
     }
 
     /// <summary>Pure end-of-track decision for the deck poll. A coordinated seek transiently pauses the clip

@@ -53,6 +53,8 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
         Width = _encodeWidth,
         Height = _encodeHeight,
         PixelFormat = _encodePixel,
+        // Review H7: a fixed target FPS is now really enforced by the session's tick scheduler - report it.
+        FrameRate = _options.Fps > 0 ? new Rational(_options.Fps, 1) : _sourceFormat.FrameRate,
     };
 
     /// <summary>Even-rounded output dimensions: 0/0 = source; one side 0 = derived preserving aspect.</summary>

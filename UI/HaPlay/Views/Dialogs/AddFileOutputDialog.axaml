@@ -112,9 +112,9 @@
                       </Grid>
                       <Grid ColumnDefinitions="*,8,120">
                         <TextBox Grid.Column="0" Text="{Binding Name}"
-                                 Watermark="{x:Static res:Strings.FileOutputAudioNameLabel}" />
+                                 PlaceholderText="{x:Static res:Strings.FileOutputAudioNameLabel}" />
                         <TextBox Grid.Column="2" Text="{Binding Language}"
-                                 Watermark="{x:Static res:Strings.FileOutputAudioLanguageLabel}" />
+                                 PlaceholderText="{x:Static res:Strings.FileOutputAudioLanguageLabel}" />
                       </Grid>
                     </StackPanel>
                   </Border>

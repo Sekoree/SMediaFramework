@@ -52,11 +52,14 @@ public sealed class BusEffectTests
         Assert.Equal(0.8f, output[0], 3); // 0.8 × 0.5 × 2
 
         bus.SetEffects([doubled]);
-        Assert.True(half.Disposed);
-        Assert.False(doubled.Disposed);
+        // Review M5: a removed effect must NOT be disposed at swap time (the read thread may still be
+        // inside it) - it retires on the read thread's next pass.
+        Assert.False(half.Disposed);
 
         bus.Submit(new float[] { 0.25f, 0.25f });
         bus.ReadInto(output);
+        Assert.True(half.Disposed);  // retired at the top of the read pass
+        Assert.False(doubled.Disposed);
         Assert.Equal(0.5f, output[0], 3);
 
         bus.Dispose();
@@ -67,7 +70,7 @@ public sealed class BusEffectTests
     public void AudioEffectOutput_ProcessesCopy_NeverMutatingTheSharedChunk()
     {
         var sink = new CapturingAudioOutput(new AudioFormat(48_000, 2));
-        using var insert = new AudioEffectOutput(sink, [new ScaleEffect(0.5f)]);
+        using var insert = AudioEffectOutput.Wrap(sink, [new ScaleEffect(0.5f)]);
 
         var shared = new float[] { 1f, 1f, 1f, 1f };
         insert.Submit(shared);
@@ -91,6 +94,115 @@ public sealed class BusEffectTests
         Assert.True(samples[0] > 0.5f);     // ramped, not stepped
         for (var i = 1; i < samples.Length; i++)
             Assert.True(samples[i] <= samples[i - 1] + 1e-6f, "gain-down ramp must be monotonic");
+    }
+
+    private sealed class ClockedStatsAudioOutput(AudioFormat format)
+        : IAudioOutput, IClockedOutput, IPlaybackClock, IAudioOutputPlaybackStats, IDisposable
+    {
+        public bool Disposed;
+        public AudioFormat Format { get; } = format;
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token) => true;
+        public TimeSpan ElapsedSinceStart => TimeSpan.FromSeconds(1);
+        public bool IsAdvancing => true;
+        public long PlayedSamples => 42;
+        public long UnderrunSamples => 0;
+        public long DroppedSamples => 0;
+        public void Dispose() => Disposed = true;
+    }
+
+    [Fact]
+    public void AudioEffectOutput_Wrap_PreservesClockPlaybackAndStatsCapabilities()
+    {
+        // Review H3: erasing IClockedOutput made the router stop slaving to the hardware clock the
+        // moment an effect was inserted (wall-clock pacing + drift on the main output).
+        var hw = new ClockedStatsAudioOutput(new AudioFormat(48_000, 2));
+        using var wrapped = AudioEffectOutput.Wrap(hw, [new ScaleEffect(0.5f)]);
+
+        var clocked = Assert.IsAssignableFrom<IClockedOutput>(wrapped);
+        Assert.True(clocked.WaitForCapacity(480, CancellationToken.None));
+        var playback = Assert.IsAssignableFrom<IPlaybackClock>(wrapped);
+        Assert.True(playback.IsAdvancing);
+        var stats = Assert.IsAssignableFrom<IAudioOutputPlaybackStats>(wrapped);
+        Assert.Equal(42, stats.PlayedSamples);
+
+        // A plain inner must NOT gain fake capabilities.
+        var plain = AudioEffectOutput.Wrap(new CapturingAudioOutput(new AudioFormat(48_000, 2)), []);
+        Assert.False(plain is IClockedOutput);
+        Assert.False(plain is IPlaybackClock);
+        Assert.False(plain is IAudioOutputPlaybackStats);
+        plain.Dispose();
+    }
+
+    [Fact]
+    public void AudioEffectOutput_DisposeInner_ControlsTerminalOwnership()
+    {
+        // Review H4: session-owned terminal → the wrapper chain is disposal-transparent; borrowed
+        // carrier → dispose stops at the wrapper (the host releases the carrier itself).
+        var owned = new ClockedStatsAudioOutput(new AudioFormat(48_000, 2));
+        AudioEffectOutput.Wrap(owned, [new ScaleEffect(1f)], disposeInner: true).Dispose();
+        Assert.True(owned.Disposed);
+
+        var borrowed = new ClockedStatsAudioOutput(new AudioFormat(48_000, 2));
+        var effect = new ScaleEffect(1f);
+        AudioEffectOutput.Wrap(borrowed, [effect], disposeInner: false).Dispose();
+        Assert.False(borrowed.Disposed);
+        Assert.True(effect.Disposed); // the wrapper ALWAYS retires its own effects
+    }
+
+    [Fact]
+    public void AudioEffectOutput_SwapRetiresOnNextSubmit_NotAtSwapTime()
+    {
+        var sink = new CapturingAudioOutput(new AudioFormat(48_000, 2));
+        using var insert = AudioEffectOutput.Wrap(sink, [new ScaleEffect(0.5f)]);
+        var removed = (ScaleEffect)insert.Effects[0];
+
+        insert.SetEffects([]);
+        Assert.False(removed.Disposed); // M5: never disposed under a potentially-running Process
+
+        insert.Submit(new float[] { 1f, 1f });
+        Assert.True(removed.Disposed); // retired at the top of the processing thread's next pass
+    }
+
+    [Fact]
+    public void GainAudioEffect_RampAdvancesPerFrame_SameGainOnAllChannels()
+    {
+        // Review M5 sub-item: the ramp used to advance per interleaved FLOAT - channels× too fast, and
+        // channels within one frame received different gains.
+        var gain = new GainAudioEffect();
+        gain.Configure(new AudioFormat(48_000, 2));
+        gain.GainDb = float.NegativeInfinity; // target 0 → maximal ramp distance
+
+        var stereo = new float[960]; // 480 frames = exactly the 10 ms ramp span at 48 kHz
+        Array.Fill(stereo, 1f);
+        gain.Process(stereo, 0);
+
+        for (var f = 0; f < stereo.Length; f += 2)
+            Assert.Equal(stereo[f], stereo[f + 1]); // L == R within every frame
+        Assert.True(stereo[0] > 0.9f, "first frame should have barely ramped");
+        Assert.Equal(0f, stereo[^1], 3); // reached target at the END of the 10 ms span, not halfway
+
+        // NaN config must be rejected, not turned into NaN audio.
+        gain.GainDb = double.NaN;
+        var probe = new float[] { 1f, 1f };
+        gain.Process(probe, 0);
+        Assert.False(float.IsNaN(probe[0]));
+    }
+
+    [Fact]
+    public void VideoEffectBusOutput_SwapRetiresOnNextSubmit()
+    {
+        var sink = new CapturingVideoOutput();
+        var effect = new CountingVideoEffect();
+        using var insert = new VideoEffectBusOutput(sink, [effect]);
+        insert.Configure(new VideoFormat(2, 2, PixelFormat.Bgra32, new Rational(30, 1)));
+
+        insert.SetEffects([]);
+        Assert.False(effect.Disposed); // M5
+
+        insert.Submit(MakeFrame());
+        Assert.True(effect.Disposed);
+        sink.Last?.Dispose();
     }
 
     private sealed class CapturingAudioOutput(AudioFormat format) : IAudioOutput

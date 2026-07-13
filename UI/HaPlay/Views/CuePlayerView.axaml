@@ -122,6 +122,10 @@
             <Separator />
             <MenuItem Header="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddVisualizerCueButton}" Command="{Binding AddVisualizerCueCommand}"
+                      ToolTip.Tip="Starts (or stops) the projectM visualizer as a placeable layer on a composition - position/size and audio-feed routing in the drawer. It keeps running across later cues until a Stop visualizer cue." />
+            <MenuItem Header="{x:Static res:Strings.AddJumpCueButton}" Command="{Binding AddJumpCueCommand}"
+                      ToolTip.Tip="Adds a control-flow cue that jumps the playhead to its target cue(s) - select the loop-back target first. Random mode picks one of several targets." />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
@@ -287,10 +291,35 @@
                   </ComboBox>
                 </Grid>
 
+                <!-- On natural end, fire a specific cue ("after this song, go to Q12"). Empty = the
+                     default chain (the NEXT cue fires if its trigger is Auto Follow). -->
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasSelectedMediaCue}">
+                  <TextBlock Text="Then fire cue #" VerticalAlignment="Center" />
+                  <TextBox Width="90" Text="{Binding SelectedEndTargetText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="(next)" />
+                </StackPanel>
+
                 <!-- Preview + scrubbing live ONLY on the Preview tab now - this tab used to carry
                      a second Preview button and a bare scrubber, and the duplicate was the one
                      whose seeks actually committed (the Preview tab's copy silently didn't). -->
-                <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
+                <!-- Media FX send (#26): this cue's audio also drives a selective-feed visualizer. -->
+                <CheckBox Content="FX: send audio to visualizer (when a visualizer cue with selective feed is running)"
+                          IsVisible="{Binding SelectedCueNode.IsMediaKind, FallbackValue=False}"
+                          IsChecked="{Binding SelectedCueNode.SendToVisualizer, Mode=TwoWay}" />
+
+                <!-- Jump-cue editor (#27): targets entered as cue NUMBERS (stored as stable IDs, so
+                     renumber/reorder never retargets), plus random-pick and fire/standby. -->
+                <StackPanel Spacing="6" IsVisible="{Binding IsJumpCueSelected}">
+                  <TextBlock Text="{x:Static res:Strings.CueJumpTargetsLabel}" FontWeight="SemiBold" />
+                  <TextBox Text="{Binding SelectedJumpTargetsText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="e.g. 3, 7, 12" />
+                  <CheckBox Content="{x:Static res:Strings.CueJumpRandomLabel}"
+                            IsChecked="{Binding SelectedJumpRandom, Mode=TwoWay}" />
+                  <CheckBox Content="{x:Static res:Strings.CueJumpFireLabel}"
+                            IsChecked="{Binding SelectedJumpFiresTarget, Mode=TwoWay}" />
+                </StackPanel>
+
+                                <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
                 <TextBox AcceptsReturn="True"
                          MinHeight="60"
                          TextWrapping="Wrap"
@@ -604,6 +633,55 @@
             </ScrollViewer>
           </TabItem>
 
+          <TabItem Header="Visualizer"
+                   IsVisible="{Binding IsVisualizerCueSelected}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <CheckBox Content="Start visualizer (off = this cue STOPS it)"
+                          IsChecked="{Binding SelectedVisualizerStarts, Mode=TwoWay}" />
+
+                <TextBlock Text="Duration (seconds; 0 = infinite - runs until a Stop cue, chain advances immediately)" FontWeight="SemiBold" />
+                <NumericUpDown MinWidth="150" HorizontalAlignment="Left" Minimum="0" Maximum="86400" Increment="1" FormatString="0.#"
+                               Value="{Binding SelectedVisualizerDurationSeconds, Mode=TwoWay}" />
+
+                <TextBlock Text="Render resolution / FPS (0 = follow the composition)" FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="Auto,150,8,Auto,150,8,Auto,120" ColumnSpacing="4">
+                  <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
+                  <NumericUpDown Grid.Column="1" MinWidth="150" Minimum="0" Maximum="7680" Increment="2" FormatString="0"
+                                 Value="{Binding SelectedCueNode.VisualizerRenderWidth, Mode=TwoWay}" />
+                  <TextBlock Grid.Column="3" Text="H" VerticalAlignment="Center" />
+                  <NumericUpDown Grid.Column="4" MinWidth="150" Minimum="0" Maximum="4320" Increment="2" FormatString="0"
+                                 Value="{Binding SelectedCueNode.VisualizerRenderHeight, Mode=TwoWay}" />
+                  <TextBlock Grid.Column="6" Text="FPS" VerticalAlignment="Center" />
+                  <NumericUpDown Grid.Column="7" MinWidth="120" Minimum="0" Maximum="240" Increment="1" FormatString="0"
+                                 Value="{Binding SelectedCueNode.VisualizerRenderFps, Mode=TwoWay}" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Content="720p60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="1280x720@60" />
+                  <Button Content="1080p60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="1920x1080@60" />
+                  <Button Content="1440p60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="2560x1440@60" />
+                  <Button Content="4K60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="3840x2160@60" />
+                </StackPanel>
+
+                <TextBlock Text="Preset folder (*.milk, searched recursively; empty = built-in idle preset)" FontWeight="SemiBold" />
+                <TextBox Text="{Binding SelectedCueNode.SourceOrAction, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                         PlaceholderText="/path/to/presets" />
+
+                <TextBlock Text="Audio feed" FontWeight="SemiBold" />
+                <CheckBox Content="Feed audio from ALL playing media"
+                          IsChecked="{Binding SelectedVisualizerFeedAll, Mode=TwoWay}" />
+                <TextBlock Text="…or only from these cue numbers (+ media cues flagged 'send to visualizer'):"
+                           IsVisible="{Binding !SelectedVisualizerFeedAll}" />
+                <TextBox Text="{Binding SelectedVisualizerFeedText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                         PlaceholderText="e.g. 2, 4"
+                         IsVisible="{Binding !SelectedVisualizerFeedAll}" />
+
+                <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                           Text="Placement (composition, position, size, opacity, rotation) is on the Video tab - the same editor as media cues. Fire this cue to start; a Stop-mode visualizer cue (or an edit reload) removes the layer." />
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
           <TabItem Header="{x:Static res:Strings.SubtitlesTabLabel}" IsVisible="{Binding SelectedCueNode.HasSubtitleTracks, FallbackValue=False}">
             <ScrollViewer>
               <StackPanel Spacing="8" Margin="6">
@@ -784,9 +862,10 @@
         </Panel>
         <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
 
-        <!-- Phase 5.3 - Now Playing panel: active cues (with progress + per-cue ✕) and the
-             upcoming-queue preview. Width set generously so the operator can shrink via the
-             splitter; multi-cue groups need room. -->
+        <!-- Phase 5.3 - Now Playing panel: active cues (with progress + per-cue ✕); expanded groups
+             list the rest of their automatic chain with time-until-start countdowns (#29 - replaced
+             the old panel-wide "Upcoming" preview). Width set generously so the operator can shrink
+             via the splitter; multi-cue groups need room. -->
         <HeaderedContentControl Grid.Column="2" Margin="4,0,0,0" Padding="6,4"
                                 Header="{x:Static res:Strings.NowPlayingHeader}">
           <DockPanel LastChildFill="True">
@@ -804,9 +883,16 @@
               </StackPanel>
             </Grid>
 
-            <ScrollViewer DockPanel.Dock="Top" MaxHeight="320" Margin="0,0,0,8">
+            <TextBlock DockPanel.Dock="Top"
+                       Text="{x:Static res:Strings.NowPlayingNoneHint}"
+                       Opacity="0.55"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+
+            <ScrollViewer>
             <!-- P4 (plan §3.2): rows are singles OR group aggregates. The implicit per-type
-                 templates below also apply to the group's nested children list. -->
+                 templates below also apply to the group's nested children + upcoming lists. -->
             <ItemsControl ItemsSource="{Binding NowPlayingRows}">
               <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
@@ -870,39 +956,24 @@
                                    ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekTooltip}" />
                       <TextBlock Classes="postime" Classes.lowtime="{Binding IsNearEnd}"
                                  Text="{Binding PositionDisplay}" />
-                      <ItemsControl ItemsSource="{Binding Children}" Margin="16,2,0,0"
-                                    IsVisible="{Binding IsExpanded}" />
+                      <StackPanel Margin="16,2,0,0" IsVisible="{Binding IsExpanded}">
+                        <ItemsControl ItemsSource="{Binding Children}" />
+                        <!-- #29: the rest of the automatic chain, each with a ticking time-until-start
+                             (replaces the panel-wide "Upcoming" section). -->
+                        <ItemsControl ItemsSource="{Binding UpcomingItems}" />
+                      </StackPanel>
                     </StackPanel>
                   </Border>
                 </DataTemplate>
-              </ItemsControl.DataTemplates>
-            </ItemsControl>
-            </ScrollViewer>
 
-            <TextBlock DockPanel.Dock="Top"
-                       Text="{x:Static res:Strings.NowPlayingNoneHint}"
-                       Opacity="0.55"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8"
-                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
-
-            <TextBlock DockPanel.Dock="Top"
-                       Text="{x:Static res:Strings.UpcomingCuesHeader}"
-                       FontWeight="SemiBold"
-                       Margin="0,8,0,4"
-                       IsVisible="{Binding UpcomingCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
-
-            <ScrollViewer>
-            <ItemsControl ItemsSource="{Binding UpcomingCues}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="vm:CueNodeViewModel">
-                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,2">
-                    <TextBlock Text="{Binding Number}" Opacity="0.6" MinWidth="32" />
-                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding DurationDisplay}" Opacity="0.5" />
-                  </StackPanel>
+                <DataTemplate DataType="vm:UpcomingChainItemViewModel">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6" Margin="6,1,6,3" Opacity="0.6">
+                    <TextBlock Grid.Column="0" Text="{Binding Node.Number}" FontWeight="SemiBold" Opacity="0.8" />
+                    <TextBlock Grid.Column="1" Text="{Binding Node.Label}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="2" Classes="postime" Text="{Binding CountdownDisplay}" />
+                  </Grid>
                 </DataTemplate>
-              </ItemsControl.ItemTemplate>
+              </ItemsControl.DataTemplates>
             </ItemsControl>
             </ScrollViewer>
           </DockPanel>

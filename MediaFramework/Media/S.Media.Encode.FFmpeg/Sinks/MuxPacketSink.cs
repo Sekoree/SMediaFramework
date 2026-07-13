@@ -38,7 +38,7 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
     /// key video packet). The LAN TS fan-out uses this to record client join points without parsing TS.</summary>
     public Action<bool>? PacketBoundaryWritten { get; init; }
 
-    public string Name => _target switch
+    public string Name => _target.DisplayName ?? _target switch
     {
         FileEncodeTarget f => $"file:{f.Path}",
         UrlEncodeTarget u => u.Url,

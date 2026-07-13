@@ -15,6 +15,7 @@ public sealed class AudioEffectBus : IAudioOutput, IAudioOutputChannelCapabiliti
     private readonly AudioBus _bus;
     private readonly AudioFormat _format;
     private IAudioBusEffect[] _effects = [];
+    private readonly System.Collections.Concurrent.ConcurrentQueue<IAudioBusEffect> _retired = new();
     private long _samplePosition;
     private bool _disposed;
 
@@ -37,9 +38,10 @@ public sealed class AudioEffectBus : IAudioOutput, IAudioOutputChannelCapabiliti
     /// <summary>The current chain snapshot (for UI listing).</summary>
     public IReadOnlyList<IAudioBusEffect> Effects => Volatile.Read(ref _effects);
 
-    /// <summary>Replaces the whole chain atomically. Effects removed by the swap are disposed AFTER the
-    /// swap (the read path may still be inside the old array for the current chunk - Configure/Process
-    /// implementations must tolerate a Process racing a Dispose by at most one chunk).</summary>
+    /// <summary>Replaces the whole chain atomically. Effects removed by the swap RETIRE on the read
+    /// thread's next pass (or in <see cref="Dispose"/>) - never here, where the pull path may still be
+    /// inside the old array (review M5: disposing under a live Process is unsafe for effects owning
+    /// native/DSP state).</summary>
     public void SetEffects(IReadOnlyList<IAudioBusEffect> effects)
     {
         ArgumentNullException.ThrowIfNull(effects);
@@ -51,8 +53,14 @@ public sealed class AudioEffectBus : IAudioOutput, IAudioOutputChannelCapabiliti
         foreach (var old in previous)
         {
             if (!next.Contains(old))
-                MediaDiagnostics.SwallowDisposeErrors(old.Dispose, "AudioEffectBus.SetEffects: removed effect");
+                _retired.Enqueue(old);
         }
+    }
+
+    private void DrainRetired()
+    {
+        while (_retired.TryDequeue(out var old))
+            MediaDiagnostics.SwallowDisposeErrors(old.Dispose, "AudioEffectBus: retired effect");
     }
 
     /// <summary>Appends one effect to the chain (atomic swap).</summary>
@@ -76,6 +84,8 @@ public sealed class AudioEffectBus : IAudioOutput, IAudioOutputChannelCapabiliti
 
     public int ReadInto(Span<float> destination)
     {
+        // The single pull thread: anything retired by an earlier swap is out of use by now.
+        DrainRetired();
         var read = _bus.ReadInto(destination);
         var effects = Volatile.Read(ref _effects);
         if (effects.Length > 0 && read > 0)
@@ -94,6 +104,7 @@ public sealed class AudioEffectBus : IAudioOutput, IAudioOutputChannelCapabiliti
         if (_disposed)
             return;
         _disposed = true;
+        DrainRetired();
         var effects = Interlocked.Exchange(ref _effects, []);
         foreach (var effect in effects)
             MediaDiagnostics.SwallowDisposeErrors(effect.Dispose, "AudioEffectBus.Dispose: effect");

@@ -289,23 +289,40 @@ public partial class MainViewModel : ViewModelBase
     partial void OnRestApiEnabledChanged(bool value)
     {
         _appSettings.RestApiEnabled = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
 
     partial void OnRestApiPortChanged(int value)
     {
         _appSettings.RestApiPort = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
 
     partial void OnRestApiAllowLanChanged(bool value)
     {
         _appSettings.RestApiAllowLan = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
+
+    /// <summary>Persists ONLY this view-model's owned settings fields via the merge-safe write path
+    /// (review H5): serializing the long-lived `_appSettings` snapshot clobbered fields other writers
+    /// (visualizer dialog, playlist toggles, dialog sizes) had saved since startup.</summary>
+    private void SaveOwnedAppSettings() => AppSettings.Update(s =>
+    {
+        s.RestApiEnabled = _appSettings.RestApiEnabled;
+        s.RestApiPort = _appSettings.RestApiPort;
+        s.RestApiAllowLan = _appSettings.RestApiAllowLan;
+        s.RestApiAccessToken = _appSettings.RestApiAccessToken;
+        s.SidebarCollapsed = _appSettings.SidebarCollapsed;
+        s.LastSelectedWorkspace = _appSettings.LastSelectedWorkspace;
+        s.MainWindow = _appSettings.MainWindow;
+        s.BaseTheme = _appSettings.BaseTheme;
+        s.Theme = _appSettings.Theme;
+        s.Density = _appSettings.Density;
+    });
 
     private void RestartRestApi()
     {
@@ -325,7 +342,7 @@ public partial class MainViewModel : ViewModelBase
     partial void OnRestApiAccessTokenChanged(string value)
     {
         _appSettings.RestApiAccessToken = string.IsNullOrEmpty(value) ? null : value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
 
@@ -445,7 +462,7 @@ public partial class MainViewModel : ViewModelBase
     partial void OnSidebarCollapsedChanged(bool value)
     {
         _appSettings.SidebarCollapsed = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
     }
 
     partial void OnSelectedWorkspaceChanged(WorkspaceItem value)
@@ -466,7 +483,7 @@ public partial class MainViewModel : ViewModelBase
             OnPropertyChanged(nameof(LoadedControlWorkspace));
         }
         _appSettings.LastSelectedWorkspace = value.Id;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         if (value == WorkspaceItem.Project)
             RefreshMediaCacheSizes(); // sizes are current by the time the operator sees the section
     }
@@ -484,7 +501,7 @@ public partial class MainViewModel : ViewModelBase
     public void SaveWindowState(WindowStateSnapshot snapshot)
     {
         _appSettings.MainWindow = snapshot;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
     }
 
     [RelayCommand]
@@ -586,7 +603,7 @@ public partial class MainViewModel : ViewModelBase
     partial void OnBaseThemeChanged(AppBaseTheme value)
     {
         _appSettings.BaseTheme = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         // The variant/density selectors gate on the newly-selected base theme so the user can pre-pick them
         // for the pending style.
         OnPropertyChanged(nameof(IsVariantSelectable));
@@ -597,14 +614,14 @@ public partial class MainViewModel : ViewModelBase
     partial void OnThemeChanged(AppThemeMode value)
     {
         _appSettings.Theme = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         MarkAppearanceChanged();
     }
 
     partial void OnDensityChanged(AppDensityMode value)
     {
         _appSettings.Density = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         MarkAppearanceChanged();
     }
 

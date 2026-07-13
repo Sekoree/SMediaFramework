@@ -120,7 +120,8 @@ public static class HaPlayShowMapper
                             clips.Add(binding);
                         break;
 
-                    // ActionCueNode / CommentCueNode have no ShowDocument equivalent yet (deferred slice).
+                    // ActionCueNode / CommentCueNode / JumpCueNode have no ShowDocument equivalent - action
+                    // and jump (control-flow) cues execute at the HaPlay transport layer.
                 }
             }
         }

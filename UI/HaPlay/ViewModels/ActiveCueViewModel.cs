@@ -87,7 +87,7 @@ public sealed partial class ActiveCueViewModel : ObservableObject
         return $"{pos} / {dur} (-{remaining})";
     }
 
-    private static string FormatMs(long ms)
+    internal static string FormatMs(long ms)
     {
         var ts = TimeSpan.FromMilliseconds(Math.Max(0, ms));
         return ts.TotalHours >= 1

@@ -108,7 +108,16 @@ internal sealed unsafe class AsyncPacketSink : IEncodedPacketSink
         }
 
         if (thread is not null)
+        {
             CooperativePlaybackJoin.JoinThread(thread, TimeSpan.FromSeconds(10), CancellationToken.None);
+            if (thread.IsAlive)
+            {
+                // Review H6: the drain thread is wedged inside FFmpeg/network I/O. Report it - Dispose
+                // will leave the native state alive rather than freeing it under the live thread.
+                Trace.LogError("push sink '{Name}': drain thread did not finish within 10s - destination stuck", Name);
+                throw new InvalidOperationException($"sink '{Name}' is stuck: its network drain did not finish.");
+            }
+        }
 
         if (_innerFaulted && _innerError is not null)
             throw new InvalidOperationException($"sink '{Name}' faulted: {_innerError.Message}", _innerError);
@@ -218,7 +227,20 @@ internal sealed unsafe class AsyncPacketSink : IEncodedPacketSink
         }
 
         if (thread is not null)
+        {
             CooperativePlaybackJoin.JoinThread(thread, TimeSpan.FromSeconds(5), CancellationToken.None);
+            if (thread.IsAlive)
+            {
+                // Review H6: the drain thread may be INSIDE av_interleaved_write_frame / protocol I/O.
+                // Freeing the queued packets, the muxer/AVIO context, or the wake event under it is a
+                // native use-after-free (process crash on stop). Deliberately LEAK this sink's native
+                // state instead - the terminal-stuck policy the router/player pumps already use.
+                Trace.LogError(
+                    "push sink '{Name}': drain thread still alive after 5s - retaining native state (terminally stuck, leaked)",
+                    Name);
+                return;
+            }
+        }
 
         DrainAndFreeRemaining();
         MediaDiagnostics.SwallowDisposeErrors(_inner.Dispose, $"AsyncPacketSink.Dispose: inner sink ({Name})");

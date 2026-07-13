@@ -60,6 +60,12 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     private long _videoBaseTicks = long.MinValue;
     private long _lastVideoPts90k = -1;
     private long _videoFrameDuration90k;
+    // Review H7 - target-rate scheduler: when options declare a fixed FPS, frames are selected/dropped
+    // per target tick (fast input) and the last frame is re-encoded into gaps (slow input), so the
+    // output really carries the configured cadence instead of just advertising it in metadata.
+    private readonly long _targetVideoFrameDuration90k;
+    private long _lastVideoTick = -1;
+    private VideoFrame? _heldVideoFrame;
 
     // Metrics.
     private long _videoSubmitted;
@@ -71,6 +77,9 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     private FFmpegEncodeSession(EncodeSessionOptions options, IReadOnlyList<IEncodedPacketSink> sinks, int audioInputSampleRate)
     {
         _options = options;
+        _targetVideoFrameDuration90k = options.IncludesVideo && options.Video.Fps > 0
+            ? 90_000L / Math.Max(1, options.Video.Fps)
+            : 0;
         foreach (var sink in sinks)
             _sinks.Add(new SinkSlot(sink));
 
@@ -384,6 +393,12 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             if (frame is null)
                 break;
 
+            if (_targetVideoFrameDuration90k > 0)
+            {
+                EncodeAtTargetRate(frame); // takes ownership (may hold the frame for gap duplication)
+                continue;
+            }
+
             try
             {
                 var pts = NextVideoPts(frame.PresentationTime);
@@ -451,8 +466,65 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         return pts;
     }
 
+    /// <summary>Review H7: encodes one submitted frame onto the FIXED target timebase. Each target tick
+    /// (1/fps) carries exactly one frame: faster input drops frames whose tick is already covered,
+    /// slower input re-encodes the last frame into the gap (capped at one second per gap - a seek/stall
+    /// jumps rather than emitting thousands of duplicates). Owns <paramref name="frame"/>: it is HELD
+    /// until the next frame replaces it (gap filling needs it), then disposed.</summary>
+    private void EncodeAtTargetRate(VideoFrame frame)
+    {
+        var dur = _targetVideoFrameDuration90k;
+        if (_videoBaseTicks == long.MinValue)
+            _videoBaseTicks = frame.PresentationTime.Ticks;
+        var srcPts90k = (frame.PresentationTime.Ticks - _videoBaseTicks) * 9 / 1000;
+        var tick = (long)Math.Round(srcPts90k / (double)dur);
+
+        if (tick <= _lastVideoTick)
+        {
+            // Input runs faster than the target (60 in, 30 configured): this tick already has a frame.
+            frame.Dispose();
+            Interlocked.Increment(ref _videoDropped);
+            return;
+        }
+
+        // Input runs slower (15 in, 30 configured): hold-duplicate the previous frame into the gap.
+        var gapStart = _lastVideoTick + 1;
+        if (_heldVideoFrame is { } held && tick > gapStart)
+        {
+            var maxDup = Math.Max(1, 90_000 / dur); // ≤ 1 s of duplicates per gap
+            var dupEnd = Math.Min(tick - 1, gapStart + maxDup - 1);
+            for (var t = gapStart; t <= dupEnd; t++)
+                EncodeAtTick(held, t, dur);
+        }
+
+        EncodeAtTick(frame, tick, dur);
+        _lastVideoTick = tick;
+        _heldVideoFrame?.Dispose();
+        _heldVideoFrame = frame; // retained for the next gap; swapped out above
+    }
+
+    private void EncodeAtTick(VideoFrame frame, long tick, long dur)
+    {
+        try
+        {
+            var pts = tick * dur;
+            var started = Stopwatch.GetTimestamp();
+            _videoCore!.Encode(frame, pts, pkt => FanOut((AVPacket*)pkt, streamIndex: 0));
+            _encodeTiming.RecordSince(started);
+            _lastVideoPts90k = pts; // keeps the monotonic clamp coherent if paths ever mix
+            Interlocked.Increment(ref _videoEncoded);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "encode session: video encode failed - frame skipped");
+            Interlocked.Increment(ref _videoDropped);
+        }
+    }
+
     private void FlushAndFinalize()
     {
+        _heldVideoFrame?.Dispose();
+        _heldVideoFrame = null;
         if (_videoCore is { } video)
         {
             try { video.Flush(pkt => FanOut((AVPacket*)pkt, 0)); }
@@ -516,7 +588,21 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             CooperativePlaybackJoin.JoinThread(_worker, TimeSpan.FromSeconds(2), CancellationToken.None);
         }
 
+        if (_worker.IsAlive)
+        {
+            // Review H6: the encode worker is wedged inside FFmpeg (stalled encoder/destination). Freeing
+            // codec contexts, sinks, queued frames, or the CTS/event under it is a native use-after-free.
+            // Mark terminally stuck and RETAIN the native state (deliberate leak) - the same policy the
+            // router/player pumps use for a stuck terminal.
+            MediaDiagnostics.LogWarning(
+                "FFmpegEncodeSession.Dispose: encode worker still alive after join - retaining native state (terminally stuck, leaked).");
+            _finished.TrySetResult();
+            return;
+        }
+
         _finished.TrySetResult();
+        MediaDiagnostics.SwallowDisposeErrors(() => _heldVideoFrame?.Dispose(), "FFmpegEncodeSession.Dispose: held frame");
+        _heldVideoFrame = null;
         MediaDiagnostics.SwallowDisposeErrors(() => _videoCore?.Dispose(), "FFmpegEncodeSession.Dispose: video core");
         foreach (var core in _audioCores)
             MediaDiagnostics.SwallowDisposeErrors(core.Dispose, "FFmpegEncodeSession.Dispose: audio core");

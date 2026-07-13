@@ -548,3 +548,83 @@ early and appear as passed rather than skipped. Add focused coverage for:
 5. Implement real frame-rate conversion and encoder pixel-format negotiation; add codec/cadence tests.
 6. Redact/move secrets, then harden stream teardown, keepalive handoff, HTTP request bounds, and TS history.
 7. Remove unused preservation code and split runtime ownership out of the large view models.
+
+---
+
+## Addendum (2026-07-12): verification outcome and agreed follow-up plan
+
+### Verification of this review (performed against the live tree + host)
+
+- **Dump analysis accepted, including its correction of the earlier attribution**: the freeze surface is native X11
+  tooltip/popup teardown synchronously waiting on a GLX-swap-stalled render thread; projectM's worker was idle at
+  capture in the 15:45 dump, so preset shader-compile causation is plausible but unproven.
+  `X11PlatformOptions.OverlayPopups` verified present in Avalonia.X11 12.1.0.
+- **Confirmed by direct code/host checks**: H2, H3, H4, H5 (`prores_ks` on this host accepts only
+  yuv422p10le/yuv444p10le/yuva444p10le), H6, H7, H8, H9, M1, M2, M9, M10, M11, L1. M13's mechanism is sound
+  (`Task.WaitAsync(token)` on a completed task wins over a pre-cancelled token); it passed 3x in isolation,
+  consistent with a full-suite-only race.
+- **Nuances**: keep `HasCompositionVisualizerAsync` if M10's preservation API is deleted (the deck uses it);
+  H1 (helper process) is accepted as the only hard isolation boundary and scheduled after the cheaper mitigations.
+
+### Scope additions agreed with the operator
+
+1. **Bus plugin ABI** (extends the existing per-capability `mfp_plugin.h` design - no god ABI):
+   `MFP_CAP_AUDIO_EFFECT` + `MFP_CAP_VIDEO_EFFECT` vtables mirroring `IAudioBusEffect`/`IVideoBusEffect`
+   (JSON config blob per kind, RT rules per the existing header contract), managed adapters following
+   `NativeLayerSurface`, `AbiPluginHost.RegisterInto(..., IBusRegistry? buses)`, HaPlay passes `MediaRuntime.Buses`.
+   Later: `MFP_CAP_VISUAL_SOURCE` (layer surface + pcm_submit face). **Prerequisite: H3/H4/M5** - the effect-chain
+   races become native use-after-free once C plugins sit in the chain.
+2. **Cue control-flow cues**: new `JumpCueNode` (`Targets: List<Guid>` - stable cue IDs shown as numbers, so
+   renumber/reorder never breaks a jump; `Mode: Always|Random`; optional `RepeatCount`; `FireTargetOnJump`).
+   Executes at the HaPlay transport layer (the `ActionCueNode` precedent). Pairs with M4's headless progression
+   controller.
+
+### Agreed implementation order
+
+1. **Batch 1 (quick/high-value)**: OverlayPopups; H8 ProRes pixel formats + per-codec CRF ranges; H5 defaults
+   (1920x1080@60 as real model defaults, honest button label, persist on close); H9 UI masking + redacted sink
+   names/logs; M11 dump retention + ptrace reset; L1 Watermark -> PlaceholderText.
+2. **Batch 2**: H3/H4/M5 effect-chain capability forwarding, lease ownership, hot-swap retirement.
+3. **Batch 3**: bus plugin ABI extension.
+4. **Batch 4**: cue jump/random cues with (or after) M4's progression controller.
+5. Then: H6/H7, settings store (simplification 1), remaining M/L items, H1 helper process.
+
+Deferred with rationale: project-file secret-store for stream keys (needs a cross-platform secret backend;
+UI masking + log redaction land first), M10 preservation-API removal (pending decision to keep tests or delete).
+
+### Status (updated 2026-07-12, after implementation)
+
+- **Batch 1: DONE + verified** (OverlayPopups; H8 pixel formats + per-codec CRF with a ProRes encoder-open
+  regression test; H5 real defaults/honest label/close-persist; H9 masking + redacted sink DisplayName;
+  M11 retention/size-log/ptrace reset; L1 zero AVLN5001 in Release).
+- **Batch 2: DONE + verified** (H3 capability-preserving `AudioEffectOutput.Wrap` incl. stats; H4
+  disposeInner + Release-hook wrapper retirement at the deck/cue sites, borrowed-carrier guard; M5
+  retire-on-processing-thread in all three hosts + per-frame gain ramp + NaN clamp; H2 cue attach leak
+  fixed. 5 new tests in BusEffectTests).
+- **Batch 3: DONE + verified** - `MFP_CAP_AUDIO_EFFECT` and `MFP_CAP_VIDEO_EFFECT` end-to-end with a
+  gcc-compiled C plugin in CI (audio: sample-exact 0.5x gain through the vtable; video: byte-exact
+  in-place CPU-frame invert via `AbiFrameMarshal` pinning; HW frames bypass per the v1 header contract).
+  M2's lazy-ordering note fixed (`Buses` forces the host build).
+- **Batch 4 (cue jump/random + M4): next.**
+- **Batch 4: jump/random cues DONE + verified** - `JumpCueNode` (ID-stable targets, Always|Random,
+  FireTargetOnJump), executes at the transport layer via the GO machinery (loop-back = select target as
+  standby + Go), "+ Jump" add-cue menu (targets the selected cue - the loop-back gesture) +
+  `AddSelectedCueAsJumpTarget` for multi-target pools, JSON "jump" discriminator, 3 round-trip/renumber/
+  authoring tests. DEFERRED from batch 4: M4's headless progression controller (jump logic lands in the
+  VM transport and migrates with M4); richer target-picker UI; RepeatCount (loop-N-then-exit needs
+  per-run state - infinite loop + manual stop is the v1 contract).
+- **H6 DONE**: AsyncPacketSink + FFmpegEncodeSession disposal now follow the terminal-stuck policy - a
+  worker still alive after its bounded join means native state is RETAINED (deliberate leak, logged)
+  instead of freed under a live FFmpeg/network call; Finish reports a stuck drain thread.
+- **H7 DONE + verified**: a configured fixed FPS is now enforced by a target-tick scheduler in the encode
+  session - faster input drops onto the grid, slower input hold-duplicates the last frame into gaps
+  (capped at 1 s per gap), PTS stamped on the target timebase, `EncodedFormat` reports the target rate.
+  Tests: 60→30 and 15→30 conversions verified by frame counts AND the decoded container rate.
+- **M4 remains deferred**: a genuinely UI-independent progression controller requires moving the deck's
+  open path (UI-thread output acquisition) off the dispatcher - a dedicated pass, not a quick patch.
+- **M4 (scoped) DONE**: deck advancement is now EVENT-driven - the mapper sets `NotifyNaturalEnd`, the
+  deck subscribes `ClipNaturallyEnded` (session dispatcher; never raised for loops/operator stops), and
+  a single idempotent `HandleShowSessionNaturalEndAsync` gate serves both the event (primary) and the
+  250ms poll (retained as fallback end detector). Advancement no longer depends on poll heuristics
+  firing first. NOT yet UI-independent: the open path still acquires outputs on the UI thread - the full
+  headless controller (opens off-dispatcher) remains the follow-up, now with the event seam in place.

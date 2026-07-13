@@ -53,14 +53,26 @@ public sealed class CueShowSessionCoordinator
             return null; // disarmed/unknown - the cue plays without this route
 
         // Line audio effects run between the route and the encoder (same insert point as the deck).
+        // The carrier stays BORROWED (disposeInner:false); the Release hook retires OUR effect wrapper
+        // (review H4: neither the session's dispose of a resampler nor a borrowed lease reaches it).
         var carrier = OutputManagement.WrapAudioEffectsForLine(lineId, rawCarrier);
 
-        void Release() => OutputManagement.ReleaseEncodeAudioByLineId(lineId);
+        void Release()
+        {
+            if (!ReferenceEquals(carrier, rawCarrier) && carrier is IDisposable effectWrapper)
+            {
+                try { effectWrapper.Dispose(); } // effects retire; stops at the borrowed carrier
+                catch { /* best effort */ }
+            }
+
+            OutputManagement.ReleaseEncodeAudioByLineId(lineId);
+        }
+
         if (carrier.Format.SampleRate == format.SampleRate && carrier.Format.Channels == format.Channels)
             return new ClipAudioOutputLease(carrier, DisposeOutputOnRuntimeDispose: false, Release: Release);
 
-        // Rate (or short-matrix channel) mismatch: adapt the clip into the carrier's format. Dispose
-        // frees only the wrapper - the borrowed carrier is released via the hook.
+        // Rate (or short-matrix channel) mismatch: adapt the clip into the carrier's format. The session
+        // disposes only the resampler wrapper; the effect wrapper + carrier retire via the hook above.
         return new ClipAudioOutputLease(
             S.Media.Decode.FFmpeg.Audio.ResamplingAudioOutput.Wrap(carrier, format),
             DisposeOutputOnRuntimeDispose: true,
@@ -204,6 +216,87 @@ public sealed class CueShowSessionCoordinator
             // them to the executors, so we fire by id (FireCueAsync) - independent of ShowSession's GO anchor.
             // Each transport op is guarded so a failure is LOGGED (not only surfaced as a UI notification).
             CuePlayer.StopPlaybackCallback = () => GuardedCueShowOp("stop", () => _cueShowSession!.StopAllAsync());
+            // #26 visualizer cue: start/stop the projectM layer on a composition WITH placement (a
+            // section of the frame). The layer persists across later cue fires (compositions persist)
+            // until a Stop cue - or an edit reload, which re-applies the checkbox-configured baseline.
+            CuePlayer.VisualizerCueExecutor = async (viz, _) =>
+            {
+                if (_cueShowSession is not { } session)
+                    return "cue session unavailable";
+                // v3: composition + geometry come from the cue's Video-tab placement (media-cue parity);
+                // legacy single-rect files were migrated to one placement at load.
+                var place = viz.VideoPlacements.FirstOrDefault();
+                var compGuid = place?.CompositionId ?? viz.CompositionId;
+                var compId = compGuid.ToString();
+                if (!viz.StartVisualizer)
+                {
+                    await session.SetCompositionVisualizerAsync(compId, null).ConfigureAwait(false);
+                    return null;
+                }
+
+                // Audio-feed routing (#26): FeedAll = every clip; else the cue's selected sources plus
+                // media cues flagged "send to visualizer". The set is snapshotted HERE (UI thread) and
+                // read lock-free by the session-dispatcher filter; refire the viz cue after changing it.
+                Func<string, bool>? feedFilter = null;
+                if (!viz.FeedAll)
+                {
+                    var allowed = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var id in viz.FeedCueIds)
+                        allowed.Add(id.ToString());
+                    var model = CuePlayer.SelectedCueList?.ToModel();
+                    if (model is not null)
+                        foreach (var node in FlattenCueNodes(model.Nodes))
+                            if (node is MediaCueNode { SendToVisualizer: true } m)
+                                allowed.Add(m.Id.ToString());
+                    feedFilter = cueId => allowed.Contains(cueId);
+                }
+
+                if (!RuntimeModules.IsProjectMAvailable)
+                    return "projectM is not available on this machine";
+                var comp = CuePlayer.SelectedCueList?.ToModel().Compositions
+                    .FirstOrDefault(c => c.Id == compGuid);
+                if (comp is null)
+                    return "the visualizer cue has no composition placement - add one on its Video tab";
+
+                var renderW = viz.RenderWidth > 0 ? viz.RenderWidth : comp.Width > 0 ? comp.Width : 1920;
+                var renderH = viz.RenderHeight > 0 ? viz.RenderHeight : comp.Height > 0 ? comp.Height : 1080;
+                var fps = viz.RenderFps > 0
+                    ? viz.RenderFps
+                    : comp.FrameRateDen > 0 && comp.FrameRateNum > 0 ? comp.FrameRateNum / comp.FrameRateDen : 60;
+                var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
+                    renderW, renderH, new Rational(fps > 0 ? fps : 60, 1),
+                    new S.Media.Visualizer.ProjectM.ProjectMOptions
+                    {
+                        PresetDirectory = string.IsNullOrWhiteSpace(viz.PresetDirectory) ? null : viz.PresetDirectory,
+                        RenderWidth = renderW,
+                        RenderHeight = renderH,
+                        Fps = fps,
+                        Shuffle = true,
+                    });
+                var placement = place is null
+                    ? new VideoPlacementSpec(compId, int.MaxValue - 1, Placement: "stretch")
+                    : new VideoPlacementSpec(
+                        compId, int.MaxValue - 1,
+                        Opacity: Math.Clamp(place.Opacity, 0, 1), Placement: "stretch",
+                        DestX: place.DestX, DestY: place.DestY,
+                        DestWidth: place.DestWidth, DestHeight: place.DestHeight,
+                        RotationDegrees: place.RotationDegrees);
+                if (!await session.SetCompositionVisualizerAsync(
+                            compId, source, placement: placement, audioFeedFilter: feedFilter)
+                        .ConfigureAwait(false))
+                {
+                    source.Dispose();
+                    Trace.LogWarning("visualizer cue: attach REFUSED (comp={Comp} - no GL surface host?)", compId);
+                    return "visualizer not attached (composition has no GL surface host)";
+                }
+
+                Trace.LogInformation(
+                    "visualizer cue ATTACHED: comp={Comp} render={W}x{H}@{Fps} dest=({X:0.##},{Y:0.##},{DW:0.##},{DH:0.##}) opacity={Op:0.##} feed={Feed} presets='{Presets}'",
+                    compId, renderW, renderH, fps,
+                    place?.DestX ?? 0, place?.DestY ?? 0, place?.DestWidth ?? 1, place?.DestHeight ?? 1,
+                    place?.Opacity ?? 1, viz.FeedAll ? "all" : "selective", viz.PresetDirectory ?? "(builtin)");
+                return null;
+            };
             // Pause must hit EVERY active group, not just the default one - a multi-group cue show would otherwise
             // keep the other groups running on pause (parity with StopAllAsync).
             CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetAllPausedAsync(paused));
@@ -736,44 +829,15 @@ public sealed class CueShowSessionCoordinator
                    $"->dst({s.DestX:0.#},{s.DestY:0.#},{s.DestWidth:0.#},{s.DestHeight:0.#})"))}]";
     }
 
-    /// <summary>Attaches a persistent projectM visualizer to every composition that enabled one (fresh each
-    /// reload; runs continuously across cue fires). No-op when projectM is unavailable - the checkbox greys
-    /// out with a reason, same as the deck.</summary>
-    private async Task ApplyCueCompositionVisualizersAsync(CueList model, ShowSession session)
-    {
-        if (!RuntimeModules.IsProjectMAvailable)
-            return;
 
-        foreach (var comp in model.Compositions.Where(c => c.VisualizerEnabled))
+    private static IEnumerable<CueNode> FlattenCueNodes(IEnumerable<CueNode> nodes)
+    {
+        foreach (var node in nodes)
         {
-            try
-            {
-                var renderW = comp.Width > 0 ? comp.Width : 1920;
-                var renderH = comp.Height > 0 ? comp.Height : 1080;
-                var fps = comp.FrameRateDen > 0 && comp.FrameRateNum > 0 ? comp.FrameRateNum / comp.FrameRateDen : 60;
-                var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
-                    renderW, renderH, new Rational(fps > 0 ? fps : 60, 1),
-                    new S.Media.Visualizer.ProjectM.ProjectMOptions
-                    {
-                        PresetDirectory = string.IsNullOrWhiteSpace(comp.VisualizerPresetDirectory)
-                            ? null
-                            : comp.VisualizerPresetDirectory,
-                        RenderWidth = renderW,
-                        RenderHeight = renderH,
-                        Fps = fps,
-                        Shuffle = true,
-                    });
-                if (!await session.SetCompositionVisualizerAsync(comp.Id.ToString(), source).ConfigureAwait(true))
-                {
-                    source.Dispose();
-                    Trace.LogWarning(
-                        "HaPlay: cue composition {Comp} visualizer not attached (no GL surface host)", comp.Id);
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.LogWarning(ex, "HaPlay: cue composition {Comp} visualizer attach failed", comp.Id);
-            }
+            yield return node;
+            if (node is CueGroupNode g)
+                foreach (var child in FlattenCueNodes(g.Children))
+                    yield return child;
         }
     }
 
@@ -1075,11 +1139,9 @@ public sealed class CueShowSessionCoordinator
             // NXT-21: await the load - blocking the UI thread on the session dispatcher would turn any
             // dispatcher stall into a whole-app freeze.
             await session.LoadDocumentAsync(doc).ConfigureAwait(true);
-            // Attach a persistent visualizer to each composition that asked for one. A cue composition
-            // survives every cue FIRE, so the visualizer runs continuously while the list plays - each
-            // fired clip's audio feeds it via the session tap. (It re-attaches on an edit reload; that's a
-            // deliberate config boundary, not per-fire.)
-            await ApplyCueCompositionVisualizersAsync(model, session).ConfigureAwait(true);
+            // Visualizers are CUES now (#26): a VisualizerCueNode attaches/detaches the layer at fire
+            // time (with placement + audio-feed routing). The old per-composition checkbox baseline is
+            // gone; an edit reload simply clears any fired visualizer (refire to restore).
             // Map each cue → its transport group so the progress poll can attribute per-group snapshot state.
             var groupByCue = new Dictionary<Guid, string>();
             foreach (var c in doc.Cues)

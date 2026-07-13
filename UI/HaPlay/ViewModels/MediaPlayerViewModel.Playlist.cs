@@ -36,9 +36,7 @@ public partial class MediaPlayerViewModel
         PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = value;
         try
         {
-            var settings = AppSettings.Load();
-            settings.PreferLiveUyvyPassthrough = value;
-            settings.Save();
+            AppSettings.Update(settings => settings.PreferLiveUyvyPassthrough = value);
         }
         catch
         {

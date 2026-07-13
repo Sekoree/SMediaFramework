@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
@@ -16,6 +17,9 @@ public partial class CuePlayerView : UserControl
 {
     private CuePlayerViewModel? _subscribedVm;
     private HierarchicalTreeDataGridSource<CueNodeViewModel>? _source;
+    private static readonly Microsoft.Extensions.Logging.ILogger CueTreeLog =
+        S.Media.Core.Diagnostics.MediaDiagnostics.CreateLogger("HaPlay.Views.CueTree");
+
     private IReadOnlyList<CueNodeViewModel>? _rowDragNodes;
 
     /// <summary>P4 close-out (plan §3.1): last drawer tab the operator used per cue type, so
@@ -154,23 +158,60 @@ public partial class CuePlayerView : UserControl
         }
 
         _rowDragNodes = e.Models.OfType<CueNodeViewModel>().ToArray();
+        if (_rowDragNodes.Count == 0)
+        {
+            // TreeDataGrid.Avalonia 12 fork defensive fallback: if the drag args carry no models,
+            // fall back to the current row selection (what the operator visibly dragged).
+            _rowDragNodes = vm.SelectedCueNode is { } sel ? [sel] : [];
+            System.Diagnostics.Debug.WriteLine("CueTree drag: e.Models empty - selection fallback");
+        }
+
         e.AllowedEffects = _rowDragNodes.Count > 0 ? DragDropEffects.Move : DragDropEffects.None;
     }
 
     private void OnCueTreeRowDrop(object? sender, TreeDataGridRowDragEventArgs e)
     {
-        e.Handled = true;
+        e.Handled = true; // suppress the grid's auto-move - MoveCueNode owns the reorder
+        // Each early return is LOGGED: "indicator shows but drop does nothing" was undiagnosable
+        // without knowing which gate rejected the drop (edit mode / no drag models / Position=None /
+        // unresolvable target row).
         if (DataContext is not CuePlayerViewModel vm || !vm.IsCueEditMode)
+        {
+            CueTreeLog.LogWarning("cue drop ignored: edit mode off");
             return;
+        }
+
         if (_rowDragNodes is null || _rowDragNodes.Count == 0)
+        {
+            CueTreeLog.LogWarning("cue drop ignored: no dragged rows captured (drag-started models empty?)");
             return;
+        }
+
         if (e.Position == TreeDataGridRowDropPosition.None)
+        {
+            CueTreeLog.LogWarning("cue drop ignored: drop position None");
             return;
+        }
 
         var target = e.TargetRow?.DataContext as CueNodeViewModel;
+        if (target is null && e.TargetRow is not null)
+        {
+            CueTreeLog.LogWarning(
+                "cue drop: target row resolved no cue (DataContext={Type}) - dropping at root end",
+                e.TargetRow.DataContext?.GetType().Name ?? "null");
+        }
+
         var placement = MapDropPosition(e.Position);
+        var moved = 0;
         foreach (var node in _rowDragNodes)
-            vm.MoveCueNode(node, target, placement);
+        {
+            if (vm.MoveCueNode(node, target, placement))
+                moved++;
+        }
+
+        CueTreeLog.LogDebug(
+            "cue drop: moved {Moved}/{Total} (position={Position}, target={Target})",
+            moved, _rowDragNodes.Count, e.Position, target?.Label ?? "(root)");
         _rowDragNodes = null;
     }
 
@@ -194,12 +235,15 @@ public partial class CuePlayerView : UserControl
     {
         _ = sender;
         if (!IsOverCueTree(e)) return;
+        // ONLY arbitrate FILE drags. This handler runs with handledEventsToo:true AFTER the grid's own
+        // row-drag handling; the old unconditional else set DragEffects=None for the grid's row
+        // reorder too - with None the OS never dispatched the Drop, so RowDrop never fired: indicators
+        // appeared, dropping did nothing (the reported bug).
+        if (!e.DataTransfer.Contains(DataFormat.File))
+            return;
         // File drops author media cues - locked down with the rest of the editing surface.
         var editMode = DataContext is CuePlayerViewModel { IsCueEditMode: true };
-        if (editMode && e.DataTransfer.Contains(DataFormat.File))
-            e.DragEffects = DragDropEffects.Copy;
-        else
-            e.DragEffects = DragDropEffects.None;
+        e.DragEffects = editMode ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
@@ -209,11 +253,11 @@ public partial class CuePlayerView : UserControl
         if (!IsOverCueTree(e)) return;
         if (DataContext is not CuePlayerViewModel { IsCueEditMode: true } vm)
             return;
-        e.Handled = true;
 
         var files = e.DataTransfer.TryGetFiles();
         if (files is null || !files.Any())
-            return;
+            return; // not a file drop (e.g. a row-reorder drop) - leave it to the grid
+        e.Handled = true;
 
         var paths = files
             .Select(f => f.Path.LocalPath)

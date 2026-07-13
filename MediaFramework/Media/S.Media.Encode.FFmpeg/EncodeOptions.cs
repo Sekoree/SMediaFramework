@@ -166,8 +166,11 @@ public sealed record EncodeSessionOptions
         {
             if (Video.BitrateBps > 0 && Video.Crf is not null)
                 errors.Add("Video rate control: set either a bitrate or a CRF, not both.");
-            if (Video.Crf is < 0 or > 63)
-                errors.Add("Video CRF must be between 0 and 63.");
+            // Per-codec CRF ranges: x264/x265 accept 0-51; AV1/VP9 accept 0-63 (review H8 - a global
+            // 0-63 range silently admitted values libx264/libx265 reject at open).
+            var crfMax = Video.Codec is EncodeVideoCodec.Av1 or EncodeVideoCodec.Vp9 ? 63 : 51;
+            if (Video.Crf is { } crf && (crf < 0 || crf > crfMax))
+                errors.Add($"Video CRF must be between 0 and {crfMax} for {Video.Codec}.");
             if (Video.ScaleWidth < 0 || Video.ScaleHeight < 0)
                 errors.Add("Video scale dimensions cannot be negative.");
             if (Container is EncodeContainer.Flv && Video.Codec is not EncodeVideoCodec.H264)

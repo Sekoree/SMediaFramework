@@ -169,6 +169,65 @@ public sealed class NowPlayingGroupRowTests
     }
 
     [Fact]
+    public void SequentialChainGroup_RunsOnSummedTimeline_WithUpcomingCountdowns()
+    {
+        DispatchUi(static () =>
+        {
+            // #29: song1 (60 s) auto-follows into song2 (120 s) - the group row runs on the summed
+            // 180 s chain, and the not-yet-fired chain members count down to their automatic start.
+            var (vm, _, child1, child2) = CreateGroupWithTwoChildren();
+            child1.DurationMs = 60_000;
+            child2.DurationMs = 120_000;
+            child2.TriggerMode = CueTriggerMode.AutoFollow;
+
+            vm.OnCueStarted(child1.Id);
+            var row = Assert.IsType<ActiveGroupViewModel>(Assert.Single(vm.NowPlayingRows));
+            vm.OnCueProgress(new CuePlaybackProgress(child1.Id, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)));
+
+            Assert.Equal(180_000, row.LongestDurationMs);
+            Assert.Equal(100.0 / 6, row.ProgressPercent, 1);
+            Assert.Equal("00:30 / 03:00 (-02:30)", row.PositionDisplay);
+
+            // child2 hasn't fired yet: one upcoming row counting down to its start (30 s away).
+            var upcoming = Assert.Single(row.UpcomingItems);
+            Assert.Same(child2, upcoming.Node);
+            Assert.Equal(30_000, upcoming.EtaMs);
+            Assert.Contains("00:30", upcoming.CountdownDisplay);
+
+            // Chain advances: the projection moves past the first leg, the upcoming list drains.
+            vm.OnCueEnded(child1.Id);
+            vm.OnCueStarted(child2.Id);
+            row = Assert.IsType<ActiveGroupViewModel>(Assert.Single(vm.NowPlayingRows));
+            vm.OnCueProgress(new CuePlaybackProgress(child2.Id, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(120)));
+            Assert.Equal("01:10 / 03:00 (-01:50)", row.PositionDisplay);
+            Assert.Empty(row.UpcomingItems);
+        });
+    }
+
+    [Fact]
+    public void ManualSiblings_KeepLongestChildTimeline_NoUpcomingRows()
+    {
+        DispatchUi(static () =>
+        {
+            // Simultaneously-fired Manual siblings are NOT a chain: the aggregate must stay on the
+            // longest child (not just the first chain member) and show no countdown rows.
+            var (vm, _, child1, child2) = CreateGroupWithTwoChildren();
+            child1.DurationMs = 60_000;
+            child2.DurationMs = 120_000; // Manual trigger - off the automatic chain
+
+            vm.OnCueStarted(child1.Id);
+            vm.OnCueStarted(child2.Id);
+            var row = Assert.IsType<ActiveGroupViewModel>(Assert.Single(vm.NowPlayingRows));
+            vm.OnCueProgress(new CuePlaybackProgress(child1.Id, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)));
+            vm.OnCueProgress(new CuePlaybackProgress(child2.Id, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(120)));
+
+            Assert.Equal(120_000, row.LongestDurationMs);
+            Assert.Equal(25.0, row.ProgressPercent, 1);
+            Assert.Empty(row.UpcomingItems);
+        });
+    }
+
+    [Fact]
     public void GroupCancel_CancelsEveryChild()
     {
         DispatchUi(static () =>

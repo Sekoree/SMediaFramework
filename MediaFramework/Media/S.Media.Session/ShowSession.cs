@@ -269,7 +269,9 @@ public sealed class ShowSession : IAsyncDisposable
     // thread-safe outputs (their Submit runs on the router pump thread).
     private readonly List<AudioTapRegistration> _audioTaps = [];
 
-    private sealed record AudioTapRegistration(Guid Id, IAudioOutput Tap, float Gain);
+    /// <summary>An audio tap fed by fired clips. <paramref name="Filter"/> (cue id → bool) makes the
+    /// feed SELECTIVE - e.g. a visualizer cue that only listens to chosen media cues; null = every clip.</summary>
+    private sealed record AudioTapRegistration(Guid Id, IAudioOutput Tap, float Gain, Func<string, bool>? Filter = null);
 
     /// <summary>The session's metadata blackboard: item metadata published on every clip fire, frame
     /// stats published by probe effects. Attach visualizer/effect sinks here.</summary>
@@ -320,8 +322,11 @@ public sealed class ShowSession : IAsyncDisposable
     /// on replace/remove/reload; false = the CALLER owns it - used for a persistent (continuously
     /// rendering) source that must survive document reloads and be re-attached to each new composition.
     /// </summary>
+    /// <param name="audioFeedFilter">Cue-id filter for the visualizer's audio feed (null = every
+    /// clip): a visualizer cue can listen only to selected media cues (#26 routing).</param>
     public Task<bool> SetCompositionVisualizerAsync(
-        string compositionId, S.Media.Core.Buses.IAudioVisualSource? source, bool disposeSourceOnRemove = true) =>
+        string compositionId, S.Media.Core.Buses.IAudioVisualSource? source, bool disposeSourceOnRemove = true,
+        VideoPlacementSpec? placement = null, Func<string, bool>? audioFeedFilter = null) =>
         InvokeAsync(async () =>
         {
             if (_visualizerSlots.Remove(compositionId, out var existing))
@@ -345,15 +350,17 @@ public sealed class ShowSession : IAsyncDisposable
                 return false;
             }
 
-            // Below the test pattern (int.MaxValue) but above every content layer.
+            // Below the test pattern (int.MaxValue) but above every content layer. A caller-provided
+            // placement (#26: visualizer-as-a-cue) renders the visualizer into a SECTION of the canvas
+            // (dest rect/opacity, same semantics as media placements); default = full-canvas stretch.
             var layer = composition.AddSurfaceLayer(
                 surfaceSource.CreateLayerSurface(),
-                new VideoPlacementSpec(compositionId, int.MaxValue - 1, Placement: "stretch"));
+                placement ?? new VideoPlacementSpec(compositionId, int.MaxValue - 1, Placement: "stretch"));
             composition.EnsurePumpStarted();
 
             var tapId = Guid.NewGuid();
-            _audioTaps.Add(new AudioTapRegistration(tapId, source, 1f));
-            AttachTapToActiveClips(tapId, source);
+            _audioTaps.Add(new AudioTapRegistration(tapId, source, 1f, audioFeedFilter));
+            AttachTapToActiveClips(tapId, source, audioFeedFilter);
             if (source is S.Media.Core.Buses.IBusMetadataSink sink)
                 MetadataHub.Attach(sink);
 
@@ -369,12 +376,14 @@ public sealed class ShowSession : IAsyncDisposable
         InvokeAsync(() => Task.FromResult(_visualizerSlots.ContainsKey(compositionId)));
 
     /// <summary>Feeds a newly-registered tap from the clips that are ALREADY playing (dispatcher).</summary>
-    private void AttachTapToActiveClips(Guid tapId, IAudioOutput tap)
+    private void AttachTapToActiveClips(Guid tapId, IAudioOutput tap, Func<string, bool>? filter = null)
     {
         foreach (var group in _groups.Values)
         {
             if (group.Active?.Player is not { AudioRouter: not null, AudioSourceId: not null } player)
                 continue;
+            if (filter is not null && group.ActiveBinding?.CueId is { } activeCueId && !filter(activeCueId))
+                continue; // selective feed: this active clip is not in the tap's listen set
             try
             {
                 player.AttachAudioOutput(tap, $"tap-{tapId:N}", map: null, gain: 1f);
@@ -404,12 +413,14 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
     /// <summary>Attaches the registered taps to a freshly-committed clip's router (dispatcher).</summary>
-    private void AttachAudioTaps(S.Media.Players.MediaPlayer player)
+    private void AttachAudioTaps(S.Media.Players.MediaPlayer player, string? cueId = null)
     {
         if (_audioTaps.Count == 0 || player.AudioRouter is null || player.AudioSourceId is null)
             return; // no audio side (video-only clip) - nothing to tap
         foreach (var tap in _audioTaps)
         {
+            if (tap.Filter is not null && cueId is not null && !tap.Filter(cueId))
+                continue; // selective feed (#26): this clip is not in the tap's listen set
             try
             {
                 player.AttachAudioOutput(tap.Tap, $"tap-{tap.Id:N}", map: null, gain: tap.Gain);
@@ -894,7 +905,7 @@ public sealed class ShowSession : IAsyncDisposable
 
             // Effect buses (Phase 4): registered audio taps ride along on every fired clip, and the
             // metadata hub learns what's playing (visualizers/overlays pick both up).
-            AttachAudioTaps(player);
+            AttachAudioTaps(player, binding.CueId);
             PublishItemMetadata(binding);
 
             armed.Start();

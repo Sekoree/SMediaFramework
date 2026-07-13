@@ -25,6 +25,7 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
     private uint _texture, _blitProgram, _blitVao;
     private int _canvasWidth, _canvasHeight;
     private bool _hasFrame;
+    private bool _loggedFirstRender;
     private volatile bool _disposed;
     private bool _failed;
 
@@ -68,6 +69,14 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
     {
         if (_disposed || _failed || _texture == 0 || _upload is null)
             return;
+        if (!_loggedFirstRender)
+        {
+            // One line per surface instance: proves the composition pump IS compositing this layer
+            // (its absence after an attach = the pump never rendered the surface at all).
+            _loggedFirstRender = true;
+            Trace.LogInformation("frame-blit surface: first composite (canvas {W}x{H}, renderer failed={Failed})",
+                _canvasWidth, _canvasHeight, _renderer.Failed);
+        }
 
         // Pull the renderer's newest frame (cheap copy under its lock); keep showing the previous
         // texture content when nothing new landed this tick - the stream stays visually continuous.

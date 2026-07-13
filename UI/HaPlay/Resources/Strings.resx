@@ -724,6 +724,9 @@
   <data name="UpcomingCuesHeader" xml:space="preserve">
     <value>Upcoming</value>
   </data>
+  <data name="NowPlayingStartsInFormat" xml:space="preserve">
+    <value>in {0}</value>
+  </data>
   <data name="CloseButton" xml:space="preserve">
     <value>Close</value>
   </data>
@@ -2068,6 +2071,39 @@
   <data name="CueKindCommentLabel" xml:space="preserve">
     <value>Comment</value>
   </data>
+  <data name="CueKindJumpLabel" xml:space="preserve">
+    <value>Jump</value>
+  </data>
+  <data name="CueKindVisualizerLabel" xml:space="preserve">
+    <value>Visualizer</value>
+  </data>
+  <data name="AddVisualizerCueButton" xml:space="preserve">
+    <value>+ Visualizer</value>
+  </data>
+  <data name="CueJumpNoTargets" xml:space="preserve">
+    <value>Jump cue has no target - select the jump cue and set a target.</value>
+  </data>
+  <data name="CueJumpTargetMissing" xml:space="preserve">
+    <value>Jump target no longer exists in this list.</value>
+  </data>
+  <data name="CueNumberDuplicateFormat" xml:space="preserve">
+    <value>Cue number "{0}" is already in use - numbers must be unique.</value>
+  </data>
+  <data name="CueJumpUnknownNumbersFormat" xml:space="preserve">
+    <value>No cue found for number(s): {0}</value>
+  </data>
+  <data name="CueJumpTargetsLabel" xml:space="preserve">
+    <value>Jump to cue number(s)</value>
+  </data>
+  <data name="CueJumpRandomLabel" xml:space="preserve">
+    <value>Pick a random target</value>
+  </data>
+  <data name="CueJumpFireLabel" xml:space="preserve">
+    <value>Fire target on jump (off = arm as standby only)</value>
+  </data>
+  <data name="AddJumpCueButton" xml:space="preserve">
+    <value>+ Jump</value>
+  </data>
   <data name="CueKindDefaultLabel" xml:space="preserve">
     <value>Cue</value>
   </data>
@@ -2765,7 +2801,7 @@
     <value>0 = match the output (the deck's output preset / driven display). A fixed size renders the visualizer at that resolution regardless of cover art or source video.</value>
   </data>
   <data name="VisualizerResMatchOutput" xml:space="preserve">
-    <value>Match output</value>
+    <value>Default (1080p60)</value>
   </data>
   <data name="VisualizerResolutionHeader" xml:space="preserve">
     <value>Render resolution</value>

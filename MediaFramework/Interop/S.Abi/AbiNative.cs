@@ -18,6 +18,7 @@ internal enum MfpCapability : uint
 {
     AudioBackend = 1u << 0, VideoSource = 1u << 1, AudioSource = 1u << 2,
     VideoOutput = 1u << 3, LayerSurface = 1u << 4, Subtitle = 1u << 5, ControlDecoder = 1u << 6,
+    AudioEffect = 1u << 7, VideoEffect = 1u << 8,
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -57,6 +58,8 @@ internal unsafe struct MfpRegistrar
     public delegate* unmanaged<void*, byte*, void*, void*, int> AddLayerSurface;
     public delegate* unmanaged<void*, byte*, void*, void*, int> AddSubtitleProvider;
     public delegate* unmanaged<void*, byte*, void*, void*, int> AddControlDecoder;
+    public delegate* unmanaged<void*, byte*, void*, void*, int> AddAudioEffect;
+    public delegate* unmanaged<void*, byte*, void*, void*, int> AddVideoEffect;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -347,5 +350,45 @@ internal unsafe struct MfpLayerSurfaceFactoryVTable
     public uint StructSize;
     public delegate* unmanaged<void*, byte*, void*> Create;   // (self, config_json) -> surface instance
     public MfpLayerSurfaceVTable* SurfaceVTable;
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpAudioEffectVTable
+{
+    public uint AbiVersion;
+    public uint StructSize;
+    public delegate* unmanaged<void*, MfpAudioFormat*, int> Configure;
+    public delegate* unmanaged<void*, float*, int, long, int> Process;   // (effect, interleaved, count, framePos)
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpAudioEffectFactoryVTable
+{
+    public uint AbiVersion;
+    public uint StructSize;
+    public delegate* unmanaged<void*, byte*, void*> Create;   // (self, config_json) -> effect instance
+    public MfpAudioEffectVTable* EffectVTable;
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpVideoEffectVTable
+{
+    public uint AbiVersion;
+    public uint StructSize;
+    public delegate* unmanaged<void*, MfpVideoFormat*, int> Configure;
+    public delegate* unmanaged<void*, MfpVideoFrame*, long, int> Process;   // (effect, frame, ptsTicks)
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpVideoEffectFactoryVTable
+{
+    public uint AbiVersion;
+    public uint StructSize;
+    public delegate* unmanaged<void*, byte*, void*> Create;   // (self, config_json) -> effect instance
+    public MfpVideoEffectVTable* EffectVTable;
     public delegate* unmanaged<void*, void> Destroy;
 }

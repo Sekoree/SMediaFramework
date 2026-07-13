@@ -16,6 +16,7 @@ public sealed class VideoEffectBusOutput :
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;
     private IVideoBusEffect[] _effects;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<IVideoBusEffect> _retired = new();
     private VideoFormat _configuredFormat;
     private bool _configured;
     private bool _disposed;
@@ -48,11 +49,19 @@ public sealed class VideoEffectBusOutput :
         }
 
         var previous = Interlocked.Exchange(ref _effects, next);
+        // Retire on the processing (pump drain) thread's next Submit - never here, where a Process may
+        // still be running on the old array (review M5).
         foreach (var old in previous)
         {
             if (!next.Contains(old))
-                MediaDiagnostics.SwallowDisposeErrors(old.Dispose, "VideoEffectBusOutput.SetEffects: removed effect");
+                _retired.Enqueue(old);
         }
+    }
+
+    private void DrainRetired()
+    {
+        while (_retired.TryDequeue(out var old))
+            MediaDiagnostics.SwallowDisposeErrors(old.Dispose, "VideoEffectBusOutput: retired effect");
     }
 
     public VideoFormat Format => _inner.Format;
@@ -78,6 +87,8 @@ public sealed class VideoEffectBusOutput :
             return;
         }
 
+        // The single processing (pump drain) thread: retired effects are out of use by now.
+        DrainRetired();
         var effects = Volatile.Read(ref _effects);
         var working = frame;
         foreach (var effect in effects)
@@ -112,6 +123,7 @@ public sealed class VideoEffectBusOutput :
         if (_disposed)
             return;
         _disposed = true;
+        DrainRetired();
         var effects = Interlocked.Exchange(ref _effects, []);
         foreach (var effect in effects)
             MediaDiagnostics.SwallowDisposeErrors(effect.Dispose, "VideoEffectBusOutput.Dispose: effect");

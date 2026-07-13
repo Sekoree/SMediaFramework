@@ -589,7 +589,54 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set => Extra = value.ToString();
     }
 
+    /// <summary>Media FX send (#26): this media cue's audio also drives a selective-feed visualizer.</summary>
+    public bool SendToVisualizer { get; set; }
+
+    /// <summary>On natural end, fire this cue (null = rely on the next cue's Auto-Follow).</summary>
+    public Guid? EndTargetCueId { get; set; }
+
+    /// <summary>Visualizer timeline duration (ms): 0 = infinite; &gt;0 = the chain advances after it.</summary>
+    public int VisualizerDurationMs { get; set; }
+
+    /// <summary>Visualizer render resolution/fps (0 = follow the composition).</summary>
+    public int VisualizerRenderWidth { get; set; }
+
+    public int VisualizerRenderHeight { get; set; }
+
+    public int VisualizerRenderFps { get; set; }
+
+    /// <summary>Visualizer-cue feed (#26): true = every clip; false = FeedCueIds + flagged media cues.</summary>
+    public bool VisualizerFeedAll { get; set; } = true;
+
+    public List<Guid> VisualizerFeedCueIds { get; set; } = [];
+
+    /// <summary>Visualizer-cue payload (#26): target composition + normalized dest rect + opacity.
+    /// StartVisualizer/preset dir ride Extra ("Stop" sentinel) and SourceOrAction respectively.</summary>
+    public Guid VisualizerCompositionId { get; set; }
+
+    public double VisualizerDestX { get; set; }
+
+    public double VisualizerDestY { get; set; }
+
+    public double VisualizerDestWidth { get; set; } = 1.0;
+
+    public double VisualizerDestHeight { get; set; } = 1.0;
+
+    public double VisualizerOpacity { get; set; } = 1.0;
+
+    /// <summary>Jump-cue targets (stable cue IDs - renumbering never retargets a jump).</summary>
+    public List<Guid> JumpTargetIds { get; set; } = [];
+
+    /// <summary>Jump-cue random pick, stored in <see cref="Extra"/> like the other kind-specific enums.</summary>
+    public bool JumpRandom
+    {
+        get => string.Equals(Extra, "Random", StringComparison.OrdinalIgnoreCase);
+        set => Extra = value ? "Random" : "Always";
+    }
+
     public bool IsGroup => Kind == CueNodeKind.Group;
+
+    public bool IsMediaKind => Kind == CueNodeKind.Media;
 
     public bool HasChildren => Children.Count > 0;
 
@@ -599,6 +646,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
         CueNodeKind.Media => Strings.CueKindMediaLabel,
         CueNodeKind.Action => Strings.CueKindActionLabel,
         CueNodeKind.Comment => Strings.CueKindCommentLabel,
+        CueNodeKind.Jump => Strings.CueKindJumpLabel,
+        CueNodeKind.Visualizer => Strings.CueKindVisualizerLabel,
         _ => Strings.CueKindDefaultLabel,
     };
 
@@ -624,7 +673,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 (rollupMs, itemCount) = AggregateChildrenDurations(static (sumMs, childMs) => Math.Max(sumMs, childMs));
                 break;
             case CueGroupFireMode.FirstCueOnly:
-                rollupMs = Children.FirstOrDefault(c => c.Kind != CueNodeKind.Comment)?.RolledDurationMs ?? 0;
+                rollupMs = SequentialChainDurationMs();
                 itemCount = Children.Count;
                 break;
             case CueGroupFireMode.ArmedList:
@@ -655,6 +704,43 @@ public sealed partial class CueNodeViewModel : ObservableObject
         return (ms, count);
     }
 
+    /// <summary>Duration of the sequential chain a FirstCueOnly group fires: the first non-comment
+    /// child plus every consecutive child whose trigger is Auto-Follow or Auto-Continue (each starts
+    /// when the previous ends). A Manual child breaks the chain - it needs its own GO.</summary>
+    /// <summary>What this node contributes to a sequential chain timeline: media/duration-visualizer
+    /// durations; 0 for transparent kinds (jump/action/infinite visualizer). Shared by the group
+    /// duration sum and the Now-Playing chain-position projection so they can never disagree.</summary>
+    internal long ChainContributionMs =>
+        Kind is CueNodeKind.Jump or CueNodeKind.Action ? 0
+        : Kind == CueNodeKind.Visualizer && VisualizerDurationMs <= 0 ? 0
+        : RolledDurationMs;
+
+    private long SequentialChainDurationMs()
+    {
+        long total = 0;
+        var started = false;
+        foreach (var child in Children)
+        {
+            if (child.Kind == CueNodeKind.Comment)
+                continue;
+            // Instant/transparent links: jumps, actions, and infinite visualizers occupy no timeline -
+            // they neither add time nor break the chain (a visualizer WITH a duration adds it like an
+            // image slide). "visualizer → song1 → song2 → jump" therefore sums song1+song2.
+            if (!started)
+            {
+                started = true;
+                total += child.ChainContributionMs;
+                continue;
+            }
+
+            if (child.TriggerMode is not (CueTriggerMode.AutoFollow or CueTriggerMode.AutoContinue))
+                break; // a Manual child needs its own GO - the automatic chain ends here
+            total += child.ChainContributionMs;
+        }
+
+        return total;
+    }
+
     /// <summary>Effective duration for roll-ups: groups recursively roll up via their own
     /// <see cref="BuildGroupDurationDisplay"/> rules; media cues return their probed
     /// <see cref="EffectiveDurationMs"/>; other kinds (Action / Comment) return 0.</summary>
@@ -665,6 +751,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             switch (Kind)
             {
                 case CueNodeKind.Media: return EffectiveDurationMs;
+                case CueNodeKind.Visualizer: return Math.Max(0, VisualizerDurationMs); // 0 = infinite → transparent in sums
                 case CueNodeKind.Group:
                 {
                     switch (GroupFireMode)
@@ -672,7 +759,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                         case CueGroupFireMode.FireAllSimultaneously:
                             return AggregateChildrenDurations(static (sumMs, childMs) => Math.Max(sumMs, childMs)).Ms;
                         case CueGroupFireMode.FirstCueOnly:
-                            return Children.FirstOrDefault(c => c.Kind != CueNodeKind.Comment)?.RolledDurationMs ?? 0;
+                            // The chain that will ACTUALLY play: the first cue plus every consecutive
+                            // Auto-Follow / Auto-Continue child (each fires when the previous ends), so
+                            // the group's duration is their SUM, not just the first item.
+                            return SequentialChainDurationMs();
                         default:
                             return AggregateChildrenDurations(static (sumMs, childMs) => sumMs + childMs).Ms;
                     }
@@ -885,6 +975,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceVideoWidth = m.SourceVideoWidth,
                     SourceVideoHeight = m.SourceVideoHeight,
                     MediaSourceItem = m.Source,
+                    SendToVisualizer = m.SendToVisualizer,
+                    EndTargetCueId = m.EndTargetCueId,
                     StartOffsetMs = m.StartOffsetMs,
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
@@ -910,6 +1002,63 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     EndpointIdText = a.EndpointId?.ToString() ?? string.Empty,
                     Extra = a.ActionKind.ToString(),
                 };
+            case JumpCueNode j:
+                return new CueNodeViewModel(CueNodeKind.Jump)
+                {
+                    Id = j.Id,
+                    Number = j.Number,
+                    Label = j.Label,
+                    TriggerMode = j.TriggerMode,
+                    PreWaitMs = j.PreWaitMs,
+                    Notes = j.Notes,
+                    ColorTag = j.ColorTag,
+                    JumpTargetIds = [.. j.TargetCueIds],
+                    Extra = j.RandomTarget ? "Random" : "Always",
+                    SourceOrAction = j.FireTargetOnJump ? "fire" : "standby",
+                };
+            case VisualizerCueNode v:
+            {
+                var vizVm = new CueNodeViewModel(CueNodeKind.Visualizer)
+                {
+                    Id = v.Id,
+                    Number = v.Number,
+                    Label = v.Label,
+                    TriggerMode = v.TriggerMode,
+                    PreWaitMs = v.PreWaitMs,
+                    Notes = v.Notes,
+                    ColorTag = v.ColorTag,
+                    VisualizerCompositionId = v.CompositionId,
+                    VisualizerDestX = v.DestX,
+                    VisualizerDestY = v.DestY,
+                    VisualizerDestWidth = v.DestWidth,
+                    VisualizerDestHeight = v.DestHeight,
+                    VisualizerOpacity = v.Opacity,
+                    VisualizerFeedAll = v.FeedAll,
+                    VisualizerFeedCueIds = [.. v.FeedCueIds],
+                    SourceOrAction = v.PresetDirectory ?? string.Empty,
+                    Extra = v.StartVisualizer ? "Start" : "Stop",
+                    VisualizerDurationMs = v.DurationMs,
+                    VisualizerRenderWidth = v.RenderWidth,
+                    VisualizerRenderHeight = v.RenderHeight,
+                    VisualizerRenderFps = v.RenderFps,
+                };
+                foreach (var placement in v.VideoPlacements)
+                    vizVm.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(placement));
+                // Legacy (pre-v3) single-rect files: migrate the Dest* fields into one placement.
+                if (vizVm.VideoPlacements.Count == 0 && v.CompositionId != Guid.Empty)
+                {
+                    vizVm.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement
+                    {
+                        CompositionId = v.CompositionId,
+                        DestX = v.DestX, DestY = v.DestY,
+                        DestWidth = v.DestWidth, DestHeight = v.DestHeight,
+                        Opacity = v.Opacity,
+                    }));
+                }
+
+                return vizVm;
+            }
+
             case CommentCueNode c:
                 return new CueNodeViewModel(CueNodeKind.Comment)
                 {
@@ -970,6 +1119,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 SourceFrameRateDen = Math.Max(0, SourceFrameRateDen),
                 SourceVideoWidth = Math.Max(0, SourceVideoWidth),
                 SourceVideoHeight = Math.Max(0, SourceVideoHeight),
+                SendToVisualizer = SendToVisualizer,
+                EndTargetCueId = EndTargetCueId,
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
                 EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
@@ -989,6 +1140,44 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
                 ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OSCOut,
+            },
+            CueNodeKind.Jump => new JumpCueNode
+            {
+                Id = Id,
+                Number = Number,
+                Label = Label,
+                TriggerMode = TriggerMode,
+                PreWaitMs = PreWaitMs,
+                Notes = Notes,
+                ColorTag = ColorTag,
+                TargetCueIds = [.. JumpTargetIds],
+                RandomTarget = JumpRandom,
+                FireTargetOnJump = !string.Equals(SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase),
+            },
+            CueNodeKind.Visualizer => new VisualizerCueNode
+            {
+                Id = Id,
+                Number = Number,
+                Label = Label,
+                TriggerMode = TriggerMode,
+                PreWaitMs = PreWaitMs,
+                Notes = Notes,
+                ColorTag = ColorTag,
+                CompositionId = VisualizerCompositionId,
+                StartVisualizer = !string.Equals(Extra, "Stop", StringComparison.OrdinalIgnoreCase),
+                PresetDirectory = string.IsNullOrWhiteSpace(SourceOrAction) ? null : SourceOrAction,
+                DestX = VisualizerDestX,
+                DestY = VisualizerDestY,
+                DestWidth = VisualizerDestWidth,
+                DestHeight = VisualizerDestHeight,
+                Opacity = VisualizerOpacity,
+                FeedAll = VisualizerFeedAll,
+                FeedCueIds = [.. VisualizerFeedCueIds],
+                DurationMs = VisualizerDurationMs,
+                RenderWidth = VisualizerRenderWidth,
+                RenderHeight = VisualizerRenderHeight,
+                RenderFps = VisualizerRenderFps,
+                VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },
             _ => new CommentCueNode
             {

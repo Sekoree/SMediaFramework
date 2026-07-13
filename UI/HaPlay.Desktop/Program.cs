@@ -48,6 +48,17 @@ sealed class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            // OverlayPopups: render tooltips/menus INSIDE the window instead of as separate native X11
+            // popup windows. Two captured UI-hang dumps show the freeze surface exactly there: closing a
+            // tooltip's popup disposes a dedicated GLX render target, and that dispose synchronously waits
+            // on a glXSwapBuffers-stalled render thread (Review/CODE-REVIEW-2026-07-12.md, incident
+            // remediation 1). Overlay popups never create that native render target, removing the wait.
+            // HAPLAY_OVERLAY_POPUPS=0 opts back into native popups (A/B for chrome/layout side effects -
+            // e.g. a caption-button glitch - at the cost of re-exposing the tooltip-close freeze).
+            .With(new X11PlatformOptions
+            {
+                OverlayPopups = Environment.GetEnvironmentVariable("HAPLAY_OVERLAY_POPUPS") != "0",
+            })
             .WithInterFont()
             .LogToTrace();
 
