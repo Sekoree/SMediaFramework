@@ -408,9 +408,10 @@ public partial class MediaPlayerViewModel
     /// retry and return true.</summary>
     private async Task<bool> TryOpenViaShowSessionAsync(PlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
     {
-        // Every open bumps the play generation FIRST: any natural-end event raised for the previous
-        // track is dropped at delivery (see the ClipNaturallyEnded subscription).
-        Interlocked.Increment(ref _playGeneration);
+        // Every open installs a fresh, unclaimed play generation FIRST. End observations carry this
+        // generation through any await, so a song-N poll that resumes after song N+1 opened cannot claim
+        // N+1's advance. The claimed bit also arbitrates the event and poll paths atomically.
+        BeginNaturalEndGeneration(ref _naturalEndGenerationState);
 
         // Resolve the registry URI + whether there's a video composition. Files probe for a video stream;
         // live inputs map to their option-carrying ndi:/padev: descriptor URIs.
@@ -465,6 +466,23 @@ public partial class MediaPlayerViewModel
             hasVideo = false;
         }
 
+        // A visualizer-owned canvas has one fixed shape across file/YouTube tracks. When the output set is
+        // still compatible, preserve that live composition (and its output leases + projectM surface) while
+        // only the audio clip changes. This is the no-black-frame path; toggle/settings/size changes still
+        // rebuild normally and therefore remain explicit visualizer restart boundaries.
+        var resolvedVisualizerSize = ResolveVisualizerRenderSize();
+        var selectedLineIds = lines.Select(line => line.Definition.Id).ToHashSet();
+        var preserveVisualizerComposition =
+            ShowSessionActive
+            && VisualizerEnabled
+            && IsVisualizerAvailable
+            && _playerShowVizOwnsCanvas
+            && _visualizerSource is not null
+            && _playerShowCanvas == (resolvedVisualizerSize.Width, resolvedVisualizerSize.Height)
+            && _playerShowCanvasFrameRate == (resolvedVisualizerSize.Fps, 1)
+            && _playerAcquiredLines.All(selectedLineIds.Contains)
+            && _playerVideoOutputs.ContainsKey(MediaPlayerShowMapper.PlayerCompositionId);
+
         try
         {
             _playerShowSession ??= new ShowSession(
@@ -500,13 +518,12 @@ public partial class MediaPlayerViewModel
                 {
                     if (!string.Equals(cueId, MediaPlayerShowMapper.PlayerCueId, StringComparison.Ordinal))
                         return;
-                    var generationAtRaise = Volatile.Read(ref _playGeneration);
+                    var generationAtRaise = ReadNaturalEndGeneration(ref _naturalEndGenerationState);
                     Dispatcher.UIThread.Post(() =>
                     {
-                        if (ReferenceEquals(_playerShowSession, hookedSession)
-                            && generationAtRaise == Volatile.Read(ref _playGeneration))
+                        if (ReferenceEquals(_playerShowSession, hookedSession))
                         {
-                            _ = HandleShowSessionNaturalEndAsync("event");
+                            _ = HandleShowSessionNaturalEndAsync("event", generationAtRaise);
                         }
                     });
                 };
@@ -523,21 +540,22 @@ public partial class MediaPlayerViewModel
                 try { await _playerShowSession.StopAsync(fade: false).ConfigureAwait(true); }
                 catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession stop before source switch"); }
 
-                // NXT-20: detach the still-attached outputs from the LIVE composition BEFORE the release/
-                // re-acquire block below. The composition pump outlives the clip; releasing a line first
-                // reconfigures its sink (idle slate) while the old composition is still submitting canvas
-                // frames into it - the same format-mismatch flood ShowSessionStopAsync guards against.
-                var attachedLines = await Dispatcher.UIThread.InvokeAsync(() => _playerAcquiredLines.ToList());
-                foreach (var held in attachedLines)
+                // A preserved visualizer composition keeps pumping the same visual stream to the same output
+                // leases between tracks. Other opens still detach before release/re-acquire (NXT-20 ordering).
+                if (!preserveVisualizerComposition)
                 {
-                    try
+                    var attachedLines = await Dispatcher.UIThread.InvokeAsync(() => _playerAcquiredLines.ToList());
+                    foreach (var held in attachedLines)
                     {
-                        await _playerShowSession.RemoveCompositionOutputAsync(
-                            MediaPlayerShowMapper.PlayerCompositionId, CompositionOutputId(held)).ConfigureAwait(true);
-                    }
-                    catch (Exception ex)
-                    {
-                        ShowLog.LogWarning(ex, "MediaPlayer: ShowSession detach output on source switch");
+                        try
+                        {
+                            await _playerShowSession.RemoveCompositionOutputAsync(
+                                MediaPlayerShowMapper.PlayerCompositionId, CompositionOutputId(held)).ConfigureAwait(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            ShowLog.LogWarning(ex, "MediaPlayer: ShowSession detach output on source switch");
+                        }
                     }
                 }
             }
@@ -553,29 +571,35 @@ public partial class MediaPlayerViewModel
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
-                // #25 REVERTED (2nd attempt): holding output leases across the track change removed the
-                // black gap but the user hit a freeze during song change - the held-output/composition-swap
-                // interaction needs live debugging before another attempt. Release/re-acquire is the
-                // proven-stable path; the black gap is the accepted cost until then.
-                foreach (var held in _playerAcquiredLines)
-                    _outputs.ReleaseVideoOutputForLine(held);
-                _playerAcquiredLines.Clear();
+                if (!preserveVisualizerComposition)
+                {
+                    foreach (var held in _playerAcquiredLines)
+                        _outputs.ReleaseVideoOutputForLine(held);
+                    _playerAcquiredLines.Clear();
+                }
 
-                var outputs = new List<(Guid LineId, IVideoOutput Output)>();
+                var outputs = preserveVisualizerComposition
+                              && _playerVideoOutputs.TryGetValue(
+                                  MediaPlayerShowMapper.PlayerCompositionId, out var preservedOutputs)
+                    ? preservedOutputs.ToList()
+                    : new List<(Guid LineId, IVideoOutput Output)>();
                 var resolutions = new List<(int Width, int Height)>();
                 // The visualizer needs the canvas + video lines even for audio-only media (its surface
                 // becomes the canvas content); a plain audio open keeps skipping them.
                 var wantsCanvas = hasVideo || (VisualizerEnabled && IsVisualizerAvailable);
                 if (wantsCanvas)
                 {
-                    foreach (var line in lines)
+                    if (!preserveVisualizerComposition)
                     {
-                        if (_outputs.AcquireVideoOutputForLine(line.Definition.Id) is not { } o)
-                            continue;
-                        outputs.Add((line.Definition.Id, o));
-                        _playerAcquiredLines.Add(line.Definition.Id);
-                        if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
-                            resolutions.Add((rw, rh));
+                        foreach (var line in lines)
+                        {
+                            if (_outputs.AcquireVideoOutputForLine(line.Definition.Id) is not { } o)
+                                continue;
+                            outputs.Add((line.Definition.Id, o));
+                            _playerAcquiredLines.Add(line.Definition.Id);
+                            if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
+                                resolutions.Add((rw, rh));
+                        }
                     }
                     // Media-player sizing: the compositor is AUTOSIZED to the source (AsSource) - or to the chosen
                     // fixed preset - and the OUTPUT letterboxes into each display. This replaces the old
@@ -587,9 +611,8 @@ public partial class MediaPlayerViewModel
                     var vizOwnsCanvas = !sizeFromSource && VisualizerEnabled && IsVisualizerAvailable;
                     if (vizOwnsCanvas)
                     {
-                        // Fixed visualizer canvas (1080p60 default, tunable). The deck rebuilds this canvas per
-                        // track - continuous-across-tracks preservation was reverted (it wedged the dispatcher;
-                        // see the composition-preservation notes). Use the cue player for a continuous visualizer.
+                        // Fixed visualizer canvas (1080p60 default, tunable). Matching visualizer-on track
+                        // changes preserve this runtime; a size/settings/toggle change rebuilds it.
                         var (vw, vh, vf) = ResolveVisualizerRenderSize();
                         canvas = (vw, vh);
                         canvasFps = (vf, 1);
@@ -663,9 +686,7 @@ public partial class MediaPlayerViewModel
                     // VIZ on an audio-only track: declare the canvas anyway so the visualizer surface
                     // has something to render onto (the clip itself stays audio-only).
                     includeCanvas: canvasDeclared),
-                // Deck always rebuilds the composition per track (preservation reverted - it wedged the
-                // dispatcher when the projectM pump stalled; see the composition-preservation notes).
-                preserveMatchingCompositions: false).ConfigureAwait(true);
+                preserveMatchingCompositions: preserveVisualizerComposition).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
@@ -703,7 +724,7 @@ public partial class MediaPlayerViewModel
                 UpdateNoOutputWarning(); // opened with no output routed → play to nothing + warn
                 // HOLD survives track changes: the new document replaced the composition (and with it the
                 // hold top-layer), so re-cover the fresh canvas when the toggle is on.
-                if (HoldFallbackVideo)
+                if (HoldFallbackVideo && !preserveVisualizerComposition)
                     _ = ApplyShowSessionHoldImageAsync();
             });
 
@@ -1360,7 +1381,6 @@ public partial class MediaPlayerViewModel
     {
         _showSessionEndConfirmTicks = 0;
         _showSessionLastTimelineGeneration = -1;
-        _naturalEndHandled = false; // fresh track - the advance-once gate re-arms (review M4)
         _playerShowPoll ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _playerShowPoll.Tick -= OnShowSessionPollTick;
         _playerShowPoll.Tick += OnShowSessionPollTick;
@@ -1377,6 +1397,9 @@ public partial class MediaPlayerViewModel
     {
         if (_playerShowSession is null || !ShowSessionActive)
             return;
+        // Capture BEFORE SnapshotAsync: that await may straddle an event-driven auto-advance and the next
+        // track's open. The returned stopped snapshot still belongs to this observed generation.
+        var generationAtPollStart = ReadNaturalEndGeneration(ref _naturalEndGenerationState);
         try
         {
             PollAudioMeters();
@@ -1418,7 +1441,7 @@ public partial class MediaPlayerViewModel
                     snap.TimelineGeneration, ref _showSessionLastTimelineGeneration,
                     ref _showSessionEndConfirmTicks))
             {
-                await HandleShowSessionNaturalEndAsync("poll").ConfigureAwait(true);
+                await HandleShowSessionNaturalEndAsync("poll", generationAtPollStart).ConfigureAwait(true);
             }
         }
         catch (Exception ex)
@@ -1427,27 +1450,24 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    // Review M4: single advance-once gate shared by the event path (ClipNaturallyEnded, primary) and
-    // the poll path (fallback) - both run on the UI thread, so a plain bool suffices. Reset when the
-    // poll (re)starts after each successful open.
-    private bool _naturalEndHandled;
+    // One packed atomic state shared by the event path (primary) and poll path (fallback): generation in
+    // the upper bits, claimed in bit 0. A new open advances the generation and clears claimed in ONE CAS;
+    // an end observation can claim only the exact generation it observed. This matters even though both
+    // continuations return to the UI thread: SnapshotAsync can outlive a whole track-change await.
+    private long _naturalEndGenerationState;
     private bool _naturalEndHooked; // ClipNaturallyEnded subscribed once per player session
-    // Monotonic play generation: bumped at the START of every open. A ClipNaturallyEnded event captures
-    // the generation when RAISED (session dispatcher) and is dropped at UI delivery if a newer open
-    // started in between - a stale end event for the PREVIOUS track must never advance again (the
-    // double-play regression: track N ends → advance to N+1 → stale N event lands after N+1's open
-    // completed and the boolean gate was re-armed → N+2 started on top of N+1).
-    private int _playGeneration;
 
     /// <summary>The ONE natural-end/advance entry (review M4). Primary trigger: the session's
     /// ClipNaturallyEnded event (precise, raised by the end-of-clip machinery, never for loops or
     /// operator stops). Fallback: the poll's confirmed-stopped heuristic. Idempotent per track.</summary>
-    private async Task HandleShowSessionNaturalEndAsync(string source)
+    private async Task HandleShowSessionNaturalEndAsync(string source, int observedGeneration)
     {
-        if (_naturalEndHandled || !ShowSessionActive)
+        if (!ShowSessionActive
+            || !TryClaimNaturalEndGeneration(ref _naturalEndGenerationState, observedGeneration))
             return;
-        _naturalEndHandled = true;
-        ShowLog.LogDebug("MediaPlayer: natural end via {Source} - advancing", source);
+        ShowLog.LogDebug(
+            "MediaPlayer: natural end via {Source} for generation {Generation} - advancing",
+            source, observedGeneration);
         StopShowSessionPoll();
         // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches this
         // (the clip's Loop flag restarts it seamlessly inside the session); this replay covers loop
@@ -1458,6 +1478,33 @@ public partial class MediaPlayerViewModel
             await PlayPlaylistItemAsync(next).ConfigureAwait(true);
         else
             await ShowSessionStopAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Starts an unclaimed generation. Packed with the claim bit so opening a new track and
+    /// re-arming end handling is atomic with respect to stale event/poll continuations.</summary>
+    internal static int BeginNaturalEndGeneration(ref long state)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref state);
+            var nextGeneration = checked((int)(current >> 1) + 1);
+            var next = (long)nextGeneration << 1; // low bit clear = not yet handled
+            if (Interlocked.CompareExchange(ref state, next, current) == current)
+                return nextGeneration;
+        }
+    }
+
+    internal static int ReadNaturalEndGeneration(ref long state) =>
+        (int)(Volatile.Read(ref state) >> 1);
+
+    /// <summary>Claims end handling exactly once, and only while <paramref name="observedGeneration"/>
+    /// remains the current track. A stale song-N observation cannot claim song N+1.</summary>
+    internal static bool TryClaimNaturalEndGeneration(ref long state, int observedGeneration)
+    {
+        if (observedGeneration < 0)
+            return false;
+        var expected = (long)observedGeneration << 1;
+        return Interlocked.CompareExchange(ref state, expected | 1L, expected) == expected;
     }
 
     /// <summary>Pure end-of-track decision for the deck poll. A coordinated seek transiently pauses the clip

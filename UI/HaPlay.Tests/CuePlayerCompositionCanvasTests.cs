@@ -56,4 +56,30 @@ public sealed class CuePlayerCompositionCanvasTests
             Assert.Equal(1920.0 / 1080.0, vm.PlacementCanvasAspect, 3);
         });
     }
+
+    [Fact]
+    public void PlacementCanvasAspect_UsesTransientFullscreenPixelSize()
+    {
+        RunUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            var lineId = Guid.NewGuid();
+            var line = new OutputLineViewModel(
+                new LocalVideoOutputDefinition(
+                    lineId, "Screen", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.FullScreen,
+                    ScreenIndex: 0, WindowWidth: null, WindowHeight: null),
+                _ => { });
+            vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { line });
+            vm.AddCueListCommand.Execute(null);
+            vm.AddCompositionCommand.Execute(null);
+            vm.AddVideoOutputCommand.Execute(null);
+
+            line.ReportLiveVideoSize(2560, 1440);
+
+            Assert.Equal(2560.0 / 1440.0, vm.PlacementCanvasAspect, 3);
+            var definition = Assert.IsType<LocalVideoOutputDefinition>(line.Definition);
+            Assert.Null(definition.WindowWidth);
+            Assert.Null(definition.WindowHeight);
+        });
+    }
 }

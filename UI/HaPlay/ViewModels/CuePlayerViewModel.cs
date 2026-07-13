@@ -17,6 +17,8 @@ namespace HaPlay.ViewModels;
 
 public partial class CuePlayerViewModel : ViewModelBase
 {
+    public CueHotkeyProfile Hotkeys { get; set; } = new();
+
     public bool IsNDIAvailable => RuntimeModules.IsNDIAvailable;
 
     /// <summary>Whether the projectM visualizer is available - gates the per-composition VIZ toggle.</summary>
@@ -28,6 +30,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// Host-provided media execution callback. When null, media cues only update transport state.
     /// </summary>
     public Func<MediaCueNode, CancellationToken, Task<string?>>? MediaCueExecutor { get; set; }
+
+    /// <summary>Manual fire for a media cue nested inside a Group. The host assigns a per-cue runtime
+    /// transport slot so it can play alongside other children instead of replacing the group's active cue.</summary>
+    public Func<MediaCueNode, CancellationToken, Task<string?>>? MediaCueIndependentExecutor { get; set; }
 
     /// <summary>
     /// Host-provided coordinated group execution callback. Opens all cues in parallel, then starts
@@ -43,6 +49,13 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host-provided visualizer-cue executor (#26): start/stop the projectM layer on a
     /// composition with placement. Wired by <see cref="CueShowSessionCoordinator"/>.</summary>
     public Func<VisualizerCueNode, CancellationToken, Task<string?>>? VisualizerCueExecutor { get; set; }
+
+    /// <summary>Hot-updates the placement of a running visualizer surface. Visualizers are not session
+    /// clips, so they need a separate callback from <see cref="UpdateActiveCueVideoPlacementCallback"/>.</summary>
+    public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveVisualizerPlacementCallback { get; set; }
+
+    /// <summary>Requests a preset advance on the visualizer currently attached to a composition.</summary>
+    public Func<Guid, Task<bool>>? NextVisualizerPresetCallback { get; set; }
 
     /// <summary>Host-provided stop callback - Stop / Panic forwards to this so the playback
     /// engine can tear down its session. Optional; null in tests.</summary>
@@ -263,7 +276,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private void OnAvailableOutputLineChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(OutputLineViewModel.Definition))
+        if (e.PropertyName is nameof(OutputLineViewModel.Definition)
+            or nameof(OutputLineViewModel.LiveVideoWidth)
+            or nameof(OutputLineViewModel.LiveVideoHeight))
             OnPropertyChanged(nameof(PlacementCanvasAspect));
     }
 
@@ -333,6 +348,14 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedCueNode = _selectedCueNodes.FirstOrDefault();
         OnPropertyChanged(nameof(SelectedCueCount));
         OnPropertyChanged(nameof(IsMultiSelected));
+    }
+
+    /// <summary>Records an explicit row press even when the operator clicks the already-selected row and the
+    /// grid therefore emits no SelectionChanged event.</summary>
+    public void MarkCueForNextGo(CueNodeViewModel cue)
+    {
+        if (IsInCurrentCueTree(cue))
+            _selectedCuePendingForGo = true;
     }
 
     [ObservableProperty]
@@ -437,7 +460,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             if (binding.CompositionId != comp.Id)
                 continue;
-            if (binding.LineRef?.Definition is Models.LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv)
+            if (binding.LineRef is { LiveVideoWidth: > 0, LiveVideoHeight: > 0 } live)
+                return (double)live.LiveVideoWidth.Value / live.LiveVideoHeight.Value;
+            if (binding.LineRef?.Definition is Models.LocalVideoOutputDefinition
+                { WindowWidth: > 0, WindowHeight: > 0 } lv)
                 return (double)lv.WindowWidth.Value / lv.WindowHeight.Value;
         }
         return null;
@@ -557,8 +583,13 @@ public partial class CuePlayerViewModel : ViewModelBase
             value.Nodes.CollectionChanged += OnCueNodesCollectionChanged;
     }
 
-    private void OnCueNodesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+    private void OnCueNodesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
         OnPropertyChanged(nameof(HasNoCues));
+        RefreshCueTargetDisplays();
+    }
 
     partial void OnSelectedCueListChanged(CueListEditorViewModel? value)
     {
@@ -585,6 +616,46 @@ public partial class CuePlayerViewModel : ViewModelBase
         BackCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
         ResubscribeCompositionFpsWatch(value);
+        RefreshCueTargetDisplays();
+    }
+
+    private void RefreshCueTargetDisplays()
+    {
+        var nodes = EnumerateAllCueNodes().ToList();
+        var byId = nodes.ToDictionary(node => node.Id);
+        static string CueReference(CueNodeViewModel cue) =>
+            string.IsNullOrWhiteSpace(cue.Number) ? cue.Label : $"#{cue.Number}";
+
+        foreach (var node in nodes)
+        {
+            if (node.EndTargetCueId is { } endId)
+            {
+                node.TargetDisplay = byId.TryGetValue(endId, out var target)
+                    ? $"End → {CueReference(target)}"
+                    : "End → ?";
+                continue;
+            }
+
+            if (node.Kind == CueNodeKind.Jump && node.JumpTargetIds.Count > 0)
+            {
+                var targets = string.Join(", ", node.JumpTargetIds.Select(id =>
+                {
+                    if (!byId.TryGetValue(id, out var target))
+                        return "?";
+                    var immediateCycle = ReferenceEquals(ResolveFireableCue(target), node);
+                    return $"{CueReference(target)}{(immediateCycle ? " ⚠ cycle" : string.Empty)}";
+                }));
+                var mode = node.JumpRandom
+                    ? node.JumpAvoidImmediateRepeat ? "Random (no repeat)" : "Random"
+                    : string.Equals(node.SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase)
+                        ? "Standby"
+                        : "Jump";
+                node.TargetDisplay = $"{mode} → {targets}";
+                continue;
+            }
+
+            node.TargetDisplay = string.Empty;
+        }
     }
 
     private CueListEditorViewModel? _watchedCueListForFps;
@@ -644,12 +715,11 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private CueNodeViewModel? _preRollWatchedCue;
 
-    /// <summary>Tracks the selected media cue so that in-place edits to its transport offsets and to
-    /// its audio routes / video placements re-warm standby pre-roll. The add/remove route commands
-    /// already call <see cref="SuggestPreRollRefresh"/>; this covers the property edits that don't.</summary>
+    /// <summary>Tracks the selected media/visualizer cue so that in-place edits to routes and placements
+    /// can reach the live runtime. Media edits also re-warm standby pre-roll.</summary>
     private void WatchSelectedCueForPreRoll(CueNodeViewModel? value)
     {
-        var next = value is { Kind: CueNodeKind.Media } ? value : null;
+        var next = value is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } ? value : null;
         if (ReferenceEquals(_preRollWatchedCue, next))
             return;
 
@@ -802,6 +872,20 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (_preRollWatchedCue is not { } cue)
             return;
 
+        var index = cue.VideoPlacements.IndexOf(placement);
+        if (index < 0)
+            return;
+
+        // A visualizer is a persistent composition surface, not an active ShowSession clip. Its persistent
+        // runtime latch outlives a finite Now-Playing row, and its layer has its own hot-update API.
+        if (cue.Kind == CueNodeKind.Visualizer)
+        {
+            if (_runningVisualizers.ContainsKey(cue.Id)
+                && UpdateActiveVisualizerPlacementCallback is { } visualizerCallback)
+                _ = visualizerCallback(cue.Id, index, placement.ToModel());
+            return;
+        }
+
         // Not running yet: the edited placement lives only in the cue model, and the backing ShowSession
         // document a GO fires from is NOT rebuilt on placement edits (only structural changes reload it).
         // Flag it stale so the next fire reloads with the current placement - otherwise the cue fires with
@@ -814,10 +898,6 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
 
         if (UpdateActiveCueVideoPlacementCallback is not { } callback)
-            return;
-
-        var index = cue.VideoPlacements.IndexOf(placement);
-        if (index < 0)
             return;
 
         _ = callback(cue.Id, index, placement.ToModel());
@@ -909,13 +989,18 @@ public partial class CuePlayerViewModel : ViewModelBase
             {
                 StatusMessage = Strings.Format(nameof(Strings.CueNumberDuplicateFormat), trimmed);
                 OnPropertyChanged(nameof(SelectedCueNumber));
-        OnPropertyChanged(nameof(SelectedEndTargetText)); // revert the editor to the old value
+                OnPropertyChanged(nameof(SelectedEndTargetText)); // revert the editor to the old value
                 return;
             }
 
             cue.Number = trimmed;
+            StatusMessage = null;
+            RefreshCueTargetDisplays();
             OnPropertyChanged(nameof(SelectedCueNumber));
-        OnPropertyChanged(nameof(SelectedEndTargetText));
+            OnPropertyChanged(nameof(SelectedEndTargetText));
+            OnPropertyChanged(nameof(SelectedVisualizerFeedText));
+            OnPropertyChanged(nameof(SelectedJumpTargetsText));
+            OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         }
     }
 
@@ -927,6 +1012,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (SelectedCueNode is { } cue)
                 cue.Label = value ?? string.Empty;
             OnPropertyChanged(nameof(SelectedCueLabel));
+            OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         }
     }
 
@@ -979,12 +1065,11 @@ public partial class CuePlayerViewModel : ViewModelBase
             {
                 v.VisualizerFeedAll = value;
                 OnPropertyChanged(nameof(SelectedVisualizerFeedAll));
-        OnPropertyChanged(nameof(SelectedVisualizerDurationSeconds));
             }
         }
     }
 
-    /// <summary>Media "then fire cue #" (on natural end), entered by number, stored as stable id.</summary>
+    /// <summary>Media end-trigger target (on natural end), entered by number and stored as a stable id.</summary>
     public string SelectedEndTargetText
     {
         get
@@ -1019,6 +1104,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 }
             }
 
+            RefreshCueTargetDisplays();
             OnPropertyChanged(nameof(SelectedEndTargetText));
         }
     }
@@ -1055,6 +1141,22 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(SelectedCueNode)); // refresh the numerics
     }
 
+    [RelayCommand(CanExecute = nameof(CanNextVisualizerPreset))]
+    private async Task NextVisualizerPresetAsync()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Visualizer } cue
+            || NextVisualizerPresetCallback is not { } callback)
+            return;
+
+        var compositionId = VisualizerTargetComposition(cue);
+        if (compositionId != Guid.Empty)
+            await callback(compositionId);
+    }
+
+    private bool CanNextVisualizerPreset() =>
+        SelectedCueNode is { Kind: CueNodeKind.Visualizer }
+        && NextVisualizerPresetCallback is not null;
+
     /// <summary>Drawer gate for the jump-cue section.</summary>
     public bool IsJumpCueSelected => SelectedCueNode?.Kind == CueNodeKind.Jump;
 
@@ -1078,13 +1180,17 @@ public partial class CuePlayerViewModel : ViewModelBase
         set
         {
             if (SelectedCueNode is { Kind: CueNodeKind.Visualizer } v)
+            {
                 v.Extra = value ? "Start" : "Stop";
+                OnPropertyChanged(nameof(SelectedVisualizerStarts));
+            }
         }
     }
 
     /// <summary>Jump targets as CUE NUMBERS (display/entry); stored as stable cue IDs (renumber-safe).
-    /// Setting parses a comma/space separated list, resolves each number against the list, keeps the
-    /// resolvable ones, and reports unknowns in the status bar.</summary>
+    /// Setting parses a comma/space separated list (including inclusive hierarchical ranges such as
+    /// 2.2-2.4), resolves each number against the list, keeps the resolvable ones, and reports unknowns
+    /// in the status bar.</summary>
     public string SelectedJumpTargetsText
     {
         get
@@ -1105,24 +1211,87 @@ public partial class CuePlayerViewModel : ViewModelBase
                 .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var resolved = new List<Guid>();
             var unknown = new List<string>();
-            foreach (var token in tokens)
+            foreach (var enteredToken in tokens)
             {
-                var match = EnumerateAllCueNodes().FirstOrDefault(c =>
-                    !ReferenceEquals(c, jump)
-                    && c.Kind is not CueNodeKind.Comment
-                    && string.Equals(c.Number?.Trim(), token, StringComparison.OrdinalIgnoreCase));
-                if (match is not null && !resolved.Contains(match.Id))
-                    resolved.Add(match.Id);
-                else if (match is null)
-                    unknown.Add(token);
+                foreach (var token in ExpandCueNumberToken(enteredToken))
+                {
+                    var match = EnumerateAllCueNodes().FirstOrDefault(c =>
+                        !ReferenceEquals(c, jump)
+                        && c.Kind is not CueNodeKind.Comment
+                        && string.Equals(c.Number?.Trim(), token, StringComparison.OrdinalIgnoreCase));
+                    if (match is not null && !resolved.Contains(match.Id))
+                        resolved.Add(match.Id);
+                    else if (match is null)
+                        unknown.Add(token);
+                }
             }
 
             jump.JumpTargetIds = resolved;
+            _lastRandomJumpTargetIds.Remove(jump.Id);
             StatusMessage = unknown.Count > 0
                 ? Strings.Format(nameof(Strings.CueJumpUnknownNumbersFormat), string.Join(", ", unknown))
                 : null;
+            RefreshCueTargetDisplays();
             OnPropertyChanged(nameof(SelectedJumpTargetsText));
         }
+    }
+
+    private const int MaximumCueNumberRangeSize = 10_000;
+
+    /// <summary>
+    /// Expands only unambiguous numeric, dot-hierarchical ranges. Other hyphenated values remain
+    /// literal cue numbers, so a custom number such as "intro-1" retains its existing meaning.
+    /// </summary>
+    private static IReadOnlyList<string> ExpandCueNumberToken(string token)
+    {
+        var separator = token.IndexOf('-');
+        if (separator <= 0
+            || separator != token.LastIndexOf('-')
+            || separator >= token.Length - 1
+            || !TryParseHierarchicalCueNumber(token[..separator], out var start)
+            || !TryParseHierarchicalCueNumber(token[(separator + 1)..], out var end)
+            || start.Length != end.Length)
+            return [token];
+
+        for (var i = 0; i < start.Length - 1; i++)
+        {
+            if (start[i] != end[i])
+                return [token];
+        }
+
+        var distance = Math.Abs((long)end[^1] - start[^1]);
+        if (distance >= MaximumCueNumberRangeSize)
+            return [token];
+
+        var prefix = start.Length == 1
+            ? string.Empty
+            : $"{string.Join('.', start[..^1])}.";
+        var step = start[^1] <= end[^1] ? 1 : -1;
+        var expanded = new List<string>((int)distance + 1);
+        for (var value = start[^1];; value += step)
+        {
+            expanded.Add($"{prefix}{value.ToString(CultureInfo.InvariantCulture)}");
+            if (value == end[^1])
+                break;
+        }
+
+        return expanded;
+    }
+
+    private static bool TryParseHierarchicalCueNumber(string text, out int[] components)
+    {
+        var parts = text.Split('.');
+        components = new int[parts.Length];
+        if (parts.Length == 0)
+            return false;
+
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (!int.TryParse(parts[i], NumberStyles.None, CultureInfo.InvariantCulture, out components[i]))
+                return false;
+        }
+
+        return true;
     }
 
     public bool SelectedJumpRandom
@@ -1131,7 +1300,27 @@ public partial class CuePlayerViewModel : ViewModelBase
         set
         {
             if (SelectedCueNode is { Kind: CueNodeKind.Jump } j)
+            {
                 j.JumpRandom = value;
+                _lastRandomJumpTargetIds.Remove(j.Id);
+                RefreshCueTargetDisplays();
+                OnPropertyChanged(nameof(SelectedJumpRandom));
+            }
+        }
+    }
+
+    public bool SelectedJumpAvoidImmediateRepeat
+    {
+        get => SelectedCueNode is { Kind: CueNodeKind.Jump } j && j.JumpAvoidImmediateRepeat;
+        set
+        {
+            if (SelectedCueNode is { Kind: CueNodeKind.Jump } j)
+            {
+                j.JumpAvoidImmediateRepeat = value;
+                _lastRandomJumpTargetIds.Remove(j.Id);
+                RefreshCueTargetDisplays();
+                OnPropertyChanged(nameof(SelectedJumpAvoidImmediateRepeat));
+            }
         }
     }
 
@@ -1142,12 +1331,16 @@ public partial class CuePlayerViewModel : ViewModelBase
         set
         {
             if (SelectedCueNode is { Kind: CueNodeKind.Jump } j)
+            {
                 j.SourceOrAction = value ? "fire" : "standby";
+                RefreshCueTargetDisplays();
+            }
         }
     }
 
     partial void OnSelectedCueNodeChanged(CueNodeViewModel? value)
     {
+        _selectedCuePendingForGo = value is not null;
         OnPropertyChanged(nameof(SelectedCueNumber));
         OnPropertyChanged(nameof(SelectedEndTargetText));
         OnPropertyChanged(nameof(SelectedCueLabel));
@@ -1160,6 +1353,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(SelectedVisualizerStarts));
         OnPropertyChanged(nameof(SelectedJumpTargetsText));
         OnPropertyChanged(nameof(SelectedJumpRandom));
+        OnPropertyChanged(nameof(SelectedJumpAvoidImmediateRepeat));
         OnPropertyChanged(nameof(SelectedJumpFiresTarget));
         // The selected cue's probe fields can land AFTER selection (when the operator picks a
         // file via "Browse media…"; the probe is async). Re-subscribe so the Video tab visibility
@@ -1183,8 +1377,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedAudioRoute = value is { Kind: CueNodeKind.Media } media
             ? media.AudioRoutes.FirstOrDefault()
             : null;
-        SelectedVideoPlacement = value is { Kind: CueNodeKind.Media } media2
-            ? media2.VideoPlacements.FirstOrDefault()
+        SelectedVideoPlacement = value is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } placeable
+            ? placeable.VideoPlacements.FirstOrDefault()
             : null;
         RemoveNodeCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(VisibleAudioRoutes));
@@ -1207,6 +1401,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         AddVideoPlacementCommand.NotifyCanExecuteChanged();
         RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
+        FireSelectedVisualizerCommand.NotifyCanExecuteChanged();
+        FireSelectedCueNowCommand.NotifyCanExecuteChanged();
+        StopSelectedCueCommand.NotifyCanExecuteChanged();
+        NextVisualizerPresetCommand.NotifyCanExecuteChanged();
         BrowseMediaSourceCommand.NotifyCanExecuteChanged();
         AssignSelectedActionEndpointCommand.NotifyCanExecuteChanged();
         EditActionCueCommand.NotifyCanExecuteChanged();
@@ -1568,6 +1766,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsCueScrubberVisible));
         SyncCueScrubberFromActiveSelection();
         SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
+        StopSelectedCueCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Engine callback - preview stopped. Clears preview state on the VM.</summary>
@@ -1594,6 +1793,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsCueScrubberVisible));
         SyncCueScrubberFromActiveSelection();
         SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
+        StopSelectedCueCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Engine callback - progress sample for one active cue. Updates the row's
@@ -1979,6 +2179,55 @@ public partial class CuePlayerViewModel : ViewModelBase
         return ordered[idx + 1];
     }
 
+    /// <summary>
+    /// Resolves the trigger policy for a sequential transition. The flat fireable order omits Group rows,
+    /// but crossing from outside into a Group must honor that Group's trigger mode; once inside the same
+    /// Group, the destination cue's own mode applies. This makes a Manual Group a real boundary gate even
+    /// when its first child is Auto-Follow/Auto-Continue.
+    /// </summary>
+    internal bool SequentialTransitionUsesMode(
+        CueNodeViewModel from, CueNodeViewModel to, CueTriggerMode requiredMode)
+    {
+        var fromPath = FindContainingGroupPath(from);
+        var toPath = FindContainingGroupPath(to);
+        var shared = 0;
+        while (shared < fromPath.Count
+               && shared < toPath.Count
+               && ReferenceEquals(fromPath[shared], toPath[shared]))
+            shared++;
+
+        // Entering nested groups requires every newly-crossed boundary to opt into the same automatic
+        // transition. A Manual inner group must not be bypassed merely because its outer group is automatic.
+        return shared < toPath.Count
+            ? toPath.Skip(shared).All(group => group.TriggerMode == requiredMode)
+            : to.TriggerMode == requiredMode;
+    }
+
+    private IReadOnlyList<CueNodeViewModel> FindContainingGroupPath(CueNodeViewModel target)
+    {
+        if (SelectedCueList is null)
+            return [];
+        var path = new List<CueNodeViewModel>();
+        return Find(SelectedCueList.Nodes) ? path : [];
+
+        bool Find(IEnumerable<CueNodeViewModel> nodes)
+        {
+            foreach (var node in nodes)
+            {
+                if (ReferenceEquals(node, target))
+                    return true;
+                if (!node.IsGroup)
+                    continue;
+                path.Add(node);
+                if (Find(node.Children))
+                    return true;
+                path.RemoveAt(path.Count - 1);
+            }
+
+            return false;
+        }
+    }
+
     private static string CueDisplay(CueNodeViewModel cue) =>
         string.IsNullOrWhiteSpace(cue.Number)
             ? cue.Label
@@ -2029,49 +2278,67 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (idx < 0)
             return;
 
+        var previous = anchor;
         for (var i = idx + 1; i < ordered.Count; i++)
         {
             var next = ordered[i];
-            if (next.TriggerMode != CueTriggerMode.AutoContinue)
+            if (!SequentialTransitionUsesMode(previous, next, CueTriggerMode.AutoContinue))
                 break;
             if (plan.Any(p => ReferenceEquals(p.Cue, next)))
+            {
+                previous = next;
                 continue;
+            }
             plan.Add((next, Math.Max(0, next.PreWaitMs)));
+            previous = next;
         }
     }
 
     /// <summary>Called when the active player finishes a file naturally during cue-driven playback.</summary>
-    public async Task OnMediaCueNaturallyEndedAsync()
+    public Task OnMediaCueNaturallyEndedAsync() =>
+        CurrentCueNode is { Kind: CueNodeKind.Media } current
+            ? OnMediaCueNaturallyEndedAsync(current.Id)
+            : Task.CompletedTask;
+
+    public async Task OnMediaCueNaturallyEndedAsync(Guid endedCueId)
     {
-        if (CurrentCueNode is not { Kind: CueNodeKind.Media } ended)
+        if (EnumerateAllCueNodes().FirstOrDefault(cue => cue.Id == endedCueId)
+            is not { Kind: CueNodeKind.Media } ended)
             return;
 
         // End target ("then fire cue #"): an explicit on-end jump wins over the default
         // next-cue-Auto-Follow chain - "after this song, go anywhere".
-        if (ended.EndTargetCueId is { } targetId
-            && EnumerateAllCueNodes().FirstOrDefault(c => c.Id == targetId) is { } endTarget
-            && !ReferenceEquals(endTarget, ended))
+        if (ended.EndTargetCueId is { } targetId)
         {
+            var endTarget = EnumerateAllCueNodes().FirstOrDefault(c => c.Id == targetId);
+            if (endTarget is null || ReferenceEquals(endTarget, ended) || endTarget.Kind == CueNodeKind.Comment)
+            {
+                // An authored end target is an override, not a best-effort hint. If its stable link became
+                // invalid after deletion/import, stop here and surface it instead of unexpectedly firing the
+                // ordinary next Auto-Follow cue.
+                StatusMessage = Strings.CueEndTargetUnavailable;
+                return;
+            }
             StandbyCueNode = endTarget;
-            SelectedCueNode = endTarget;
             StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(endTarget));
-            await Go();
+            _immediateJumpChain.Clear();
+            await GoCore();
             return;
         }
 
         var ordered = EnumerateFireableCueOrder().ToList();
-        var idx = ordered.FindIndex(c => ReferenceEquals(c, CurrentCueNode));
+        var idx = ordered.FindIndex(c => ReferenceEquals(c, ended));
         if (idx < 0 || idx + 1 >= ordered.Count)
             return;
 
         var next = ordered[idx + 1];
-        if (next.TriggerMode != CueTriggerMode.AutoFollow)
+        if (!SequentialTransitionUsesMode(ended, next, CueTriggerMode.AutoFollow))
             return;
 
         StandbyCueNode = next;
-        SelectedCueNode = next;
         StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
-        await Go();
+        _immediateJumpChain.Clear();
+        await GoCore();
     }
 
     public void RefreshBrokenEndpointFlags()
@@ -2186,6 +2453,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 SourceOrAction = path,
             };
             parent.Add(row);
+            FinalizeAddedCue(row);
             _ = ProbeAndAssignDurationAsync(row, path);
             added++;
         }
@@ -2224,9 +2492,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             ct.ThrowIfCancellationRequested();
 
             var steps = group.ToList();
-            // Only the playing pointer follows the fired steps. The SELECTION stays where Go put
-            // it (the next cue that would fire) - yanking it back to the firing cue defeated the
-            // "selection previews the next GO" behavior and moved the operator's editor cursor.
+            // Only the playing pointer follows fired steps. The editor selection is operator-owned and
+            // transport never changes it; current/standby row dots show the live playhead instead.
             foreach (var step in steps)
                 CurrentCueNode = step.Cue;
 
@@ -2408,19 +2675,34 @@ public partial class CuePlayerViewModel : ViewModelBase
             _ = StopVisualizerAsync(id);
     }
 
+    /// <summary>A host rebuild removed one composition visualizer without executing its Stop cue.</summary>
+    internal void OnVisualizerLayerCleared(Guid compositionId) => EndVisualizerRows(compositionId);
+
+    /// <summary>The host removed every composition visualizer without executing individual Stop cues.</summary>
+    internal void OnVisualizerLayersCleared()
+    {
+        foreach (var compositionId in _runningVisualizers.Values.Select(info => info.Composition).Distinct().ToList())
+            EndVisualizerRows(compositionId);
+    }
+
     // --- Visualizer Now-Playing rows (#29 first slice) --------------------------------------------
+    // _runningVisualizers tracks the actual persistent layer lifetime. A finite cue duration only retires
+    // its Now-Playing timeline row; it does not stop projectM, so keep that distinction explicit or Panic and
+    // later live placement edits would lose the still-running layer after the row timed out.
     private readonly Dictionary<Guid, (Guid Composition, long StartedTicks, int DurationMs)> _runningVisualizers = new();
+    private readonly HashSet<Guid> _visibleVisualizerRows = new();
     private Avalonia.Threading.DispatcherTimer? _visualizerRowTimer;
 
     private static Guid VisualizerTargetComposition(CueNodeViewModel viz) =>
         viz.VideoPlacements.FirstOrDefault()?.CompositionId ?? viz.VisualizerCompositionId;
 
-    private void StartVisualizerRow(CueNodeViewModel viz)
+    internal void StartVisualizerRow(CueNodeViewModel viz)
     {
         // Re-firing replaces the layer on that composition - end any prior rows for it first.
         EndVisualizerRows(VisualizerTargetComposition(viz));
         _runningVisualizers[viz.Id] =
             (VisualizerTargetComposition(viz), System.Diagnostics.Stopwatch.GetTimestamp(), Math.Max(0, viz.VisualizerDurationMs));
+        _visibleVisualizerRows.Add(viz.Id);
         OnCueStarted(viz.Id);
         _visualizerRowTimer ??= new Avalonia.Threading.DispatcherTimer(
             TimeSpan.FromMilliseconds(500), Avalonia.Threading.DispatcherPriority.Background, OnVisualizerRowTick);
@@ -2432,22 +2714,28 @@ public partial class CuePlayerViewModel : ViewModelBase
         foreach (var (id, info) in _runningVisualizers.Where(kv => kv.Value.Composition == compositionId).ToList())
         {
             _runningVisualizers.Remove(id);
-            OnCueEnded(id);
+            if (_visibleVisualizerRows.Remove(id))
+                OnCueEnded(id);
         }
 
-        if (_runningVisualizers.Count == 0)
+        if (_visibleVisualizerRows.Count == 0)
             _visualizerRowTimer?.Stop();
     }
 
     private void OnVisualizerRowTick(object? sender, EventArgs e)
     {
-        foreach (var (id, info) in _runningVisualizers.ToList())
+        foreach (var id in _visibleVisualizerRows.ToList())
         {
+            if (!_runningVisualizers.TryGetValue(id, out var info))
+            {
+                _visibleVisualizerRows.Remove(id);
+                continue;
+            }
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(info.StartedTicks);
             if (info.DurationMs > 0 && elapsed.TotalMilliseconds >= info.DurationMs)
             {
                 // Timeline slot done (the layer keeps rendering; only the row retires).
-                _runningVisualizers.Remove(id);
+                _visibleVisualizerRows.Remove(id);
                 OnCueEnded(id);
                 continue;
             }
@@ -2456,7 +2744,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 id, elapsed, TimeSpan.FromMilliseconds(info.DurationMs)));
         }
 
-        if (_runningVisualizers.Count == 0)
+        if (_visibleVisualizerRows.Count == 0)
             _visualizerRowTimer?.Stop();
     }
 
@@ -2469,7 +2757,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (idx < 0 || idx + 1 >= ordered.Count)
             return;
         var next = ordered[idx + 1];
-        if (next.TriggerMode != CueTriggerMode.AutoFollow)
+        if (!SequentialTransitionUsesMode(fired, next, CueTriggerMode.AutoFollow))
             return;
 
         if (delayMs > 0)
@@ -2481,9 +2769,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
 
         StandbyCueNode = next;
-        SelectedCueNode = next;
         StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
-        await Go();
+        _immediateJumpChain.Clear();
+        await GoCore();
     }
 
     private void ApplyCueExecutionFailure(CueNodeViewModel cue, string? detail)
@@ -2491,7 +2779,6 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (ReferenceEquals(CurrentCueNode, cue))
             CurrentCueNode = null;
         StandbyCueNode = cue;
-        SelectedCueNode = cue;
         IsTransportPaused = false;
         StatusMessage = string.IsNullOrWhiteSpace(detail)
             ? Strings.Format(nameof(Strings.CueExecutionFailedStatusFormat), CueDisplay(cue))
@@ -2548,7 +2835,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Executes a Jump cue (UI thread): resolves a live target by stable cue ID (numbers are
     /// display-only, so renumber/reorder never retargets), picks randomly when configured, then either
     /// fires the target (default - the loop actually loops) or arms it as standby for the next GO.</summary>
-    private string? ExecuteJumpCueOnUi(CueNodeViewModel jump)
+    internal string? ExecuteJumpCueOnUi(CueNodeViewModel jump)
     {
         if (jump.JumpTargetIds.Count == 0)
             return Strings.CueJumpNoTargets;
@@ -2557,19 +2844,65 @@ public partial class CuePlayerViewModel : ViewModelBase
         var live = jump.JumpTargetIds
             .Where(byId.ContainsKey)
             .Select(id => byId[id])
-            .Where(c => c.Kind != CueNodeKind.Comment && !ReferenceEquals(c, jump))
+            .Where(c => c.Kind != CueNodeKind.Comment)
+            .DistinctBy(c => c.Id)
             .ToList();
         if (live.Count == 0)
             return Strings.CueJumpTargetMissing;
 
-        var target = jump.JumpRandom && live.Count > 1
-            ? live[Random.Shared.Next(live.Count)]
-            : live[0];
+        if (!_immediateJumpChain.Add(jump.Id))
+        {
+            _immediateJumpChain.Clear();
+            throw new InvalidOperationException(Strings.CueJumpCycleDetected);
+        }
 
-        SelectedCueNode = target;
+        // A group target resolves through its fire mode to a concrete first cue. Exclude any candidate whose
+        // next immediate jump was already visited: e.g. Jump #5 → containing Group → first child Jump #5.
+        // Valid media/action targets in the same pool remain usable, so one bad group link cannot spin the app.
+        var safe = live.Where(candidate =>
+        {
+            var resolved = ResolveFireableCue(candidate);
+            return resolved is null
+                   || resolved.Kind != CueNodeKind.Jump
+                   || !_immediateJumpChain.Contains(resolved.Id);
+        }).ToList();
+        if (safe.Count == 0)
+        {
+            _immediateJumpChain.Clear();
+            throw new InvalidOperationException(Strings.CueJumpCycleDetected);
+        }
+
+        var candidates = safe;
+        if (jump.JumpRandom
+            && jump.JumpAvoidImmediateRepeat
+            && safe.Count > 1
+            && _lastRandomJumpTargetIds.TryGetValue(jump.Id, out var previousTargetId))
+        {
+            var nonRepeating = safe.Where(candidate => candidate.Id != previousTargetId).ToList();
+            if (nonRepeating.Count > 0)
+                candidates = nonRepeating;
+        }
+
+        var target = jump.JumpRandom && candidates.Count > 1
+            ? candidates[Random.Shared.Next(candidates.Count)]
+            : candidates[0];
+        if (jump.JumpRandom && jump.JumpAvoidImmediateRepeat)
+            _lastRandomJumpTargetIds[jump.Id] = target.Id;
+        else
+            _lastRandomJumpTargetIds.Remove(jump.Id);
+        var resolvedTarget = ResolveFireableCue(target);
+
         StandbyCueNode = target;
         if (!string.Equals(jump.SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase))
-            _ = Go(); // fires the standby target through the normal GO machinery (plan + auto-chains)
+        {
+            if (resolvedTarget?.Kind != CueNodeKind.Jump)
+                _immediateJumpChain.Clear();
+            _ = GoCore(); // preserve the visited set only across an immediate Jump→Jump continuation
+        }
+        else
+        {
+            _immediateJumpChain.Clear();
+        }
         return null;
     }
 
@@ -2636,6 +2969,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public void ApplyCueLists(IReadOnlyList<CueList> lists, string? collectionPath = null)
     {
+        _lastRandomJumpTargetIds.Clear();
         _cueListsCollectionPath = collectionPath;
         OnPropertyChanged(nameof(CueListsCollectionPath));
         OnPropertyChanged(nameof(DisplayedCueFilePath));
@@ -2654,6 +2988,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;
+        RefreshCueTargetDisplays();
     }
 
     private void ClearCueListsCollectionPath()

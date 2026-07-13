@@ -360,8 +360,9 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     private void OnSDLResized(object? sender, (int Width, int Height) size)
     {
-        if (!TryRecordWindowedResize(size.Width, size.Height))
+        if (size.Width < 320 || size.Height < 240)
             return;
+        TryRecordWindowedResize(size.Width, size.Height);
         Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewResized(_line, size.Width, size.Height),
             DispatcherPriority.Background);
     }
@@ -561,8 +562,9 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
     {
         var width = (int)Math.Round(e.NewSize.Width);
         var height = (int)Math.Round(e.NewSize.Height);
-        if (!TryRecordWindowedResize(width, height))
+        if (width < 320 || height < 240)
             return;
+        TryRecordWindowedResize(width, height);
         _owner.NotifyLocalPreviewResized(_line, width, height);
     }
 

@@ -404,6 +404,18 @@ public sealed record VisualizerCueNode : CueNode
 
     public int RenderFps { get; init; }
 
+    /// <summary>Seconds before the visualizer automatically advances to another preset.</summary>
+    public double PresetDurationSeconds { get; init; } = 30;
+
+    /// <summary>Whether automatic/manual advances choose a random preset instead of the next one.</summary>
+    public bool ShufflePresets { get; init; } = true;
+
+    /// <summary>projectM beat sensitivity (0..5; the library default is 1).</summary>
+    public double BeatSensitivity { get; init; } = 1;
+
+    /// <summary>Seconds used to cross-fade between presets.</summary>
+    public double TransitionSeconds { get; init; } = 2;
+
     /// <summary>Legacy single-rect placement (pre-v3 files); migrated to <see cref="VideoPlacements"/>.</summary>
     public double DestX { get; init; }
 
@@ -434,6 +446,10 @@ public sealed record JumpCueNode : CueNode
 
     /// <summary>Pick a random target from <see cref="TargetCueIds"/> instead of the first live one.</summary>
     public bool RandomTarget { get; init; }
+
+    /// <summary>When randomly choosing, avoid the target picked by this Jump cue last time whenever
+    /// another live target is available. Runtime choice history is intentionally not persisted.</summary>
+    public bool AvoidImmediateRepeat { get; init; }
 
     /// <summary>Fire the target on arrival (default). False = arm it as standby only (next GO fires it).</summary>
     public bool FireTargetOnJump { get; init; } = true;

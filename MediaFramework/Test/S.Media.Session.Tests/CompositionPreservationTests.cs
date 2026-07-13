@@ -6,6 +6,8 @@ using S.Media.Core.Registry;
 using S.Media.Core.Video;
 using S.Media.Session;
 using Silk.NET.OpenGL;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Xunit;
 using PixelFormat = S.Media.Core.Video.PixelFormat;
 
@@ -14,9 +16,9 @@ namespace S.Media.Session.Tests;
 /// <summary>
 /// Opt-in composition preservation (LoadDocumentAsync preserveMatchingCompositions): a live composition
 /// whose id + raster + rate match the incoming document is kept alive across the reload, and with it any
-/// attached visualizer (surface + audio tap + source). Default reloads still fully rebuild - the behaviour
-/// the cue player relies on. This is the mechanism behind a visualizer that runs continuously while a
-/// playlist of tracks feeds into it.
+/// attached visualizer (surface + audio tap + source). Default reloads still fully rebuild; cue-graph edits
+/// explicitly opt into preservation. This is the mechanism behind a visualizer that runs continuously while
+/// a playlist of tracks feeds into it, including tracks added during playback.
 /// </summary>
 public sealed class CompositionPreservationTests
 {
@@ -28,7 +30,9 @@ public sealed class CompositionPreservationTests
     }
 
     /// <summary>Surface-hosting CPU compositor (no GL) so SetCompositionVisualizerAsync can attach.</summary>
-    private sealed class FakeSurfaceHost(VideoFormat output) : IVideoCompositorSurfaceHost
+    private sealed class FakeSurfaceHost(
+        VideoFormat output,
+        ConcurrentQueue<float>? surfaceOpacities = null) : IVideoCompositorSurfaceHost
     {
         private readonly CpuVideoCompositor _inner = new(output);
         public VideoFormat OutputFormat => _inner.OutputFormat;
@@ -38,7 +42,13 @@ public sealed class CompositionPreservationTests
         public VideoFrame CompositeWithSurfaces(
             IReadOnlyList<CompositorLayer> frameLayers,
             IReadOnlyList<CompositorSurfaceLayer> surfaceLayers,
-            TimeSpan presentationTime) => _inner.Composite(frameLayers, presentationTime);
+            TimeSpan presentationTime)
+        {
+            if (surfaceOpacities is not null)
+                foreach (var layer in surfaceLayers)
+                    surfaceOpacities.Enqueue(layer.Opacity);
+            return _inner.Composite(frameLayers, presentationTime);
+        }
         public void Dispose() => _inner.Dispose();
     }
 
@@ -72,10 +82,10 @@ public sealed class CompositionPreservationTests
         Compositions: [new ShowComposition("screen", "Screen", w, h, fpsNum, 1)],
         Routes: []);
 
-    private static ShowSession NewSurfaceSession() => new(
+    private static ShowSession NewSurfaceSession(ConcurrentQueue<float>? surfaceOpacities = null) => new(
         MediaRegistry.Build(_ => { }),
         compositorFactory: fmt => new ClipCompositionCompositor(
-            new FakeSurfaceHost(fmt), RequiresBgraLayerConversion: true, "TEST-SURFACE-HOST"));
+            new FakeSurfaceHost(fmt, surfaceOpacities), RequiresBgraLayerConversion: true, "TEST-SURFACE-HOST"));
 
     [Fact]
     public async Task Preserve_KeepsVisualizerAliveAcrossReload()
@@ -92,6 +102,96 @@ public sealed class CompositionPreservationTests
 
         Assert.False(viz.Disposed, "preserved reload must NOT dispose the visualizer");
         Assert.True(await session.HasCompositionVisualizerAsync("screen"), "visualizer should still be attached");
+    }
+
+    [Fact]
+    public async Task Preserve_KeepsVisualizerWhenTheCueGraphGainsANewCue()
+    {
+        await using var session = NewSurfaceSession();
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync("screen", viz));
+        var editedDocument = CanvasDoc() with
+        {
+            Cues = [new CueDefinition("new-song", 1, "Song added during playback")],
+        };
+
+        await session.LoadDocumentAsync(editedDocument, preserveMatchingCompositions: true);
+
+        Assert.False(viz.Disposed);
+        Assert.True(await session.HasCompositionVisualizerAsync("screen"));
+    }
+
+    [Fact]
+    public async Task RunningVisualizer_PlacementCanBeUpdatedInPlace()
+    {
+        await using var session = NewSurfaceSession();
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync("screen", viz));
+
+        var updated = await session.UpdateCompositionVisualizerPlacementAsync(
+            "screen",
+            new VideoPlacementSpec(
+                "screen", int.MaxValue - 1, Opacity: 0.6, Placement: "contain",
+                DestX: 0.25, DestY: 0, DestWidth: 0.5, DestHeight: 1));
+
+        Assert.True(updated);
+        Assert.False(await session.UpdateCompositionVisualizerPlacementAsync(
+            "missing", new VideoPlacementSpec("missing", 0)));
+        Assert.False(viz.Disposed, "a placement edit must not replace/restart the visualizer source");
+    }
+
+    [Fact]
+    public async Task StopAll_FadesVisualizerFromAuthoredOpacityBeforeDetach()
+    {
+        var opacities = new ConcurrentQueue<float>();
+        await using var session = NewSurfaceSession(opacities);
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz,
+            placement: new VideoPlacementSpec("screen", 10, Opacity: 0.8)));
+
+        await WaitUntilAsync(() => opacities.Any(value => value >= 0.79f), TimeSpan.FromSeconds(2));
+        var stopwatch = Stopwatch.StartNew();
+        await session.StopAllAsync();
+
+        Assert.True(stopwatch.Elapsed >= TimeSpan.FromMilliseconds(500), "soft stop should await its fade");
+        Assert.True(viz.Disposed);
+        Assert.False(await session.HasCompositionVisualizerAsync("screen"));
+        var samples = opacities.ToArray();
+        Assert.DoesNotContain(samples, value => value > 0.801f);
+        Assert.Contains(samples, value => value is > 0.05f and < 0.75f);
+    }
+
+    [Fact]
+    public async Task StopOneVisualizer_FadesBeforeDetach()
+    {
+        var opacities = new ConcurrentQueue<float>();
+        await using var session = NewSurfaceSession(opacities);
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz,
+            placement: new VideoPlacementSpec("screen", 10, Opacity: 0.65)));
+
+        await WaitUntilAsync(() => opacities.Any(value => value >= 0.64f), TimeSpan.FromSeconds(2));
+        var stopwatch = Stopwatch.StartNew();
+        await session.FadeOutCompositionVisualizerAsync("screen");
+
+        Assert.True(stopwatch.Elapsed >= TimeSpan.FromMilliseconds(500));
+        Assert.True(viz.Disposed);
+        Assert.False(await session.HasCompositionVisualizerAsync("screen"));
+        Assert.Contains(opacities, value => value is > 0.03f and < 0.6f);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (!predicate() && deadline.Elapsed < timeout)
+            await Task.Delay(15);
+        Assert.True(predicate(), "condition did not become true before timeout");
     }
 
     [Fact]

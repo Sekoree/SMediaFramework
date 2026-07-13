@@ -334,6 +334,8 @@ public static class Strings
     public static string CueTreeKindColumnHeader => Get(nameof(CueTreeKindColumnHeader));
     public static string CueTreeStatusColumnHeader => Get(nameof(CueTreeStatusColumnHeader));
     public static string CueTreeNameColumnHeader => Get(nameof(CueTreeNameColumnHeader));
+    public static string CueTreeStartTriggerColumnHeader => Get(nameof(CueTreeStartTriggerColumnHeader));
+    public static string CueTreeTargetColumnHeader => Get(nameof(CueTreeTargetColumnHeader));
     public static string CueTreeDurationColumnHeader => Get(nameof(CueTreeDurationColumnHeader));
     public static string GeneralTabLabel => Get(nameof(GeneralTabLabel));
     public static string AudioTabLabel => Get(nameof(AudioTabLabel));
@@ -343,6 +345,9 @@ public static class Strings
     public static string GroupTabLabel => Get(nameof(GroupTabLabel));
     public static string SelectACueDrawerHint => Get(nameof(SelectACueDrawerHint));
     public static string TriggerLabel => Get(nameof(TriggerLabel));
+    public static string StartTriggerLabel => Get(nameof(StartTriggerLabel));
+    public static string EndTriggerTargetLabel => Get(nameof(EndTriggerTargetLabel));
+    public static string EndTriggerTargetTooltip => Get(nameof(EndTriggerTargetTooltip));
     public static string PreWaitLabel => Get(nameof(PreWaitLabel));
     public static string NotesLabel => Get(nameof(NotesLabel));
     public static string GroupFireModeLabel => Get(nameof(GroupFireModeLabel));
@@ -456,6 +461,9 @@ public static class Strings
     public static string RenumberScopeRootLabel => Get(nameof(RenumberScopeRootLabel));
     public static string RenumberScopeSelectionLabel => Get(nameof(RenumberScopeSelectionLabel));
     public static string RenumberButton => Get(nameof(RenumberButton));
+    public static string ReorganizeCueListButton => Get(nameof(ReorganizeCueListButton));
+    public static string ReorganizeCueListTooltip => Get(nameof(ReorganizeCueListTooltip));
+    public static string ReorganizedCueListStatusFormat => Get(nameof(ReorganizedCueListStatusFormat));
     public static string RenumberedStatusFormat => Get(nameof(RenumberedStatusFormat));
     public static string NowPlayingHeader => Get(nameof(NowPlayingHeader));
     public static string NowPlayingNoneHint => Get(nameof(NowPlayingNoneHint));
@@ -932,10 +940,13 @@ public static class Strings
     public static string AddVisualizerCueButton => Get(nameof(AddVisualizerCueButton));
     public static string CueJumpNoTargets => Get(nameof(CueJumpNoTargets));
     public static string CueJumpTargetMissing => Get(nameof(CueJumpTargetMissing));
+    public static string CueJumpCycleDetected => Get(nameof(CueJumpCycleDetected));
+    public static string CueEndTargetUnavailable => Get(nameof(CueEndTargetUnavailable));
     public static string CueNumberDuplicateFormat => Get(nameof(CueNumberDuplicateFormat));
     public static string CueJumpUnknownNumbersFormat => Get(nameof(CueJumpUnknownNumbersFormat));
     public static string CueJumpTargetsLabel => Get(nameof(CueJumpTargetsLabel));
     public static string CueJumpRandomLabel => Get(nameof(CueJumpRandomLabel));
+    public static string CueJumpAvoidRepeatLabel => Get(nameof(CueJumpAvoidRepeatLabel));
     public static string CueJumpFireLabel => Get(nameof(CueJumpFireLabel));
     public static string AddJumpCueButton => Get(nameof(AddJumpCueButton));
     public static string CueKindDefaultLabel => Get(nameof(CueKindDefaultLabel));

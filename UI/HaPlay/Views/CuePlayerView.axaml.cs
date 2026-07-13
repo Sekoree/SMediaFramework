@@ -8,6 +8,7 @@ using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Controls.Templates;
 using Avalonia.VisualTree;
 using HaPlay.Playback;
+using HaPlay.Models;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 
@@ -15,6 +16,8 @@ namespace HaPlay.Views;
 
 public partial class CuePlayerView : UserControl
 {
+    private static readonly TimeSpan DoubleStopHotkeyWindow = TimeSpan.FromMilliseconds(600);
+    private long _lastStopHotkeyTimestamp;
     private CuePlayerViewModel? _subscribedVm;
     private HierarchicalTreeDataGridSource<CueNodeViewModel>? _source;
     private static readonly Microsoft.Extensions.Logging.ILogger CueTreeLog =
@@ -45,6 +48,9 @@ public partial class CuePlayerView : UserControl
         // Ctrl+↑↓ on this same handler. Transport keys live on the UserControl below so they
         // fire whether the tree or anything else inside the cue tab has focus.
         CueTreeGrid.KeyDown += OnCueTreeKeyDown;
+        CueTreeGrid.AddHandler(
+            PointerPressedEvent, OnCueTreePointerPressed,
+            RoutingStrategies.Tunnel, handledEventsToo: true);
         KeyDown += OnUserControlKeyDown;
         // The Preview tab's scrubber is the deck's ONLY scrub surface (the General tab used to
         // carry a second slider - and it was the only one wired to commit the seek).
@@ -64,29 +70,64 @@ public partial class CuePlayerView : UserControl
         var focused = Avalonia.Controls.TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
         if (focused is TextBox or NumericUpDown or ComboBox or Slider or CheckBox or ToggleSwitch) return;
 
-        switch (e.Key)
+        var hotkeys = vm.Hotkeys;
+        if (CueHotkeyGesture.Matches(hotkeys.PanicNow, e))
         {
-            case Avalonia.Input.Key.Space:
-                if (vm.GoCommand.CanExecute(null)) vm.GoCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Avalonia.Input.Key.Escape:
+            _lastStopHotkeyTimestamp = 0;
+            if (vm.PanicCommand.CanExecute(null)) vm.PanicCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (CueHotkeyGesture.Matches(hotkeys.StopThenPanic, e))
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            var doublePress = _lastStopHotkeyTimestamp != 0
+                              && System.Diagnostics.Stopwatch.GetElapsedTime(_lastStopHotkeyTimestamp, now)
+                                  <= DoubleStopHotkeyWindow;
+            _lastStopHotkeyTimestamp = doublePress ? 0 : now;
+            if (doublePress)
+            {
                 if (vm.PanicCommand.CanExecute(null)) vm.PanicCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Avalonia.Input.Key.Enter:
-                if (vm.StandbySelectedCommand.CanExecute(null)) vm.StandbySelectedCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Avalonia.Input.Key.Back:
-                if (vm.BackCommand.CanExecute(null)) vm.BackCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Avalonia.Input.Key.P when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
-                if (vm.TogglePreviewCommand.CanExecute(null))
-                    vm.TogglePreviewCommand.Execute(null);
-                e.Handled = true;
-                break;
+            }
+            else if (vm.StopCommand.CanExecute(null))
+            {
+                vm.StopCommand.Execute(null);
+            }
+            e.Handled = true;
+            return;
+        }
+
+        if (CueHotkeyGesture.Matches(hotkeys.Go, e))
+        {
+            if (vm.GoCommand.CanExecute(null)) vm.GoCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (CueHotkeyGesture.Matches(hotkeys.StandbySelected, e))
+        {
+            if (vm.StandbySelectedCommand.CanExecute(null)) vm.StandbySelectedCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (CueHotkeyGesture.Matches(hotkeys.Back, e))
+        {
+            if (vm.BackCommand.CanExecute(null)) vm.BackCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (CueHotkeyGesture.Matches(hotkeys.Pause, e))
+        {
+            if (vm.PauseCommand.CanExecute(null)) vm.PauseCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (CueHotkeyGesture.Matches(hotkeys.NextVisualizerPreset, e))
+        {
+            if (vm.NextVisualizerPresetCommand.CanExecute(null)) vm.NextVisualizerPresetCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Avalonia.Input.Key.P
+                 && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+        {
+            if (vm.TogglePreviewCommand.CanExecute(null)) vm.TogglePreviewCommand.Execute(null);
+            e.Handled = true;
         }
     }
 
@@ -146,6 +187,31 @@ public partial class CuePlayerView : UserControl
                 e.Handled = true;
                 break;
         }
+    }
+
+    private void OnCueTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not CuePlayerViewModel vm)
+            return;
+
+        CueNodeViewModel? cue = null;
+        for (var visual = e.Source as Visual; visual is not null && !ReferenceEquals(visual, CueTreeGrid);
+             visual = visual.GetVisualParent())
+        {
+            if (visual is Control { DataContext: CueNodeViewModel row })
+            {
+                cue = row;
+                break;
+            }
+        }
+        if (cue is null)
+            return;
+
+        var point = e.GetCurrentPoint(CueTreeGrid);
+        if (point.Properties.IsRightButtonPressed)
+            vm.UpdateSelection([cue]);
+        vm.MarkCueForNextGo(cue);
     }
 
     private void OnCueTreeRowDragStarted(object? sender, TreeDataGridRowDragStartedEventArgs e)
@@ -389,6 +455,16 @@ public partial class CuePlayerView : UserControl
             x => x.Children,
             x => x.HasChildren,
             x => x.IsExpanded));
+        _source.Columns.Add(AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
+            Strings.CueTreeStartTriggerColumnHeader,
+            nameof(CueNodeViewModel.StartTriggerDisplay),
+            static row => row.StartTriggerDisplay,
+            new GridLength(106)));
+        _source.Columns.Add(AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
+            Strings.CueTreeTargetColumnHeader,
+            nameof(CueNodeViewModel.TargetDisplay),
+            static row => row.TargetDisplay,
+            new GridLength(145)));
         _source.Columns.Add(AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
             Strings.CueTreeDurationColumnHeader,
             nameof(CueNodeViewModel.DurationDisplay),

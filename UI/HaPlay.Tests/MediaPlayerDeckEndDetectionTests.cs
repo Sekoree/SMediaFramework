@@ -11,6 +11,32 @@ namespace HaPlay.Tests;
 /// any seek/pause/resume/clip swap, including ones the deck did not initiate) restarts the window outright.</summary>
 public sealed class MediaPlayerDeckEndDetectionTests
 {
+    [Fact]
+    public void NaturalEndGeneration_AllowsOnlyOneClaimAcrossEventAndPoll()
+    {
+        long state = 0;
+        var generation = MediaPlayerViewModel.BeginNaturalEndGeneration(ref state);
+
+        Assert.True(MediaPlayerViewModel.TryClaimNaturalEndGeneration(ref state, generation));
+        Assert.False(MediaPlayerViewModel.TryClaimNaturalEndGeneration(ref state, generation));
+    }
+
+    [Fact]
+    public void NaturalEndGeneration_RejectsPollThatResumesAfterNextTrackOpened()
+    {
+        long state = 0;
+        var song1Generation = MediaPlayerViewModel.BeginNaturalEndGeneration(ref state);
+
+        // The primary event advances song 1. While its old poll is awaiting SnapshotAsync, song 2 opens.
+        Assert.True(MediaPlayerViewModel.TryClaimNaturalEndGeneration(ref state, song1Generation));
+        var song2Generation = MediaPlayerViewModel.BeginNaturalEndGeneration(ref state);
+
+        // The delayed song-1 poll must not consume song 2's one permitted advance.
+        Assert.False(MediaPlayerViewModel.TryClaimNaturalEndGeneration(ref state, song1Generation));
+        Assert.Equal(song2Generation, MediaPlayerViewModel.ReadNaturalEndGeneration(ref state));
+        Assert.True(MediaPlayerViewModel.TryClaimNaturalEndGeneration(ref state, song2Generation));
+    }
+
     // Every case runs with a STABLE generation unless it tests the generation reset itself: same value in,
     // lastGeneration pre-seeded to it (the poll has already seen one tick at this generation).
     private static bool Confirm(

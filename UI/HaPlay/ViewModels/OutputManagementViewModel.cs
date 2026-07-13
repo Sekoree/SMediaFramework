@@ -768,12 +768,19 @@ public partial class OutputManagementViewModel : ViewModelBase
     internal void NotifyLocalPreviewResized(OutputLineViewModel line, int width, int height)
     {
         if (line.Definition is not LocalVideoOutputDefinition lv
-            || lv.SurfaceMode != VideoSurfaceMode.Windowed
             || width < 320
             || height < 240)
         {
             return;
         }
+
+        // Always retain the live framebuffer/window size for consumers such as the composition layout
+        // editor. Fullscreen dimensions are deliberately transient: persisting them into WindowWidth/
+        // WindowHeight would lose the operator's windowed restore size.
+        line.ReportLiveVideoSize(width, height);
+
+        if (lv.SurfaceMode != VideoSurfaceMode.Windowed)
+            return;
 
         if (lv.WindowWidth == width && lv.WindowHeight == height)
             return;

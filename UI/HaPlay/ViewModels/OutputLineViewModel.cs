@@ -22,6 +22,25 @@ public partial class OutputLineViewModel : ViewModelBase
 
     public OutputDefinition Definition { get; private set; }
 
+    /// <summary>The most recent pixel size reported by a live local-video window. Unlike the persisted
+    /// WindowWidth/WindowHeight this also represents fullscreen size without destroying the windowed
+    /// restore dimensions.</summary>
+    public int? LiveVideoWidth { get; private set; }
+
+    public int? LiveVideoHeight { get; private set; }
+
+    internal void ReportLiveVideoSize(int width, int height)
+    {
+        if (width <= 0 || height <= 0
+            || (LiveVideoWidth == width && LiveVideoHeight == height))
+            return;
+
+        LiveVideoWidth = width;
+        LiveVideoHeight = height;
+        OnPropertyChanged(nameof(LiveVideoWidth));
+        OnPropertyChanged(nameof(LiveVideoHeight));
+    }
+
     /// <summary>Phase A - swaps the definition in place after the runtime is reconfigured (§9.6).
     /// Notifies derived UI bindings (kind label / summary / VM-derived booleans) so the line refreshes.
     /// Only the management VM calls this; everything else treats <see cref="Definition"/> as read-only.</summary>

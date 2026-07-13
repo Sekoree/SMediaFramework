@@ -45,6 +45,8 @@ public partial class CuePlayerViewModel
         var oldDisplay = CueDisplay(SelectedCueNode);
         SelectedCueNode.Number = result.Number;
         SelectedCueNode.Label = result.Label;
+        RefreshCueTargetDisplays();
+        OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         StatusMessage = Strings.Format(nameof(Strings.RenamedCueStatusFormat), oldDisplay, CueDisplay(SelectedCueNode));
     }
 
@@ -111,6 +113,7 @@ public partial class CuePlayerViewModel
         parent.Insert(next, node);
         SelectedCueNode = node;
         MaybeRenumberAfterStructureChange();
+        RefreshCueTargetDisplays();
         SuggestPreRollRefresh();
     }
 
@@ -167,6 +170,7 @@ public partial class CuePlayerViewModel
         destinationParent.Insert(destinationIndex, node);
         SelectedCueNode = node;
         MaybeRenumberAfterStructureChange();
+        RefreshCueTargetDisplays();
         SuggestPreRollRefresh();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
@@ -216,6 +220,7 @@ public partial class CuePlayerViewModel
         var idx = parent.IndexOf(SelectedCueNode);
         parent.Insert(idx + 1, copyVm);
         SelectedCueNode = copyVm;
+        RefreshCueTargetDisplays();
     }
 
     private bool CanDuplicateSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
@@ -287,10 +292,23 @@ public partial class CuePlayerViewModel
                 break;
         }
 
+        RefreshCueTargetDisplays();
         StatusMessage = Strings.Format(nameof(Strings.RenumberedStatusFormat), renumbered);
     }
 
     private bool CanRenumber() => SelectedCueList is not null && SelectedCueList.Nodes.Count > 0;
+
+    /// <summary>One-click canonical numbering: root rows become 1, 2, 3… and each nested group receives
+    /// hierarchical child numbers such as 2.1, 2.2 and 2.3. Stable-ID cue links remain unchanged.</summary>
+    [RelayCommand(CanExecute = nameof(CanRenumber))]
+    private void ReorganizeCueList()
+    {
+        if (SelectedCueList is null)
+            return;
+        var renumbered = RenumberSubtree(SelectedCueList.Nodes, start: 1, step: 1, recurseIntoGroups: true);
+        RefreshCueTargetDisplays();
+        StatusMessage = Strings.Format(nameof(Strings.ReorganizedCueListStatusFormat), renumbered);
+    }
 
     /// <summary>Renumbers the rows in <paramref name="nodes"/> in tree order. When
     /// <paramref name="recurseIntoGroups"/> is true, group children get sub-numbers

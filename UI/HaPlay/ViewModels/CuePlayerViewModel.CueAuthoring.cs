@@ -45,6 +45,7 @@ public partial class CuePlayerViewModel
         node.TriggerMode = SelectedCueList.DefaultTriggerMode;
         if (SelectedCueList.AutoRenumberOnInsert)
             RenumberFlat(SelectedCueList.Nodes, start: 1, step: 1);
+        RefreshCueTargetDisplays();
     }
 
     /// <summary>"+ Media" - cancel-safe: the picker runs FIRST and a cue row is only created per
@@ -504,7 +505,12 @@ public partial class CuePlayerViewModel
     {
         var parent = SelectedParentCollection();
         if (parent is null) return;
-        var target = SelectedCueNode is { } sel && sel.Kind != CueNodeKind.Comment ? sel : null;
+        var target = SelectedCueNode is { } sel && sel.Kind != CueNodeKind.Comment
+                     // With a Group selected, the new Jump is inserted as that Group's first/last child.
+                     // Auto-targeting the same Group would make Group→Jump→Group an immediate cycle.
+                     && !(sel.IsGroup && ReferenceEquals(parent, sel.Children))
+            ? sel
+            : null;
         var row = new CueNodeViewModel(CueNodeKind.Jump)
         {
             Number = NextNumber(parent),
@@ -535,6 +541,7 @@ public partial class CuePlayerViewModel
         if (jump is null || jump.JumpTargetIds.Contains(target.Id))
             return;
         jump.JumpTargetIds.Add(target.Id);
+        RefreshCueTargetDisplays();
         StatusMessage = Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{jump.Label}: +{CueDisplay(target)}");
     }
 
@@ -559,7 +566,11 @@ public partial class CuePlayerViewModel
         // exactly like a media cue's placement (#26 v3).
         var seedComp = SelectedComposition?.Id ?? SelectedCueList?.Compositions.FirstOrDefault()?.Id;
         if (seedComp is { } compId && compId != Guid.Empty)
-            row.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement { CompositionId = compId }));
+            row.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement
+            {
+                CompositionId = compId,
+                LayerIndex = 100,
+            }));
         parent.Add(row);
         FinalizeAddedCue(row);
         SelectedCueNode = row;
@@ -596,6 +607,7 @@ public partial class CuePlayerViewModel
         var removedFireableIndex = orderedBefore.FindIndex(c => ReferenceEquals(c, removedFireable));
         if (!RemoveNodeRecursive(SelectedCueList.Nodes, SelectedCueNode))
             return;
+        RefreshCueTargetDisplays();
         PruneSelectionToCurrentTree();
         ReconcileTransportAfterTreeMutation(removedFireableIndex);
     }

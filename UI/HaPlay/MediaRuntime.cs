@@ -139,7 +139,18 @@ internal static class MediaRuntime
     }
 
     /// <summary>Eagerly builds the registry at startup (for deterministic timing/logging). Idempotent.</summary>
-    public static void Initialize() => _ = Host;
+    public static void Initialize()
+    {
+        _ = Host;
+        // Visualizer creation does not necessarily touch the optional bus-effect registry first. Configure
+        // continuous projectM rendering at application startup as well, so a deck visualizer always owns its
+        // offscreen renderer and can survive preserved composition/song swaps.
+        if (RuntimeModules.IsProjectMAvailable)
+        {
+            S.Media.Visualizer.ProjectM.ProjectMVisualSource.OffscreenGlContextFactory =
+                S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
+        }
+    }
 
     /// <summary>
     /// Disposes the owning host at app shutdown, releasing the modules' native runtime holds deterministically

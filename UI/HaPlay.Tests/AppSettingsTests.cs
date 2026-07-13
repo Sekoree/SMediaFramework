@@ -1,10 +1,29 @@
 using System.Text.Json;
+using Avalonia;
+using HaPlay.Views;
 using Xunit;
 
 namespace HaPlay.Tests;
 
 public sealed class AppSettingsTests
 {
+    [Theory]
+    [InlineData(1900, 900, 1.0, 928, 363)]
+    [InlineData(1900, 900, 1.5, 448, 43)]
+    [InlineData(-200, -100, 1.0, 0, 0)]
+    public void MainWindowRestore_ClampsTheCompleteFrameInsideTheWorkingArea(
+        int requestedX, int requestedY, double scaling, int expectedX, int expectedY)
+    {
+        var clamped = MainWindow.ClampWindowPosition(
+            new PixelPoint(requestedX, requestedY),
+            new PixelRect(0, 0, 1920, 1035),
+            scaling,
+            clientWidthDip: 960,
+            clientHeightDip: 640);
+
+        Assert.Equal(new PixelPoint(expectedX, expectedY), clamped);
+    }
+
     [Fact]
     public void Save_RecoversFromBackup_WithoutOverwritingItWithCorruptPrimary()
     {
@@ -111,6 +130,31 @@ public sealed class AppSettingsTests
         var fresh = new AppSettings();
         Assert.Equal(AppThemeMode.System, fresh.Theme);
         Assert.Equal(AppDensityMode.Compact, fresh.Density);
+        Assert.Equal("Space", fresh.CueHotkeys.Go);
+        Assert.Equal("Esc", fresh.CueHotkeys.StopThenPanic);
+        Assert.Equal("Ctrl+Esc", fresh.CueHotkeys.PanicNow);
+    }
+
+    [Fact]
+    public void AppSettings_RoundTripsCueHotkeys()
+    {
+        var settings = new AppSettings
+        {
+            CueHotkeys = new CueHotkeyProfile
+            {
+                Go = "G",
+                StopThenPanic = "F12",
+                NextVisualizerPreset = "Ctrl+N",
+            },
+        };
+
+        var json = JsonSerializer.Serialize(settings, AppSettingsJsonContext.Default.AppSettings);
+        var loaded = JsonSerializer.Deserialize(json, AppSettingsJsonContext.Default.AppSettings);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("G", loaded!.CueHotkeys.Go);
+        Assert.Equal("F12", loaded.CueHotkeys.StopThenPanic);
+        Assert.Equal("Ctrl+N", loaded.CueHotkeys.NextVisualizerPreset);
     }
 
     /// <summary>UI rewrite P5: the PlayersLayout setting was removed with the deck grid. A settings

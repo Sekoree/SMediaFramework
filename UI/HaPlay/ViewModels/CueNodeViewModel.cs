@@ -44,6 +44,30 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private CueTriggerMode _triggerMode = CueTriggerMode.Manual;
 
+    /// <summary>Compact cue-tree rendering of the cue's start policy.</summary>
+    public string StartTriggerDisplay => TriggerMode switch
+    {
+        CueTriggerMode.AutoFollow => "Auto-follow",
+        CueTriggerMode.AutoContinue => "Auto-continue",
+        _ => "Manual",
+    };
+
+    partial void OnTriggerModeChanged(CueTriggerMode value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(StartTriggerDisplay));
+    }
+
+    private string _targetDisplay = string.Empty;
+
+    /// <summary>Resolved control-flow target for the cue tree. Persisted links remain stable IDs;
+    /// the cue-player refreshes this display when targets or cue numbers change.</summary>
+    public string TargetDisplay
+    {
+        get => _targetDisplay;
+        internal set => SetProperty(ref _targetDisplay, value);
+    }
+
     [ObservableProperty]
     private int _preWaitMs;
 
@@ -605,6 +629,14 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     public int VisualizerRenderFps { get; set; }
 
+    public double VisualizerPresetDurationSeconds { get; set; } = 30;
+
+    public bool VisualizerShufflePresets { get; set; } = true;
+
+    public double VisualizerBeatSensitivity { get; set; } = 1;
+
+    public double VisualizerTransitionSeconds { get; set; } = 2;
+
     /// <summary>Visualizer-cue feed (#26): true = every clip; false = FeedCueIds + flagged media cues.</summary>
     public bool VisualizerFeedAll { get; set; } = true;
 
@@ -633,6 +665,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         get => string.Equals(Extra, "Random", StringComparison.OrdinalIgnoreCase);
         set => Extra = value ? "Random" : "Always";
     }
+
+    /// <summary>Random Jump cues can exclude their immediately previous target when alternatives exist.</summary>
+    public bool JumpAvoidImmediateRepeat { get; set; }
 
     public bool IsGroup => Kind == CueNodeKind.Group;
 
@@ -1013,6 +1048,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Notes = j.Notes,
                     ColorTag = j.ColorTag,
                     JumpTargetIds = [.. j.TargetCueIds],
+                    JumpAvoidImmediateRepeat = j.AvoidImmediateRepeat,
                     Extra = j.RandomTarget ? "Random" : "Always",
                     SourceOrAction = j.FireTargetOnJump ? "fire" : "standby",
                 };
@@ -1041,15 +1077,23 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     VisualizerRenderWidth = v.RenderWidth,
                     VisualizerRenderHeight = v.RenderHeight,
                     VisualizerRenderFps = v.RenderFps,
+                    VisualizerPresetDurationSeconds = v.PresetDurationSeconds,
+                    VisualizerShufflePresets = v.ShufflePresets,
+                    VisualizerBeatSensitivity = v.BeatSensitivity,
+                    VisualizerTransitionSeconds = v.TransitionSeconds,
                 };
                 foreach (var placement in v.VideoPlacements)
-                    vizVm.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(placement));
+                {
+                    var placementVm = CueVideoPlacementViewModel.FromModel(placement);
+                    vizVm.VideoPlacements.Add(placementVm);
+                }
                 // Legacy (pre-v3) single-rect files: migrate the Dest* fields into one placement.
                 if (vizVm.VideoPlacements.Count == 0 && v.CompositionId != Guid.Empty)
                 {
                     vizVm.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement
                     {
                         CompositionId = v.CompositionId,
+                        LayerIndex = 0,
                         DestX = v.DestX, DestY = v.DestY,
                         DestWidth = v.DestWidth, DestHeight = v.DestHeight,
                         Opacity = v.Opacity,
@@ -1152,6 +1196,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 ColorTag = ColorTag,
                 TargetCueIds = [.. JumpTargetIds],
                 RandomTarget = JumpRandom,
+                AvoidImmediateRepeat = JumpAvoidImmediateRepeat,
                 FireTargetOnJump = !string.Equals(SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase),
             },
             CueNodeKind.Visualizer => new VisualizerCueNode
@@ -1177,6 +1222,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 RenderWidth = VisualizerRenderWidth,
                 RenderHeight = VisualizerRenderHeight,
                 RenderFps = VisualizerRenderFps,
+                PresetDurationSeconds = VisualizerPresetDurationSeconds,
+                ShufflePresets = VisualizerShufflePresets,
+                BeatSensitivity = VisualizerBeatSensitivity,
+                TransitionSeconds = VisualizerTransitionSeconds,
                 VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },
             _ => new CommentCueNode

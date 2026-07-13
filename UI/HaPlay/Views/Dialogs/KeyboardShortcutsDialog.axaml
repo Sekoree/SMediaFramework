@@ -5,7 +5,7 @@
         x:Class="HaPlay.Views.Dialogs.KeyboardShortcutsDialog"
         x:DataType="vm:KeyboardShortcutsDialogViewModel"
         Title="{x:Static res:Strings.KeyboardShortcutsDialogTitle}"
-        Width="460" Height="440"
+        Width="620" Height="680" MinWidth="520" MinHeight="500"
         WindowStartupLocation="CenterOwner">
   <DockPanel Margin="14">
     <TextBox DockPanel.Dock="Top"
@@ -15,13 +15,36 @@
              Margin="0,0,0,10" />
 
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
-                Margin="0,10,0,0">
-      <Button Content="{x:Static res:Strings.CloseButton}" IsCancel="True" IsDefault="True"
-              Click="OnCloseClick" />
+                Spacing="8" Margin="0,10,0,0">
+      <Button Content="Reset cue defaults" Click="OnResetClick" />
+      <Button Content="Save" IsDefault="True" Click="OnSaveClick" />
+      <Button Content="{x:Static res:Strings.CloseButton}" IsCancel="True" Click="OnCloseClick" />
     </StackPanel>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel Spacing="12">
+        <Border BorderBrush="#44808080" BorderThickness="1" Padding="10">
+          <StackPanel Spacing="7">
+            <TextBlock Text="Cue player hotkeys" FontWeight="SemiBold" />
+            <TextBlock Text="Enter a key or combination such as Space, N or Ctrl+Escape. Leave a field blank to disable it. The Stop hotkey stops on the first press and panic-stops when pressed again within 600 ms."
+                       TextWrapping="Wrap" Opacity="0.7" />
+            <ItemsControl ItemsSource="{Binding CueHotkeyRows}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:CueHotkeyEditorRow">
+                  <Grid ColumnDefinitions="*,180" ColumnSpacing="12" Margin="0,2">
+                    <TextBlock Grid.Column="0" Text="{Binding Description}" VerticalAlignment="Center"
+                               TextWrapping="Wrap" />
+                    <TextBox Grid.Column="1" Text="{Binding Gesture, Mode=TwoWay}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828"
+                       TextWrapping="Wrap" IsVisible="{Binding ValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
+        </Border>
+
+        <TextBlock Text="Shortcut reference" FontWeight="SemiBold" />
         <TextBlock Text="{x:Static res:Strings.ShortcutsNoResults}" Opacity="0.6"
                    IsVisible="{Binding !HasResults}" />
         <ItemsControl ItemsSource="{Binding FilteredGroups}" Grid.IsSharedSizeScope="True">

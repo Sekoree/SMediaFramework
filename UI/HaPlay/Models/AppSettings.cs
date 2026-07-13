@@ -75,6 +75,9 @@ public sealed class AppSettings
 
     public string? RestApiAccessToken { get; set; }
 
+    /// <summary>Configurable cue-player transport and visualizer shortcuts.</summary>
+    public CueHotkeyProfile CueHotkeys { get; set; } = new();
+
     private static string FilePath
     {
         get
@@ -139,6 +142,7 @@ public sealed class AppSettings
 
         if (s.VisualizerFps <= 0)
             s.VisualizerFps = 60;
+        s.CueHotkeys ??= new CueHotkeyProfile();
         return s;
     }
 
@@ -300,5 +304,6 @@ public enum AppBaseTheme
 [JsonSerializable(typeof(AppSettings))]
 [JsonSerializable(typeof(WindowStateSnapshot))]
 [JsonSerializable(typeof(DialogSizeSnapshot))]
+[JsonSerializable(typeof(CueHotkeyProfile))]
 [JsonSerializable(typeof(List<string>))]
 internal partial class AppSettingsJsonContext : JsonSerializerContext;

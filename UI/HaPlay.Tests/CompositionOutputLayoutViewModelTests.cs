@@ -213,6 +213,41 @@ public sealed class CompositionOutputLayoutViewModelTests
     }
 
     [Fact]
+    public void Live_output_resolution_replaces_stale_saved_raster_and_full_output_destination()
+    {
+        var mapping = new CueOutputMapping
+        {
+            OutputWidth = 1280,
+            OutputHeight = 720,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    SrcWidth = 1,
+                    SrcHeight = 1,
+                    DestWidth = 1280,
+                    DestHeight = 720,
+                },
+            },
+        };
+        var vm = CompositionOutputLayoutViewModel.Build(1920, 1080, new[]
+        {
+            (Left, "Resizable window", (int?)1280, (int?)720, (CueOutputMapping?)mapping),
+        });
+
+        vm.UpdateOutputResolution(Left, 1920, 1080);
+
+        Assert.Equal(1920, vm.Items[0].OutputWidth);
+        Assert.Equal(1080, vm.Items[0].OutputHeight);
+        var updated = vm.ToMapping(vm.Items[0]);
+        Assert.Equal(1920, updated.OutputWidth);
+        Assert.Equal(1080, updated.OutputHeight);
+        var section = Assert.Single(updated.Sections);
+        Assert.Equal(1920, section.DestWidth);
+        Assert.Equal(1080, section.DestHeight);
+    }
+
+    [Fact]
     public void Overlaps_and_gaps_are_allowed_between_items()
     {
         var vm = CompositionOutputLayoutViewModel.Build(1000, 1000, new[]

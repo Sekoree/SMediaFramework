@@ -114,35 +114,41 @@ public partial class MainViewModel
             }
         }
 
-        var outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
-        ApplyProjectSnapshot(project);
-        CurrentProjectPath = targetPath;
-
-        if (intoOriginal)
+        IReadOnlyList<string> outputStartErrors;
+        var cueGraphNeedsReload = ProjectSections.Includes(project.SavedSections, ProjectSections.CueLists);
+        bool outputsReplaced;
+        using (await _cueShow.SuspendAutomaticReloadsForProjectRestoreAsync().ConfigureAwait(true))
         {
-            // Match the dialog promise: recovered content is unsaved until the operator explicitly saves it.
-            _autoSaveSuspendedForRecovery = true;
-            AutoSaveStatusIsError = false;
-            AutoSaveStatusText = Strings.AutoSaveStatusSuspended;
-            if (session.Info.DirtyScriptPaths.Count > 0
-                && (session.ScriptsDir is null
-                    || !Control.RestoreDirtyScriptBufferFrom(session.ScriptsDir, session.Info.DirtyScriptPaths)))
+            outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
+            ApplyProjectSnapshot(project);
+            CurrentProjectPath = targetPath;
+
+            if (intoOriginal)
             {
-                ProjectStatus = Strings.Format(nameof(Strings.RecoveryFailedFormat),
-                    "the recovered script editor buffer could not be restored");
-                return false;
+                // Match the dialog promise: recovered content is unsaved until the operator explicitly saves it.
+                _autoSaveSuspendedForRecovery = true;
+                AutoSaveStatusIsError = false;
+                AutoSaveStatusText = Strings.AutoSaveStatusSuspended;
+                if (session.Info.DirtyScriptPaths.Count > 0
+                    && (session.ScriptsDir is null
+                        || !Control.RestoreDirtyScriptBufferFrom(session.ScriptsDir, session.Info.DirtyScriptPaths)))
+                {
+                    ProjectStatus = Strings.Format(nameof(Strings.RecoveryFailedFormat),
+                        "the recovered script editor buffer could not be restored");
+                    return false;
+                }
             }
+            else
+            {
+                _autoSaveSuspendedForRecovery = false;
+            }
+            MarkProjectDirty();
+            outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync().ConfigureAwait(true);
         }
-        else
-        {
-            _autoSaveSuspendedForRecovery = false;
-        }
-        MarkProjectDirty();
 
-        _ = RefreshCuePreRollAsync();
-        var outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync();
-        if (outputsReplaced)
+        if (outputsReplaced || cueGraphNeedsReload)
             await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
+        await RefreshCuePreRollAsync().ConfigureAwait(true);
         CuePlayer.RefreshBrokenEndpointFlags();
         await PromptRebindMissingActionEndpointsAsync();
         _ = RefreshAllEndpointHealthAsync();

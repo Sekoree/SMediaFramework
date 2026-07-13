@@ -38,10 +38,14 @@ public partial class MainViewModel
     private async Task NewProjectCoreAsync()
     {
         var project = new HaPlayProject();
-        var outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
-        ApplyProjectSnapshot(project);
-        if (outputsReplaced)
-            await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
+        using (await _cueShow.SuspendAutomaticReloadsForProjectRestoreAsync().ConfigureAwait(true))
+        {
+            await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
+            ApplyProjectSnapshot(project);
+            await OutputManagement.StartRuntimesForLoadedDefinitionsAsync().ConfigureAwait(true);
+        }
+        await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
+        await RefreshCuePreRollAsync().ConfigureAwait(true);
         CurrentProjectPath = null;
         ProjectStatus = null;
         AutoSaveEnabled = false;
@@ -108,12 +112,18 @@ public partial class MainViewModel
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var missing = requestedRoutes.Where(r => !availableNames.Contains(r)).ToList();
 
-        var outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
-        ApplyProjectSnapshot(project);
-        _ = RefreshCuePreRollAsync();
-        var outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync();
-        if (outputsReplaced)
+        IReadOnlyList<string> outputStartErrors;
+        var cueGraphNeedsReload = ProjectSections.Includes(project.SavedSections, ProjectSections.CueLists);
+        bool outputsReplaced;
+        using (await _cueShow.SuspendAutomaticReloadsForProjectRestoreAsync().ConfigureAwait(true))
+        {
+            outputsReplaced = await PrepareForProjectOutputReplacementAsync(project).ConfigureAwait(true);
+            ApplyProjectSnapshot(project);
+            outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync().ConfigureAwait(true);
+        }
+        if (outputsReplaced || cueGraphNeedsReload)
             await _cueShow.ReloadAfterOutputRestoreAsync().ConfigureAwait(true);
+        await RefreshCuePreRollAsync().ConfigureAwait(true);
         if (project.SavedSections is { Count: > 0 } imported)
         {
             // Partial file = a section import into the current show, not a project switch: keep the
@@ -169,8 +179,11 @@ public partial class MainViewModel
                 await player.StopCommand.ExecuteAsync(null).ConfigureAwait(true);
         }
 
-        CuePlayer.StopCommand.Execute(null);
+        // Await the engine fade before asking the cue VM to reset its transport UI. Doing this in the opposite
+        // order starts the VM's host stop callback and this direct stop concurrently; the second claim can then
+        // release the media clip before the first fade has a chance to ramp it.
         await _cueShow.StopAllPlaybackAsync().ConfigureAwait(true);
+        CuePlayer.StopCommand.Execute(null); // now forwards an idempotent no-active-layers stop and resets rows
         await OutputManagement.PrepareForDefinitionsReplacementAsync().ConfigureAwait(true);
         return true;
     }

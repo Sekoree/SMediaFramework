@@ -1608,6 +1608,35 @@ public sealed class ShowSessionTests
         Compositions: [], Routes: []);
 
     [Fact]
+    public async Task IndependentFire_AllowsTwoCuesFromTheSameAuthoredGroupToRunTogether()
+    {
+        var document = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("cue1", 1, "A", GroupId: "authored"),
+                new CueDefinition("cue2", 2, "B", GroupId: "authored"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1"),
+                new ShowClipBinding("cue2", "fake://2"),
+            ],
+            Compositions: [], Routes: []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(document);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue1"));
+        Assert.Equal(
+            CueExecutionStatus.Fired,
+            await session.FireCueIndependentAsync("cue2", "manual:cue2"));
+
+        var snapshot = await session.SnapshotAsync();
+        Assert.True(snapshot.Single(group => group.GroupId == "authored").IsActive);
+        Assert.True(snapshot.Single(group => group.GroupId == "manual:cue2").IsActive);
+    }
+
+    [Fact]
     public async Task SetAllPausedAsync_PausesAndResumesEveryActiveGroup()
     {
         // NXT-04/06: pause parity with StopAllAsync. The single-group SetPausedAsync only touches one group, so a

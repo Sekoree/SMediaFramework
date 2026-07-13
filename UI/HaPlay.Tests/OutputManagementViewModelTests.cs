@@ -227,7 +227,7 @@ public sealed class OutputManagementViewModelTests
     }
 
     [Fact]
-    public void NotifyLocalPreviewResized_IgnoresFullscreenAndTooSmallSizes()
+    public void NotifyLocalPreviewResized_TracksFullscreenWithoutOverwritingWindowedRestoreSize()
     {
         var vm = new OutputManagementViewModel();
         var fullscreenId = Guid.NewGuid();
@@ -246,9 +246,13 @@ public sealed class OutputManagementViewModelTests
         var fullscreen = Assert.IsType<LocalVideoOutputDefinition>(vm.Outputs[0].Definition);
         Assert.Null(fullscreen.WindowWidth);
         Assert.Null(fullscreen.WindowHeight);
+        Assert.Equal(1920, vm.Outputs[0].LiveVideoWidth);
+        Assert.Equal(1080, vm.Outputs[0].LiveVideoHeight);
         var windowed = Assert.IsType<LocalVideoOutputDefinition>(vm.Outputs[1].Definition);
         Assert.Equal(1280, windowed.WindowWidth);
         Assert.Equal(720, windowed.WindowHeight);
+        Assert.Null(vm.Outputs[1].LiveVideoWidth);
+        Assert.Null(vm.Outputs[1].LiveVideoHeight);
     }
 
     [Fact]

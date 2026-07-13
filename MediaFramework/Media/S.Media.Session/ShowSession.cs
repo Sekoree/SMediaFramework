@@ -330,15 +330,7 @@ public sealed class ShowSession : IAsyncDisposable
         InvokeAsync(async () =>
         {
             if (_visualizerSlots.Remove(compositionId, out var existing))
-            {
-                existing.Layer.Dispose();
-                _audioTaps.RemoveAll(t => t.Id == existing.TapId);
-                RemoveTapFromActiveClips(existing.TapId);
-                if (existing.Source is S.Media.Core.Buses.IBusMetadataSink oldSink)
-                    MetadataHub.Detach(oldSink);
-                if (existing.DisposeSource && existing.Source is IDisposable disposable)
-                    MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
-            }
+                DisposeVisualizerSlot(existing);
 
             if (source is null)
                 return true;
@@ -369,11 +361,37 @@ public sealed class ShowSession : IAsyncDisposable
             return true;
         });
 
+    /// <summary>Detaches one live visualizer surface and all of the auxiliary feeds it owns. Must run on
+    /// the session dispatcher. The dictionary entry is removed by the caller first so replacement/fade
+    /// identity checks cannot accidentally tear down a newer source on the same composition.</summary>
+    private void DisposeVisualizerSlot(VisualizerSlot slot)
+    {
+        slot.Layer.Dispose();
+        _audioTaps.RemoveAll(t => t.Id == slot.TapId);
+        RemoveTapFromActiveClips(slot.TapId);
+        if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
+            MetadataHub.Detach(sink);
+        if (slot.DisposeSource && slot.Source is IDisposable disposable)
+            MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+    }
+
     /// <summary>True when <paramref name="compositionId"/> currently has a visualizer attached. A caller that
     /// reloads with <c>preserveMatchingCompositions</c> uses this to tell whether its persistent visualizer
     /// carried over (preserved) or was dropped (composition rebuilt) so it can decide whether to re-attach.</summary>
     public Task<bool> HasCompositionVisualizerAsync(string compositionId) =>
         InvokeAsync(() => Task.FromResult(_visualizerSlots.ContainsKey(compositionId)));
+
+    /// <summary>Hot-updates a running visualizer surface's destination/opacity/crop/rotation without
+    /// replacing its projectM source. Returns false when the composition has no attached visualizer.</summary>
+    public Task<bool> UpdateCompositionVisualizerPlacementAsync(
+        string compositionId, VideoPlacementSpec placement) =>
+        InvokeAsync(() =>
+        {
+            if (!_visualizerSlots.TryGetValue(compositionId, out var slot))
+                return Task.FromResult(false);
+            slot.Layer.UpdatePlacement(placement);
+            return Task.FromResult(true);
+        });
 
     /// <summary>Feeds a newly-registered tap from the clips that are ALREADY playing (dispatcher).</summary>
     private void AttachTapToActiveClips(Guid tapId, IAudioOutput tap, Func<string, bool>? filter = null)
@@ -1456,7 +1474,7 @@ public sealed class ShowSession : IAsyncDisposable
                                         group.Active!,
                                         group.ActiveRouteTargets,
                                         group.ActiveAudioScale,
-                                        group.ActiveLayer?.Opacity ?? 0f,
+                                        group.CaptureLayerOpacities(),
                                         remaining,
                                         ct);
                                     return true;
@@ -1505,7 +1523,7 @@ public sealed class ShowSession : IAsyncDisposable
         IArmedClip clip,
         IReadOnlyList<AudioRouteTarget> routeTargets,
         float startAudioScale,
-        float startOpacity,
+        IReadOnlyList<float> startLayerOpacities,
         TimeSpan duration,
         CancellationToken ct)
     {
@@ -1519,7 +1537,7 @@ public sealed class ShowSession : IAsyncDisposable
                     return Task.FromResult(true);
                 var scale = FadeRamp.LevelDown(elapsed, duration);
                 group.ApplyFadeLevel(
-                    clip.Player, routeTargets, startAudioScale, startOpacity, scale);
+                    clip.Player, routeTargets, startAudioScale, startLayerOpacities, scale);
                 return Task.FromResult(scale <= 0f);
             }),
             onCompleted: () => InvokeAsync(async () =>
@@ -1563,6 +1581,42 @@ public sealed class ShowSession : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _fires.FireCueAsync(cueId);
+    }
+
+    /// <summary>Fires one media cue on a caller-owned transport group instead of the group encoded in the
+    /// show document. This is the manual-override path used by HaPlay: different children of one authored
+    /// group can then play concurrently, while re-firing the same child replaces only its own manual slot.</summary>
+    public async Task<CueExecutionStatus> FireCueIndependentAsync(
+        string cueId,
+        string independentGroupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cueId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(independentGroupId);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (!_cueGraph.TryGetCue(cueId, out var cue))
+            throw new ArgumentException($"cue '{cueId}' is not registered", nameof(cueId));
+        if (!cue.Enabled)
+            return CueExecutionStatus.SkippedDisabled;
+        if (!cue.Armed)
+            return CueExecutionStatus.SkippedNotArmed;
+        if (!_clipsByCue.TryGetValue(cueId, out var binding))
+            return CueExecutionStatus.NotReady;
+
+        try
+        {
+            if (cue.PreWait > TimeSpan.Zero)
+                await Task.Delay(cue.PreWait, cancellationToken).ConfigureAwait(false);
+            await PlayClipAsync(independentGroupId, binding, cancellationToken).ConfigureAwait(false);
+            if (cue.PostWait > TimeSpan.Zero)
+                await Task.Delay(cue.PostWait, cancellationToken).ConfigureAwait(false);
+            return CueExecutionStatus.Fired;
+        }
+        catch (OperationCanceledException)
+        {
+            return CueExecutionStatus.Failed;
+        }
     }
 
     /// <summary>Runs the current cue graph's fire - the <see cref="CueFireOrchestrator"/>'s state seam. Reads
@@ -1789,7 +1843,20 @@ public sealed class ShowSession : IAsyncDisposable
     public Task StopAllAsync()
     {
         _fires.CancelActiveFire();
-        return StopGroupsCoreAsync(() => _groups.Values.Where(group => group.Active is not null).ToArray(), fade: true);
+        // Visualizers are persistent composition surfaces rather than transport clips. Fade them on the same
+        // stop clock instead of detaching them immediately: otherwise an opaque/partly-opaque visualizer vanishes
+        // in one frame and exposes the still-fading media layer beneath it as a visible brightness flash.
+        return Task.WhenAll(
+            StopGroupsCoreAsync(() => _groups.Values.Where(group => group.Active is not null).ToArray(), fade: true),
+            FadeOutAndRemoveVisualizersAsync());
+    }
+
+    /// <summary>Soft-stops the persistent visualizer on one composition. Visualizer Stop cues use the
+    /// same fade clock as global Stop/Panic instead of detaching the surface in a single frame.</summary>
+    public Task FadeOutCompositionVisualizerAsync(string compositionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(compositionId);
+        return FadeOutAndRemoveVisualizersAsync(compositionId);
     }
 
     /// <summary>Stops the cue with <paramref name="cueId"/> wherever it is the active clip (per-cue stop /
@@ -1831,7 +1898,7 @@ public sealed class ShowSession : IAsyncDisposable
                             ? configured
                             : SoftStopFadeDuration,
                         group.ActiveAudioScale,
-                        group.ActiveLayer?.Opacity ?? 0f,
+                        group.CaptureLayerOpacities(),
                         group.ActiveRouteTargets);
                 }
 
@@ -1884,7 +1951,7 @@ public sealed class ShowSession : IAsyncDisposable
                     if (!ReferenceEquals(fade.Group.Active, fade.Clip))
                         continue; // replaced/ended during the fade - leave the new clip alone
                     fade.Group.ApplyFadeLevel(
-                        fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartOpacity,
+                        fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartLayerOpacities,
                         FadeRamp.LevelDown(elapsed, fade.Duration));
                     applied = true;
                 }
@@ -1903,8 +1970,65 @@ public sealed class ShowSession : IAsyncDisposable
         IArmedClip Clip,
         TimeSpan Duration,
         float StartAudioScale,
-        float StartOpacity,
+        IReadOnlyList<float> StartLayerOpacities,
         IReadOnlyList<AudioRouteTarget> RouteTargets);
+
+    private sealed record VisualizerFade(string CompositionId, VisualizerSlot Slot, float StartOpacity);
+
+    /// <summary>Soft-stops all persistent visualizer layers. Capturing slot identity makes the final detach safe
+    /// when a new visualizer is fired onto the same composition while the old one is fading.</summary>
+    private Task FadeOutAndRemoveVisualizersAsync() => FadeOutAndRemoveVisualizersAsync(compositionId: null);
+
+    private async Task FadeOutAndRemoveVisualizersAsync(string? compositionId)
+    {
+        try
+        {
+            var fades = await InvokeAsync(() => Task.FromResult<IReadOnlyList<VisualizerFade>>(
+                    _visualizerSlots
+                        .Where(pair => compositionId is null
+                                       || string.Equals(pair.Key, compositionId, StringComparison.Ordinal))
+                        .Select(pair =>
+                            new VisualizerFade(pair.Key, pair.Value, pair.Value.Layer.Opacity))
+                        .ToArray()))
+                .ConfigureAwait(false);
+            if (fades.Count == 0)
+                return;
+
+            await FadeRamp.RunAsync(FadeStepInterval, CancellationToken.None, elapsed => InvokeAsync(() =>
+            {
+                var applied = false;
+                var level = FadeRamp.LevelDown(elapsed, SoftStopFadeDuration);
+                foreach (var fade in fades)
+                {
+                    if (!_visualizerSlots.TryGetValue(fade.CompositionId, out var current)
+                        || !ReferenceEquals(current, fade.Slot))
+                        continue;
+                    fade.Slot.Layer.Opacity = fade.StartOpacity * level;
+                    applied = true;
+                }
+
+                return Task.FromResult(!applied || level <= 0f);
+            })).ConfigureAwait(false);
+
+            await InvokeAsync(() =>
+            {
+                foreach (var fade in fades)
+                {
+                    if (!_visualizerSlots.TryGetValue(fade.CompositionId, out var current)
+                        || !ReferenceEquals(current, fade.Slot))
+                        continue;
+                    _visualizerSlots.Remove(fade.CompositionId);
+                    DisposeVisualizerSlot(fade.Slot);
+                }
+
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Session disposal owns every remaining surface and tap.
+        }
+    }
 
     /// <summary>Pauses or resumes the active clip on <paramref name="groupId"/> - a seamless toggle (codec
     /// pipelines are not flushed, so resume continues from the same frame, matching the GUI engine's
@@ -2399,11 +2523,14 @@ public sealed class ShowSession : IAsyncDisposable
         /// ride rides the NEW output set. Keeps the binding and current audio scale.</summary>
         public void SetActiveRouteTargets(IReadOnlyList<AudioRouteTarget> routeTargets) =>
             _activeRouteTargets = routeTargets.ToArray();
-        // Every placement fades on one ramp, so the primary (first) layer's opacity is representative for the
-        // cross-fade opacity readback.
-        public ClipCompositionRuntime.IPlacedClipLayer? ActiveLayer => _layers.Count > 0 ? _layers[0].Slot : null;
         public IReadOnlyList<AudioRouteTarget> ActiveRouteTargets => _activeRouteTargets;
         public float ActiveAudioScale => _activeAudioScale;
+
+        /// <summary>Captures every placement's own opacity. A cue may deliberately use different opacities on
+        /// different compositions, so a stop fade must scale each from its own value rather than snapping all
+        /// layers to the first placement's opacity on the first ramp step.</summary>
+        public IReadOnlyList<float> CaptureLayerOpacities() =>
+            _layers.Select(placed => placed.Slot.Opacity).ToArray();
 
         /// <summary>Hands the group the cancellation source for the active clip's background work (the fade-in
         /// ramp + the end-of-clip loop/stop/freeze monitor). Cancelled when the clip is replaced.</summary>
@@ -2447,17 +2574,19 @@ public sealed class ShowSession : IAsyncDisposable
             S.Media.Players.MediaPlayer player,
             IReadOnlyList<AudioRouteTarget> routeTargets,
             float startAudioScale,
-            float startOpacity,
+            IReadOnlyList<float> startLayerOpacities,
             float scale)
         {
             if (Active?.Player != player)
                 return;
             scale = Math.Clamp(scale, 0f, 1f);
             ApplyAudioScale(player, routeTargets, startAudioScale * scale);
-            // All of the clip's composition layers fade together on the one ramp.
-            var opacity = startOpacity * scale;
-            foreach (var placed in _layers)
-                placed.Slot.Opacity = opacity;
+            // All placements share the timing ramp but retain their individual authored/live-edited opacity.
+            for (var i = 0; i < _layers.Count; i++)
+            {
+                var startOpacity = i < startLayerOpacities.Count ? startLayerOpacities[i] : 0f;
+                _layers[i].Slot.Opacity = startOpacity * scale;
+            }
         }
 
         /// <summary>Live-repositions the active clip's composition layer identified by

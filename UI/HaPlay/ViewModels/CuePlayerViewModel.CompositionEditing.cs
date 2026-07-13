@@ -340,7 +340,7 @@ public partial class CuePlayerViewModel
             var placement = new CueVideoPlacementViewModel
             {
                 CompositionId = firstComp?.Id ?? Guid.Empty,
-                LayerIndex = media.VideoPlacements.Count,
+                LayerIndex = media.Kind == CueNodeKind.Visualizer ? 100 : media.VideoPlacements.Count,
             };
             placement.SetDestRect(fx, fy, fw, fh);
             media.VideoPlacements.Add(placement);

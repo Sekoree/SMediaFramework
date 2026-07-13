@@ -114,6 +114,7 @@ public partial class MainViewModel : ViewModelBase
 
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
+        CuePlayer.Hotkeys = _appSettings.CueHotkeys.Copy();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
         // Appearance (§8.6) - load saved values and apply them immediately. The OnXChanged hooks would
         // re-save on first set; seed via backing fields so we don't fire that pointlessly.
@@ -322,6 +323,7 @@ public partial class MainViewModel : ViewModelBase
         s.BaseTheme = _appSettings.BaseTheme;
         s.Theme = _appSettings.Theme;
         s.Density = _appSettings.Density;
+        s.CueHotkeys = _appSettings.CueHotkeys.Copy();
     });
 
     private void RestartRestApi()
@@ -527,7 +529,12 @@ public partial class MainViewModel : ViewModelBase
         var owner = TryGetOwnerWindow();
         if (owner is null)
             return;
-        await new Views.Dialogs.KeyboardShortcutsDialog().ShowDialog(owner);
+        await new Views.Dialogs.KeyboardShortcutsDialog(CuePlayer.Hotkeys, hotkeys =>
+        {
+            CuePlayer.Hotkeys = hotkeys.Copy();
+            _appSettings.CueHotkeys = hotkeys.Copy();
+            SaveOwnedAppSettings();
+        }).ShowDialog(owner);
     }
 
     /// <summary>Ctrl+1..N keyboard handler. Index is 1-based to match the modifier key. (§12.5)</summary>
@@ -1465,10 +1472,7 @@ public partial class MainViewModel : ViewModelBase
         RebuildProjectMIDIDeviceRows();
 
         if (!Has(ProjectSections.Players))
-        {
-            FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync project-load-no-players");
             return;
-        }
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)
@@ -1484,7 +1488,6 @@ public partial class MainViewModel : ViewModelBase
         for (var i = 0; i < project.Players.Count && i < Players.Count; i++)
             Players[i].ApplyPlayerConfigSnapshot(project.Players[i]);
 
-        FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync project-load");
     }
 
     // ----- Phase B (§7): Project save / load command plumbing --------------------------------
