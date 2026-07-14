@@ -11,6 +11,23 @@ namespace HaPlay.Tests;
 /// <summary>The record-to-file output line: persistence round-trip, settings→options mapping, dialog commit.</summary>
 public sealed class FileOutputDefinitionTests
 {
+    /// <summary>True when this machine can actually open the given encoders. Mirrors the
+    /// <c>Validate().Count &gt; 0</c> skip guard the encode round-trip tests use, so dialog-commit tests
+    /// that assert on a produced definition skip (rather than fail) on a runner without usable FFmpeg
+    /// natives instead of crashing.</summary>
+    private static bool EncodersUsable(string videoCodec, string audioCodec = "Flac") =>
+        FileOutputRuntime.BuildOptions(new EncodeSettingsDefinition(
+                Container: "Matroska",
+                OutputMode: "VideoAndAudio",
+                VideoCodec: videoCodec,
+                VideoCrf: null,
+                ScaleWidth: 1920,
+                ScaleHeight: 1080,
+                Fps: 30)
+            {
+                AudioLegs = [new EncodeAudioLegDefinition(audioCodec, Channels: 2)],
+            }).Validate().Count == 0;
+
     [Fact]
     public void FileOutputDefinition_RoundTripsThroughProjectJson()
     {
@@ -68,6 +85,9 @@ public sealed class FileOutputDefinitionTests
     [Fact]
     public void DialogCommit_ProducesDefinition_AndFlagsBadFolder()
     {
+        if (!EncodersUsable("Mpeg4"))
+            return; // no usable FFmpeg on this runner - the commit probe cannot pass
+
         var vm = new AddFileOutputDialogViewModel
         {
             DisplayName = "Rec 1",
@@ -114,6 +134,9 @@ public sealed class FileOutputDefinitionTests
             Fps = 0,
         };
         vm.InitializeExistingOutputNames([]);
+        if (!EncodersUsable("Mpeg4"))
+            return; // no usable FFmpeg on this runner - the commit probe cannot pass
+
         var contentOnly = vm.TryCommit();
         Assert.NotNull(contentOnly);
         Assert.False(contentOnly.RecordsContinuousProgram);
@@ -284,6 +307,9 @@ public sealed class FileOutputDefinitionTests
     [Fact]
     public void LiveStreamDialog_LowLatencyPreset_CommitsInspectableAdvancedSettings()
     {
+        if (!EncodersUsable("H264"))
+            return; // no usable FFmpeg on this runner - the commit probe cannot pass
+
         var vm = new AddLiveStreamOutputDialogViewModel
         {
             DisplayName = "Low latency",

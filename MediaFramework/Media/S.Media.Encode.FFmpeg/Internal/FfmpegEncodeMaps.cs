@@ -123,27 +123,46 @@ internal static class FfmpegEncodeMaps
     internal static unsafe AVCodec* FindVideoEncoder(EncodeVideoCodec codec)
     {
         FFmpegRuntime.EnsureInitialized();
-        foreach (var name in VideoEncoderNames(codec))
+        try
         {
-            var byName = avcodec_find_encoder_by_name(name);
-            if (byName is not null)
-                return byName;
-        }
+            foreach (var name in VideoEncoderNames(codec))
+            {
+                var byName = avcodec_find_encoder_by_name(name);
+                if (byName is not null)
+                    return byName;
+            }
 
-        return avcodec_find_encoder(VideoCodecId(codec)); // built-in / codec-id fallback
+            return avcodec_find_encoder(VideoCodecId(codec)); // built-in / codec-id fallback
+        }
+        catch (NotSupportedException)
+        {
+            // FFmpeg.AutoGen's dynamic loader leaves a stub that throws NotSupportedException when the
+            // native libraries are absent or their major version doesn't match the bindings (e.g. a CI
+            // runner without FFmpeg). Encoder DISCOVERY must answer "unavailable" (null) there, never
+            // propagate: callers use it to validate options and to skip encode tests with no usable
+            // FFmpeg, and a raw binding error would surface as an opaque crash instead.
+            return null;
+        }
     }
 
     internal static unsafe AVCodec* FindAudioEncoder(EncodeAudioCodec codec)
     {
         FFmpegRuntime.EnsureInitialized();
-        foreach (var name in AudioEncoderNames(codec))
+        try
         {
-            var byName = avcodec_find_encoder_by_name(name);
-            if (byName is not null)
-                return byName;
-        }
+            foreach (var name in AudioEncoderNames(codec))
+            {
+                var byName = avcodec_find_encoder_by_name(name);
+                if (byName is not null)
+                    return byName;
+            }
 
-        return avcodec_find_encoder(AudioCodecId(codec)); // built-in / codec-id fallback
+            return avcodec_find_encoder(AudioCodecId(codec)); // built-in / codec-id fallback
+        }
+        catch (NotSupportedException)
+        {
+            return null; // native FFmpeg unavailable/mismatched - see FindVideoEncoder
+        }
     }
 
     /// <summary>Picks the pixel format frames are converted to before hitting the encoder.</summary>

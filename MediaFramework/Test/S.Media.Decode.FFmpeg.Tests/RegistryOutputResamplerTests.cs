@@ -12,7 +12,7 @@ public sealed class RegistryOutputResamplerTests
         public void Submit(ReadOnlySpan<float> packedSamples) => SubmittedSamples += packedSamples.Length;
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void FFmpegModule_AdaptsRouterRateIntoFixedRateOutput()
     {
         using var registry = MediaRegistry.Build(builder => builder.Use(new FFmpegModule()));
