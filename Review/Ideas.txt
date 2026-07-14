@@ -1,0 +1,1 @@
+- When downlading youtube videos, offer to also download the thumbnail and embed as a separate video stream (video tab in Cue player might need a stream selection)
