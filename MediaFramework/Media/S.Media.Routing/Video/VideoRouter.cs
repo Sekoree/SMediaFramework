@@ -518,7 +518,6 @@ public sealed class VideoRouter : IDisposable
     private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
 
-
     private IVideoCpuFrameConverter CreateCpuFrameConverter() =>
         _options.VideoCpuFrameConverterFactory?.Invoke()
         ?? throw new InvalidOperationException(

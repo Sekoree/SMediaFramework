@@ -1,6 +1,8 @@
 using System.Text.Json;
 using HaPlay.OutputPreview;
 using HaPlay.ViewModels.Dialogs;
+using S.Media.Decode.FFmpeg;
+using S.Media.Decode.FFmpeg.Video;
 using S.Media.Encode.FFmpeg;
 using Xunit;
 
@@ -25,7 +27,10 @@ public sealed class FileOutputDefinitionTests
                     new EncodeAudioLegDefinition("Flac", 0, 1, 0, "Commentary", "jpn"),
                 ],
             })
-        { Alias = "Rec" };
+        {
+            Alias = "Rec",
+            RecordingMode = FileOutputDefinition.ContinuousProgramRecordingMode,
+        };
 
         var json = JsonSerializer.Serialize(def);
         var back = JsonSerializer.Deserialize<OutputDefinition>(json);
@@ -36,6 +41,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Equal("/tmp/recordings", file.DirectoryPath);
         Assert.Equal(2, file.EffectiveEncode.AudioLegs.Count);
         Assert.Equal("Commentary", file.EffectiveEncode.AudioLegs[1].Name);
+        Assert.True(file.RecordsContinuousProgram);
         Assert.Equal(ManagedOutputKind.FileRecord, file.Kind);
     }
 
@@ -77,10 +83,155 @@ public sealed class FileOutputDefinitionTests
         Assert.NotNull(def);
         Assert.Equal("Rec 1", def.DisplayName);
         Assert.Equal("Matroska", def.EffectiveEncode.Container);
+        Assert.Equal(FileOutputDefinition.ContinuousProgramRecordingMode, def.EffectiveRecordingMode);
+        Assert.Equal(1920, def.EffectiveEncode.ScaleWidth);
+        Assert.Equal(1080, def.EffectiveEncode.ScaleHeight);
+        Assert.Equal(30, def.EffectiveEncode.Fps);
 
         vm.DirectoryPath = "";
         Assert.Null(vm.TryCommit());
         Assert.NotNull(vm.ValidationMessage);
+    }
+
+    [Fact]
+    public void LegacyFileOutput_RemainsContentOnly_AndDialogCanSelectEitherPolicy()
+    {
+        // RecordingMode did not exist in older project JSON. Preserve its gap-collapsing behavior
+        // rather than silently changing file duration or requiring a fixed raster on project load.
+        var legacy = new FileOutputDefinition(Guid.NewGuid(), "Legacy", "/tmp");
+        Assert.Equal(FileOutputDefinition.ContentOnlyRecordingMode, legacy.EffectiveRecordingMode);
+        Assert.False(legacy.RecordsContinuousProgram);
+
+        var vm = new AddFileOutputDialogViewModel
+        {
+            DisplayName = "Content record",
+            DirectoryPath = Path.GetTempPath(),
+            Container = "Matroska",
+            VideoCodec = "Mpeg4",
+            RecordingMode = FileOutputDefinition.ContentOnlyRecordingMode,
+            ScaleWidth = 0,
+            ScaleHeight = 0,
+            Fps = 0,
+        };
+        vm.InitializeExistingOutputNames([]);
+        var contentOnly = vm.TryCommit();
+        Assert.NotNull(contentOnly);
+        Assert.False(contentOnly.RecordsContinuousProgram);
+
+        vm.RecordingMode = FileOutputDefinition.ContinuousProgramRecordingMode;
+        Assert.Null(vm.TryCommit());
+        Assert.Equal(Resources.Strings.FileOutputContinuousFormatRequired, vm.ValidationMessage);
+    }
+
+    [Fact]
+    public async Task ContinuousFileRecording_WritesBlackAndSilenceWhileIdle()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"haplay-continuous-record-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var encode = new EncodeSettingsDefinition(
+                Container: "Matroska",
+                OutputMode: "VideoAndAudio",
+                VideoCodec: "Mpeg4",
+                VideoCrf: null,
+                ScaleWidth: 128,
+                ScaleHeight: 96,
+                Fps: 30)
+            {
+                AudioLegs = [new EncodeAudioLegDefinition("Flac", Channels: 2)],
+            };
+            var definition = new FileOutputDefinition(
+                Guid.NewGuid(), "Continuous", directory, "continuous", encode)
+            {
+                RecordingMode = FileOutputDefinition.ContinuousProgramRecordingMode,
+            };
+            if (FileOutputRuntime.BuildOptions(encode).Validate().Count > 0)
+                return;
+
+            string path;
+            using (var runtime = new FileOutputRuntime(definition))
+            {
+                runtime.Arm();
+                path = runtime.CurrentFilePath!;
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+                while ((runtime.GetMetrics()?.VideoFramesEncoded ?? 0) < 10 && DateTime.UtcNow < deadline)
+                    await Task.Delay(20);
+
+                var metrics = runtime.GetMetrics()!;
+                Assert.True(metrics.VideoFramesEncoded >= 10,
+                    "continuous recording did not encode idle black frames");
+                Assert.True(metrics.Sinks[0].BytesWritten > 0,
+                    "continuous recording did not mux its idle program");
+                await runtime.DisarmAsync();
+            }
+
+            Assert.True(new FileInfo(path).Length > 256);
+            using var decoder = MediaContainerDecoder.Open(
+                path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            Assert.True(decoder.HasVideo);
+            Assert.True(decoder.HasAudio);
+            Assert.Equal(128, decoder.Video.Format.Width);
+            Assert.Equal(96, decoder.Video.Format.Height);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); }
+            catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task ContentOnlyFileRecording_DoesNotInventIdleFrames()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"haplay-content-record-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var encode = new EncodeSettingsDefinition(
+                Container: "Matroska",
+                OutputMode: "VideoOnly",
+                VideoCodec: "Mpeg4",
+                VideoCrf: null,
+                ScaleWidth: 128,
+                ScaleHeight: 96,
+                Fps: 0);
+            var definition = new FileOutputDefinition(Guid.NewGuid(), "Content", directory, "content", encode)
+            {
+                RecordingMode = FileOutputDefinition.ContentOnlyRecordingMode,
+            };
+            if (FileOutputRuntime.BuildOptions(encode).Validate().Count > 0)
+                return;
+
+            using var runtime = new FileOutputRuntime(definition);
+            runtime.Arm();
+            await Task.Delay(250);
+            Assert.Equal(0, runtime.GetMetrics()!.VideoFramesSubmitted);
+
+            // Once configured, one source frame is content; repeated presentations with the same
+            // stopped timestamp are held-canvas output and must not lengthen video without audio.
+            var output = runtime.AcquireForPlayback(needsVideo: true, needsAudio: false).Video!;
+            var format = new S.Media.Core.Video.VideoFormat(
+                128, 96, S.Media.Core.Video.PixelFormat.Bgra32, new S.Media.Core.Video.Rational(30, 1));
+            output.Configure(format);
+            for (var i = 0; i < 12; i++)
+                output.Submit(new S.Media.Core.Video.VideoFrame(
+                    TimeSpan.Zero, format, [new byte[128 * 96 * 4]], [128 * 4]));
+            await Task.Delay(100);
+            Assert.Equal(1, runtime.GetMetrics()!.VideoFramesSubmitted);
+
+            // A genuinely advancing source timestamp resumes content capture immediately.
+            output.Submit(new S.Media.Core.Video.VideoFrame(
+                TimeSpan.FromMilliseconds(33), format, [new byte[128 * 96 * 4]], [128 * 4]));
+            await Task.Delay(100);
+            Assert.Equal(2, runtime.GetMetrics()!.VideoFramesSubmitted);
+            await runtime.DisarmAsync();
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); }
+            catch { /* best effort */ }
+        }
     }
 
     [Fact]
@@ -89,10 +240,22 @@ public sealed class FileOutputDefinitionTests
         OutputDefinition def = new LiveStreamOutputDefinition(
             Guid.NewGuid(),
             "Stage stream",
-            new EncodeSettingsDefinition(Container: "MpegTs", VideoBitrateBps: 6_000_000, VideoCrf: null),
+            new EncodeSettingsDefinition(Container: "MpegTs", VideoBitrateBps: 6_000_000, VideoCrf: null)
+            {
+                VideoBitrateMode = "Constant",
+                VideoMaxBFrames = 0,
+                VideoVbvBufferMilliseconds = 500,
+                VideoLowLatencyTune = true,
+            },
             new LocalStreamServerDefinition(Enabled: true, Port: 9100, EnableTs: true, EnableHls: false))
         {
-            PushTargets = [new StreamPushTargetDefinition("Srt", "srt://encoder.local:9000")],
+            PushTargets =
+            [
+                new StreamPushTargetDefinition("Srt", "srt://encoder.local:9000")
+                {
+                    SrtLatencyMilliseconds = 120,
+                },
+            ],
         };
 
         var json = System.Text.Json.JsonSerializer.Serialize(def);
@@ -103,6 +266,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Equal(9100, stream.EffectiveLocalServer.Port);
         var target = Assert.Single(stream.PushTargets);
         Assert.Equal("Srt", target.Protocol);
+        Assert.Equal(120, target.SrtLatencyMilliseconds);
 
         var options = OutputPreview.LiveStreamOutputRuntime.BuildOptions(stream);
         Assert.Equal(S.Media.Stream.Http.PushProtocol.Srt, Assert.Single(options.PushTargets).Protocol);
@@ -110,6 +274,64 @@ public sealed class FileOutputDefinitionTests
         Assert.True(options.LocalServer!.EnableTs);
         Assert.False(options.LocalServer.EnableHls);
         Assert.Equal(S.Media.Encode.FFmpeg.EncodeContainer.MpegTs, options.Encode.Container);
+        Assert.Equal(EncodeVideoBitrateMode.Constant, options.Encode.Video.BitrateMode);
+        Assert.Equal(3_000_000, options.Encode.Video.BufferSizeBits);
+        Assert.Equal(0, options.Encode.Video.MaxBFrames);
+        Assert.True(options.Encode.Video.LowLatencyTune);
+        Assert.Equal(120, Assert.Single(options.PushTargets).SrtLatencyMilliseconds);
+    }
+
+    [Fact]
+    public void LiveStreamDialog_LowLatencyPreset_CommitsInspectableAdvancedSettings()
+    {
+        var vm = new AddLiveStreamOutputDialogViewModel
+        {
+            DisplayName = "Low latency",
+            VideoCodec = "H264",
+        };
+        vm.InitializeExistingOutputNames([]);
+        vm.PushTargets.Add(new StreamPushTargetRowViewModel
+        {
+            Protocol = "Srt",
+            Url = "srt://encoder.local:9000",
+            SrtLatencyMilliseconds = 180,
+        });
+
+        vm.ApplyLowLatencyPresetCommand.Execute(null);
+        var definition = vm.TryCommit();
+
+        Assert.NotNull(definition);
+        Assert.Equal("Constant", definition.EffectiveEncode.VideoBitrateMode);
+        Assert.Equal(definition.EffectiveEncode.Fps, definition.EffectiveEncode.GopSize);
+        Assert.Equal(0, definition.EffectiveEncode.VideoMaxBFrames);
+        Assert.Equal(500, definition.EffectiveEncode.VideoVbvBufferMilliseconds);
+        Assert.True(definition.EffectiveEncode.VideoLowLatencyTune);
+        Assert.Equal(180, Assert.Single(definition.PushTargets).SrtLatencyMilliseconds);
+    }
+
+    [Fact]
+    public void LiveStreamRuntime_RetainsStartupFailureForHealthPolling()
+    {
+        var definition = new LiveStreamOutputDefinition(
+            Guid.NewGuid(),
+            "No destination",
+            new EncodeSettingsDefinition(
+                Container: "MpegTs",
+                OutputMode: "VideoOnly",
+                VideoCodec: "H264",
+                VideoCrf: 30,
+                ScaleWidth: 128,
+                ScaleHeight: 96,
+                Fps: 30),
+            new LocalStreamServerDefinition(Enabled: false));
+        using var runtime = new OutputPreview.LiveStreamOutputRuntime(definition);
+
+        Assert.Throws<ArgumentException>(() => runtime.GoLive());
+
+        var state = runtime.GetRuntimeState();
+        Assert.False(state.IsLive);
+        Assert.Null(state.Status);
+        Assert.Contains("no destination", state.LastError, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -192,5 +414,31 @@ public sealed class FileOutputDefinitionTests
 
         Assert.Null(vm.TryCommit());
         Assert.Contains("ProRes", vm.ValidationMessage);
+    }
+
+    [Fact]
+    public async Task RecordingPathReservation_IsAtomicAndUniqueAcrossConcurrentLines()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"haplay-recording-{Guid.NewGuid():N}");
+        try
+        {
+            var definition = new FileOutputDefinition(
+                Guid.NewGuid(), "Recording", directory, "same-name", new EncodeSettingsDefinition("Matroska"));
+            var paths = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => Task.Run(() =>
+                FileOutputRuntime.ReserveUniqueFilePath(definition, EncodeContainer.Matroska))));
+
+            Assert.Equal(paths.Length, paths.Distinct(StringComparer.Ordinal).Count());
+            Assert.All(paths, path =>
+            {
+                Assert.True(File.Exists(path));
+                Assert.Equal(directory, Path.GetDirectoryName(path));
+                Assert.EndsWith(".mkv", path, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); }
+            catch { /* best effort */ }
+        }
     }
 }

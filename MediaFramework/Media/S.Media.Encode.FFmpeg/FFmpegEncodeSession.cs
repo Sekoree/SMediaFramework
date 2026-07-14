@@ -15,8 +15,9 @@ namespace S.Media.Encode.FFmpeg;
 ///
 /// <para>Timestamps: the first video frame's presentation time is the session baseline; later frames
 /// are relative to it with a monotonic clamp (a backwards seek during recording continues one frame
-/// ahead instead of rewinding the file). Audio counts output samples from the first chunk. Both legs
-/// therefore start at ≈0 when the session is armed mid-playback.</para>
+/// ahead instead of rewinding the file). Audio tracks absolute submitted input-frame positions, so a
+/// bounded-queue drop creates a timestamp gap rather than silently compressing the audio timeline.
+/// Both legs start at ≈0 when the session is armed mid-playback.</para>
 ///
 /// <para>Lifecycle: attach the sinks (router/pump wiring), <see cref="FinishAsync"/> to flush encoders
 /// and write trailers, then <see cref="Dispose"/>. A sink that throws is detached and reported via
@@ -47,25 +48,50 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     private bool _finishRequested;
     private bool _disposed;
 
-    // Video intake (submit thread → worker).
-    private readonly Queue<VideoFrame> _videoQueue = new();
+    // Video intake (submit thread → worker). Source frames use their media PTS, continuation frames
+    // are placed directly after the encode cursor, and live-wall-clock frames use their intake instant.
+    // The last mode is important for a continuously running carrier: a paused compositor may keep
+    // producing fresh black/held frames with one frozen media PTS, but those are still distinct live
+    // output frames and must not collapse to a single encoded frame.
+    private enum VideoTimelineMode
+    {
+        Source,
+        Continuation,
+        LiveWallClock,
+    }
+
+    private sealed record QueuedVideoFrame(
+        VideoFrame Frame,
+        VideoTimelineMode TimelineMode,
+        long LiveCaptureTimestamp = 0);
+    private readonly Queue<QueuedVideoFrame> _videoQueue = new();
     private const int MaxQueuedVideoFrames = 8;
 
-    // Audio intake per leg (router pump thread → worker). Chunks are copied on Submit.
-    private readonly Queue<float[]>[] _audioQueues;
+    // Audio intake per leg (router pump thread → worker). The absolute input-frame position survives
+    // queue overflow, so the encoder can represent dropped time instead of compressing the timeline.
+    private sealed record QueuedAudioChunk(float[] Samples, long StartFrame);
+    private readonly Queue<QueuedAudioChunk>[] _audioQueues;
     private readonly long[] _audioQueuedFloats;
     private readonly long[] _audioFloatCap;
+    private readonly long[] _audioSubmittedFrames;
+    private readonly int[] _audioInputChannels;
 
     // Video PTS policy (worker-thread state).
     private long _videoBaseTicks = long.MinValue;
+    private long _videoBasePts90k;
+    private long _lastVideoSourceTicks = long.MinValue;
+    private bool _sourceTimelineNeedsReanchor;
     private long _lastVideoPts90k = -1;
     private long _videoFrameDuration90k;
     // Review H7 - target-rate scheduler: when options declare a fixed FPS, frames are selected/dropped
     // per target tick (fast input) and the last frame is re-encoded into gaps (slow input), so the
     // output really carries the configured cadence instead of just advertising it in metadata.
     private readonly long _targetVideoFrameDuration90k;
+    private long _videoBaseTick;
     private long _lastVideoTick = -1;
     private VideoFrame? _heldVideoFrame;
+    private long _liveVideoBaseTimestamp = long.MinValue;
+    private long _liveVideoBaseTick;
 
     // Metrics.
     private long _videoSubmitted;
@@ -85,35 +111,51 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
 
         IReadOnlyList<AudioLegOptions> legs = options.IncludesAudio ? options.AudioLegs : [];
         _audioCores = new FfmpegAudioEncoderCore[legs.Count];
-        _audioQueues = new Queue<float[]>[legs.Count];
+        _audioQueues = new Queue<QueuedAudioChunk>[legs.Count];
         _audioQueuedFloats = new long[legs.Count];
         _audioFloatCap = new long[legs.Count];
+        _audioSubmittedFrames = new long[legs.Count];
+        _audioInputChannels = new int[legs.Count];
         var audioSinks = new FFmpegEncodeAudioSink[legs.Count];
-        for (var i = 0; i < legs.Count; i++)
+        try
         {
-            var leg = legs[i];
-            var inputChannels = leg.Channels > 0 ? leg.Channels : 2;
-            var inputFormat = new AudioFormat(audioInputSampleRate, inputChannels);
-            _audioCores[i] = new FfmpegAudioEncoderCore(leg, inputFormat);
-            _audioQueues[i] = new Queue<float[]>();
-            _audioFloatCap[i] = (long)audioInputSampleRate * inputChannels * 5; // ~5 s backlog per leg
-            audioSinks[i] = new FFmpegEncodeAudioSink(this, i, inputFormat);
+            for (var i = 0; i < legs.Count; i++)
+            {
+                var leg = legs[i];
+                var inputChannels = leg.Channels > 0 ? leg.Channels : 2;
+                var inputFormat = new AudioFormat(audioInputSampleRate, inputChannels);
+                _audioCores[i] = new FfmpegAudioEncoderCore(leg, inputFormat);
+                _audioQueues[i] = new Queue<QueuedAudioChunk>();
+                _audioInputChannels[i] = inputChannels;
+                _audioFloatCap[i] = (long)audioInputSampleRate * inputChannels * 5; // ~5 s backlog per leg
+                audioSinks[i] = new FFmpegEncodeAudioSink(this, i, inputFormat);
+            }
+
+            AudioSinks = audioSinks;
+            CombinedAudioSink = audioSinks.Length > 0
+                ? new FFmpegEncodeCombinedAudioSink(this, audioSinks.Select(s => s.Format).ToArray())
+                : null;
+
+            if (options.IncludesVideo)
+                VideoSink = new FFmpegEncodeVideoSink(this);
+
+            _worker = new Thread(WorkerLoop)
+            {
+                IsBackground = true,
+                Name = "FFmpegEncodeSession",
+            };
+            _worker.Start();
         }
-
-        AudioSinks = audioSinks;
-        CombinedAudioSink = audioSinks.Length > 0
-            ? new FFmpegEncodeCombinedAudioSink(this, audioSinks.Select(s => s.Format).ToArray())
-            : null;
-
-        if (options.IncludesVideo)
-            VideoSink = new FFmpegEncodeVideoSink(this);
-
-        _worker = new Thread(WorkerLoop)
+        catch
         {
-            IsBackground = true,
-            Name = "FFmpegEncodeSession",
-        };
-        _worker.Start();
+            foreach (var core in _audioCores)
+                core?.Dispose();
+            foreach (var slot in _sinks)
+                slot.Sink.Dispose();
+            _cts.Dispose();
+            _work.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Creates a session writing to one destination. Options are validated (throws on errors).
@@ -125,7 +167,7 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(target);
-        var errors = options.Validate();
+        var errors = options.Validate(audioInputSampleRate: audioInputSampleRate);
         if (errors.Count > 0)
             throw new ArgumentException($"Invalid encode options: {string.Join(" | ", errors)}", nameof(options));
 
@@ -143,9 +185,15 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         ArgumentNullException.ThrowIfNull(sinks);
         if (sinks.Count == 0)
             throw new ArgumentException("at least one packet sink is required.", nameof(sinks));
-        var errors = options.Validate();
+        var errors = options.Validate(audioInputSampleRate: audioInputSampleRate);
         if (errors.Count > 0)
+        {
+            // This overload is the ownership-transfer seam used by live fan-out. Once called, the
+            // caller never has to guess whether validation or native construction failed first.
+            foreach (var sink in sinks)
+                sink.Dispose();
             throw new ArgumentException($"Invalid encode options: {string.Join(" | ", errors)}", nameof(options));
+        }
 
         return new FFmpegEncodeSession(options, sinks, audioInputSampleRate);
     }
@@ -185,19 +233,24 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     {
         int videoQueueDepth;
         long audioQueuedSamples = 0;
+        List<EncodeSinkState> sinkStates;
         lock (_gate)
         {
             videoQueueDepth = _videoQueue.Count;
             foreach (var q in _audioQueuedFloats)
                 audioQueuedSamples += q;
-        }
+            sinkStates = _sinks.Select(s =>
+            {
+                var healthy = !s.Faulted;
+                var error = s.Error;
+                if (healthy && s.Sink is IEncodedPacketSinkHealth liveHealth)
+                {
+                    healthy = liveHealth.Healthy;
+                    error = liveHealth.Error;
+                }
 
-        List<EncodeSinkState> sinkStates;
-        lock (_gate)
-        {
-            sinkStates = _sinks
-                .Select(s => new EncodeSinkState(s.Sink.Name, !s.Faulted, s.Error, s.Sink.BytesWritten))
-                .ToList();
+                return new EncodeSinkState(s.Sink.Name, healthy, error, s.Sink.BytesWritten);
+            }).ToList();
         }
 
         return new FFmpegEncodeSessionMetrics(
@@ -214,7 +267,24 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
 
     // --- intake (called by the sinks) ---------------------------------------
 
-    internal void SubmitVideo(VideoFrame frame)
+    internal void SubmitVideo(VideoFrame frame, bool continueTimeline = false) =>
+        SubmitVideoCore(
+            frame,
+            continueTimeline ? VideoTimelineMode.Continuation : VideoTimelineMode.Source,
+            liveCaptureTimestamp: 0);
+
+    /// <summary>
+    /// Enqueues one frame on the live carrier timeline. Its capture instant, rather than its media PTS,
+    /// selects the fixed-rate output tick. This keeps live video continuous across pause/stop and source
+    /// timeline resets while retaining normal source-time scheduling for recordings.
+    /// </summary>
+    internal void SubmitLiveVideo(VideoFrame frame) =>
+        SubmitVideoCore(frame, VideoTimelineMode.LiveWallClock, Stopwatch.GetTimestamp());
+
+    private void SubmitVideoCore(
+        VideoFrame frame,
+        VideoTimelineMode timelineMode,
+        long liveCaptureTimestamp)
     {
         var dropped = false;
         lock (_gate)
@@ -227,12 +297,12 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
 
             while (_videoQueue.Count >= MaxQueuedVideoFrames)
             {
-                _videoQueue.Dequeue().Dispose();
+                _videoQueue.Dequeue().Frame.Dispose();
                 Interlocked.Increment(ref _videoDropped);
                 dropped = true;
             }
 
-            _videoQueue.Enqueue(frame);
+            _videoQueue.Enqueue(new QueuedVideoFrame(frame, timelineMode, liveCaptureTimestamp));
             Interlocked.Increment(ref _videoSubmitted);
             _work.Set();
         }
@@ -268,7 +338,10 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
                 return;
             }
 
-            _videoCore = new FfmpegVideoEncoderCore(_options.Video, format);
+            _videoCore = new FfmpegVideoEncoderCore(
+                _options.Video,
+                format,
+                enableConstantBitrateFiller: _options.Container is EncodeContainer.MpegTs or EncodeContainer.Flv);
             _videoInputFormat = format;
             _videoFrameDuration90k = format.FrameRate.Numerator > 0
                 ? 90_000L * format.FrameRate.Denominator / format.FrameRate.Numerator
@@ -282,6 +355,11 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     {
         if (packedSamples.IsEmpty)
             return;
+        var channels = _audioInputChannels[legIndex];
+        if (packedSamples.Length % channels != 0)
+            throw new ArgumentException(
+                $"packedSamples length {packedSamples.Length} is not a multiple of channel count {channels}.",
+                nameof(packedSamples));
         var chunk = packedSamples.ToArray();
         var dropped = false;
         lock (_gate)
@@ -290,12 +368,14 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
                 return;
 
             var queue = _audioQueues[legIndex];
-            queue.Enqueue(chunk);
+            var startFrame = _audioSubmittedFrames[legIndex];
+            _audioSubmittedFrames[legIndex] += chunk.Length / channels;
+            queue.Enqueue(new QueuedAudioChunk(chunk, startFrame));
             _audioQueuedFloats[legIndex] += chunk.Length;
             while (_audioQueuedFloats[legIndex] > _audioFloatCap[legIndex] && queue.Count > 1)
             {
                 var victim = queue.Dequeue();
-                _audioQueuedFloats[legIndex] -= victim.Length;
+                _audioQueuedFloats[legIndex] -= victim.Samples.Length;
                 Interlocked.Increment(ref _audioChunksDropped);
                 dropped = true;
             }
@@ -341,7 +421,8 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // disposed without FinishAsync - best-effort trailer below in Dispose
+            // Dispose without FinishAsync is an abort: queued frames are released and sinks are
+            // disposed by Dispose after this worker exits. Graceful flush/trailer belongs to FinishAsync.
         }
         catch (Exception ex)
         {
@@ -367,12 +448,14 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
 
         var streams = new List<EncodedStreamInfo>();
         if (_videoCore is { } video)
-            streams.Add(new EncodedStreamInfo(EncodedStreamKind.Video, video.CodecParameters, video.TimeBase, null, null));
+            streams.Add(new EncodedStreamInfo(
+                EncodedStreamKind.Video, video.CodecParameters, video.TimeBase, video.FrameRate, null, null));
         for (var i = 0; i < _audioCores.Length; i++)
         {
             var leg = _options.AudioLegs[i];
             streams.Add(new EncodedStreamInfo(
-                EncodedStreamKind.Audio, _audioCores[i].CodecParameters, _audioCores[i].TimeBase, leg.Name, leg.Language));
+                EncodedStreamKind.Audio, _audioCores[i].CodecParameters, _audioCores[i].TimeBase,
+                default, leg.Name, leg.Language));
         }
 
         ForEachLiveSink(slot => slot.Sink.OnStreamsReady(streams));
@@ -380,88 +463,128 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
 
     private void PumpOnce()
     {
-        // Video first (keeps mux interleaving happy), then each audio leg.
+        // Weighted round-robin: one video frame, then a bounded catch-up batch from EVERY audio leg.
+        // The old "drain all video, then audio" order could starve AAC forever when a 60 fps producer
+        // kept the video queue non-empty and the encoder ran below real time. Audio then hit its 5 s cap,
+        // acquired timestamp gaps and sounded sped-up/discontinuous at the receiver. Audio encoding is
+        // cheap, so 32 chunks per leg lets it catch up without withholding video indefinitely.
         while (true)
         {
-            VideoFrame? frame = null;
+            var didWork = TryPumpOneVideo();
+            for (var i = 0; i < _audioCores.Length; i++)
+                didWork |= PumpAudioBatch(i, maxChunks: 32) > 0;
+            if (!didWork)
+                break;
+        }
+    }
+
+    private bool TryPumpOneVideo()
+    {
+        QueuedVideoFrame? queued = null;
+        lock (_gate)
+        {
+            if (_videoQueue.Count > 0)
+                queued = _videoQueue.Dequeue();
+        }
+
+        if (queued is null)
+            return false;
+
+        if (_targetVideoFrameDuration90k > 0)
+        {
+            EncodeAtTargetRate(
+                queued.Frame,
+                queued.TimelineMode,
+                queued.LiveCaptureTimestamp); // takes ownership
+            return true;
+        }
+
+        try
+        {
+            var pts = NextVideoPts(
+                queued.Frame.PresentationTime,
+                queued.TimelineMode != VideoTimelineMode.Source);
+            var started = Stopwatch.GetTimestamp();
+            _videoCore!.Encode(queued.Frame, pts, pkt => FanOut((AVPacket*)pkt, streamIndex: 0));
+            _encodeTiming.RecordSince(started);
+            Interlocked.Increment(ref _videoEncoded);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "encode session: video encode failed - frame skipped");
+            Interlocked.Increment(ref _videoDropped);
+        }
+        finally
+        {
+            queued.Frame.Dispose();
+        }
+
+        return true;
+    }
+
+    private int PumpAudioBatch(int legIndex, int maxChunks)
+    {
+        var processed = 0;
+        var audioBase = _videoCore is null ? 0 : 1;
+        while (processed < maxChunks)
+        {
+            QueuedAudioChunk? chunk = null;
             lock (_gate)
             {
-                if (_videoQueue.Count > 0)
-                    frame = _videoQueue.Dequeue();
+                if (_audioQueues[legIndex].Count > 0)
+                {
+                    chunk = _audioQueues[legIndex].Dequeue();
+                    _audioQueuedFloats[legIndex] -= chunk.Samples.Length;
+                }
             }
 
-            if (frame is null)
+            if (chunk is null)
                 break;
 
-            if (_targetVideoFrameDuration90k > 0)
-            {
-                EncodeAtTargetRate(frame); // takes ownership (may hold the frame for gap duplication)
-                continue;
-            }
-
+            var legStream = audioBase + legIndex;
             try
             {
-                var pts = NextVideoPts(frame.PresentationTime);
                 var started = Stopwatch.GetTimestamp();
-                _videoCore!.Encode(frame, pts, pkt => FanOut((AVPacket*)pkt, streamIndex: 0));
+                _audioCores[legIndex].Submit(
+                    chunk.Samples, chunk.StartFrame, pkt => FanOut((AVPacket*)pkt, legStream));
                 _encodeTiming.RecordSince(started);
-                Interlocked.Increment(ref _videoEncoded);
             }
             catch (Exception ex)
             {
-                Trace.LogError(ex, "encode session: video encode failed - frame skipped");
-                Interlocked.Increment(ref _videoDropped);
+                Trace.LogError(ex, "encode session: audio leg {Leg} encode failed - chunk skipped", legIndex);
             }
-            finally
-            {
-                frame.Dispose();
-            }
+
+            processed++;
         }
 
-        var audioBase = _videoCore is null ? 0 : 1;
-        for (var i = 0; i < _audioCores.Length; i++)
-        {
-            while (true)
-            {
-                float[]? chunk = null;
-                lock (_gate)
-                {
-                    if (_audioQueues[i].Count > 0)
-                    {
-                        chunk = _audioQueues[i].Dequeue();
-                        _audioQueuedFloats[i] -= chunk.Length;
-                    }
-                }
-
-                if (chunk is null)
-                    break;
-
-                var legStream = audioBase + i;
-                try
-                {
-                    var started = Stopwatch.GetTimestamp();
-                    _audioCores[i].Submit(chunk, pkt => FanOut((AVPacket*)pkt, legStream));
-                    _encodeTiming.RecordSince(started);
-                }
-                catch (Exception ex)
-                {
-                    Trace.LogError(ex, "encode session: audio leg {Leg} encode failed - chunk skipped", i);
-                }
-            }
-        }
+        return processed;
     }
 
     /// <summary>First frame anchors the baseline; afterwards PTS is relative with a monotonic clamp so
     /// a backwards seek mid-recording continues one frame ahead instead of rewriting the timeline.</summary>
-    private long NextVideoPts(TimeSpan presentationTime)
+    private long NextVideoPts(TimeSpan presentationTime, bool continueTimeline)
     {
-        if (_videoBaseTicks == long.MinValue)
-            _videoBaseTicks = presentationTime.Ticks;
+        var step = Math.Max(1, _videoFrameDuration90k);
+        if (continueTimeline)
+        {
+            _sourceTimelineNeedsReanchor = true;
+            _lastVideoPts90k = _lastVideoPts90k < 0 ? 0 : _lastVideoPts90k + step;
+            return _lastVideoPts90k;
+        }
 
-        var relTicks = presentationTime.Ticks - _videoBaseTicks;
-        var pts = relTicks * 9 / 1000; // 100 ns ticks → 90 kHz
+        var sourceTicks = presentationTime.Ticks;
+        if (ShouldReanchorSource(sourceTicks, step))
+        {
+            _videoBaseTicks = sourceTicks;
+            _videoBasePts90k = _lastVideoPts90k < 0 ? 0 : _lastVideoPts90k + step;
+            _sourceTimelineNeedsReanchor = false;
+        }
+
+        _lastVideoSourceTicks = sourceTicks;
+        var relTicks = sourceTicks - _videoBaseTicks;
+        var pts = _videoBasePts90k + relTicks * 9 / 1000; // 100 ns ticks → 90 kHz
         if (pts <= _lastVideoPts90k)
-            pts = _lastVideoPts90k + Math.Max(1, _videoFrameDuration90k);
+            pts = _lastVideoPts90k + step;
         _lastVideoPts90k = pts;
         return pts;
     }
@@ -471,13 +594,47 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     /// slower input re-encodes the last frame into the gap (capped at one second per gap - a seek/stall
     /// jumps rather than emitting thousands of duplicates). Owns <paramref name="frame"/>: it is HELD
     /// until the next frame replaces it (gap filling needs it), then disposed.</summary>
-    private void EncodeAtTargetRate(VideoFrame frame)
+    private void EncodeAtTargetRate(
+        VideoFrame frame,
+        VideoTimelineMode timelineMode,
+        long liveCaptureTimestamp)
     {
         var dur = _targetVideoFrameDuration90k;
-        if (_videoBaseTicks == long.MinValue)
-            _videoBaseTicks = frame.PresentationTime.Ticks;
-        var srcPts90k = (frame.PresentationTime.Ticks - _videoBaseTicks) * 9 / 1000;
-        var tick = (long)Math.Round(srcPts90k / (double)dur);
+        long tick;
+        if (timelineMode == VideoTimelineMode.LiveWallClock)
+        {
+            if (_liveVideoBaseTimestamp == long.MinValue)
+            {
+                _liveVideoBaseTimestamp = liveCaptureTimestamp;
+                _liveVideoBaseTick = _lastVideoTick + 1;
+            }
+
+            // Round to the nearest configured output tick. The submitter is paced to that same
+            // cadence, so small wake-up jitter neither invents nor loses a frame; a real stall forms
+            // a gap which the held-frame logic below fills just like a slow source.
+            var elapsedTimestamp = Math.Max(0, liveCaptureTimestamp - _liveVideoBaseTimestamp);
+            var elapsed90k = elapsedTimestamp * 90_000d / Stopwatch.Frequency;
+            tick = _liveVideoBaseTick + (long)Math.Round(elapsed90k / dur);
+        }
+        else if (timelineMode == VideoTimelineMode.Continuation)
+        {
+            _sourceTimelineNeedsReanchor = true;
+            tick = _lastVideoTick + 1;
+        }
+        else
+        {
+            var sourceTicks = frame.PresentationTime.Ticks;
+            if (ShouldReanchorSource(sourceTicks, dur))
+            {
+                _videoBaseTicks = sourceTicks;
+                _videoBaseTick = _lastVideoTick + 1;
+                _sourceTimelineNeedsReanchor = false;
+            }
+
+            _lastVideoSourceTicks = sourceTicks;
+            var srcPts90k = (sourceTicks - _videoBaseTicks) * 9 / 1000;
+            tick = _videoBaseTick + (long)Math.Round(srcPts90k / (double)dur);
+        }
 
         if (tick <= _lastVideoTick)
         {
@@ -502,6 +659,18 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         _heldVideoFrame?.Dispose();
         _heldVideoFrame = frame; // retained for the next gap; swapped out above
     }
+
+    private static long VideoDurationTicks(long duration90k) =>
+        Math.Max(1, duration90k * TimeSpan.TicksPerSecond / 90_000L);
+
+    /// <summary>Whether the source PTS baseline must be re-anchored for the incoming frame: the first
+    /// frame, a pending continuation reset, or a backward seek beyond half a frame. Shared by the
+    /// fixed-rate and source-following schedulers so their seek-detection policy can never drift apart.</summary>
+    private bool ShouldReanchorSource(long sourceTicks, long duration90k) =>
+        _videoBaseTicks == long.MinValue
+        || _sourceTimelineNeedsReanchor
+        || (_lastVideoSourceTicks != long.MinValue
+            && sourceTicks < _lastVideoSourceTicks - VideoDurationTicks(duration90k) / 2);
 
     private void EncodeAtTick(VideoFrame frame, long tick, long dur)
     {
@@ -596,7 +765,8 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             // router/player pumps use for a stuck terminal.
             MediaDiagnostics.LogWarning(
                 "FFmpegEncodeSession.Dispose: encode worker still alive after join - retaining native state (terminally stuck, leaked).");
-            _finished.TrySetResult();
+            _finished.TrySetException(new TimeoutException(
+                "The FFmpeg encode worker did not stop; native state was retained to avoid use-after-free."));
             return;
         }
 
@@ -611,7 +781,7 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         lock (_gate)
         {
             while (_videoQueue.Count > 0)
-                _videoQueue.Dequeue().Dispose();
+                _videoQueue.Dequeue().Frame.Dispose();
             foreach (var q in _audioQueues)
                 q.Clear();
         }

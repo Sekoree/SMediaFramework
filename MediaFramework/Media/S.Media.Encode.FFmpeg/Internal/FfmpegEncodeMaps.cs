@@ -14,15 +14,7 @@ internal static class FfmpegEncodeMaps
         _ => throw new ArgumentOutOfRangeException(nameof(container)),
     };
 
-    internal static string ContainerFileExtension(EncodeContainer container) => container switch
-    {
-        EncodeContainer.Mp4 => ".mp4",
-        EncodeContainer.Matroska => ".mkv",
-        EncodeContainer.Mov => ".mov",
-        EncodeContainer.MpegTs => ".ts",
-        EncodeContainer.Flv => ".flv",
-        _ => throw new ArgumentOutOfRangeException(nameof(container)),
-    };
+    internal static string ContainerFileExtension(EncodeContainer container) => container.GetFileExtension();
 
     internal static AVCodecID VideoCodecId(EncodeVideoCodec codec) => codec switch
     {
@@ -99,8 +91,38 @@ internal static class FfmpegEncodeMaps
     internal static unsafe bool AudioEncoderAvailable(EncodeAudioCodec codec) =>
         FindAudioEncoder(codec) is not null;
 
+    internal static unsafe IReadOnlyList<int> AudioEncoderSampleRates(EncodeAudioCodec codec)
+    {
+        var encoder = FindAudioEncoder(codec);
+#pragma warning disable CS0618 // FFmpeg retains this zero-terminated capability list for AVCodec.
+        if (encoder is null || encoder->supported_samplerates is null)
+            return [];
+        var rates = new List<int>();
+        for (var p = encoder->supported_samplerates; *p != 0; p++)
+            rates.Add(*p);
+#pragma warning restore CS0618
+        return rates;
+    }
+
+    internal static unsafe bool VideoEncoderSupportsPixelFormat(EncodeVideoCodec codec, PixelFormat pixelFormat)
+    {
+        var encoder = FindVideoEncoder(codec);
+        var avPixel = FfmpegVideoPixelMaps.ToAvPixelFormat(pixelFormat);
+        if (encoder is null || avPixel is null)
+            return false;
+#pragma warning disable CS0618 // FFmpeg retains this zero-terminated capability list for AVCodec.
+        if (encoder->pix_fmts is null)
+            return true;
+        for (var p = encoder->pix_fmts; *p != AVPixelFormat.AV_PIX_FMT_NONE; p++)
+            if (*p == avPixel.Value)
+                return true;
+#pragma warning restore CS0618
+        return false;
+    }
+
     internal static unsafe AVCodec* FindVideoEncoder(EncodeVideoCodec codec)
     {
+        FFmpegRuntime.EnsureInitialized();
         foreach (var name in VideoEncoderNames(codec))
         {
             var byName = avcodec_find_encoder_by_name(name);
@@ -113,6 +135,7 @@ internal static class FfmpegEncodeMaps
 
     internal static unsafe AVCodec* FindAudioEncoder(EncodeAudioCodec codec)
     {
+        FFmpegRuntime.EnsureInitialized();
         foreach (var name in AudioEncoderNames(codec))
         {
             var byName = avcodec_find_encoder_by_name(name);

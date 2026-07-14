@@ -51,6 +51,11 @@ internal sealed class TsFanOutBuffer
             _bufferedBytes += copy.Length;
             while (_bufferedBytes > RollingCapacityBytes && _chunks.Count > 1)
             {
+                // Never discard the newest video-keyframe join point. A temporarily oversized window
+                // is preferable to handing a new decoder a non-decodable mid-GOP prefix.
+                var oldest = _chunks.Peek();
+                if (_joinOffset > 0 && oldest.Offset + oldest.Bytes.Length > _joinOffset)
+                    break;
                 var victim = _chunks.Dequeue();
                 _bufferedBytes -= victim.Bytes.Length;
             }
@@ -96,15 +101,39 @@ internal sealed class TsFanOutBuffer
         var client = new Client(channel);
         lock (_gate)
         {
-            // Prime with buffered history from the join point (keyframe start) so playback syncs fast.
+            // Coalesce the complete history into one channel item. Previously, a history longer than
+            // ClientQueueChunks wrote only its oldest prefix, then switched straight to the live tail,
+            // creating a decoder-corrupting byte discontinuity.
+            var historyChunks = new List<byte[]>();
             foreach (var (offset, bytes) in _chunks)
             {
                 if (offset + bytes.Length <= _joinOffset)
                     continue;
                 var skip = Math.Max(0, _joinOffset - offset);
-                var slice = skip > 0 ? bytes.AsSpan((int)skip).ToArray() : bytes;
-                if (!channel.Writer.TryWrite(slice))
-                    break; // history bigger than the client queue - it will start slightly later
+                historyChunks.Add(skip > 0 ? bytes.AsSpan((int)skip).ToArray() : bytes);
+            }
+            if (historyChunks.Count <= ClientQueueChunks)
+            {
+                foreach (var chunk in historyChunks)
+                    channel.Writer.TryWrite(chunk);
+            }
+            else
+            {
+                // Coalesce into one exact-size array filled once. The old MemoryStream + ToArray
+                // allocated the whole history twice (internal buffer plus the copy); the join copy
+                // still runs under _gate to stay ordered ahead of the live tail, but the mux drain
+                // thread's OnBytes is blocked for half as much allocation work.
+                var total = 0;
+                foreach (var chunk in historyChunks)
+                    total += chunk.Length;
+                var coalesced = new byte[total];
+                var offset = 0;
+                foreach (var chunk in historyChunks)
+                {
+                    Buffer.BlockCopy(chunk, 0, coalesced, offset, chunk.Length);
+                    offset += chunk.Length;
+                }
+                channel.Writer.TryWrite(coalesced);
             }
 
             _clients.Add(client);

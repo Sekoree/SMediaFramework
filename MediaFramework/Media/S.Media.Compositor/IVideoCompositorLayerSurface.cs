@@ -23,6 +23,17 @@ public interface IVideoCompositorLayerSurface : IDisposable
 }
 
 /// <summary>
+/// Optional companion for a layer surface that owns objects tied to the compositor's GL context.
+/// <see cref="IVideoCompositorLayerSurface.Dispose"/> may run on a control thread and should only stop
+/// logical use; the GL compositor calls <see cref="ReleaseGl"/> on its owner thread with the context
+/// current before destroying that context.
+/// </summary>
+public interface IVideoCompositorGlResource
+{
+    void ReleaseGl(GL gl);
+}
+
+/// <summary>
 /// A layer-surface placed in a composite: the GL-rendering <see cref="IVideoCompositorLayerSurface"/> plus
 /// its destination <see cref="Transform"/> and <see cref="Opacity"/>. Surface layers render on top of the
 /// frame layers, in list order, directly into the compositor's canvas (no intermediate frame).

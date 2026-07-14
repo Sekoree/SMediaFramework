@@ -1637,6 +1637,23 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task IndependentFire_PreservesCallerCancellation()
+    {
+        var document = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue", 1, "Delayed", PreWait: TimeSpan.FromSeconds(30))],
+            Clips: [new ShowClipBinding("cue", "fake://1")],
+            Compositions: [],
+            Routes: []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(document);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            session.FireCueIndependentAsync("cue", "manual:cue", cts.Token));
+    }
+
+    [Fact]
     public async Task SetAllPausedAsync_PausesAndResumesEveryActiveGroup()
     {
         // NXT-04/06: pause parity with StopAllAsync. The single-group SetPausedAsync only touches one group, so a

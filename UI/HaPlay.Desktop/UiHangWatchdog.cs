@@ -281,6 +281,7 @@ internal static partial class UiHangWatchdog
             Trace.LogInformation(
                 "UI hang dump captured: {Path} ({SizeMb:0} MB, type {Type})",
                 dumpPath, size / 1024.0 / 1024.0, DumpTypeFlag());
+            DesktopCrashDiagnostics.PinLogsBeside(dumpPath);
             PruneOldDumps(keep: dumpPath);
             return dumpPath;
         }
@@ -314,7 +315,12 @@ internal static partial class UiHangWatchdog
                 {
                     try
                     {
+                        var stem = Path.Combine(dump.DirectoryName ?? _logDirectory, Path.GetFileNameWithoutExtension(dump.Name));
                         dump.Delete();
+                        foreach (var incidentLog in Directory.GetFiles(
+                                     dump.DirectoryName ?? _logDirectory,
+                                     Path.GetFileName(stem) + ".*.log"))
+                            File.Delete(incidentLog);
                         Trace.LogInformation("pruned old hang dump {Path} ({SizeMb:0} MB)",
                             dump.FullName, dump.Length / 1024.0 / 1024.0);
                     }

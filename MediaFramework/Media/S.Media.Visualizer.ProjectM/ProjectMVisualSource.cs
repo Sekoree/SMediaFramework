@@ -140,7 +140,7 @@ public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVide
     /// the stream up mid-flow - no restart). Legacy mode: projectM renders in the composition's context.</summary>
     public IVideoCompositorLayerSurface CreateLayerSurface() =>
         _renderer is not null
-            ? new ProjectMFrameBlitSurface(_renderer)
+            ? new ProjectMFrameBlitSurface(this, _renderer)
             : new ProjectMGlLayerSurface(this);
 
     // --- IBusMetadataSink ------------------------------------------------------

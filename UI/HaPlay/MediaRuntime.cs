@@ -101,8 +101,9 @@ internal static class MediaRuntime
                 S.Media.Visualizer.ProjectM.ProjectMModule.Register(b);
                 // Continuous mode: give every visualizer source its own offscreen GL context factory so
                 // projectM renders on a dedicated thread, surviving composition rebuilds (track changes)
-                // and keeping preset loads off the composition pump/dispatcher. The factory returns null
-                // when GL is unavailable at runtime - the source then falls back to in-composition render.
+                // and keeping preset loads off the composition pump/dispatcher. If context creation fails,
+                // the frame-blit surface detects the failed renderer and falls back to compositor-context
+                // rendering on the compositor's GL thread.
                 S.Media.Visualizer.ProjectM.ProjectMVisualSource.OffscreenGlContextFactory =
                     S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
             }

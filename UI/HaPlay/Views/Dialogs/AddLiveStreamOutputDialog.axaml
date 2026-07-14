@@ -47,6 +47,15 @@
                   </Grid>
                   <TextBox Text="{Binding StreamKey}" PasswordChar="●"
                            PlaceholderText="{x:Static res:Strings.StreamPushKeyWatermark}" />
+                  <Grid ColumnDefinitions="Auto,8,140" IsVisible="{Binding IsSrt}">
+                    <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StreamSrtLatencyLabel}"
+                               VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="2" Minimum="20" Maximum="8000" Increment="20"
+                                   FormatString="0" Value="{Binding SrtLatencyMilliseconds}" />
+                  </Grid>
+                  <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                             IsVisible="{Binding IsSrt}"
+                             Text="{x:Static res:Strings.StreamSrtLatencyHint}" />
                 </StackPanel>
               </Border>
             </DataTemplate>
@@ -101,7 +110,7 @@
               <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding VideoPreset}" HorizontalAlignment="Stretch" />
 
               <TextBlock Text="{x:Static res:Strings.StreamOutputResolutionLabel}" FontWeight="SemiBold" />
-              <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*,14,Auto,8,90">
+              <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*,14,Auto,8,120">
                 <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
                 <NumericUpDown Grid.Column="2" Minimum="2" Maximum="7680" Increment="2" FormatString="0"
                                Value="{Binding ScaleWidth}" />
@@ -110,10 +119,52 @@
                                Value="{Binding ScaleHeight}" />
                 <TextBlock Grid.Column="8" Text="FPS" VerticalAlignment="Center" />
                 <NumericUpDown Grid.Column="10" Minimum="1" Maximum="240" Increment="1" FormatString="0"
-                               Value="{Binding Fps}" />
+                               MinWidth="120" Value="{Binding Fps}" />
               </Grid>
               <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
                          Text="{x:Static res:Strings.StreamOutputResolutionHint}" />
+
+              <Expander Header="{x:Static res:Strings.StreamAdvancedVideoHeader}">
+                <StackPanel Spacing="8" Margin="8,8,0,0">
+                  <Button Content="{x:Static res:Strings.StreamApplyLowLatencyPresetButton}"
+                          Command="{Binding ApplyLowLatencyPresetCommand}"
+                          IsEnabled="{Binding SupportsH26xAdvancedOptions}"
+                          HorizontalAlignment="Left" />
+
+                  <TextBlock Text="{x:Static res:Strings.StreamVideoBitrateModeLabel}" FontWeight="SemiBold" />
+                  <ComboBox ItemsSource="{Binding VideoBitrateModes}"
+                            SelectedValue="{Binding VideoBitrateMode}"
+                            SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                            HorizontalAlignment="Stretch" />
+
+                  <Grid ColumnDefinitions="*,12,*">
+                    <StackPanel Grid.Column="0" Spacing="4">
+                      <TextBlock Text="{x:Static res:Strings.StreamKeyframeIntervalLabel}" FontWeight="SemiBold" />
+                      <NumericUpDown Minimum="1" Maximum="10" Increment="1" FormatString="0"
+                                     Value="{Binding KeyframeIntervalSeconds}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="4" IsEnabled="{Binding SupportsH26xAdvancedOptions}">
+                      <TextBlock Text="{x:Static res:Strings.StreamMaximumBFramesLabel}" FontWeight="SemiBold" />
+                      <ComboBox ItemsSource="{Binding MaximumBFrameChoices}"
+                                SelectedValue="{Binding VideoMaximumBFrames}"
+                                SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                                HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Grid>
+
+                  <StackPanel Spacing="4" IsVisible="{Binding IsConstantBitrate}">
+                    <TextBlock Text="{x:Static res:Strings.StreamVbvBufferLabel}" FontWeight="SemiBold" />
+                    <NumericUpDown Minimum="100" Maximum="8000" Increment="100" FormatString="0"
+                                   Value="{Binding VideoVbvBufferMilliseconds}" />
+                  </StackPanel>
+
+                  <CheckBox Content="{x:Static res:Strings.StreamLowLatencyTuneLabel}"
+                            IsChecked="{Binding VideoLowLatencyTune}"
+                            IsEnabled="{Binding SupportsH26xAdvancedOptions}" />
+                  <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                             Text="{x:Static res:Strings.StreamLowLatencyPlaybackHint}" />
+                </StackPanel>
+              </Expander>
             </StackPanel>
 
             <StackPanel Spacing="8" IsVisible="{Binding ShowAudioSettings}">

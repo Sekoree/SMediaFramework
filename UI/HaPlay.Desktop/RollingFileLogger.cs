@@ -188,6 +188,7 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         {
             var files = new DirectoryInfo(options.Directory)
                 .EnumerateFiles($"{options.FileNamePrefix}-*.log")
+                .Where(file => IsRollingRunLog(file.Name, options.FileNamePrefix))
                 .OrderByDescending(f => f.LastWriteTimeUtc)
                 .Skip(options.RetainCount)
                 .ToList();
@@ -198,6 +199,21 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
             }
         }
         catch { /* best effort - pruning is not critical */ }
+    }
+
+    private static bool IsRollingRunLog(string fileName, string prefix)
+    {
+        var expectedPrefix = prefix + "-";
+        if (!fileName.StartsWith(expectedPrefix, StringComparison.Ordinal)
+            || !fileName.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var stamp = fileName[expectedPrefix.Length..^4];
+        return DateTime.TryParseExact(
+            stamp,
+            "yyyyMMdd-HHmmss",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None,
+            out _);
     }
 
     public void Dispose()

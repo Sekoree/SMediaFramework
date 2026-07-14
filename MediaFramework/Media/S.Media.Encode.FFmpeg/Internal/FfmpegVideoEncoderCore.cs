@@ -15,6 +15,7 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
     internal static readonly AVRational VideoTimeBase = new() { num = 1, den = 90_000 };
 
     private readonly VideoEncodeOptions _options;
+    private readonly bool _enableConstantBitrateFiller;
     private AVCodecContext* _codec;
     private AVCodecParameters* _codecParameters;
     private AVFrame* _frame;
@@ -28,25 +29,63 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
     private PixelFormat _encodePixel;
     private int _encodeWidth;
     private int _encodeHeight;
+    private readonly AVRational _frameRate;
+    private readonly AVRational _codecTimeBase;
+    private readonly long _packetDuration90k;
     private bool _disposed;
 
-    internal FfmpegVideoEncoderCore(VideoEncodeOptions options, VideoFormat sourceFormat)
+    internal FfmpegVideoEncoderCore(
+        VideoEncodeOptions options,
+        VideoFormat sourceFormat,
+        bool enableConstantBitrateFiller = false)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _enableConstantBitrateFiller = enableConstantBitrateFiller;
         FFmpegRuntime.EnsureInitialized();
         _sourceFormat = sourceFormat;
+        _frameRate = options.Fps > 0
+            ? new AVRational { num = options.Fps, den = 1 }
+            : FfmpegEncodeMaps.ToAvRational(sourceFormat.FrameRate);
+        if (_frameRate.num <= 0 || _frameRate.den <= 0)
+            _frameRate = new AVRational { num = 30, den = 1 };
+        // Every encoder needs the actual frame clock (inverse of the configured OR source-following
+        // frame rate), not the MPEG-TS 90 kHz packet clock. libx264 writes codec time_base into SPS VUI,
+        // while built-in MPEG-4 rejects 1/90000 outright for common source rates. Keep 90 kHz only as
+        // the session/sink interchange clock and rescale at the codec boundary.
+        _codecTimeBase = new AVRational { num = _frameRate.den, den = _frameRate.num };
+        _packetDuration90k = Math.Max(1, 90_000L * _frameRate.den / _frameRate.num);
 
         _encodePixel = FfmpegEncodeMaps.PickVideoEncodePixel(sourceFormat.PixelFormat, options.Codec, options.EncodePixelFormat);
         if (FfmpegVideoPixelMaps.ToAvPixelFormat(_encodePixel) is null)
             throw new NotSupportedException($"encode pixel format {_encodePixel} is not supported by this FFmpeg build.");
 
         (_encodeWidth, _encodeHeight) = ResolveScale(sourceFormat.Width, sourceFormat.Height, options.ScaleWidth, options.ScaleHeight);
-        OpenCodec();
+        try
+        {
+            OpenCodec();
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
     }
 
     internal AVCodecParameters* CodecParameters => _codecParameters;
 
     internal AVRational TimeBase => VideoTimeBase;
+
+    internal AVRational FrameRate => _frameRate;
+
+    internal AVRational CodecTimeBase => _codecTimeBase;
+
+    internal long MinimumBitrate => _codec->rc_min_rate;
+
+    internal long MaximumBitrate => _codec->rc_max_rate;
+
+    internal int VbvBufferSize => _codec->rc_buffer_size;
+
+    internal int MaximumBFrames => _codec->max_b_frames;
 
     internal VideoFormat EncodedFormat => _sourceFormat with
     {
@@ -87,7 +126,7 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
         FFmpegException.ThrowIfError(wr, nameof(av_frame_make_writable));
 
         FillFrame(frame);
-        _frame->pts = ptsIn90kHz;
+        _frame->pts = av_rescale_q(ptsIn90kHz, VideoTimeBase, _codec->time_base);
 
         var ret = avcodec_send_frame(_codec, _frame);
         FFmpegException.ThrowIfError(ret, nameof(avcodec_send_frame));
@@ -161,6 +200,12 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
                 break;
             FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_packet));
             av_packet_rescale_ts(_packet, _codec->time_base, VideoTimeBase);
+            // Several encoders (notably libx264 with B-frames) leave AVPacket.duration unset. Live
+            // muxers cannot infer a stable cadence from a never-ending stream as reliably as a file
+            // muxer can at trailer time; HLS then warns and some ingest servers report an arbitrary
+            // observed FPS. Every video session has a locked cadence, so stamp that duration here.
+            if (_packet->duration <= 0)
+                _packet->duration = _packetDuration90k;
             try
             {
                 onPacket((IntPtr)_packet);
@@ -186,30 +231,58 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
         _codec->width = _encodeWidth;
         _codec->height = _encodeHeight;
         _codec->pix_fmt = avPix;
-        _codec->time_base = VideoTimeBase;
-        _codec->framerate = _options.Fps > 0
-            ? new AVRational { num = _options.Fps, den = 1 }
-            : FfmpegEncodeMaps.ToAvRational(_sourceFormat.FrameRate);
+        _codec->time_base = _codecTimeBase;
+        _codec->framerate = _frameRate;
         if (_options.BitrateBps > 0)
             _codec->bit_rate = _options.BitrateBps;
+        if (_options.BitrateMode == EncodeVideoBitrateMode.Constant && _options.BitrateBps > 0)
+        {
+            // Equal min/max rates plus VBV make the bitrate a hard network envelope rather than a
+            // long-term average. For live transport containers the codec-specific HRD option below
+            // also enables filler/strict CBR behaviour; file containers keep the VBV constraint but
+            // omit filler bytes that MP4/MOV do not carry reliably.
+            _codec->rc_min_rate = _options.BitrateBps;
+            _codec->rc_max_rate = _options.BitrateBps;
+            var bufferBits = _options.BufferSizeBits > 0
+                ? _options.BufferSizeBits
+                : _options.BitrateBps; // a one-second VBV when the caller did not choose one
+            _codec->rc_buffer_size = checked((int)Math.Min(bufferBits, int.MaxValue));
+            _codec->rc_initial_buffer_occupancy = _codec->rc_buffer_size * 3 / 4;
+        }
         if (_options.GopSize > 0)
             _codec->gop_size = _options.GopSize;
+        if (_options.MaxBFrames is { } maxBFrames)
+            _codec->max_b_frames = maxBFrames;
 
         // CRF (quality target): x264/x265/AV1/VP9 accept a "crf" priv option. On encoders that don't
-        // (ProRes/DNxHR/FFV1) av_opt_set silently no-ops - those are bitrate/profile driven.
+        // (ProRes/DNxHR/FFV1) validation rejects CRF - those are bitrate/profile driven.
         if (_options.Crf is { } crf)
-            av_opt_set(_codec->priv_data, "crf", crf.ToString(System.Globalization.CultureInfo.InvariantCulture), 0);
+            SetPrivateOption("crf", crf.ToString(System.Globalization.CultureInfo.InvariantCulture));
         // Named speed presets are an x264/x265 concept ("veryfast" …). AV1/VP9 use numeric presets and
         // reject the names, so only pass the string to the codecs that understand it.
-        if (_options.Preset is { Length: > 0 } preset
-            && _options.Codec is EncodeVideoCodec.H264 or EncodeVideoCodec.Hevc)
+        if (_options.Preset is { Length: > 0 } preset && _options.Codec.SupportsNamedPreset())
         {
-            av_opt_set(_codec->priv_data, "preset", preset, 0);
+            SetPrivateOption("preset", preset);
+        }
+        if (_options.LowLatencyTune && _options.Codec.SupportsLatencyControls())
+        {
+            SetPrivateOption("tune", "zerolatency");
+        }
+        if (_enableConstantBitrateFiller
+            && _options.BitrateMode == EncodeVideoBitrateMode.Constant
+            && _options.BitrateBps > 0)
+        {
+            // libx264's CBR HRD emits filler to maintain a constant transport rate. libx265 exposes
+            // the equivalent stricter VBV/HRD switches through its parameter dictionary.
+            if (_options.Codec == EncodeVideoCodec.H264)
+                SetPrivateOption("nal-hrd", "cbr");
+            else if (_options.Codec == EncodeVideoCodec.Hevc)
+                SetPrivateOption("x265-params", "strict-cbr=1:hrd=1");
         }
 
         // Encoder-specific profile/private options (ProRes 4444 alpha, DNxHR HR profile, …).
         foreach (var (key, value) in FfmpegEncodeMaps.VideoEncoderPrivateOptions(_options.Codec, _encodePixel))
-            av_opt_set(_codec->priv_data, key, value, 0);
+            SetPrivateOption(key, value);
 
         // GLOBAL_HEADER unconditionally: the session's packets fan out to N muxers and mp4/mov/flv
         // demand out-of-band extradata. Muxers that don't need it (mpegts) ignore it.
@@ -237,6 +310,13 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
         _packet = av_packet_alloc();
         if (_packet is null)
             throw new OutOfMemoryException("av_packet_alloc returned NULL");
+    }
+
+    private void SetPrivateOption(string key, string value)
+    {
+        var ret = av_opt_set(_codec->priv_data, key, value, 0);
+        if (ret < 0)
+            throw new FFmpegException(ret, $"av_opt_set({key}={value})");
     }
 
     public void Dispose()

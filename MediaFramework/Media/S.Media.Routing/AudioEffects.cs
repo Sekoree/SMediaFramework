@@ -209,7 +209,11 @@ public sealed class GainAudioEffect : IAudioBusEffect
     /// NaN / +inf are rejected (kept at the previous target) - a corrupt config must not emit NaN audio.</summary>
     public double GainDb
     {
-        get => 20.0 * Math.Log10(Math.Max(1e-9f, Volatile.Read(ref _targetLinear)));
+        get
+        {
+            var linear = Volatile.Read(ref _targetLinear);
+            return linear <= 0f ? double.NegativeInfinity : 20.0 * Math.Log10(linear);
+        }
         set
         {
             if (double.IsNaN(value) || double.IsPositiveInfinity(value))

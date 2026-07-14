@@ -558,3 +558,258 @@ The original ordering still holds after verification. Add A1 beside H3 because b
 timeline correctness; address A2 together with M10 so validation failures are resource-safe; and fix
 A3/A4 before relying on file and LAN outputs unattended. M1 should be implemented as topology and
 availability reconciliation plus feedback, not as an arm-event retry—the latter already exists.
+
+---
+
+## Implementation follow-up — 2026-07-14
+
+The actionable findings were implemented as structural fixes rather than local suppressions. Two incident
+recommendations remain deliberately open because the evidence does not justify pretending they are closed:
+projectM process isolation is a separate IPC architecture project, and the H2 dump does not identify the text
+that triggered font fallback (there is currently no UI binding to `CurrentPresetName`).
+
+### Finding disposition after implementation
+
+| ID | Status | Implemented disposition |
+|---|---|---|
+| H1 | **Mitigated; isolation remains** | Added an opt-in Linux software-rendered UI mode (`--safe-ui` / `HAPLAY_SAFE_UI=1`) and documented it in the README. This removes Avalonia from the GLX swap failure domain. Moving projectM/SDL GL into a helper process and compositor-aware close deferral remain open architectural work. |
+| H2 | **Needs incident evidence** | Source inspection found no HaPlay UI consumer of projectM `CurrentPresetName`; `.WithInterFont()` is already configured. A blanket ASCII sanitizer or global font override would change unrelated operator text without addressing a demonstrated call site. Re-capture with heap/string evidence before changing UI text policy. |
+| H3 | **Fixed** | Replaced the competing keepalive/media clocks with one session-owned monotonic cursor. Filler frames explicitly continue that cursor; a resumed/restarted source timeline re-anchors at the next tick. Fixed-rate track changes and backward seeks no longer disappear behind the old cursor. |
+| H4 / M1 | **Fixed** | Added a serialized binding↔lease topology reconciler driven by output add/remove/reconfigure and binding changes. It hot-detaches/attaches live composition outputs, forces non-preserving reloads after topology changes, retries available runtimes, marks missed live mappings dirty, and surfaces unavailable/reconnected status to the operator. |
+| H5 | **Fixed** | Registry-created projectM surfaces now own and dispose their source. GL resources use an explicit compositor-owner-thread `ReleaseGl` contract so native projectM instances and GL objects are destroyed before context teardown. |
+| H6 | **Fixed** | `VideoEffectBusOutput` now establishes branch-local CPU backing once before any effect chain, protecting shared fan-out siblings even when an effect mutates in place. |
+| M2–M4 | **Fixed** | Mux byte metrics are managed snapshots; live-session construction has transactional ownership rollback and rejects zero-sink local configurations; keepalive handoff and combined-audio splitting are serialized. |
+| M5 | **Fixed** | Full TS join history is delivered without a prefix/tail discontinuity; bind identity, request timeout, atomic client admission, HEAD/405 semantics, per-mount accounting, port validation, shutdown lock duration, canonical paths, and advertised interface IPs were corrected. |
+| M6–M7 | **Fixed** | Reconfigure commits/events are marshalled as one UI-thread transaction; removing an effect removes exactly one reference/equal occurrence. |
+| M8–M9 | **Fixed** | Renderer publication is double-buffered, readback is timed, pacers rebase after stalls, attempted preset names publish before native load, failed offscreen startup falls back in-composition, and all legacy GL/projectM resources have owner-thread teardown. |
+| M10–M11 | **Fixed** | Validation queries the selected FFmpeg encoder's sample-rate/pixel-format capabilities and rejects invalid scalar/private-option combinations; caller cancellation is rethrown from independent cue fire. |
+| L1–L10 | **Fixed** | Corrected alpha blending/uniform caching, completion and comment drift, checked private options, contained `Try*` factory failures, corrected gain mute reporting/docs/style, made projectM builds architecture-aware/reproducible/non-mutating, fixed renderer fallback and settings freshness, synchronized video leases, centralized container extensions, and pinned logs beside dumps with independent run-log retention. |
+| A1–A2 | **Fixed** | Audio queue entries carry absolute input positions and advance packet PTS across dropped ranges. Audio/video core constructors and the session/sink ownership seam roll back partial native construction. |
+| A3–A4 | **Fixed** | Recording paths use millisecond timestamps plus atomic `CreateNew` suffix reservation. Live sessions retain the server's canonical mount name for every URL/status value. |
+| A5–A6 | **Fixed** | Keepalive uses a fractional sample accumulator; client and byte counts are tracked per mount. |
+
+### Additional issue found while implementing
+
+HaPlay's persisted encode defaults always carry a CRF and x264-style preset, even when the selected codec is
+MPEG-4/ProRes/etc. Once private-option validation became strict, that made otherwise valid UI definitions fail.
+The UI→framework mapper now emits CRF/preset only for codec families that support them; direct framework users
+still receive a clear validation error for unsupported combinations.
+
+### Live SRT verification follow-up — 2026-07-14
+
+Testing HaPlay against a real MistServer SRT ingest exposed a recovery/observability gap that the
+offline URL-validation coverage could not catch. A transient `av_interleaved_write_frame` failure
+permanently detached the push sink while the live runtime remained armed, and the one-second output
+health poll then overwrote the useful failure state with route health. Push destinations now remain
+attached through a reconnecting sink, retry with exponential backoff on a video keyframe (or the next
+packet for audio-only streams), and expose connecting/reconnecting/healthy state through the normal
+encode metrics and HaPlay IO health panel. Query values such as SRT `streamid` and `passphrase` are
+also redacted from metric/log display names even when entered directly in the URL.
+
+The project configuration used for the report was independently verified end-to-end at its configured
+1920×1080/60 H.264/AAC shape: the provider reported a live input with both tracks. The original failure
+was therefore a transient link failure made permanent by the old detach policy, not an invalid project
+or unsupported SRT build. The live-stream dialog's FPS field was widened from 90 to 120 pixels so its
+numeric value remains visible beside the stepper controls.
+
+### Regression coverage added
+
+- fixed-FPS filler→clip→restarted-track→filler continuity and audio-gap packet PTS;
+- metrics polling across finish/dispose and sink rollback on invalid construction;
+- in-place video-effect mutation with shared sibling backing;
+- caller-cancellation propagation and throwing registry factories;
+- TS history beyond the client queue, canonical mount names, HEAD/405 behavior, per-mount clients, and bind conflicts;
+- concurrent atomic recording-path reservation and UI-thread reconfigure tests.
+
+### Visualizer continuity/audio follow-up — 2026-07-14
+
+Testing the live-output project with the visualizer already running exposed two session integration defects.
+First, adding the live output left a required non-preserving document reload pending. Firing the next group
+flushed that reload, rebuilt the composition, and disposed the visualizer even though the replacement
+composition was still its intended target. Visualizer slots can now opt into document-reload persistence:
+the session retains the projectM source, preset state, audio tap/filter, metadata subscription, placement and
+ownership, then recreates only the compositor surface on the replacement composition. HaPlay cue visualizers
+use this contract, so later cover-art media remains below the still-running surface layer.
+
+Second, the session previously attached a tap directly to each clip router. ProjectM advertises a fixed 48 kHz
+input, so a 44.1 kHz FLAC router rejected it while the independently-resampled 48 kHz livestream route kept
+working. Fixed-rate output adaptation is now a media-registry capability supplied by the FFmpeg module. The
+session caches one owned adapter per tap/router format, detaches taps immediately on unregister, and disposes
+only its adapters (never the caller's tap). Coverage now includes a full composition rebuild with a persistent
+visualizer and a 48 kHz tap receiving a subsequently-fired 44.1 kHz clip.
+
+Post-fix verification: the full Debug suite passed with **1,885 passed, 9 skipped, 0 failed**; the full Release
+solution build completed with **0 warnings and 0 errors**.
+
+### Live filler/cadence follow-up — 2026-07-14
+
+The next real SRT run exposed a second keepalive handoff defect. The run log showed the push connect and
+successfully announce both streams, then fail its mux write about ten seconds later. The visualizer was not
+started until after that disconnect and program audio did not begin until later still. HaPlay acquires a live
+output as soon as the composition topology is attached, but the old keepalive treated that lease acquisition
+as proof that samples were flowing and immediately stopped both black and silence. The result was a packetless
+SRT connection despite the output being armed—the exact interval in which filler was required.
+
+The keepalive now exposes activity-reporting sink wrappers and arbitrates each encoded track from actual
+submissions, not route ownership. Acquiring an idle video/audio route continues black and silence; the first
+real sample yields that track after a serialized handoff; and filler resumes automatically after a short
+three-frame activity grace if an acquired route falls silent. Each audio leg has its own clock and silence
+buffer, so an unfed auxiliary/language track stays valid while another track receives PCM. Explicit release
+still resumes filler immediately.
+
+Two related encoder issues were corrected in the same pass:
+
+- `PumpOnce` previously drained an unbounded video queue before examining audio. A continuously replenished
+  video queue could therefore starve AAC, eventually overflow the five-second audio backlog, and produce
+  timeline gaps/discontinuities. Encoding is now weighted round-robin: one video item followed by a bounded
+  catch-up batch from every audio leg.
+- The encoder produced all configured frames but libx264 packets carried zero duration, which made the HLS
+  muxer warn that segment duration could not be precise and left a live receiver to infer cadence from packet
+  arrival. Video packets now carry the locked frame duration and output streams advertise both average and
+  nominal frame rate from the configured cadence.
+
+The project's exact 1920×1080/60, 6 Mbps H.264 + 192 kbps AAC shape was exercised for eight idle seconds:
+the keepalive submitted/encoded **481 frames** (the initial frame plus 8×60), continued audio and mux bytes,
+and emitted no zero-duration warnings after the timestamp fix. The provider displaying approximately
+190 kbps for AAC is consistent with that configured 192 kbps target; it is not an unexpected codec setting.
+
+Regression coverage now includes acquired-but-idle video plus two audio tracks, real-frame-to-filler resume,
+audio-only silence, fixed-rate packet duration/cadence metadata, and the existing filler/media timeline
+handoffs. Final verification passed with **1,888 passed, 9 skipped, 0 failed** in Debug; the full Release
+solution build completed with **0 warnings and 0 errors**.
+
+### H.264 codec-clock follow-up — 2026-07-14
+
+Probing the running SRT ingest resolved the remaining contradictory frame-rate reports. MistServer's HLS
+master advertised `FRAME-RATE=19.072`, while its own track metadata reported `fps=19.072` / `fpks=19072`
+but `efps=60` / `efpks=60000`. A five-second decode read exactly 300 frames, the progressive MP4 remux
+reported 60/1 nominal and average frame rate, and packet DTS advanced at 16.667 ms. The stream was therefore
+actually carrying 60 fps; only its H.264-declared cadence was corrupt.
+
+Bitstream tracing found an SPS VUI `num_units_in_tick=1` and `time_scale=180000`, which declares a derived
+90,000 fps. The encoder had incorrectly used the transport/session packet clock (`1/90000`) as libx264's
+codec frame clock. MistServer's TS input parses the SPS rate, multiplies it by 1000 for `fpks`, then stores
+that value in a 16-bit metadata field: `90,000,000 mod 65,536 = 19,072`, exactly reproducing the displayed
+number. MistServer's `efps=60` was its separately measured effective cadence.
+
+Fixed-rate encoders now open with the inverse frame rate as their codec clock (`1/60` here). Input PTS is
+rescaled from the session's fine-grained 90 kHz timeline before encoding, and encoded packets are rescaled
+back to 90 kHz for fan-out/muxing. This preserves the existing transport timestamps while causing libx264
+to write the correct SPS timing. A new 1080p60 local output traced as `num_units_in_tick=1`,
+`time_scale=120`, decoded all 120 frames over two seconds, and reported 60/1 nominal and average rate.
+Regression coverage asserts that a configured 60 fps session uses a `1/60` codec clock while retaining a
+`1/90000` packet interchange clock. Final verification passed with **1,889 passed, 9 skipped, 0 failed**
+in Debug; the full Release solution build completed with **0 warnings and 0 errors**.
+
+### Live latency and rate-control follow-up — 2026-07-14
+
+The corrected live stream was probed again to separate ingest delay from viewer delay. MistServer saw the
+configured 1920×1080 H.264 video at a measured and declared 60 fps, plus 48 kHz stereo AAC-LC. The labels
+`AAC`, `Aac`, and the browser codec string `mp4a.40.2` all describe that same AAC-LC track; there is no audio
+codec conversion or mismatch behind the reported delay. The server did still report one B-frame and its
+standard roughly 50-second live/DVR buffer. Its DASH manifest advertised a 5-second presentation delay, and
+the ordinary HLS playlist exposed a multi-segment live window. A viewer landing about 20 seconds behind was
+therefore consistent with segmented playback/player selection rather than a 20-second SRT ingest queue.
+
+This distinction matters operationally. MistServer documents ordinary HLS/DASH as segmented protocols with
+potentially high latency, while its WebSocket MP4 path is real-time and expected below three seconds. The
+50-second Buffer input default is seekable history, not a requirement that every player stay 50 seconds
+behind live. For the provider-hosted page, the server/player configuration must prefer WS/MP4, WebRTC or a
+proper LL-HLS path to meet a sub-two-second target; encoder changes alone cannot turn conventional HLS into
+that path. See the official [protocol comparison](https://docs.mistserver.org/protocol/),
+[WS/MP4 notes](https://docs.mistserver.org/protocol/pseudostreaming/ws-mp4/), and
+[Buffer input settings](https://docs.mistserver.org/mistserver/inputs/Buffer/).
+
+The application nevertheless lacked controls for minimizing the encode and contribution portions of the
+latency budget. That gap is now addressed end-to-end rather than by appending opaque encoder strings:
+
+- `VideoEncodeOptions` has typed average/constant bitrate mode, VBV capacity, maximum B-frames, and
+  zero-latency tuning. Constant mode programs bitrate, equal min/max rates, VBV size/occupancy and, for live
+  transport containers, libx264 CBR HRD filler or libx265 strict-CBR/HRD. `MaxBFrames=0` removes frame
+  reordering, and H.264/H.265 low-latency mode applies the encoder's `zerolatency` tune.
+- HaPlay persists every setting without changing the positional project schema. The live-output dialog has
+  editable bitrate mode, keyframe interval, B-frame limit, VBV duration and tune controls, plus an
+  inspectable **Apply low-latency preset** action (CBR, 1-second GOP, no B-frames, 500 ms VBV,
+  zero-latency tune). Existing projects retain their old average/automatic defaults until the operator opts
+  in.
+- Each SRT target now has a latency-in-milliseconds field (120 ms default in the editor). The runtime safely
+  converts it to FFmpeg's microsecond `latency=` URL option, while preserving an explicit URL value as the
+  expert override. FFmpeg defines this as the retransmission/packet-delivery window; lowering it trims only
+  the network contribution and must still leave enough time for RTT and packet recovery. See the official
+  [FFmpeg SRT option documentation](https://ffmpeg.org/ffmpeg-protocols.html#srt).
+- Validation rejects impossible CBR/VBV combinations, unsupported codec/tune combinations, invalid B-frame
+  ranges and out-of-range/non-SRT latency fields. Encoder discovery now initializes the FFmpeg binding
+  itself, removing a test-order dependency exposed by isolated encoder tests.
+
+Focused regression coverage opens the real libx264 backend with CBR HRD, asserts min/max/VBV/B-frame
+programming, round-trips the new project settings, verifies the dialog preset and checks SRT URL precedence
+and unit conversion. The dialog also explains that sub-two-second playback needs an appropriate output
+protocol so operators do not spend time tuning SRT or x264 against latency that is actually in the HLS
+player. Final verification passed with **1,891 passed, 9 skipped, 0 failed** in Release; the full Release
+solution build completed with **0 warnings and 0 errors**.
+
+### Stop-to-idle live-carrier follow-up — 2026-07-14
+
+A subsequent SRT run exposed a timestamp-domain defect specifically at cue Stop. The runtime log showed
+audio filler resume about 100 ms after Stop, but no video filler transition; roughly one minute later the
+remote peer closed the half-idle SRT connection and FFmpeg reported `av_interleaved_write_frame failed
+(-5)`. The reconnecting sink then correctly waited for a video keyframe, but none could arrive while the
+video encoder was no longer advancing, so the I/O monitor remained red and VLC lost the source.
+
+The route was not actually video-idle. A composition intentionally keeps pumping after its transport is
+paused/stopped so an empty canvas can produce black (and persistent surfaces can still render). Those frames
+all carried the stopped source's frozen media PTS. The fixed-FPS scheduler therefore dropped every frame
+after the first as an already-covered target tick, while the keepalive activity wrapper saw the continuing
+submissions and yielded its own black filler. The submitted-frame counter rose, but encoded video packets
+and keyframes stopped; only silent AAC continued.
+
+Live video now has an explicit carrier-clock scheduling mode. Both real composition frames and keepalive
+black frames capture their monotonic intake time and map that instant to the configured output tick. Media
+PTS remains the policy for file recording, and the existing explicit continuation mode remains available
+for source-timeline handoffs. This is a timeline separation rather than a special-case Stop hook: paused
+canvases, held images, visualizer-only frames and newly restarted source timelines all remain continuous on
+the live carrier, while faster input is still dropped and slower input is still hold-duplicated by the one
+fixed-rate scheduler. Consequently the stopped composition itself carries black, audio keepalive carries
+silence on each unfed track, periodic video keyframes continue, and a transient SRT write failure has a
+valid boundary on which to reconnect.
+
+Regression coverage continuously submits frames with an intentionally frozen zero media timestamp while
+the route remains active and asserts that encoded video advances inside the keepalive idle grace (so the
+test cannot pass later via fallback black). The full encode suite (**22 tests**) and live-stream suite
+(**19 tests**) pass. Final verification passed with **1,892 passed, 9 skipped, 0 failed** in Release; the
+full Release solution build completed with **0 warnings and 0 errors**.
+
+### File recording clock-policy follow-up — 2026-07-14
+
+The live Stop fix raised the corresponding file-output policy question. Applying only wall-clock video to a
+file would have been incorrect: after a cue stopped, video would continue while routed audio stopped, creating
+the same duration mismatch in a different form. Both useful recording behaviours are now explicit instead:
+
+- **Continuous program** records the complete Arm-to-Stop interval. It starts black video and every configured
+  silent audio track immediately on Arm, hands each leg to routed media only while samples are arriving, then
+  resumes filler. It requires a fixed video width, height and frame rate because the file must have a known
+  raster before the first cue. New file outputs default to 1920×1080 at 30 fps and this policy.
+- **Content only** joins source-timeline content and collapses idle gaps. A dedicated video gate drops repeated
+  held-canvas presentations with an unchanged source PTS, including the source-following-FPS path that would
+  otherwise monotonically clamp those repeats and extend video without audio.
+
+The former stream-only `StreamKeepAlive` implementation was moved down into the encode layer as the reusable
+`ContinuousEncodeCarrier`; live streams and continuous file outputs now use exactly the same serialized
+black/silence ↔ real-media handoff and live wall-clock video scheduler. Audio handoff also retains the samples
+that accrue during its short inactivity grace and emits that silence when filler resumes, so repeated stops do
+not shorten audio relative to the wall-clock video program.
+
+`FileOutputDefinition.RecordingMode` is nullable for compatibility. A missing value identifies an existing
+project created before this setting and preserves its historical content-only behaviour; the add/edit dialog
+always persists the operator's explicit choice. The I/O summary displays the selected policy, and both dialog
+and runtime validation reject continuous video without a locked raster/cadence.
+
+Testing this uncovered one adjacent source-following encoder defect: codec contexts used `1/90000` whenever
+the FPS option was zero. Built-in MPEG-4 rejects that clock for common frame rates, and H.264 can advertise
+incorrect VUI cadence. Codec timebase is now the inverse of the resolved frame rate for both fixed and
+source-following modes; packets are still rescaled to the session's 90 kHz interchange clock.
+
+Regression coverage now verifies policy persistence/defaults/legacy fallback, continuous idle black plus a
+decodable silent audio track, content-only zero-output idle behaviour, frozen-PTS suppression and resumed
+source time, and source-following codec-clock selection. Final verification passed with **1,896 passed,
+9 skipped, 0 failed** in Release; the full Release solution build completed with **0 warnings and 0 errors**.

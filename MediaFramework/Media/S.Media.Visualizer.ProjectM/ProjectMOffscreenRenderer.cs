@@ -16,8 +16,8 @@ namespace S.Media.Visualizer.ProjectM;
 /// the session when projectM rendered on the composition pump).
 ///
 /// <para>Audio: drains the source's SPSC PCM ring on this thread. Frames: rendered into a private FBO at
-/// the configured resolution, read back as BGRA, published under a lock (renderer-paced, ~one buffer copy
-/// per frame; consumers copy out under the same lock). Row order matches the GL FBO layout, so the blit
+/// the configured resolution, read back as BGRA, and swap-published under a short lock with no producer
+/// copy; consumers copy out under the same lock. Row order matches the GL FBO layout, so the blit
 /// shader's existing V-flip renders it upright - identical orientation to the in-composition path.</para>
 /// </summary>
 internal sealed class ProjectMOffscreenRenderer : IDisposable
@@ -37,7 +37,7 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
     private int _disposeStarted;
 
     private readonly object _frameGate = new();
-    private readonly byte[] _latestFrame;
+    private byte[] _latestFrame;
     private long _frameVersion; // under _frameGate; 0 = nothing rendered yet
 
     private string[] _presets = [];
@@ -46,6 +46,7 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
     private volatile int _presetCount = -1; // -1 = not enumerated yet
     private volatile string? _currentPresetName;
     private string? _lastSlowPresetLogged; // render thread only
+    private string? _lastSlowReadbackPresetLogged; // render thread only
     private volatile bool _failed;
 
     internal ProjectMOffscreenRenderer(
@@ -162,9 +163,8 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             }
 
             var readback = new byte[_width * _height * 4];
-            var frameInterval = TimeSpan.FromSeconds(1.0 / _fps);
-            var started = Stopwatch.GetTimestamp();
-            long frame = 0;
+            var intervalStopwatchTicks = Stopwatch.Frequency / (double)_fps;
+            var nextDeadline = Stopwatch.GetTimestamp();
             var lastPresetSwitch = Stopwatch.GetTimestamp();
             var token = _cts.Token;
 
@@ -221,18 +221,34 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
                 gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
                 gl.PixelStore(PixelStoreParameter.PackRowLength, 0);
+                var readbackStarted = Stopwatch.GetTimestamp();
                 fixed (byte* dst = readback)
                     gl.ReadPixels(0, 0, (uint)_width, (uint)_height, GLEnum.Bgra, GLEnum.UnsignedByte, dst);
+                var readbackElapsed = Stopwatch.GetElapsedTime(readbackStarted);
+                if (readbackElapsed.TotalMilliseconds > 500 && _currentPresetName != _lastSlowReadbackPresetLogged)
+                {
+                    _lastSlowReadbackPresetLogged = _currentPresetName;
+                    Trace.LogWarning(
+                        "SLOW projectM readback: {Ms:0}ms on '{Preset}' - GPU/driver transfer stalled",
+                        readbackElapsed.TotalMilliseconds, _currentPresetName ?? "(idle)");
+                }
 
                 lock (_frameGate)
                 {
-                    System.Buffer.BlockCopy(readback, 0, _latestFrame, 0, _latestFrame.Length);
+                    // Double-buffer publication: the renderer never copies a full frame while holding
+                    // the lock; it swaps ownership with the previously published buffer.
+                    var reusable = _latestFrame;
+                    _latestFrame = readback;
+                    readback = reusable;
                     _frameVersion++;
                 }
 
-                frame++;
-                var sleepTicks = frame * frameInterval.Ticks - Stopwatch.GetElapsedTime(started).Ticks;
-                if (sleepTicks > 0 && token.WaitHandle.WaitOne(TimeSpan.FromTicks(sleepTicks)))
+                nextDeadline += (long)Math.Round(intervalStopwatchTicks);
+                var now = Stopwatch.GetTimestamp();
+                if (nextDeadline <= now)
+                    nextDeadline = now + (long)Math.Round(intervalStopwatchTicks);
+                var delay = TimeSpan.FromSeconds((nextDeadline - now) / (double)Stopwatch.Frequency);
+                if (token.WaitHandle.WaitOne(delay))
                     break;
             }
         }
@@ -275,6 +291,7 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             ? NextRandomIndex()
             : (_presetIndex + 1) % _presets.Length;
         var preset = _presets[_presetIndex];
+        _currentPresetName = Path.GetFileNameWithoutExtension(preset);
         try
         {
             // Timed: a pathological preset's shader compile can take SECONDS and stalls the whole GPU
@@ -291,8 +308,6 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                     "SLOW preset load: {Ms:0}ms for '{Preset}' - heavy shader compile; consider removing it from the pack",
                     elapsed.TotalMilliseconds, preset);
             }
-
-            _currentPresetName = Path.GetFileNameWithoutExtension(preset);
         }
         catch (Exception ex)
         {

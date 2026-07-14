@@ -26,6 +26,11 @@ public interface IMediaRegistryBuilder
     /// <summary>Sets the audio resample-source factory <c>(inner, targetSampleRate) =&gt; wrapped</c>.</summary>
     IMediaRegistryBuilder SetResamplerFactory(Func<IAudioSource, int, IAudioSource> factory);
 
+    /// <summary>Sets the fixed-rate output adapter factory. The returned output advertises
+    /// <paramref name="routerFormat"/> to an audio router and resamples into the inner output's format.</summary>
+    IMediaRegistryBuilder SetResamplingOutputFactory(Func<IAudioOutput, AudioFormat, IAudioOutput> factory) =>
+        throw new NotSupportedException("This registry builder does not support audio output resamplers.");
+
     /// <summary>Sets the adaptive-rate output-wrapper factory (FFmpeg-backed) the router uses to
     /// drift-correct non-master audio outputs.</summary>
     IMediaRegistryBuilder SetAdaptiveRateOutputFactory(AdaptiveRateOutputFactory factory);

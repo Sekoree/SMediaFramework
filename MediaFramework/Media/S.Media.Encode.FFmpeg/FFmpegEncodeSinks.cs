@@ -45,6 +45,65 @@ public sealed class FFmpegEncodeVideoSink : IVideoOutput
         ArgumentNullException.ThrowIfNull(frame);
         _session.SubmitVideo(frame);
     }
+
+    /// <summary>Submits a generated filler frame immediately after the session's current video
+    /// cursor. Unlike ordinary media, the frame's own presentation time is not a source timeline.</summary>
+    internal void SubmitTimelineContinuation(VideoFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        _session.SubmitVideo(frame, continueTimeline: true);
+    }
+
+    /// <summary>Submits a frame against a continuous carrier's wall-clock cadence. A valid program
+    /// frame remains new output even if its source PTS is frozen.</summary>
+    internal void SubmitLive(VideoFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        _session.SubmitLiveVideo(frame);
+    }
+}
+
+/// <summary>
+/// Source-timeline adapter for content-only recordings. A composition may continue presenting its held
+/// canvas while paused/stopped, with every presentation carrying the exact same media timestamp. Those
+/// repeats are not new source time and are discarded here, so an idle gap is collapsed consistently for
+/// both fixed-rate and source-following encodes. Backward timestamps remain valid: the encode session
+/// re-anchors them for a newly fired clip or seek.
+/// </summary>
+public sealed class ContentOnlyEncodeVideoSink : IVideoOutput
+{
+    private readonly FFmpegEncodeVideoSink _inner;
+    private readonly Lock _gate = new();
+    private long _lastSubmittedPts = long.MinValue;
+
+    public ContentOnlyEncodeVideoSink(FFmpegEncodeVideoSink inner) =>
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+
+    public VideoFormat Format => _inner.Format;
+    public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _inner.AcceptedPixelFormats;
+
+    public void Configure(VideoFormat format)
+    {
+        lock (_gate)
+            _inner.Configure(format);
+    }
+
+    public void Submit(VideoFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        lock (_gate)
+        {
+            var pts = frame.PresentationTime.Ticks;
+            if (pts == _lastSubmittedPts)
+            {
+                frame.Dispose();
+                return;
+            }
+
+            _lastSubmittedPts = pts;
+            _inner.Submit(frame);
+        }
+    }
 }
 
 /// <summary>
@@ -79,6 +138,7 @@ public sealed class FFmpegEncodeAudioSink : IAudioOutput
 public sealed class FFmpegEncodeCombinedAudioSink : IAudioOutput, IAudioOutputChannelCapabilities
 {
     private readonly FFmpegEncodeSession _session;
+    private readonly Lock _submitGate = new();
     private readonly int[] _legChannels;
     private readonly float[][] _legScratch;
 
@@ -102,29 +162,32 @@ public sealed class FFmpegEncodeCombinedAudioSink : IAudioOutput, IAudioOutputCh
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {
-        var totalChannels = Format.Channels;
-        if (packedSamples.Length % totalChannels != 0)
-            throw new ArgumentException(
-                $"packedSamples length {packedSamples.Length} is not a multiple of the combined channel count {totalChannels}.",
-                nameof(packedSamples));
-
-        var frames = packedSamples.Length / totalChannels;
-        var channelOffset = 0;
-        for (var leg = 0; leg < _legChannels.Length; leg++)
+        lock (_submitGate)
         {
-            var legChannels = _legChannels[leg];
-            var needed = frames * legChannels;
-            if (_legScratch[leg].Length < needed)
-                _legScratch[leg] = new float[needed];
-            var dst = _legScratch[leg].AsSpan(0, needed);
-            for (var f = 0; f < frames; f++)
-            {
-                var src = packedSamples.Slice(f * totalChannels + channelOffset, legChannels);
-                src.CopyTo(dst.Slice(f * legChannels, legChannels));
-            }
+            var totalChannels = Format.Channels;
+            if (packedSamples.Length % totalChannels != 0)
+                throw new ArgumentException(
+                    $"packedSamples length {packedSamples.Length} is not a multiple of the combined channel count {totalChannels}.",
+                    nameof(packedSamples));
 
-            _session.SubmitAudio(leg, dst);
-            channelOffset += legChannels;
+            var frames = packedSamples.Length / totalChannels;
+            var channelOffset = 0;
+            for (var leg = 0; leg < _legChannels.Length; leg++)
+            {
+                var legChannels = _legChannels[leg];
+                var needed = frames * legChannels;
+                if (_legScratch[leg].Length < needed)
+                    _legScratch[leg] = new float[needed];
+                var dst = _legScratch[leg].AsSpan(0, needed);
+                for (var f = 0; f < frames; f++)
+                {
+                    var src = packedSamples.Slice(f * totalChannels + channelOffset, legChannels);
+                    src.CopyTo(dst.Slice(f * legChannels, legChannels));
+                }
+
+                _session.SubmitAudio(leg, dst);
+                channelOffset += legChannels;
+            }
         }
     }
 }

@@ -45,11 +45,34 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// (disposed with <see cref="ReleaseVideoOutputForLine"/>).</summary>
     public IVideoOutput? AcquireVideoOutputForLine(Guid lineId)
     {
+        lock (_videoLeaseGate)
+            if (!_videoOutputLeases.Add(lineId))
+                return null;
+
         var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
         if (line is null)
+        {
+            lock (_videoLeaseGate) _videoOutputLeases.Remove(lineId);
             return null;
+        }
         var raw = AcquireRawVideoOutputForLine(line);
-        return raw is null ? null : WrapVideoEffects(lineId, line.Definition, raw);
+        if (raw is null)
+        {
+            lock (_videoLeaseGate) _videoOutputLeases.Remove(lineId);
+            return null;
+        }
+
+        try
+        {
+            return WrapVideoEffects(lineId, line.Definition, raw);
+        }
+        catch
+        {
+            // Acquisition is transactional: if effect construction fails, relinquish both the
+            // logical lease and the underlying runtime hold before surfacing the error.
+            ReleaseVideoOutputForLine(lineId);
+            throw;
+        }
     }
 
     private IVideoOutput? AcquireRawVideoOutputForLine(OutputLineViewModel line)
@@ -70,6 +93,8 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     // Per-line video effect wrappers handed out by AcquireVideoOutputForLine; the wrapper (and its
     // effect instances) dispose on release, the wrapped runtime output is released separately.
+    private readonly Lock _videoLeaseGate = new();
+    private readonly HashSet<Guid> _videoOutputLeases = [];
     private readonly Dictionary<Guid, S.Media.Routing.VideoEffectBusOutput> _videoEffectWrappers = new();
 
     private IVideoOutput WrapVideoEffects(Guid lineId, OutputDefinition definition, IVideoOutput inner)
@@ -78,8 +103,17 @@ public partial class OutputManagementViewModel : ViewModelBase
         if (effects.Count == 0)
             return inner;
         var wrapper = new S.Media.Routing.VideoEffectBusOutput(inner, effects);
-        _videoEffectWrappers[lineId] = wrapper;
-        return wrapper;
+        try
+        {
+            lock (_videoLeaseGate)
+                _videoEffectWrappers.Add(lineId, wrapper);
+            return wrapper;
+        }
+        catch
+        {
+            wrapper.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Instantiates the line's persisted VIDEO effect chain from the bus registry (unknown
@@ -117,10 +151,6 @@ public partial class OutputManagementViewModel : ViewModelBase
         return effects ?? (IReadOnlyList<S.Media.Core.Buses.IAudioBusEffect>)[];
     }
 
-    /// <summary>Wraps an audio sink resolved OUTSIDE this VM (deck route factory, cue lease factory)
-    /// with the owning line's persisted audio effects. Thread-safe (reads the definitions snapshot);
-    /// returns the inner unchanged when the line has no audio effects. The wrapper owns the effect
-    /// instances and is disposal-transparent for the inner sink.</summary>
     /// <summary>Wraps <paramref name="inner"/> in the line's configured audio-effect chain (no-op when the
     /// line has none). Uses the capability-preserving <c>Wrap</c> so a hardware sink behind effects still
     /// exposes its clock/stats to the router (review H3). <paramref name="disposeInner"/> hands terminal
@@ -141,7 +171,13 @@ public partial class OutputManagementViewModel : ViewModelBase
     {
         // Dispose the per-acquire effect wrapper first (its effect instances die here); the wrapped
         // runtime output is released below and survives for the next acquire.
-        if (_videoEffectWrappers.Remove(lineId, out var wrapper))
+        S.Media.Routing.VideoEffectBusOutput? wrapper;
+        lock (_videoLeaseGate)
+        {
+            _videoOutputLeases.Remove(lineId);
+            _videoEffectWrappers.Remove(lineId, out wrapper);
+        }
+        if (wrapper is not null)
         {
             try { wrapper.Dispose(); }
             catch { /* best effort */ }
@@ -340,6 +376,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             IsEnabled = true,
         };
+        Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
         Outputs.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasOutputs));
@@ -349,7 +386,6 @@ public partial class OutputManagementViewModel : ViewModelBase
             SelectedLine ??= Outputs.FirstOrDefault();
             RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         };
-        Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
         RebuildDefinitionsSnapshot();
     }
 
@@ -673,7 +709,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 nameof(newDefinition));
 
         if (detachRoutes)
-            await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(false);
+            await RunOnUiThreadAsync(() => RaiseAsync(OutputLineReconfiguringAsync, line)).ConfigureAwait(false);
 
         switch (newDefinition)
         {
@@ -721,15 +757,25 @@ public partial class OutputManagementViewModel : ViewModelBase
                 throw new NotSupportedException($"Unknown output definition type: {newDefinition.GetType().Name}");
         }
 
-        // Update the line's definition reference so VM consumers (routing checkboxes, KindLabel, Summary)
-        // observe the new values.
-        line.ReplaceDefinition(newDefinition);
+        await RunOnUiThreadAsync(async () =>
+        {
+            // Commit observable VM state and all dependent callbacks as one UI-thread transaction.
+            line.ReplaceDefinition(newDefinition);
+            RaiseTopologyChanged();
+            if (detachRoutes)
+                await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(true);
+        }).ConfigureAwait(false);
+    }
 
-        // A clone-of change is the load-bearing topology change - fire the event so player VMs resync
-        // their routing checkbox list (clones get hidden, parents get exposed).
-        RaiseTopologyChanged();
-        if (detachRoutes)
-            await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(false);
+    private static async Task RunOnUiThreadAsync(Func<Task> action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            await action().ConfigureAwait(true);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(action);
     }
 
     private static async Task RaiseAsync(Func<OutputLineViewModel, Task>? handlers, OutputLineViewModel line)
@@ -1054,13 +1100,40 @@ public partial class OutputManagementViewModel : ViewModelBase
         var status = runtime.GetStatus();
         if (status is null || status.LocalServerPort == 0)
             return null;
-        var host = System.Net.Dns.GetHostName();
-        var parts = new List<string>(2);
-        if (status.TsUrlPath is { } ts)
-            parts.Add($"http://{host}:{status.LocalServerPort}{ts}");
-        if (status.HlsUrlPath is { } hls)
-            parts.Add($"http://{host}:{status.LocalServerPort}{hls}");
+        var hosts = ResolveAdvertisableLanAddresses();
+        var parts = new List<string>(hosts.Count * 2);
+        foreach (var host in hosts)
+        {
+            if (status.TsUrlPath is { } ts)
+                parts.Add($"http://{host}:{status.LocalServerPort}{ts}");
+            if (status.HlsUrlPath is { } hls)
+                parts.Add($"http://{host}:{status.LocalServerPort}{hls}");
+        }
         return parts.Count > 0 ? string.Join("\n", parts) : null;
+    }
+
+    private static IReadOnlyList<string> ResolveAdvertisableLanAddresses()
+    {
+        try
+        {
+            var addresses = System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName())
+                .Where(address => !System.Net.IPAddress.IsLoopback(address)
+                                  && !address.IsIPv6LinkLocal
+                                  && !address.IsIPv6Multicast)
+                .Select(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                    ? $"[{address}]"
+                    : address.ToString())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (addresses.Length > 0)
+                return addresses;
+        }
+        catch
+        {
+            // DNS/adapter enumeration can fail in a restricted container; retain a usable local URL.
+        }
+
+        return ["127.0.0.1"];
     }
 
     private void EnsureLiveStreamRuntime(OutputLineViewModel line, LiveStreamOutputDefinition definition)
@@ -1635,6 +1708,8 @@ public partial class OutputManagementViewModel : ViewModelBase
                 }
             }
 
+            ApplyLiveStreamHealth(line, ref worst, ref detail);
+
             line.Health = worst;
             line.HealthDetail = detail;
             if (anyWired)
@@ -1673,6 +1748,86 @@ public partial class OutputManagementViewModel : ViewModelBase
         AggregateWarningCount = warn;
         AggregateErrorCount = err;
     }
+
+    /// <summary>
+    /// Encode-destination health is independent from route throughput: a cue can submit perfectly
+    /// while an SRT/RTMP destination is reconnecting. Merge both signals instead of allowing the
+    /// playback probe to overwrite a start failure or make a detached network sink look healthy.
+    /// </summary>
+    private void ApplyLiveStreamHealth(
+        OutputLineViewModel line,
+        ref OutputLineHealthState worst,
+        ref string? detail)
+    {
+        if (line.Definition is not LiveStreamOutputDefinition)
+            return;
+
+        LiveStreamOutputRuntime? runtime;
+        lock (_liveStreamsGate)
+            _liveStreams.TryGetValue(line, out runtime);
+        if (runtime is null)
+            return;
+
+        var runtimeState = runtime.GetRuntimeState();
+        OutputLineHealthState state;
+        string? streamDetail;
+        if (!runtimeState.IsLive)
+        {
+            if (string.IsNullOrWhiteSpace(runtimeState.LastError))
+                return;
+            state = OutputLineHealthState.Error;
+            streamDetail = Strings.Format(nameof(Strings.StreamLiveStartFailedFormat), runtimeState.LastError);
+        }
+        else
+        {
+            var sinks = runtimeState.Status?.Encode.Sinks ?? [];
+            var unavailable = sinks.Where(sink => !sink.Healthy).ToArray();
+            if (sinks.Count == 0 || (unavailable.Length > 0 && unavailable.All(sink => sink.Error is null)))
+            {
+                state = OutputLineHealthState.Warning;
+                streamDetail = Strings.Format(nameof(Strings.StreamLiveConnectingFormat), Math.Max(1, sinks.Count));
+            }
+            else if (unavailable.Length > 0)
+            {
+                state = unavailable.Length == sinks.Count
+                    ? OutputLineHealthState.Error
+                    : OutputLineHealthState.Warning;
+                var reason = string.Join("; ", unavailable
+                    .Select(sink => sink.Error)
+                    .Where(error => !string.IsNullOrWhiteSpace(error))
+                    .Distinct(StringComparer.Ordinal));
+                if (reason.Length == 0)
+                    reason = "Destination unavailable.";
+                streamDetail = Strings.Format(
+                    nameof(Strings.StreamLiveDegradedFormat), unavailable.Length, sinks.Count, reason);
+            }
+            else
+            {
+                state = OutputLineHealthState.Healthy;
+                var bytes = sinks.Sum(sink => sink.BytesWritten);
+                streamDetail = Strings.Format(
+                    nameof(Strings.StreamLiveHealthyFormat), sinks.Count, FormatByteCount(bytes));
+            }
+        }
+
+        if (state > worst)
+        {
+            worst = state;
+            detail = streamDetail;
+        }
+        else if (state == worst && !string.IsNullOrWhiteSpace(streamDetail))
+        {
+            detail = string.IsNullOrWhiteSpace(detail) ? streamDetail : $"{detail} · {streamDetail}";
+        }
+    }
+
+    private static string FormatByteCount(long bytes) => bytes switch
+    {
+        >= 1024L * 1024L * 1024L => $"{bytes / (1024d * 1024d * 1024d):0.0} GiB",
+        >= 1024L * 1024L => $"{bytes / (1024d * 1024d):0.0} MiB",
+        >= 1024L => $"{bytes / 1024d:0.0} KiB",
+        _ => $"{Math.Max(0, bytes)} B",
+    };
 
     private static string FormatCueHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
         m.State == OutputLineHealthState.Healthy

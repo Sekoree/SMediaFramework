@@ -197,6 +197,18 @@ public sealed record EncodeSettingsDefinition(
     int Fps = 0)
 {
     public IReadOnlyList<EncodeAudioLegDefinition> AudioLegs { get; init; } = [new EncodeAudioLegDefinition()];
+
+    /// <summary>"Average" (legacy/default) or "Constant". String-backed for project compatibility.</summary>
+    public string VideoBitrateMode { get; init; } = "Average";
+
+    /// <summary>Maximum B-frames (null = encoder default, 0 = disabled).</summary>
+    public int? VideoMaxBFrames { get; init; }
+
+    /// <summary>VBV capacity expressed as duration at the selected bitrate (0 = encoder default).</summary>
+    public int VideoVbvBufferMilliseconds { get; init; } = 1000;
+
+    /// <summary>Apply the H.264/H.265 encoder's zero-latency tune.</summary>
+    public bool VideoLowLatencyTune { get; init; }
 }
 
 /// <summary>Record-to-file output line. The runtime is armed/disarmed explicitly (a recording is an
@@ -205,21 +217,45 @@ public sealed record FileOutputDefinition(
     Guid Id,
     string DisplayName,
     string DirectoryPath,
-    // File name pattern; "{timestamp}" expands to yyyyMMdd_HHmmss at arm time so re-arming never overwrites.
+    // File name pattern; "{timestamp}" expands to yyyyMMdd_HHmmss_fff at arm time. The runtime also
+    // reserves the final name atomically and adds a suffix on collision, so re-arming never overwrites.
     string FileNamePattern = "recording_{timestamp}",
     EncodeSettingsDefinition? Encode = null) : OutputDefinition(Id, DisplayName)
 {
+    public const string ContentOnlyRecordingMode = "ContentOnly";
+    public const string ContinuousProgramRecordingMode = "ContinuousProgram";
+
     [JsonIgnore]
     public override ManagedOutputKind Kind => ManagedOutputKind.FileRecord;
 
     [JsonIgnore]
     public EncodeSettingsDefinition EffectiveEncode => Encode ?? new EncodeSettingsDefinition();
+
+    /// <summary>
+    /// Recording-clock policy. Null is the legacy project shape and remains content-only so opening an
+    /// existing show never silently changes its file duration or introduces a fixed-format requirement.
+    /// New outputs explicitly persist <see cref="ContinuousProgramRecordingMode"/> by default.
+    /// </summary>
+    public string? RecordingMode { get; init; }
+
+    [JsonIgnore]
+    public string EffectiveRecordingMode =>
+        string.Equals(RecordingMode, ContinuousProgramRecordingMode, StringComparison.OrdinalIgnoreCase)
+            ? ContinuousProgramRecordingMode
+            : ContentOnlyRecordingMode;
+
+    [JsonIgnore]
+    public bool RecordsContinuousProgram => EffectiveRecordingMode == ContinuousProgramRecordingMode;
 }
 
 /// <summary>One push destination of a live-stream output (persisted). Protocol stored as string
 /// ("Rtmp"/"Srt"/"Rtsp") for the same enum-growth resilience as the codec names. <see cref="StreamKey"/>
 /// is the ingest key/auth token folded into the URL per protocol when the server needs one (may be blank).</summary>
-public sealed record StreamPushTargetDefinition(string Protocol = "Rtmp", string Url = "", string? StreamKey = null);
+public sealed record StreamPushTargetDefinition(string Protocol = "Rtmp", string Url = "", string? StreamKey = null)
+{
+    /// <summary>SRT retransmission latency in milliseconds (null = libsrt default / URL option).</summary>
+    public int? SrtLatencyMilliseconds { get; init; }
+}
 
 /// <summary>The built-in LAN server's persisted settings. <see cref="MountName"/> is the URL path segment
 /// (e.g. "stage" → <c>/stage.ts</c>) so several streams can share one server on the same port.</summary>

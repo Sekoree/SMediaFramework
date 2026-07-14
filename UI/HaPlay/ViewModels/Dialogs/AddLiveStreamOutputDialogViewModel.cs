@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.OutputPreview;
 using HaPlay.Resources;
+using S.Media.Encode.FFmpeg;
 
 namespace HaPlay.ViewModels.Dialogs;
 
@@ -21,6 +22,8 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
     public EncodeChoice[] OutputModes { get; } = EncodeChoices.OutputModes;
     public EncodeChoice[] VideoCodecs { get; } = EncodeChoices.StreamVideoCodecs;
     public EncodeChoice[] AudioCodecs { get; } = EncodeChoices.StreamAudioCodecs;
+    public EncodeChoice[] VideoBitrateModes { get; } = EncodeChoices.VideoBitrateModes;
+    public EncodeChoice[] MaximumBFrameChoices { get; } = EncodeChoices.MaximumBFrames;
     public string[] Presets { get; } = EncodeChoices.Presets;
 
     public AddLiveStreamOutputDialogViewModel()
@@ -38,14 +41,28 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
     public bool ShowVideoSettings => OutputMode != "AudioOnly";
     public bool ShowAudioSettings => OutputMode != "VideoOnly";
 
-    [ObservableProperty] private string _videoCodec = "H264";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SupportsH26xAdvancedOptions))]
+    private string _videoCodec = "H264";
     [ObservableProperty] private int _videoBitrateKbps = 6000;
     [ObservableProperty] private string _videoPreset = "veryfast";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsConstantBitrate))]
+    private string _videoBitrateMode = "Average";
+    [ObservableProperty] private int _keyframeIntervalSeconds = 2;
+    [ObservableProperty] private string _videoMaximumBFrames = "Auto";
+    [ObservableProperty] private int _videoVbvBufferMilliseconds = 1000;
+    [ObservableProperty] private bool _videoLowLatencyTune;
     // A live stream demands an explicit, locked output resolution + frame rate (clients can't follow a
     // renegotiating stream) - defaulted to 1080p30 so the dialog is valid out of the box.
     [ObservableProperty] private int _scaleWidth = 1920;
     [ObservableProperty] private int _scaleHeight = 1080;
     [ObservableProperty] private int _fps = 30;
+
+    public bool IsConstantBitrate => VideoBitrateMode == "Constant";
+    public bool SupportsH26xAdvancedOptions =>
+        Enum.TryParse<EncodeVideoCodec>(VideoCodec, ignoreCase: true, out var codec)
+        && codec.SupportsLatencyControls();
 
     public ObservableCollection<AudioLegRowViewModel> AudioLegs { get; } = [new AudioLegRowViewModel()];
 
@@ -96,6 +113,17 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
             AudioLegs.Remove(row);
     }
 
+    [RelayCommand]
+    private void ApplyLowLatencyPreset()
+    {
+        // A one-click, inspectable preset: every field remains independently editable afterwards.
+        VideoBitrateMode = "Constant";
+        KeyframeIntervalSeconds = 1;
+        VideoMaximumBFrames = "0";
+        VideoVbvBufferMilliseconds = 500;
+        VideoLowLatencyTune = true;
+    }
+
     public void InitializeExistingOutputNames(IEnumerable<string> names)
     {
         var set = OutputNameUniqueness.CreateNameSet(names);
@@ -114,6 +142,16 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
         VideoCodec = encode.VideoCodec;
         VideoBitrateKbps = encode.VideoBitrateBps > 0 ? (int)(encode.VideoBitrateBps / 1000) : 6000;
         VideoPreset = encode.VideoPreset ?? "veryfast";
+        VideoBitrateMode = encode.VideoBitrateMode == "Constant" ? "Constant" : "Average";
+        KeyframeIntervalSeconds = encode.GopSize > 0 && encode.Fps > 0
+            ? Math.Clamp((int)Math.Round((double)encode.GopSize / encode.Fps), 1, 10)
+            : 2;
+        VideoMaximumBFrames = encode.VideoMaxBFrames?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                              ?? "Auto";
+        VideoVbvBufferMilliseconds = encode.VideoVbvBufferMilliseconds > 0
+            ? Math.Clamp(encode.VideoVbvBufferMilliseconds, 100, 8_000)
+            : 1000;
+        VideoLowLatencyTune = encode.VideoLowLatencyTune;
         ScaleWidth = encode.ScaleWidth > 0 ? encode.ScaleWidth : 1920;
         ScaleHeight = encode.ScaleHeight > 0 ? encode.ScaleHeight : 1080;
         Fps = encode.Fps > 0 ? encode.Fps : 30;
@@ -129,6 +167,7 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
             PushTargets.Add(new StreamPushTargetRowViewModel
             {
                 Protocol = target.Protocol, Url = target.Url, StreamKey = target.StreamKey ?? "",
+                SrtLatencyMilliseconds = target.SrtLatencyMilliseconds ?? 120,
             });
 
         var server = existing.EffectiveLocalServer;
@@ -167,15 +206,22 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
                 Container: "MpegTs",
                 OutputMode,
                 VideoCodec,
-                VideoBitrateKbps * 1000L, // live streams are bitrate-driven (CBR-ish for network pacing)
+                VideoBitrateKbps * 1000L,
                 VideoCrf: null,
                 VideoPreset,
-                GopSize: Math.Max(1, Fps) * 2, // ~2 s keyframe cadence for joiners/segments
+                GopSize: Math.Max(1, Fps) * Math.Clamp(KeyframeIntervalSeconds, 1, 10),
                 ScaleWidth,
                 ScaleHeight,
                 Fps)
             {
                 AudioLegs = AudioLegs.Select(l => l.ToDefinition()).ToArray(),
+                VideoBitrateMode = VideoBitrateMode == "Constant" ? "Constant" : "Average",
+                VideoMaxBFrames = SupportsH26xAdvancedOptions
+                    && int.TryParse(VideoMaximumBFrames, out var maxBFrames)
+                        ? maxBFrames
+                        : null,
+                VideoVbvBufferMilliseconds = Math.Clamp(VideoVbvBufferMilliseconds, 100, 8_000),
+                VideoLowLatencyTune = SupportsH26xAdvancedOptions && VideoLowLatencyTune,
             },
             new LocalStreamServerDefinition(
                 LocalServerEnabled, LocalServerPort, LocalServerTs, LocalServerHls,
@@ -185,7 +231,12 @@ public partial class AddLiveStreamOutputDialogViewModel : ViewModelBase
                 .Where(t => !string.IsNullOrWhiteSpace(t.Url))
                 .Select(t => new StreamPushTargetDefinition(
                     t.Protocol, t.Url.Trim(),
-                    string.IsNullOrWhiteSpace(t.StreamKey) ? null : t.StreamKey.Trim()))
+                    string.IsNullOrWhiteSpace(t.StreamKey) ? null : t.StreamKey.Trim())
+                {
+                    SrtLatencyMilliseconds = t.Protocol == "Srt"
+                        ? Math.Clamp(t.SrtLatencyMilliseconds, 20, 8_000)
+                        : null,
+                })
                 .ToArray(),
         };
 
@@ -207,7 +258,12 @@ public partial class StreamPushTargetRowViewModel : ViewModelBase
 {
     public EncodeChoice[] Protocols { get; } = EncodeChoices.PushProtocols;
 
-    [ObservableProperty] private string _protocol = "Rtmp";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSrt))]
+    private string _protocol = "Rtmp";
     [ObservableProperty] private string _url = "";
     [ObservableProperty] private string _streamKey = "";
+    [ObservableProperty] private int _srtLatencyMilliseconds = 120;
+
+    public bool IsSrt => Protocol == "Srt";
 }

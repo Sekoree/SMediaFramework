@@ -23,9 +23,11 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
     private WriteCallbackAvio? _callbackAvio;
     private AVRational[] _sourceTimeBases = [];
     private bool _headerWritten;
+    private bool _writeFaulted;
     private bool _finished;
     private bool _disposed;
     private long _packetsWritten;
+    private long _bytesWritten;
 
     public MuxPacketSink(EncodeIoTarget target, EncodeContainer container)
     {
@@ -48,19 +50,7 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
     public long PacketsWritten => Volatile.Read(ref _packetsWritten);
 
     /// <summary>Container bytes written so far (avio position); 0 before the header goes out.</summary>
-    public long BytesWritten
-    {
-        get
-        {
-            if (_callbackAvio is { } cb)
-                return cb.BytesWritten;
-            var fmt = _fmt;
-            if (fmt is null || fmt->pb is null || !_headerWritten)
-                return 0;
-            var pos = avio_tell(fmt->pb);
-            return pos > 0 ? pos : 0;
-        }
-    }
+    public long BytesWritten => Volatile.Read(ref _bytesWritten);
 
     public void OnStreamsReady(IReadOnlyList<EncodedStreamInfo> streams)
     {
@@ -87,6 +77,11 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
             ret = avcodec_parameters_copy(stream->codecpar, info.CodecParameters);
             FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_copy));
             stream->time_base = info.TimeBase; // muxer may adjust in write_header; packets rescale to the final value
+            if (info.Kind == EncodedStreamKind.Video && info.FrameRate.num > 0 && info.FrameRate.den > 0)
+            {
+                stream->avg_frame_rate = info.FrameRate;
+                stream->r_frame_rate = info.FrameRate;
+            }
             _sourceTimeBases[i] = info.TimeBase;
 
             if (info.Name is { Length: > 0 } name)
@@ -122,6 +117,7 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
         }
 
         _headerWritten = true;
+        SnapshotBytesWritten();
 
         _scratch = av_packet_alloc();
         if (_scratch is null)
@@ -158,9 +154,12 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
                     avio_flush(_fmt->pb);
                 boundary(isVideo && keyframe);
             }
+
+            SnapshotBytesWritten();
         }
         catch
         {
+            _writeFaulted = true;
             av_packet_unref(_scratch);
             throw;
         }
@@ -176,8 +175,25 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
 
         _finished = true;
         var ret = av_write_trailer(_fmt);
-        FFmpegException.ThrowIfError(ret, nameof(av_write_trailer));
+        if (ret < 0)
+        {
+            _writeFaulted = true;
+            FFmpegException.ThrowIfError(ret, nameof(av_write_trailer));
+        }
+        SnapshotBytesWritten();
         Trace.LogDebug("MuxPacketSink {Name}: trailer written ({Packets} packets)", Name, PacketsWritten);
+    }
+
+    private void SnapshotBytesWritten()
+    {
+        long bytes;
+        if (_callbackAvio is { } callback)
+            bytes = callback.BytesWritten;
+        else if (_fmt is not null && _fmt->pb is not null && _headerWritten)
+            bytes = Math.Max(0, avio_tell(_fmt->pb));
+        else
+            return;
+        Interlocked.Exchange(ref _bytesWritten, Math.Max(Volatile.Read(ref _bytesWritten), bytes));
     }
 
     public void Dispose()
@@ -188,8 +204,12 @@ internal sealed unsafe class MuxPacketSink : IEncodedPacketSink
 
         if (_fmt is not null)
         {
-            if (_headerWritten && !_finished)
+            // Once a network write has failed, attempting a trailer can repeat the same blocking I/O
+            // before a reconnect. Close the broken AVIO directly instead.
+            if (_headerWritten && !_finished && !_writeFaulted)
                 MediaDiagnostics.SwallowDisposeErrors(() => av_write_trailer(_fmt), "MuxPacketSink.Dispose: av_write_trailer");
+
+            SnapshotBytesWritten();
 
             if (_callbackAvio is not null)
             {

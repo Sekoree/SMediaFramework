@@ -20,12 +20,14 @@ public sealed unsafe class EncodedStreamInfo
         EncodedStreamKind kind,
         AVCodecParameters* codecParameters,
         AVRational timeBase,
+        AVRational frameRate,
         string? name,
         string? language)
     {
         Kind = kind;
         _codecParameters = codecParameters;
         TimeBase = timeBase;
+        FrameRate = frameRate;
         Name = name;
         Language = language;
     }
@@ -35,6 +37,10 @@ public sealed unsafe class EncodedStreamInfo
     /// <summary>Timebase the session's packets for this stream are stamped in (the encoder timebase).
     /// Sinks rescale to their own stream timebases on write.</summary>
     public AVRational TimeBase { get; }
+
+    /// <summary>Locked video cadence, or 0/0 for non-video streams. Used by muxers to advertise the
+    /// configured rate immediately instead of waiting for a finite file's timestamps to be analysed.</summary>
+    internal AVRational FrameRate { get; }
 
     /// <summary>Track title metadata (audio legs).</summary>
     public string? Name { get; }
@@ -71,4 +77,16 @@ internal unsafe interface IEncodedPacketSink : IDisposable
 
     /// <summary>End of stream: flush and finalize (write trailer, close avio). Called once, after the last packet.</summary>
     void Finish();
+}
+
+/// <summary>
+/// Optional live health exposed by sinks that can remain attached while their destination is
+/// temporarily unavailable (for example, a reconnecting network push). The encode session folds
+/// this into its normal per-sink metrics without coupling the packet-sink contract to retry policy.
+/// </summary>
+internal interface IEncodedPacketSinkHealth
+{
+    bool Healthy { get; }
+
+    string? Error { get; }
 }

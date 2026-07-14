@@ -36,17 +36,10 @@ public partial class MediaPlayerViewModel
     [ObservableProperty]
     private bool _visualizerEnabled;
 
-    // One settings read for all visualizer fields (avoids 4× disk reads + FileGate contention on the
-    // UI thread during VM construction).
-    private static readonly Models.AppSettings VisualizerSettingsSeed = Models.AppSettings.Load();
-
     /// <summary>Preset directory for the visualizer (*.milk, scanned recursively). Persisted
     /// per-machine (AppSettings, set via the VIZ ▾ picker); defaults to the dev build's fetched pack.</summary>
     [ObservableProperty]
-    private string? _visualizerPresetDirectory =
-        VisualizerSettingsSeed.VisualizerPresetDirectory is { Length: > 0 } saved && Directory.Exists(saved)
-            ? saved
-            : DefaultPresetDirectory();
+    private string? _visualizerPresetDirectory;
 
     partial void OnVisualizerPresetDirectoryChanged(string? value)
     {
@@ -58,15 +51,30 @@ public partial class MediaPlayerViewModel
 
     /// <summary>Visualizer render width (0 = follow the canvas / output preset). Persisted per-machine.</summary>
     [ObservableProperty]
-    private int _visualizerWidth = VisualizerSettingsSeed.VisualizerWidth;
+    private int _visualizerWidth;
 
     /// <summary>Visualizer render height (0 = follow the canvas / output preset).</summary>
     [ObservableProperty]
-    private int _visualizerHeight = VisualizerSettingsSeed.VisualizerHeight;
+    private int _visualizerHeight;
 
     /// <summary>Visualizer target FPS (0 = follow the canvas rate).</summary>
     [ObservableProperty]
-    private int _visualizerFps = VisualizerSettingsSeed.VisualizerFps;
+    private int _visualizerFps;
+
+    /// <summary>Loads one coherent settings snapshot for each newly-created deck. This avoids repeated
+    /// disk reads while ensuring decks created later in the same process see settings changed by an
+    /// earlier deck instead of inheriting a launch-time static snapshot.</summary>
+    private void InitializeVisualizerSettings()
+    {
+        var settings = Models.AppSettings.Load();
+        VisualizerPresetDirectory =
+            settings.VisualizerPresetDirectory is { Length: > 0 } saved && Directory.Exists(saved)
+                ? saved
+                : DefaultPresetDirectory();
+        VisualizerWidth = settings.VisualizerWidth;
+        VisualizerHeight = settings.VisualizerHeight;
+        VisualizerFps = settings.VisualizerFps;
+    }
 
     /// <summary>A human summary of the visualizer resolution for the settings UI. Zero (older settings
     /// files) resolves to the real default, so the label says so instead of the old "Match output" lie.</summary>

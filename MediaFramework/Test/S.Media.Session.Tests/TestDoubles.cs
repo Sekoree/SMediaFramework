@@ -4,7 +4,7 @@ namespace S.Media.Session.Tests;
 /// <paramref name="chunks"/> sizes the source (default 8 reads ≈ instant EOF - tests that need the clip to
 /// STAY ALIVE through pauses/fades must pass a large count, since natural EOF now legitimately flips the
 /// player to not-running).</summary>
-internal sealed class FakeAudioDecoderProvider(int chunks = 8) : IMediaDecoderProvider
+internal sealed class FakeAudioDecoderProvider(int chunks = 8, int sampleRate = 48_000) : IMediaDecoderProvider
 {
     public string Name => "fake-audio";
 
@@ -13,10 +13,11 @@ internal sealed class FakeAudioDecoderProvider(int chunks = 8) : IMediaDecoderPr
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
         throw new NotSupportedException("fake provider is audio-only");
 
-    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => new SyntheticSilentSource(chunks);
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
+        new SyntheticSilentSource(chunks, sampleRate);
 
-    public static IMediaRegistry Registry(int chunks = 8) =>
-        MediaRegistry.Build(b => b.AddDecoder(new FakeAudioDecoderProvider(chunks)));
+    public static IMediaRegistry Registry(int chunks = 8, int sampleRate = 48_000) =>
+        MediaRegistry.Build(b => b.AddDecoder(new FakeAudioDecoderProvider(chunks, sampleRate)));
 }
 
 /// <summary>A provider whose atomic open BLOCKS until the token is cancelled - to verify a STOP/abort preempts
@@ -40,12 +41,12 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
 
 /// <summary>A finite stereo source that yields a few chunks of silence then exhausts - enough for a clip
 /// to open and Play() without a real decoder or device.</summary>
-internal sealed class SyntheticSilentSource(int chunks = 8) : IAudioSource, ISeekableSource
+internal sealed class SyntheticSilentSource(int chunks = 8, int sampleRate = 48_000) : IAudioSource, ISeekableSource
 {
     private int _remaining = chunks;
     private TimeSpan _position;
 
-    public AudioFormat Format { get; } = new(48_000, 2);
+    public AudioFormat Format { get; } = new(sampleRate, 2);
 
     public bool IsExhausted => Volatile.Read(ref _remaining) <= 0;
 

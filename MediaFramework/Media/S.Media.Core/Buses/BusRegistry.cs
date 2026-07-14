@@ -106,19 +106,31 @@ internal sealed class BusRegistry(
 
     public bool TryCreateAudioEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IAudioBusEffect effect)
     {
-        effect = _audio.TryGetValue(kind, out var factory) ? factory(configJson) : null;
+        effect = null;
+        if (!_audio.TryGetValue(kind, out var factory))
+            return false;
+        try { effect = factory(configJson); }
+        catch { return false; }
         return effect is not null;
     }
 
     public bool TryCreateVideoEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IVideoBusEffect effect)
     {
-        effect = _video.TryGetValue(kind, out var factory) ? factory(configJson) : null;
+        effect = null;
+        if (!_video.TryGetValue(kind, out var factory))
+            return false;
+        try { effect = factory(configJson); }
+        catch { return false; }
         return effect is not null;
     }
 
     public bool TryCreateVisualSource(string kind, VisualSourceCreateArgs args, [MaybeNullWhen(false)] out IAudioVisualSource source)
     {
-        source = _visual.TryGetValue(kind, out var factory) ? factory(args) : null;
+        source = null;
+        if (!_visual.TryGetValue(kind, out var factory))
+            return false;
+        try { source = factory(args); }
+        catch { return false; }
         return source is not null;
     }
 }

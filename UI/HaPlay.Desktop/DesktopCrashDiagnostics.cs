@@ -63,6 +63,33 @@ internal static class DesktopCrashDiagnostics
             WriteSync(body);
     }
 
+    /// <summary>Copies the current rolling and crash logs beside a captured dump. The snapshot names
+    /// share the dump stem, so later rolling retention can never separate incident context from stacks.</summary>
+    public static void PinLogsBeside(string dumpPath)
+    {
+        var stem = Path.Combine(
+            Path.GetDirectoryName(dumpPath) ?? ".",
+            Path.GetFileNameWithoutExtension(dumpPath));
+        CopyOpenFileSnapshot(_rollingLogFilePath, stem + ".run.log");
+        CopyOpenFileSnapshot(_crashFilePath, stem + ".crash.log");
+    }
+
+    private static void CopyOpenFileSnapshot(string? source, string destination)
+    {
+        if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+            return;
+        try
+        {
+            using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.Read);
+            input.CopyTo(output);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "could not pin incident log {Source} beside dump {DumpLog}", source, destination);
+        }
+    }
+
     public static void RecordFatalException(string source, Exception exception)
     {
         EnsureCrashFile();

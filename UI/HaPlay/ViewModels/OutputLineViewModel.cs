@@ -168,7 +168,13 @@ public partial class OutputLineViewModel : ViewModelBase
     {
         if (_host is null)
             return;
-        var next = Definition.Effects.Where(e => !ReferenceEquals(e, effect) && e != effect).ToArray();
+        var next = Definition.Effects.ToList();
+        var index = next.FindIndex(candidate => ReferenceEquals(candidate, effect));
+        if (index < 0)
+            index = next.FindIndex(candidate => candidate == effect);
+        if (index < 0)
+            return;
+        next.RemoveAt(index);
         await _host.UpdateLineEffectsAsync(this, next);
         NotifyEffectsChanged();
     }
@@ -372,7 +378,7 @@ public partial class OutputLineViewModel : ViewModelBase
     };
 
     public string Summary => Definition switch
-        {
+    {
         PortAudioOutputDefinition p =>
             Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.EffectiveAudioBackendName),
         LocalVideoOutputDefinition v =>
@@ -398,6 +404,9 @@ public partial class OutputLineViewModel : ViewModelBase
                 f.EffectiveEncode.Container,
                 f.EffectiveEncode.VideoCodec,
                 f.EffectiveEncode.AudioLegs.Count > 0 ? f.EffectiveEncode.AudioLegs[0].Codec : "-",
+                f.RecordsContinuousProgram
+                    ? Strings.FileOutputRecordingContinuousShort
+                    : Strings.FileOutputRecordingContentOnlyShort,
                 f.DirectoryPath),
         LiveStreamOutputDefinition s =>
             Strings.Format(

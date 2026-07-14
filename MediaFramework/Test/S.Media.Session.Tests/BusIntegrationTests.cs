@@ -21,6 +21,15 @@ public sealed class BusIntegrationTests
         public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Add(ref _samples, packedSamples.Length);
     }
 
+    private sealed class ForwardingRateAdapter(IAudioOutput inner, AudioFormat routerFormat)
+        : IAudioOutput, IDisposable
+    {
+        public bool Disposed { get; private set; }
+        public AudioFormat Format => routerFormat;
+        public void Submit(ReadOnlySpan<float> packedSamples) => inner.Submit(packedSamples);
+        public void Dispose() => Disposed = true;
+    }
+
     private sealed class RecordingSink : IBusMetadataSink
     {
         public readonly List<MediaItemMetadata> Items = [];
@@ -48,6 +57,33 @@ public sealed class BusIntegrationTests
             await Task.Delay(20);
         Assert.True(tap.Samples > 0, "tap received no audio from the fired clip");
 
+        await session.StopAsync(fade: false);
+    }
+
+    [Fact]
+    public async Task FixedRateTap_IsAdaptedToAClipWithADifferentNativeRate()
+    {
+        ForwardingRateAdapter? adapter = null;
+        var registry = MediaRegistry.Build(builder => builder
+            .AddDecoder(new FakeAudioDecoderProvider(chunks: 2048, sampleRate: 44_100))
+            .SetResamplingOutputFactory((inner, routerFormat) =>
+                adapter = new ForwardingRateAdapter(inner, routerFormat)));
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneAudioCue());
+
+        var tap = new CountingTap(); // fixed 48 kHz, like projectM
+        var tapId = await session.RegisterAudioTapAsync(tap);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue1"));
+
+        for (var i = 0; i < 100 && tap.Samples == 0; i++)
+            await Task.Delay(20);
+
+        Assert.NotNull(adapter);
+        Assert.Equal(new AudioFormat(44_100, 2), adapter.Format);
+        Assert.True(tap.Samples > 0, "the adapted tap received no audio from the 44.1 kHz clip");
+
+        await session.UnregisterAudioTapAsync(tapId);
+        Assert.True(adapter.Disposed, "unregister must release the session-owned rate adapter");
         await session.StopAsync(fade: false);
     }
 

@@ -31,7 +31,49 @@ public static class ProjectMModule
         {
             var options = ProjectMOptions.FromJson(configJson);
             var source = new ProjectMVisualSource(1920, 1080, new Rational(30, 1), options);
-            return source.CreateLayerSurface();
+            try
+            {
+                return new SourceOwnedLayerSurface(source, source.CreateLayerSurface());
+            }
+            catch
+            {
+                source.Dispose();
+                throw;
+            }
         });
+    }
+
+    /// <summary>The registry creates a source solely to back one surface, so the returned surface must
+    /// carry source ownership. Without this adapter every composition rebuild leaked a renderer thread.</summary>
+    private sealed class SourceOwnedLayerSurface(
+        ProjectMVisualSource source,
+        Compositor.IVideoCompositorLayerSurface inner) :
+        Compositor.IVideoCompositorLayerSurface,
+        Compositor.IVideoCompositorGlResource
+    {
+        private int _disposed;
+
+        public void ConfigureGl(Silk.NET.OpenGL.GL gl, VideoFormat canvas) => inner.ConfigureGl(gl, canvas);
+
+        public void Render(
+            Silk.NET.OpenGL.GL gl,
+            uint targetFbo,
+            TimeSpan masterTime,
+            Compositor.LayerTransform2D transform,
+            float opacity) => inner.Render(gl, targetFbo, masterTime, transform, opacity);
+
+        public void ReleaseGl(Silk.NET.OpenGL.GL gl)
+        {
+            if (inner is Compositor.IVideoCompositorGlResource resource)
+                resource.ReleaseGl(gl);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            inner.Dispose();
+            source.Dispose();
+        }
     }
 }

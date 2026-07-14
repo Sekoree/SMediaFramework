@@ -59,9 +59,11 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
 {
     // Surfaces this compositor has ConfigureGl'd, stamped with the canvas format they were configured
     // for - CompositeWithSurfaces (re)configures a surface on first sight and after a canvas change,
-    // always on the GL thread (NXT-10: the host owns the configure contract, not the caller). Weak so
-    // an abandoned surface never pins.
+    // always on the GL thread (NXT-10: the host owns the configure contract, not the caller). The weak
+    // table tracks configuration state; GL-owning surfaces additionally remain strongly tracked until
+    // compositor teardown so their native resources can be released while the context is still current.
     private readonly ConditionalWeakTable<IVideoCompositorLayerSurface, StrongBox<VideoFormat>> _configuredSurfaces = new();
+    private readonly HashSet<IVideoCompositorGlResource> _surfaceGlResources = [];
     /// <summary>Immutable warp-pass snapshot (swapped atomically by <see cref="SetWarpPass"/>;
     /// read once per <see cref="Composite"/> so a mid-frame swap can't tear).</summary>
     private sealed record WarpPassState(VideoFormat Output, WarpSection[] Sections);
@@ -559,6 +561,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                 var configured = _configuredSurfaces.GetOrCreateValue(surfaceLayer.Surface);
                 if (configured.Value != _output)
                 {
+                    if (surfaceLayer.Surface is IVideoCompositorGlResource glResource)
+                        _surfaceGlResources.Add(glResource);
                     surfaceLayer.Surface.ConfigureGl(_gl, _output);
                     configured.Value = _output;
                 }
@@ -1668,6 +1672,11 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
         DrainDeferredExternalImageReleases();
         _disposed = true;
+        foreach (var resource in _surfaceGlResources)
+            MediaDiagnostics.SwallowDisposeErrors(
+                () => resource.ReleaseGl(_gl),
+                $"GlVideoCompositor.Dispose: surface GL resource {resource.GetType().Name}");
+        _surfaceGlResources.Clear();
         foreach (var (_, tex) in _layerTextures)
             _gl.DeleteTexture(tex);
         _layerTextures.Clear();

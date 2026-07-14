@@ -11,6 +11,19 @@ public enum EncodeContainer
     Flv,
 }
 
+public static class EncodeContainerExtensions
+{
+    public static string GetFileExtension(this EncodeContainer container) => container switch
+    {
+        EncodeContainer.Mp4 => ".mp4",
+        EncodeContainer.Matroska => ".mkv",
+        EncodeContainer.Mov => ".mov",
+        EncodeContainer.MpegTs => ".ts",
+        EncodeContainer.Flv => ".flv",
+        _ => throw new ArgumentOutOfRangeException(nameof(container)),
+    };
+}
+
 public enum EncodeVideoCodec
 {
     // Consumer / delivery
@@ -31,6 +44,28 @@ public enum EncodeVideoCodec
     Ffv1,
     /// <summary>Always-available fallback when no libx264/libx265 is in the FFmpeg build.</summary>
     Mpeg4,
+}
+
+/// <summary>
+/// Codec capability predicates shared by encode validation, the UI→framework mapper, the encoder
+/// core, and the output dialogs. The "which codecs accept CRF / named presets / the x26x low-latency
+/// rate-control set" knowledge lives here only, so those sites cannot drift apart (a drifted mapper
+/// would emit options that <see cref="EncodeSessionOptions.Validate"/> now rejects outright).
+/// </summary>
+public static class EncodeVideoCodecCapabilities
+{
+    /// <summary>Constant-rate-factor quality target (libx264/libx265/AV1/VP9).</summary>
+    public static bool SupportsCrf(this EncodeVideoCodec codec) =>
+        codec is EncodeVideoCodec.H264 or EncodeVideoCodec.Hevc
+            or EncodeVideoCodec.Av1 or EncodeVideoCodec.Vp9;
+
+    /// <summary>Named speed presets ("veryfast" …) - an x264/x265 concept the numeric-preset codecs reject.</summary>
+    public static bool SupportsNamedPreset(this EncodeVideoCodec codec) =>
+        codec is EncodeVideoCodec.H264 or EncodeVideoCodec.Hevc;
+
+    /// <summary>Maximum-B-frame limits and the zero-latency tune, exposed by the libx264/libx265 backends.</summary>
+    public static bool SupportsLatencyControls(this EncodeVideoCodec codec) =>
+        codec is EncodeVideoCodec.H264 or EncodeVideoCodec.Hevc;
 }
 
 public enum EncodeAudioCodec
@@ -62,8 +97,18 @@ public enum EncodeOutputMode
     AudioOnly,
 }
 
+/// <summary>How a configured video bitrate is enforced.</summary>
+public enum EncodeVideoBitrateMode
+{
+    /// <summary>Use the bitrate as a long-term average target; short bursts may exceed it.</summary>
+    Average,
+
+    /// <summary>Constrain the encoder to the target with equal min/max rates and a VBV buffer.</summary>
+    Constant,
+}
+
 /// <summary>
-/// Video encoder settings. Rate control is either <see cref="BitrateBps"/> (CBR-ish target) or
+/// Video encoder settings. Rate control is either <see cref="BitrateBps"/> or
 /// <see cref="Crf"/> (quality-target, libx264/libx265 only) - setting both is a validation error;
 /// setting neither uses the codec default. <see cref="ScaleWidth"/>/<see cref="ScaleHeight"/> of 0
 /// keep the source dimensions (either may be 0 alone: the other is derived preserving aspect, rounded
@@ -76,6 +121,12 @@ public sealed record VideoEncodeOptions
     /// <summary>Target bitrate in bits/s (0 = unset).</summary>
     public long BitrateBps { get; init; }
 
+    /// <summary>Average or constant bitrate control. Only applies when <see cref="BitrateBps"/> is set.</summary>
+    public EncodeVideoBitrateMode BitrateMode { get; init; } = EncodeVideoBitrateMode.Average;
+
+    /// <summary>VBV buffer capacity in bits for constant bitrate control (0 = one second of bitrate).</summary>
+    public long BufferSizeBits { get; init; }
+
     /// <summary>Constant-rate-factor quality target (null = unset). Lower is better; 18–28 is typical for x264.</summary>
     public int? Crf { get; init; }
 
@@ -84,6 +135,13 @@ public sealed record VideoEncodeOptions
 
     /// <summary>GOP size in frames (0 = codec default). Live streaming wants ~2 s worth.</summary>
     public int GopSize { get; init; }
+
+    /// <summary>Maximum consecutive B-frames (null = codec default, 0 = disabled). Disabling removes
+    /// frame reordering delay at some compression-efficiency cost.</summary>
+    public int? MaxBFrames { get; init; }
+
+    /// <summary>Apply the encoder's zero-latency tune. Supported by the libx264/libx265 backends.</summary>
+    public bool LowLatencyTune { get; init; }
 
     /// <summary>Output width in pixels (0 = source width, or derived from <see cref="ScaleHeight"/> preserving aspect).</summary>
     public int ScaleWidth { get; init; }
@@ -146,7 +204,7 @@ public sealed record EncodeSessionOptions
     /// (when <paramref name="probeEncoders"/>) whether this FFmpeg build actually ships each selected
     /// encoder. Empty list = valid.
     /// </summary>
-    public IReadOnlyList<string> Validate(bool probeEncoders = true)
+    public IReadOnlyList<string> Validate(bool probeEncoders = true, int audioInputSampleRate = 48_000)
     {
         var errors = new List<string>();
 
@@ -164,6 +222,25 @@ public sealed record EncodeSessionOptions
 
         if (IncludesVideo)
         {
+            if (Video.BitrateBps < 0)
+                errors.Add("Video bitrate cannot be negative.");
+            if (!Enum.IsDefined(Video.BitrateMode))
+                errors.Add("Video bitrate mode is not recognized.");
+            if (Video.BitrateMode == EncodeVideoBitrateMode.Constant && Video.BitrateBps <= 0)
+                errors.Add("Constant video bitrate mode requires a positive video bitrate.");
+            if (Video.BufferSizeBits < 0 || Video.BufferSizeBits > int.MaxValue)
+                errors.Add($"Video VBV buffer must be between 0 and {int.MaxValue} bits.");
+            if (Video.BufferSizeBits > 0 && Video.BitrateBps <= 0)
+                errors.Add("A video VBV buffer requires a positive video bitrate.");
+            if (Video.GopSize < 0)
+                errors.Add("Video GOP size cannot be negative.");
+            if (Video.MaxBFrames is < 0 or > 16)
+                errors.Add("Video maximum B-frames must be between 0 and 16, or unset.");
+            if ((Video.MaxBFrames is not null || Video.LowLatencyTune)
+                && !Video.Codec.SupportsLatencyControls())
+                errors.Add($"B-frame and zero-latency controls are not supported by {Video.Codec}.");
+            if (Video.Fps is < 0 or > 240)
+                errors.Add("Video frame rate must be between 0 and 240 fps (0 follows the source).");
             if (Video.BitrateBps > 0 && Video.Crf is not null)
                 errors.Add("Video rate control: set either a bitrate or a CRF, not both.");
             // Per-codec CRF ranges: x264/x265 accept 0-51; AV1/VP9 accept 0-63 (review H8 - a global
@@ -171,6 +248,10 @@ public sealed record EncodeSessionOptions
             var crfMax = Video.Codec is EncodeVideoCodec.Av1 or EncodeVideoCodec.Vp9 ? 63 : 51;
             if (Video.Crf is { } crf && (crf < 0 || crf > crfMax))
                 errors.Add($"Video CRF must be between 0 and {crfMax} for {Video.Codec}.");
+            if (Video.Crf is not null && !Video.Codec.SupportsCrf())
+                errors.Add($"Video CRF is not supported by {Video.Codec}; use bitrate or the codec default.");
+            if (!string.IsNullOrWhiteSpace(Video.Preset) && !Video.Codec.SupportsNamedPreset())
+                errors.Add($"Named speed presets are not supported by {Video.Codec}.");
             if (Video.ScaleWidth < 0 || Video.ScaleHeight < 0)
                 errors.Add("Video scale dimensions cannot be negative.");
             if (Container is EncodeContainer.Flv && Video.Codec is not EncodeVideoCodec.H264)
@@ -187,9 +268,11 @@ public sealed record EncodeSessionOptions
             for (var i = 0; i < AudioLegs.Count; i++)
             {
                 var leg = AudioLegs[i];
+                if (leg.BitrateBps < 0)
+                    errors.Add($"Audio track {i + 1}: bitrate cannot be negative.");
                 if (leg.Channels < 0 || leg.Channels > 16)
                     errors.Add($"Audio track {i + 1}: channel count {leg.Channels} is out of range.");
-                if (leg.SampleRate is < 0 or > 384_000)
+                if (leg.SampleRate != 0 && leg.SampleRate is < 8_000 or > 384_000)
                     errors.Add($"Audio track {i + 1}: sample rate {leg.SampleRate} is out of range.");
                 if (Container is EncodeContainer.Flv && leg.Codec is not EncodeAudioCodec.Aac and not EncodeAudioCodec.Mp3)
                     errors.Add("FLV (RTMP) requires AAC or MP3 audio.");
@@ -206,12 +289,28 @@ public sealed record EncodeSessionOptions
             FFmpegRuntime.EnsureInitialized();
             if (IncludesVideo && !Internal.FfmpegEncodeMaps.VideoEncoderAvailable(Video.Codec))
                 errors.Add($"This FFmpeg build has no encoder for {Video.Codec}.");
+            else if (IncludesVideo && Video.EncodePixelFormat is { } encodePixel
+                     && !Internal.FfmpegEncodeMaps.VideoEncoderSupportsPixelFormat(Video.Codec, encodePixel))
+                errors.Add($"This FFmpeg build's {Video.Codec} encoder does not support {encodePixel}.");
             if (IncludesAudio)
             {
                 foreach (var leg in AudioLegs.DistinctBy(l => l.Codec))
                 {
                     if (!Internal.FfmpegEncodeMaps.AudioEncoderAvailable(leg.Codec))
                         errors.Add($"This FFmpeg build has no encoder for {leg.Codec}.");
+                }
+
+                for (var i = 0; i < AudioLegs.Count; i++)
+                {
+                    var leg = AudioLegs[i];
+                    if (!Internal.FfmpegEncodeMaps.AudioEncoderAvailable(leg.Codec))
+                        continue;
+                    var rate = leg.SampleRate > 0 ? leg.SampleRate : audioInputSampleRate;
+                    var supported = Internal.FfmpegEncodeMaps.AudioEncoderSampleRates(leg.Codec);
+                    if (rate > 0 && supported.Count > 0 && !supported.Contains(rate))
+                        errors.Add(
+                            $"Audio track {i + 1}: {leg.Codec} does not support {rate} Hz in this FFmpeg build " +
+                            $"(supported: {string.Join(", ", supported)} Hz).");
                 }
             }
         }

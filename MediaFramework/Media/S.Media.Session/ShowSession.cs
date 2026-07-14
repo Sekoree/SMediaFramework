@@ -269,9 +269,48 @@ public sealed class ShowSession : IAsyncDisposable
     // thread-safe outputs (their Submit runs on the router pump thread).
     private readonly List<AudioTapRegistration> _audioTaps = [];
 
-    /// <summary>An audio tap fed by fired clips. <paramref name="Filter"/> (cue id → bool) makes the
-    /// feed SELECTIVE - e.g. a visualizer cue that only listens to chosen media cues; null = every clip.</summary>
-    private sealed record AudioTapRegistration(Guid Id, IAudioOutput Tap, float Gain, Func<string, bool>? Filter = null);
+    /// <summary>An audio tap fed by fired clips. <see cref="Filter"/> (cue id → bool) makes the feed
+    /// selective. Fixed-rate taps cache one borrowed-inner adapter per clip/router format.</summary>
+    private sealed class AudioTapRegistration(
+        Guid id, IAudioOutput tap, float gain, Func<string, bool>? filter = null)
+    {
+        private readonly Dictionary<AudioFormat, IAudioOutput> _adaptedOutputs = [];
+
+        public Guid Id { get; } = id;
+        public IAudioOutput Tap { get; } = tap;
+        public float Gain { get; } = gain;
+        public Func<string, bool>? Filter { get; } = filter;
+
+        public IAudioOutput ResolveForRouter(IMediaRegistry registry, int sampleRate)
+        {
+            var routerFormat = new AudioFormat(sampleRate, Tap.Format.Channels);
+            if (routerFormat == Tap.Format)
+                return Tap;
+            if (_adaptedOutputs.TryGetValue(routerFormat, out var existing))
+                return existing;
+
+            var adapted = registry.CreateResamplingOutput(Tap, routerFormat)
+                ?? throw new InvalidOperationException(
+                    $"no audio output resampler is registered for {sampleRate} Hz → {Tap.Format.SampleRate} Hz");
+            if (adapted.Format != routerFormat)
+            {
+                (adapted as IDisposable)?.Dispose();
+                throw new InvalidOperationException(
+                    $"audio output resampler advertised {adapted.Format}, expected router format {routerFormat}");
+            }
+
+            _adaptedOutputs.Add(routerFormat, adapted);
+            return adapted;
+        }
+
+        public void DisposeAdapters()
+        {
+            foreach (var adapter in _adaptedOutputs.Values)
+                if (adapter is IDisposable disposable)
+                    MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: audio tap resampler");
+            _adaptedOutputs.Clear();
+        }
+    }
 
     /// <summary>The session's metadata blackboard: item metadata published on every clip fire, frame
     /// stats published by probe effects. Attach visualizer/effect sinks here.</summary>
@@ -280,8 +319,8 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>
     /// Registers an audio tap (e.g. a visualizer's audio face): from now on every fired clip's audio
     /// router feeds it a stereo-mapped copy of the clip's source, alongside the real outputs. The tap
-    /// must accept the clip mix rate at its declared channel count (taps with internal rings tolerate
-    /// rate drift). Takes effect for clips fired AFTER registration.
+    /// is automatically adapted when its fixed sample rate differs from the clip's native mix rate.
+    /// Takes effect for clips fired AFTER registration.
     /// </summary>
     public Task<Guid> RegisterAudioTapAsync(IAudioOutput tap, float gain = 1f)
     {
@@ -294,12 +333,17 @@ public sealed class ShowSession : IAsyncDisposable
         });
     }
 
-    /// <summary>Unregisters a tap. Clips already playing keep feeding it until they stop (their routes
-    /// tear down with the clip); new fires exclude it.</summary>
+    /// <summary>Unregisters a tap immediately: active routes are detached and session-owned sample-rate
+    /// adapters are disposed. The caller still owns the original tap.</summary>
     public Task UnregisterAudioTapAsync(Guid id) =>
         InvokeAsync(() =>
         {
-            _audioTaps.RemoveAll(t => t.Id == id);
+            if (_audioTaps.FirstOrDefault(t => t.Id == id) is { } tap)
+            {
+                RemoveTapFromActiveClips(id);
+                _audioTaps.Remove(tap);
+                tap.DisposeAdapters();
+            }
             return Task.CompletedTask;
         });
 
@@ -310,7 +354,9 @@ public sealed class ShowSession : IAsyncDisposable
         ClipCompositionRuntime.SurfaceLayerSlot Layer,
         Guid TapId,
         S.Media.Core.Buses.IAudioVisualSource Source,
-        bool DisposeSource);
+        bool DisposeSource,
+        VideoPlacementSpec Placement,
+        bool PreserveAcrossDocumentReload);
 
     /// <summary>
     /// Attaches (or, with null, removes) a visualizer on a composition: the source's GL layer surface
@@ -319,21 +365,24 @@ public sealed class ShowSession : IAsyncDisposable
     /// source is a metadata sink - it joins <see cref="MetadataHub"/>. Returns false when the
     /// composition doesn't exist or its compositor can't host GL surfaces (CPU fallback).
     /// <paramref name="disposeSourceOnRemove"/>: true (default) = the session owns the source's disposal
-    /// on replace/remove/reload; false = the CALLER owns it - used for a persistent (continuously
-    /// rendering) source that must survive document reloads and be re-attached to each new composition.
+    /// on replace/remove/reload; false = the caller owns its lifetime.
+    /// <paramref name="preserveAcrossDocumentReload"/> recreates only the surface when the composition
+    /// itself must be rebuilt, retaining the source, preset state, audio tap/filter and metadata feed.
     /// </summary>
     /// <param name="audioFeedFilter">Cue-id filter for the visualizer's audio feed (null = every
     /// clip): a visualizer cue can listen only to selected media cues (#26 routing).</param>
     public Task<bool> SetCompositionVisualizerAsync(
         string compositionId, S.Media.Core.Buses.IAudioVisualSource? source, bool disposeSourceOnRemove = true,
-        VideoPlacementSpec? placement = null, Func<string, bool>? audioFeedFilter = null) =>
+        VideoPlacementSpec? placement = null, Func<string, bool>? audioFeedFilter = null,
+        bool preserveAcrossDocumentReload = false) =>
         InvokeAsync(async () =>
         {
-            if (_visualizerSlots.Remove(compositionId, out var existing))
-                DisposeVisualizerSlot(existing);
-
             if (source is null)
+            {
+                if (_visualizerSlots.Remove(compositionId, out var removedSlot))
+                    DisposeVisualizerSlot(removedSlot);
                 return true;
+            }
 
             if (!_compositions.TryGetValue(compositionId, out var composition)
                 || !composition.SupportsSurfaceLayers
@@ -342,21 +391,32 @@ public sealed class ShowSession : IAsyncDisposable
                 return false;
             }
 
-            // Below the test pattern (int.MaxValue) but above every content layer. A caller-provided
+            // Surface layers render above frame-backed content (so cover art remains below the
+            // visualizer) and order among themselves by LayerIndex. A caller-provided
             // placement (#26: visualizer-as-a-cue) renders the visualizer into a SECTION of the canvas
             // (dest rect/opacity, same semantics as media placements); default = full-canvas stretch.
-            var layer = composition.AddSurfaceLayer(
-                surfaceSource.CreateLayerSurface(),
-                placement ?? new VideoPlacementSpec(compositionId, int.MaxValue - 1, Placement: "stretch"));
+            var resolvedPlacement = placement
+                ?? new VideoPlacementSpec(compositionId, int.MaxValue - 1, Placement: "stretch");
+
+            // Stage the replacement first. A renderer/surface creation failure must not tear down the
+            // currently-live visualizer on this composition.
+            var layer = composition.AddSurfaceLayer(surfaceSource.CreateLayerSurface(), resolvedPlacement);
             composition.EnsurePumpStarted();
 
+            if (_visualizerSlots.Remove(compositionId, out var existing))
+                DisposeVisualizerSlot(ReferenceEquals(existing.Source, source)
+                    ? existing with { DisposeSource = false }
+                    : existing);
+
             var tapId = Guid.NewGuid();
-            _audioTaps.Add(new AudioTapRegistration(tapId, source, 1f, audioFeedFilter));
-            AttachTapToActiveClips(tapId, source, audioFeedFilter);
+            var tap = new AudioTapRegistration(tapId, source, 1f, audioFeedFilter);
+            _audioTaps.Add(tap);
+            AttachTapToActiveClips(tap);
             if (source is S.Media.Core.Buses.IBusMetadataSink sink)
                 MetadataHub.Attach(sink);
 
-            _visualizerSlots[compositionId] = new VisualizerSlot(layer, tapId, source, disposeSourceOnRemove);
+            _visualizerSlots[compositionId] = new VisualizerSlot(
+                layer, tapId, source, disposeSourceOnRemove, resolvedPlacement, preserveAcrossDocumentReload);
             await Task.CompletedTask;
             return true;
         });
@@ -367,12 +427,8 @@ public sealed class ShowSession : IAsyncDisposable
     private void DisposeVisualizerSlot(VisualizerSlot slot)
     {
         slot.Layer.Dispose();
-        _audioTaps.RemoveAll(t => t.Id == slot.TapId);
         RemoveTapFromActiveClips(slot.TapId);
-        if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
-            MetadataHub.Detach(sink);
-        if (slot.DisposeSource && slot.Source is IDisposable disposable)
-            MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+        DisposeVisualizerAuxiliaries(slot);
     }
 
     /// <summary>True when <paramref name="compositionId"/> currently has a visualizer attached. A caller that
@@ -390,21 +446,23 @@ public sealed class ShowSession : IAsyncDisposable
             if (!_visualizerSlots.TryGetValue(compositionId, out var slot))
                 return Task.FromResult(false);
             slot.Layer.UpdatePlacement(placement);
+            _visualizerSlots[compositionId] = slot with { Placement = placement };
             return Task.FromResult(true);
         });
 
     /// <summary>Feeds a newly-registered tap from the clips that are ALREADY playing (dispatcher).</summary>
-    private void AttachTapToActiveClips(Guid tapId, IAudioOutput tap, Func<string, bool>? filter = null)
+    private void AttachTapToActiveClips(AudioTapRegistration tap)
     {
         foreach (var group in _groups.Values)
         {
             if (group.Active?.Player is not { AudioRouter: not null, AudioSourceId: not null } player)
                 continue;
-            if (filter is not null && group.ActiveBinding?.CueId is { } activeCueId && !filter(activeCueId))
+            if (tap.Filter is not null && group.ActiveBinding?.CueId is { } activeCueId && !tap.Filter(activeCueId))
                 continue; // selective feed: this active clip is not in the tap's listen set
             try
             {
-                player.AttachAudioOutput(tap, $"tap-{tapId:N}", map: null, gain: 1f);
+                var output = tap.ResolveForRouter(_registry, player.AudioRouter!.SampleRate);
+                player.AttachAudioOutput(output, $"tap-{tap.Id:N}", map: null, gain: tap.Gain);
             }
             catch (Exception ex)
             {
@@ -441,7 +499,8 @@ public sealed class ShowSession : IAsyncDisposable
                 continue; // selective feed (#26): this clip is not in the tap's listen set
             try
             {
-                player.AttachAudioOutput(tap.Tap, $"tap-{tap.Id:N}", map: null, gain: tap.Gain);
+                var output = tap.ResolveForRouter(_registry, player.AudioRouter.SampleRate);
+                player.AttachAudioOutput(output, $"tap-{tap.Id:N}", map: null, gain: tap.Gain);
             }
             catch (Exception ex)
             {
@@ -708,7 +767,7 @@ public sealed class ShowSession : IAsyncDisposable
 
         // Test-pattern + visualizer slots die with their compositions - EXCEPT on preserved compositions,
         // whose slots (and, for the visualizer, its audio tap + source) are kept alive.
-        RetainSlotsForPreservedCompositionsOnly(preservedIds);
+        var visualizersToReattach = RetainSlotsForPreservedCompositionsOnly(preservedIds, newCompositions);
         foreach (var (id, composition) in _compositions)
         {
             if (!preservedIds.Contains(id))
@@ -727,6 +786,7 @@ public sealed class ShowSession : IAsyncDisposable
         }
         foreach (var (id, runtime) in newCompositions)
             _compositions[id] = runtime;
+        ReattachPersistentVisualizers(visualizersToReattach);
         PublishCompositionsView(); // refresh the lock-free health-poll view for the new composition set
 
         _cueGraph = newCueGraph;
@@ -1576,7 +1636,7 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>Fires a specific cue by id (PreWait/PostWait/AutoContinue honoured by the cue graph). Runs OFF the
     /// serial dispatcher (NXT-03), so its pre-wait + media open don't park the loop - STOP/seek/load/queries stay
-    /// responsive and can abort it. A cancelled fire returns <see cref="CueExecutionStatus.Failed"/>.</summary>
+    /// responsive and can abort it.</summary>
     public Task<CueExecutionStatus> FireCueAsync(string cueId)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -1612,6 +1672,10 @@ public sealed class ShowSession : IAsyncDisposable
             if (cue.PostWait > TimeSpan.Zero)
                 await Task.Delay(cue.PostWait, cancellationToken).ConfigureAwait(false);
             return CueExecutionStatus.Fired;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -2417,6 +2481,10 @@ public sealed class ShowSession : IAsyncDisposable
         PublishGroupViews();
         _testPatternSlots.Clear(); // slots are owned by their compositions (disposed below); drop stale refs
         ClearVisualizerSlots();
+        // Generic (non-visualizer) taps are caller-owned, but their cached rate adapters are session-owned.
+        foreach (var tap in _audioTaps)
+            tap.DisposeAdapters();
+        _audioTaps.Clear();
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
@@ -2429,24 +2497,42 @@ public sealed class ShowSession : IAsyncDisposable
     private void ClearVisualizerSlots()
     {
         foreach (var slot in _visualizerSlots.Values)
-        {
-            _audioTaps.RemoveAll(t => t.Id == slot.TapId);
-            if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
-                MetadataHub.Detach(sink);
-            if (slot.DisposeSource && slot.Source is IDisposable disposable)
-                MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
-        }
+            DisposeVisualizerAuxiliaries(slot);
 
         _visualizerSlots.Clear();
     }
+
+    private void DisposeVisualizerAuxiliaries(VisualizerSlot slot)
+    {
+        if (_audioTaps.FirstOrDefault(t => t.Id == slot.TapId) is { } tap)
+        {
+            _audioTaps.Remove(tap);
+            tap.DisposeAdapters();
+        }
+        if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
+            MetadataHub.Detach(sink);
+        if (slot.DisposeSource && slot.Source is IDisposable disposable)
+            MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+    }
+
+    private sealed record VisualizerReattachment(
+        string CompositionId,
+        VisualizerSlot Slot,
+        ClipCompositionRuntime Replacement);
 
     /// <summary>Reload-time slot cleanup that SPARES the preserved compositions. Test-pattern + visualizer
     /// slots belonging to compositions about to be disposed are dropped/torn down (identical to the old
     /// unconditional clear when <paramref name="preservedIds"/> is empty); slots on a preserved composition
     /// are left intact - its surface layer stays on the still-live composition, and its visualizer's audio
-    /// tap + source are kept alive so it keeps running while the next clip feeds it.</summary>
-    private void RetainSlotsForPreservedCompositionsOnly(HashSet<string> preservedIds)
+    /// tap + source are kept alive so it keeps running while the next clip feeds it. A visualizer explicitly
+    /// marked persistent also keeps those durable parts while its surface is recreated on a replacement
+    /// composition (needed when output topology changes force a full composition rebuild).</summary>
+    private List<VisualizerReattachment> RetainSlotsForPreservedCompositionsOnly(
+        HashSet<string> preservedIds,
+        IReadOnlyDictionary<string, ClipCompositionRuntime> replacementCompositions)
     {
+        var reattachments = new List<VisualizerReattachment>();
+
         // Test-pattern slots: drop refs only for compositions that are going away.
         if (preservedIds.Count == 0)
         {
@@ -2458,16 +2544,47 @@ public sealed class ShowSession : IAsyncDisposable
                 _testPatternSlots.Remove(id);
         }
 
-        // Visualizer slots: dispose + unhook only the ones whose composition is going away (a
-        // caller-owned source is unhooked but NOT disposed - the caller re-attaches it after the load).
+        // A retained composition already owns the live surface. For a rebuilt composition, a persistent
+        // slot retains its source/tap/filter and is rebound after the composition map commits. Other slots
+        // preserve the historical full-reload teardown semantics.
         foreach (var (id, slot) in _visualizerSlots.Where(kv => !preservedIds.Contains(kv.Key)).ToList())
         {
-            _audioTaps.RemoveAll(t => t.Id == slot.TapId);
-            if (slot.Source is S.Media.Core.Buses.IBusMetadataSink sink)
-                MetadataHub.Detach(sink);
-            if (slot.DisposeSource && slot.Source is IDisposable disposable)
-                MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ShowSession: visualizer source");
+            if (slot.PreserveAcrossDocumentReload
+                && replacementCompositions.TryGetValue(id, out var replacement)
+                && replacement.SupportsSurfaceLayers
+                && slot.Source is Compositor.ILayerSurfaceVideoSource)
+            {
+                reattachments.Add(new VisualizerReattachment(id, slot, replacement));
+                continue;
+            }
+
+            DisposeVisualizerAuxiliaries(slot);
             _visualizerSlots.Remove(id);
+        }
+
+        return reattachments;
+    }
+
+    private void ReattachPersistentVisualizers(IReadOnlyList<VisualizerReattachment> reattachments)
+    {
+        foreach (var pending in reattachments)
+        {
+            try
+            {
+                var surfaceSource = (Compositor.ILayerSurfaceVideoSource)pending.Slot.Source;
+                var layer = pending.Replacement.AddSurfaceLayer(
+                    surfaceSource.CreateLayerSurface(), pending.Slot.Placement);
+                pending.Replacement.EnsurePumpStarted();
+                _visualizerSlots[pending.CompositionId] = pending.Slot with { Layer = layer };
+            }
+            catch (Exception ex)
+            {
+                _visualizerSlots.Remove(pending.CompositionId);
+                DisposeVisualizerAuxiliaries(pending.Slot);
+                MediaDiagnostics.LogWarning(
+                    "ShowSession: persistent visualizer could not reattach to rebuilt composition '{0}' ({1}).",
+                    pending.CompositionId, ex.Message);
+            }
         }
     }
 

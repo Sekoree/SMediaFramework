@@ -89,6 +89,16 @@ public sealed class CompositorLayerSurfaceRegistryTests
         Assert.Equal("<null>", sawConfig);
     }
 
+    [Fact]
+    public void TryCreateLayerSurface_contains_factory_failure()
+    {
+        var registry = CompositorRegistryBuilder.Build(builder =>
+            builder.AddLayerSurface("broken", _ => throw new InvalidOperationException("boom")));
+
+        Assert.False(registry.TryCreateLayerSurface("broken", "{}", out var surface));
+        Assert.Null(surface);
+    }
+
     private sealed class FakeSurface : IVideoCompositorLayerSurface
     {
         public void ConfigureGl(GL gl, VideoFormat canvas) { }

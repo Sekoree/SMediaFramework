@@ -88,6 +88,8 @@ public sealed class CueShowSessionCoordinator
     // from the live compositions first, then released, so the old composition pump never submits into a sink
     // the idle slate just reconfigured.
     private readonly List<Guid> _cueAcquiredVideoLines = new();
+    private readonly SemaphoreSlim _cueOutputReconcileGate = new(1, 1);
+    private bool _cueOutputAvailabilityWarningActive;
     // Live projectM sources by composition. ShowSession owns their disposal; this reference exists only
     // for the cue drawer's operator-triggered "next preset" action.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, S.Media.Visualizer.ProjectM.ProjectMVisualSource>
@@ -229,6 +231,7 @@ public sealed class CueShowSessionCoordinator
             OutputManagement.CueLineMetricsProbe = TryGetCueShowLineHealthMetrics;
             OutputManagement.OutputLineReconfiguringAsync += OnOutputLineReconfiguringAsync;
             OutputManagement.OutputLineReconfiguredAsync += OnOutputLineReconfiguredAsync;
+            OutputManagement.RoutingTopologyChanged += OnOutputRoutingTopologyChanged;
 
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
             // them to the executors, so we fire by id (FireCueAsync) - independent of ShowSession's GO anchor.
@@ -248,8 +251,9 @@ public sealed class CueShowSessionCoordinator
                 }
             });
             // #26 visualizer cue: start/stop the projectM layer on a composition WITH placement (a
-            // section of the frame). The layer persists across later cue fires and cue-graph edits while
-            // its composition remains compatible, until a Stop cue or a true composition/project rebuild.
+            // section of the frame). The layer persists across later cue fires and cue-graph edits. If an
+            // output-topology change rebuilds its composition, ShowSession recreates only the surface while
+            // retaining the same projectM source/tap/preset state; Stop remains the explicit lifetime boundary.
             CuePlayer.VisualizerCueExecutor = async (viz, _) =>
             {
                 if (_cueShowSession is not { } session)
@@ -320,7 +324,8 @@ public sealed class CueShowSessionCoordinator
                     });
                 var placement = ToVisualizerPlacement(compId, place);
                 if (!await session.SetCompositionVisualizerAsync(
-                            compId, source, placement: placement, audioFeedFilter: feedFilter)
+                            compId, source, placement: placement, audioFeedFilter: feedFilter,
+                            preserveAcrossDocumentReload: true)
                         .ConfigureAwait(false))
                 {
                     source.Dispose();
@@ -790,6 +795,7 @@ public sealed class CueShowSessionCoordinator
     private void OnCueOutputBindingsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         RebindCueGraphItemSubscriptions();
+        FireAndLog(ReconcileCueOutputTopologyAsync(), "cue output binding reconciliation");
         ScheduleCueShowSessionReload(preserveMatchingCompositions: false);
     }
 
@@ -833,6 +839,9 @@ public sealed class CueShowSessionCoordinator
             or nameof(CueVideoOutputBindingViewModel.MappingEnabled)
             or nameof(CueVideoOutputBindingViewModel.LineRef))
             return;
+        if (e.PropertyName is nameof(CueVideoOutputBindingViewModel.OutputLineId)
+            or nameof(CueVideoOutputBindingViewModel.CompositionId))
+            FireAndLog(ReconcileCueOutputTopologyAsync(), "cue output binding reassignment");
         ScheduleCueShowSessionReload(preserveMatchingCompositions: false);
     }
 
@@ -937,6 +946,13 @@ public sealed class CueShowSessionCoordinator
             Trace.LogWarning(
                 "HaPlay: output mapping update missed composition {Composition} / line {Line}",
                 compositionId, outputLineId);
+            await RunOnUiThreadAsync(async () =>
+            {
+                MarkCueShowGraphDirty(preserveMatchingCompositions: false);
+                CuePlayer.StatusMessage =
+                    $"Output mapping pending: line {DescribeOutputLine(outputLineId)} is not attached.";
+                await ReconcileCueOutputTopologyAsync().ConfigureAwait(true);
+            }).ConfigureAwait(false);
             return;
         }
 
@@ -985,7 +1001,20 @@ public sealed class CueShowSessionCoordinator
     /// <summary>Reacquires a hot-reconfigured output without rebuilding the show document or interrupting active
     /// cues. Project restore uses <see cref="ReloadAfterOutputRestoreAsync"/> after all new runtimes have started.</summary>
     private Task OnOutputLineReconfiguredAsync(OutputLineViewModel line) =>
-        RunOnUiThreadAsync(() => AttachCueOutputLineAsync(line.Definition.Id));
+        RunOnUiThreadAsync(ReconcileCueOutputTopologyAsync);
+
+    private void OnOutputRoutingTopologyChanged(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        // CollectionChanged raises before every observer has rebuilt its derived snapshots. Post the
+        // reconciliation to the back of the UI queue so it sees the committed output topology.
+        Dispatcher.UIThread.Post(() =>
+        {
+            MarkCueShowGraphDirty(preserveMatchingCompositions: false);
+            FireAndLog(ReconcileCueOutputTopologyAsync(), "cue output topology reconciliation");
+        }, DispatcherPriority.Background);
+    }
 
     private static async Task RunOnUiThreadAsync(Func<Task> action)
     {
@@ -1068,6 +1097,75 @@ public sealed class CueShowSessionCoordinator
             "HaPlay: cue output reattached after runtime reconfigure - composition={Composition} line={Line}",
             compositionId, lineId);
     }
+
+    /// <summary>Single owner for binding ↔ live output-lease reconciliation. It is safe while cues are
+    /// active because ShowSession adds/removes composition outputs without rebuilding the document.</summary>
+    private async Task ReconcileCueOutputTopologyAsync()
+    {
+        if (_cueShowSession is null || CuePlayer.SelectedCueList is null)
+            return;
+
+        await _cueOutputReconcileGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await ReconcileCueOutputTopologyCoreAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _cueOutputReconcileGate.Release();
+        }
+    }
+
+    private async Task ReconcileCueOutputTopologyCoreAsync()
+    {
+        if (_cueShowSession is null || CuePlayer.SelectedCueList is null)
+            return;
+
+        var model = CuePlayer.SelectedCueList.ToModel();
+        var availableLines = OutputManagement.DefinitionsSnapshot.Select(d => d.Id).ToHashSet();
+        var desiredByLine = model.VideoOutputs
+            .Where(binding => binding.OutputLineId != Guid.Empty && availableLines.Contains(binding.OutputLineId))
+            .GroupBy(binding => binding.OutputLineId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        foreach (var (compositionId, outputs) in _cueVideoOutputs.ToArray())
+        {
+            foreach (var output in outputs)
+            {
+                if (desiredByLine.TryGetValue(output.LineId, out var desired)
+                    && string.Equals(compositionId, desired.CompositionId.ToString(), StringComparison.Ordinal))
+                    continue;
+                await DetachCueOutputLineAsync(output.LineId).ConfigureAwait(true);
+            }
+        }
+
+        foreach (var lineId in desiredByLine.Keys)
+            if (!_cueAcquiredVideoLines.Contains(lineId))
+                await AttachCueOutputLineAsync(lineId).ConfigureAwait(true);
+
+        var unavailable = model.VideoOutputs
+            .Where(binding => binding.OutputLineId != Guid.Empty
+                              && (!_cueAcquiredVideoLines.Contains(binding.OutputLineId)
+                                  || !availableLines.Contains(binding.OutputLineId)))
+            .Select(binding => DescribeOutputLine(binding.OutputLineId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (unavailable.Length > 0)
+        {
+            _cueOutputAvailabilityWarningActive = true;
+            CuePlayer.StatusMessage = $"Cue output unavailable: {string.Join(", ", unavailable)}.";
+            Trace.LogWarning("HaPlay: cue output reconciliation left unavailable lines: {Lines}", unavailable);
+        }
+        else if (_cueOutputAvailabilityWarningActive)
+        {
+            _cueOutputAvailabilityWarningActive = false;
+            CuePlayer.StatusMessage = "Cue outputs reconnected.";
+        }
+    }
+
+    private string DescribeOutputLine(Guid lineId) =>
+        OutputManagement.DefinitionsSnapshot.FirstOrDefault(definition => definition.Id == lineId)?.DisplayName
+        ?? lineId.ToString("N");
 
     /// <summary>Forces a document/output-lease rebuild after project restore has created all output runtimes.</summary>
     public Task ReloadAfterOutputRestoreAsync() => RunOnUiThreadAsync(async () =>
@@ -1369,6 +1467,7 @@ public sealed class CueShowSessionCoordinator
 
             var videoOutputs = new Dictionary<string, CueShowVideoOutput[]>(StringComparer.Ordinal);
             var usedThisPass = new HashSet<Guid>();
+            var unavailableLines = new List<string>();
             foreach (var binding in model.VideoOutputs)
             {
                 if (binding.OutputLineId == Guid.Empty)
@@ -1398,7 +1497,10 @@ public sealed class CueShowSessionCoordinator
                 }
 
                 if (output is null)
+                {
+                    unavailableLines.Add(DescribeOutputLine(binding.OutputLineId));
                     continue;
+                }
                 var key = binding.CompositionId.ToString();
                 var target = new CueShowVideoOutput(
                     binding.OutputLineId,
@@ -1413,9 +1515,18 @@ public sealed class CueShowSessionCoordinator
             // dispatcher stall into a whole-app freeze.
             await session.LoadDocumentAsync(doc, preserveMatchingCompositions).ConfigureAwait(true);
 
-            // A node-only edit keeps same-shaped compositions alive, including their projectM surface,
-            // audio tap, preset position and source instance. Reconcile only compositions that really were
-            // rebuilt/dropped; clearing the whole dictionary here was the reason adding a song stopped VIZ.
+            if (unavailableLines.Count > 0)
+            {
+                _cueOutputAvailabilityWarningActive = true;
+                CuePlayer.StatusMessage =
+                    $"Cue output unavailable: {string.Join(", ", unavailableLines.Distinct(StringComparer.Ordinal))}.";
+                Trace.LogWarning(
+                    "HaPlay: cue ShowSession loaded with unavailable output lines: {Lines}", unavailableLines);
+            }
+
+            // Node-only edits keep same-shaped compositions alive. Full output-topology rebuilds now reattach
+            // explicitly-persistent visualizer slots to the replacement composition without restarting their
+            // source. Reconcile only a slot that truly could not survive (composition removed/incompatible).
             foreach (var (compositionId, _) in _cueVisualizerSources.ToArray())
             {
                 if (await session.HasCompositionVisualizerAsync(compositionId.ToString()).ConfigureAwait(true))
@@ -1498,6 +1609,7 @@ public sealed class CueShowSessionCoordinator
         {
             OutputManagement.OutputLineReconfiguringAsync -= OnOutputLineReconfiguringAsync;
             OutputManagement.OutputLineReconfiguredAsync -= OnOutputLineReconfiguredAsync;
+            OutputManagement.RoutingTopologyChanged -= OnOutputRoutingTopologyChanged;
             foreach (var held in _cueAcquiredVideoLines)
                 OutputManagement.ReleaseVideoOutputForLine(held);
             _cueAcquiredVideoLines.Clear();

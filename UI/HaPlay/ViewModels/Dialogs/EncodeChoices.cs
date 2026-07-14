@@ -78,6 +78,21 @@ public static class EncodeChoices
         new("RTSP", "Rtsp"),
     ];
 
+    public static readonly EncodeChoice[] VideoBitrateModes =
+    [
+        new("Average bitrate (ABR)", "Average"),
+        new("Constant bitrate (CBR)", "Constant"),
+    ];
+
+    public static readonly EncodeChoice[] MaximumBFrames =
+    [
+        new("Automatic", "Auto"),
+        new("Disabled (0)", "0"),
+        new("1", "1"),
+        new("2", "2"),
+        new("3", "3"),
+    ];
+
     public static readonly string[] Presets =
         ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"];
 }

@@ -12,29 +12,43 @@ namespace S.Media.Visualizer.ProjectM;
 /// a fresh surface simply picks the stream up mid-flow. Same blit shader/orientation as the legacy
 /// in-composition surface (the readback preserves FBO row order; the shader's V-flip shows it upright).
 ///
-/// <para>Lifetime: <see cref="Dispose"/> can run off the GL thread; GL objects retire with the
-/// composition's context (the documented MMD/projectM surface pattern).</para>
+/// <para>Lifetime: <see cref="Dispose"/> can run off the GL thread and stops rendering. The owning
+/// compositor later invokes <see cref="ReleaseGl"/> on its GL thread before tearing down the context.</para>
 /// </summary>
-internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
+internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface, IVideoCompositorGlResource
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Visualizer.ProjectM.BlitSurface");
 
+    private readonly ProjectMVisualSource _source;
     private readonly ProjectMOffscreenRenderer _renderer;
+    private ProjectMGlLayerSurface? _fallback;
+    private VideoFormat _canvasFormat;
     private byte[]? _upload;
     private long _seenVersion;
     private uint _texture, _blitProgram, _blitVao;
+    private int _cornersLocation = -1, _opacityLocation = -1, _sceneLocation = -1;
     private int _canvasWidth, _canvasHeight;
     private bool _hasFrame;
     private bool _loggedFirstRender;
     private volatile bool _disposed;
     private bool _failed;
 
-    internal ProjectMFrameBlitSurface(ProjectMOffscreenRenderer renderer) => _renderer = renderer;
+    internal ProjectMFrameBlitSurface(ProjectMVisualSource source, ProjectMOffscreenRenderer renderer)
+    {
+        _source = source;
+        _renderer = renderer;
+    }
 
     public unsafe void ConfigureGl(GL gl, VideoFormat canvas)
     {
         _canvasWidth = canvas.Width;
         _canvasHeight = canvas.Height;
+        _canvasFormat = canvas;
+        if (_renderer.Failed)
+        {
+            EnsureFallback(gl);
+            return;
+        }
         if (_texture != 0 || _failed)
             return; // canvas re-configure: only the blit target changed
 
@@ -57,6 +71,9 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
 
             _blitProgram = CompileProgram(gl, BlitVs, BlitFs);
             _blitVao = gl.GenVertexArray();
+            _cornersLocation = gl.GetUniformLocation(_blitProgram, "uCorners");
+            _opacityLocation = gl.GetUniformLocation(_blitProgram, "uOpacity");
+            _sceneLocation = gl.GetUniformLocation(_blitProgram, "uScene");
         }
         catch (Exception ex)
         {
@@ -67,6 +84,12 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
 
     public unsafe void Render(GL gl, uint targetFbo, TimeSpan masterTime, LayerTransform2D transform, float opacity)
     {
+        if (_renderer.Failed)
+        {
+            EnsureFallback(gl);
+            _fallback?.Render(gl, targetFbo, masterTime, transform, opacity);
+            return;
+        }
         if (_disposed || _failed || _texture == 0 || _upload is null)
             return;
         if (!_loggedFirstRender)
@@ -112,9 +135,9 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
         Span<float> ndc = stackalloc float[8];
         WriteCornerNdc(transform, ndc);
         fixed (float* c = ndc)
-            gl.Uniform2(gl.GetUniformLocation(_blitProgram, "uCorners"), 4, c);
-        gl.Uniform1(gl.GetUniformLocation(_blitProgram, "uOpacity"), Math.Clamp(opacity, 0f, 1f));
-        gl.Uniform1(gl.GetUniformLocation(_blitProgram, "uScene"), 0);
+            gl.Uniform2(_cornersLocation, 4, c);
+        gl.Uniform1(_opacityLocation, Math.Clamp(opacity, 0f, 1f));
+        gl.Uniform1(_sceneLocation, 0);
         gl.ActiveTexture(TextureUnit.Texture0);
         gl.BindTexture(TextureTarget.Texture2D, _texture);
         gl.BindVertexArray(_blitVao);
@@ -158,7 +181,30 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
         }
     }
 
-    public void Dispose() => _disposed = true; // GL objects retire with the composition's context
+    public void Dispose()
+    {
+        _disposed = true;
+        _fallback?.Dispose();
+    }
+
+    private void EnsureFallback(GL gl)
+    {
+        if (_disposed || _fallback is not null)
+            return;
+        Trace.LogWarning("continuous projectM renderer unavailable - falling back to compositor-context rendering");
+        _fallback = new ProjectMGlLayerSurface(_source);
+        _fallback.ConfigureGl(gl, _canvasFormat);
+    }
+
+    public void ReleaseGl(GL gl)
+    {
+        _disposed = true;
+        _fallback?.ReleaseGl(gl);
+        _fallback = null;
+        if (_texture != 0) { gl.DeleteTexture(_texture); _texture = 0; }
+        if (_blitProgram != 0) { gl.DeleteProgram(_blitProgram); _blitProgram = 0; }
+        if (_blitVao != 0) { gl.DeleteVertexArray(_blitVao); _blitVao = 0; }
+    }
 
     private const string BlitVs = """
         #version 330 core
@@ -182,7 +228,7 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface
         void main()
         {
             vec4 scene = texture(uScene, vUv);
-            fragColor = vec4(scene.rgb * uOpacity, uOpacity);
+            fragColor = vec4(scene.rgb, scene.a * uOpacity);
         }
         """;
 }

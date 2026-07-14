@@ -14,6 +14,13 @@ public class MediaRegistryTests
         Assert.False(r.TryOpenVideo("file:///x.mp4", null, out _));
         Assert.Null(r.CreateCpuConverter());
         Assert.Null(r.CreateResampler(new FakeAudioSource(), 48000));
+        Assert.Null(r.CreateResamplingOutput(new NullAudioOutput(), new AudioFormat(44_100, 2)));
+    }
+
+    private sealed class NullAudioOutput : IAudioOutput
+    {
+        public AudioFormat Format => new(48_000, 2);
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
     }
 
     private sealed class DisposeSpy(Action onDispose) : IDisposable

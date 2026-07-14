@@ -262,6 +262,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _outputs = outputs;
         _requestRemove = requestRemove;
         Name = name;
+        InitializeVisualizerSettings();
         SyncOutputsCollection();
         _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
         // Phase B (§3.4) - also resync on definition changes (Edit) so clone-of transitions update

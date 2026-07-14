@@ -14,10 +14,10 @@ namespace S.Media.Visualizer.ProjectM;
 /// composite.
 ///
 /// <para>Lifetime: <see cref="Dispose"/> can run off the GL thread (session dispatcher), so it only
-/// marks the surface dead - the projectM instance and GL objects are freed when the composition's GL
-/// context tears down (the MMD surface's documented pattern; bounded by composition lifetime).</para>
+/// marks the surface dead. The owning compositor invokes <see cref="ReleaseGl"/> on its GL thread,
+/// which destroys the projectM instance and every GL object before the context is torn down.</para>
 /// </summary>
-internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
+internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVideoCompositorGlResource
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Visualizer.ProjectM.Surface");
 
@@ -33,6 +33,7 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
     private nint _projectM;
     private uint _fbo, _colorTex, _depthRbo;
     private uint _blitProgram, _blitVao;
+    private int _cornersLocation = -1, _opacityLocation = -1, _sceneLocation = -1;
     private int _sceneWidth, _sceneHeight;
     private int _canvasWidth, _canvasHeight;
     private volatile bool _disposed;
@@ -175,9 +176,9 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
         Span<float> ndc = stackalloc float[8];
         WriteCornerNdc(transform, ndc);
         fixed (float* c = ndc)
-            gl.Uniform2(gl.GetUniformLocation(_blitProgram, "uCorners"), 4, c);
-        gl.Uniform1(gl.GetUniformLocation(_blitProgram, "uOpacity"), Math.Clamp(opacity, 0f, 1f));
-        gl.Uniform1(gl.GetUniformLocation(_blitProgram, "uScene"), 0);
+            gl.Uniform2(_cornersLocation, 4, c);
+        gl.Uniform1(_opacityLocation, Math.Clamp(opacity, 0f, 1f));
+        gl.Uniform1(_sceneLocation, 0);
         gl.ActiveTexture(TextureUnit.Texture0);
         gl.BindTexture(TextureTarget.Texture2D, _colorTex);
         gl.BindVertexArray(_blitVao);
@@ -193,10 +194,11 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
         _presetIndex = _options.Shuffle && _presets.Length > 1
             ? NextRandomIndex()
             : (_presetIndex + 1) % _presets.Length;
+        var displayName = Path.GetFileNameWithoutExtension(_presets[_presetIndex]);
+        _source.ReportLegacyPresetName(displayName); // visible even if the native load stalls
         try
         {
             Native.projectm_load_preset_file(_projectM, _presets[_presetIndex], smooth);
-            _source.ReportLegacyPresetName(Path.GetFileNameWithoutExtension(_presets[_presetIndex]));
         }
         catch (Exception ex)
         {
@@ -269,6 +271,9 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
     {
         _blitProgram = CompileProgram(gl, BlitVs, BlitFs);
         _blitVao = gl.GenVertexArray(); // attribute-less quad still needs a bound VAO in core profile
+        _cornersLocation = gl.GetUniformLocation(_blitProgram, "uCorners");
+        _opacityLocation = gl.GetUniformLocation(_blitProgram, "uOpacity");
+        _sceneLocation = gl.GetUniformLocation(_blitProgram, "uScene");
     }
 
     private static uint CompileProgram(GL gl, string vs, string fs)
@@ -310,7 +315,22 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
         }
     }
 
-    public void Dispose() => _disposed = true; // GL objects + projectM instance retire with the context (see class docs)
+    public void Dispose() => _disposed = true;
+
+    public void ReleaseGl(GL gl)
+    {
+        _disposed = true;
+        if (_projectM != 0)
+        {
+            Native.projectm_destroy(_projectM);
+            _projectM = 0;
+        }
+        if (_fbo != 0) { gl.DeleteFramebuffer(_fbo); _fbo = 0; }
+        if (_colorTex != 0) { gl.DeleteTexture(_colorTex); _colorTex = 0; }
+        if (_depthRbo != 0) { gl.DeleteRenderbuffer(_depthRbo); _depthRbo = 0; }
+        if (_blitProgram != 0) { gl.DeleteProgram(_blitProgram); _blitProgram = 0; }
+        if (_blitVao != 0) { gl.DeleteVertexArray(_blitVao); _blitVao = 0; }
+    }
 
     private const string BlitVs = """
         #version 330 core
@@ -334,7 +354,7 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface
         void main()
         {
             vec4 scene = texture(uScene, vUv);
-            fragColor = vec4(scene.rgb * uOpacity, uOpacity);
+            fragColor = vec4(scene.rgb, scene.a * uOpacity);
         }
         """;
 }

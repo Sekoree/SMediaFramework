@@ -4,6 +4,13 @@
 There is currently a basic test build on the Releases page for Windows and Linux to find bugs:<br>
 https://github.com/Sekoree/MFPlayer/releases/tag/v1.0.0<br>
 
+## Linux show-safe UI mode
+
+On Linux systems where the GLX driver can stall during a window/dialog close, launch HaPlayer with
+`--safe-ui` (or set `HAPLAY_SAFE_UI=1`). This keeps the Avalonia UI on its software renderer while
+video outputs and visualizers continue to use their dedicated rendering paths. The selected mode is
+recorded in the startup log.
+
 ## The Framework
 
 Initially this started as a silly way of adding an FFmpeg decoder to [OwnAudioSharp](https://github.com/ModernMube/OwnAudioSharp) which then lead to a hacked together addon that made it play video as well.<br>
@@ -43,4 +50,3 @@ XRAnimator and blender_mmd_tools (to understand how to read model and motion dat
 libASS (for fancy subtitles)<br>
 Mond (for the scripting parts of the "Control" area)<br>
 NDI (to professionally™ send audio and video over the network)<br>
-

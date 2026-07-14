@@ -4,6 +4,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Encode.FFmpeg;
+using HaPlay.Resources;
 
 namespace HaPlay.OutputPreview;
 
@@ -21,6 +22,8 @@ internal sealed class FileOutputRuntime : IDisposable
     private readonly object _gate = new();
     private FileOutputDefinition _definition;
     private FFmpegEncodeSession? _session;
+    private ContinuousEncodeCarrier? _carrier;
+    private ContentOnlyEncodeVideoSink? _contentOnlyVideoSink;
     private string? _currentFilePath;
     private bool _videoAcquired;
     private bool _audioAcquired;
@@ -51,8 +54,20 @@ internal sealed class FileOutputRuntime : IDisposable
         return session?.GetMetrics();
     }
 
-    /// <summary>Validates the definition's encode settings against this FFmpeg build (empty = ok).</summary>
-    public IReadOnlyList<string> ValidateEncode() => BuildOptions(Definition.EffectiveEncode).Validate();
+    /// <summary>Validates the definition's encode settings and recording-clock policy (empty = ok).</summary>
+    public IReadOnlyList<string> ValidateEncode()
+    {
+        var definition = Definition;
+        var options = BuildOptions(definition.EffectiveEncode);
+        var errors = options.Validate().ToList();
+        if (definition.RecordsContinuousProgram
+            && options.IncludesVideo
+            && (options.Video.ScaleWidth <= 0 || options.Video.ScaleHeight <= 0 || options.Video.Fps <= 0))
+        {
+            errors.Add(Strings.FileOutputContinuousFormatRequired);
+        }
+        return errors;
+    }
 
     /// <summary>Creates the encode session and opens the output file. Throws on invalid options or an
     /// un-creatable file. No-op when already armed.</summary>
@@ -66,11 +81,48 @@ internal sealed class FileOutputRuntime : IDisposable
 
             var encode = _definition.EffectiveEncode;
             var options = BuildOptions(encode);
-            var path = ResolveFilePath(_definition, options.Container);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            _session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(path), audioSampleRate);
+            if (_definition.RecordsContinuousProgram
+                && options.IncludesVideo
+                && (options.Video.ScaleWidth <= 0 || options.Video.ScaleHeight <= 0 || options.Video.Fps <= 0))
+            {
+                throw new ArgumentException(Strings.FileOutputContinuousFormatRequired);
+            }
+
+            var path = ReserveUniqueFilePath(_definition, options.Container);
+            FFmpegEncodeSession? session = null;
+            ContinuousEncodeCarrier? carrier = null;
+            try
+            {
+                session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(path), audioSampleRate);
+                if (_definition.RecordsContinuousProgram)
+                {
+                    carrier = new ContinuousEncodeCarrier(
+                        session,
+                        options.IncludesVideo ? options.Video.ScaleWidth : 0,
+                        options.IncludesVideo ? options.Video.ScaleHeight : 0,
+                        options.IncludesVideo ? options.Video.Fps : 0);
+                    carrier.Start();
+                }
+
+                _session = session;
+                _carrier = carrier;
+                _contentOnlyVideoSink = carrier is null && session.VideoSink is { } contentVideo
+                    ? new ContentOnlyEncodeVideoSink(contentVideo)
+                    : null;
+            }
+            catch
+            {
+                carrier?.Dispose();
+                session?.Dispose();
+                TryDeleteEmptyReservation(path);
+                throw;
+            }
             _currentFilePath = path;
-            Trace.LogInformation("record armed: '{Name}' → {Path}", _definition.EffectiveName, path);
+            Trace.LogInformation(
+                "record armed: '{Name}' → {Path} ({Mode})",
+                _definition.EffectiveName,
+                path,
+                _definition.EffectiveRecordingMode);
         }
     }
 
@@ -78,10 +130,14 @@ internal sealed class FileOutputRuntime : IDisposable
     public async Task DisarmAsync()
     {
         FFmpegEncodeSession? session;
+        ContinuousEncodeCarrier? carrier;
         lock (_gate)
         {
             session = _session;
+            carrier = _carrier;
             _session = null;
+            _carrier = null;
+            _contentOnlyVideoSink = null;
             _videoAcquired = false;
             _audioAcquired = false;
         }
@@ -89,6 +145,7 @@ internal sealed class FileOutputRuntime : IDisposable
         if (session is null)
             return;
 
+        carrier?.Dispose();
         try
         {
             await session.FinishAsync().WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
@@ -115,13 +172,17 @@ internal sealed class FileOutputRuntime : IDisposable
 
             IVideoOutput? video = null;
             IAudioOutput? audio = null;
-            if (needsVideo && !_videoAcquired && _session.VideoSink is { } vs)
+            if (needsVideo
+                && !_videoAcquired
+                && (_carrier?.VideoSink ?? (IVideoOutput?)_contentOnlyVideoSink ?? _session.VideoSink) is { } vs)
             {
                 _videoAcquired = true;
                 video = vs;
             }
 
-            if (needsAudio && !_audioAcquired && _session.CombinedAudioSink is { } combined)
+            if (needsAudio
+                && !_audioAcquired
+                && (_carrier?.CombinedAudioSink ?? _session.CombinedAudioSink) is { } combined)
             {
                 // The COMBINED sink: all tracks as concatenated channels, so a deck/cue channel matrix
                 // routes source channels onto specific tracks (ch 0..k-1 = track 1, k.. = track 2, …).
@@ -129,6 +190,7 @@ internal sealed class FileOutputRuntime : IDisposable
                 audio = combined;
             }
 
+            _carrier?.SetPlaybackActive(_videoAcquired, _audioAcquired);
             return (video, audio);
         }
     }
@@ -141,6 +203,7 @@ internal sealed class FileOutputRuntime : IDisposable
                 _videoAcquired = false;
             if (releaseAudio)
                 _audioAcquired = false;
+            _carrier?.SetPlaybackActive(_videoAcquired, _audioAcquired);
         }
     }
 
@@ -157,17 +220,24 @@ internal sealed class FileOutputRuntime : IDisposable
     internal static EncodeSessionOptions BuildOptions(EncodeSettingsDefinition encode)
     {
         var legs = encode.AudioLegs.Count > 0 ? encode.AudioLegs : [new EncodeAudioLegDefinition()];
+        var videoCodec = ParseOrDefault(encode.VideoCodec, EncodeVideoCodec.H264);
         return new EncodeSessionOptions
         {
             Container = ParseOrDefault(encode.Container, EncodeContainer.Mp4),
             OutputMode = ParseOrDefault(encode.OutputMode, EncodeOutputMode.VideoAndAudio),
             Video = new VideoEncodeOptions
             {
-                Codec = ParseOrDefault(encode.VideoCodec, EncodeVideoCodec.H264),
+                Codec = videoCodec,
                 BitrateBps = encode.VideoBitrateBps,
-                Crf = encode.VideoBitrateBps > 0 ? null : encode.VideoCrf,
-                Preset = encode.VideoPreset,
+                BitrateMode = ParseOrDefault(encode.VideoBitrateMode, EncodeVideoBitrateMode.Average),
+                BufferSizeBits = VbvBufferBits(
+                    encode.VideoBitrateBps,
+                    encode.VideoVbvBufferMilliseconds),
+                Crf = encode.VideoBitrateBps > 0 || !videoCodec.SupportsCrf() ? null : encode.VideoCrf,
+                Preset = videoCodec.SupportsNamedPreset() ? encode.VideoPreset : null,
                 GopSize = encode.GopSize,
+                MaxBFrames = encode.VideoMaxBFrames,
+                LowLatencyTune = encode.VideoLowLatencyTune,
                 ScaleWidth = encode.ScaleWidth,
                 ScaleHeight = encode.ScaleHeight,
                 Fps = encode.Fps,
@@ -187,44 +257,81 @@ internal sealed class FileOutputRuntime : IDisposable
     private static TEnum ParseOrDefault<TEnum>(string? value, TEnum fallback) where TEnum : struct =>
         Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
 
-    private static string ResolveFilePath(FileOutputDefinition definition, EncodeContainer container)
+    private static long VbvBufferBits(long bitrateBps, int bufferMilliseconds)
     {
+        if (bitrateBps <= 0 || bufferMilliseconds <= 0)
+            return 0;
+        var bits = (decimal)bitrateBps * bufferMilliseconds / 1000m;
+        return bits >= long.MaxValue ? long.MaxValue : (long)bits;
+    }
+
+    internal static string ReserveUniqueFilePath(FileOutputDefinition definition, EncodeContainer container)
+    {
+        Directory.CreateDirectory(definition.DirectoryPath);
         var name = string.IsNullOrWhiteSpace(definition.FileNamePattern)
             ? "recording_{timestamp}"
             : definition.FileNamePattern;
         name = name.Replace(
             "{timestamp}",
-            DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture),
+            DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture),
             StringComparison.OrdinalIgnoreCase);
 
-        var extension = container switch
-        {
-            EncodeContainer.Mp4 => ".mp4",
-            EncodeContainer.Matroska => ".mkv",
-            EncodeContainer.Mov => ".mov",
-            EncodeContainer.MpegTs => ".ts",
-            EncodeContainer.Flv => ".flv",
-            _ => ".mp4",
-        };
+        name = Path.GetFileName(name);
+        if (string.IsNullOrWhiteSpace(name))
+            name = "recording_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+        var extension = container.GetFileExtension();
         if (!name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
             name += extension;
 
-        return Path.Combine(definition.DirectoryPath, name);
+        var stem = name[..^extension.Length];
+        for (var suffix = 0; suffix < 10_000; suffix++)
+        {
+            var candidateName = suffix == 0 ? name : $"{stem}_{suffix}{extension}";
+            var candidate = Path.Combine(definition.DirectoryPath, candidateName);
+            try
+            {
+                using var reservation = new FileStream(
+                    candidate, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                return candidate;
+            }
+            catch (IOException) when (File.Exists(candidate))
+            {
+                // Collision with an existing recording or another concurrent arm; try the next suffix.
+            }
+        }
+
+        throw new IOException($"Could not reserve a unique recording path in '{definition.DirectoryPath}'.");
+    }
+
+    private static void TryDeleteEmptyReservation(string path)
+    {
+        try
+        {
+            if (File.Exists(path) && new FileInfo(path).Length == 0)
+                File.Delete(path);
+        }
+        catch { /* best effort - never hide the encoder/open failure */ }
     }
 
     public void Dispose()
     {
         FFmpegEncodeSession? session;
+        ContinuousEncodeCarrier? carrier;
         lock (_gate)
         {
             if (_disposed)
                 return;
             _disposed = true;
             session = _session;
+            carrier = _carrier;
             _session = null;
+            _carrier = null;
+            _contentOnlyVideoSink = null;
         }
 
-        // Synchronous best-effort finish: Dispose flushes + writes the trailer internally.
+        // Shutdown disposal is an abort; the operator's normal Disarm path above performs the trailer flush.
+        // Stop the shared carrier first so it cannot submit into the retiring encode session.
+        carrier?.Dispose();
         if (session is not null)
             MediaDiagnostics.SwallowDisposeErrors(session.Dispose, "FileOutputRuntime.Dispose: encode session");
     }

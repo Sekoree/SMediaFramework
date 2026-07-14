@@ -68,10 +68,18 @@ public sealed class CompositionPreservationTests
 
         // IAudioOutput (distinct Format type ⇒ explicit)
         AudioFormat IAudioOutput.Format => new(48_000, 2);
-        public void Submit(ReadOnlySpan<float> packedSamples) => SubmitCount++;
+        public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref SubmitCount);
 
         public IVideoCompositorLayerSurface CreateLayerSurface() => new MinimalSurface();
         public void Dispose() => Disposed = true;
+    }
+
+    private sealed class ForwardingRateAdapter(IAudioOutput inner, AudioFormat routerFormat)
+        : IAudioOutput, IDisposable
+    {
+        public AudioFormat Format => routerFormat;
+        public void Submit(ReadOnlySpan<float> packedSamples) => inner.Submit(packedSamples);
+        public void Dispose() { }
     }
 
     // Audio-only document (no clip needed): just the composition the visualizer attaches to.
@@ -82,8 +90,10 @@ public sealed class CompositionPreservationTests
         Compositions: [new ShowComposition("screen", "Screen", w, h, fpsNum, 1)],
         Routes: []);
 
-    private static ShowSession NewSurfaceSession(ConcurrentQueue<float>? surfaceOpacities = null) => new(
-        MediaRegistry.Build(_ => { }),
+    private static ShowSession NewSurfaceSession(
+        ConcurrentQueue<float>? surfaceOpacities = null,
+        IMediaRegistry? registry = null) => new(
+        registry ?? MediaRegistry.Build(_ => { }),
         compositorFactory: fmt => new ClipCompositionCompositor(
             new FakeSurfaceHost(fmt, surfaceOpacities), RequiresBgraLayerConversion: true, "TEST-SURFACE-HOST"));
 
@@ -117,6 +127,52 @@ public sealed class CompositionPreservationTests
         };
 
         await session.LoadDocumentAsync(editedDocument, preserveMatchingCompositions: true);
+
+        Assert.False(viz.Disposed);
+        Assert.True(await session.HasCompositionVisualizerAsync("screen"));
+    }
+
+    [Fact]
+    public async Task FullRebuild_ReattachesVisualizerMarkedPersistent()
+    {
+        await using var session = NewSurfaceSession();
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+        var placement = new VideoPlacementSpec(
+            "screen", 1, Opacity: 0.69, Placement: "contain",
+            DestX: 0.1, DestY: 0.2, DestWidth: 0.8, DestHeight: 0.7);
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz, placement: placement, preserveAcrossDocumentReload: true));
+
+        // Output-topology changes require the composition itself to be rebuilt. The durable visualizer
+        // source/tap remains live and only its compositor surface is recreated on the replacement canvas.
+        await session.LoadDocumentAsync(CanvasDoc(), preserveMatchingCompositions: false);
+
+        Assert.False(viz.Disposed, "a persistent visualizer source must survive a full graph rebuild");
+        Assert.True(await session.HasCompositionVisualizerAsync("screen"));
+    }
+
+    [Fact]
+    public async Task PersistentVisualizer_AfterFullRebuild_ReceivesLaterDifferentRateClip()
+    {
+        var registry = MediaRegistry.Build(builder => builder
+            .AddDecoder(new FakeAudioDecoderProvider(chunks: 2048, sampleRate: 44_100))
+            .SetResamplingOutputFactory(static (inner, routerFormat) =>
+                new ForwardingRateAdapter(inner, routerFormat)));
+        await using var session = NewSurfaceSession(registry: registry);
+        var document = CanvasDoc() with
+        {
+            Cues = [new CueDefinition("song", 1, "44.1 kHz song")],
+            Clips = [new ShowClipBinding("song", "fake://song")],
+        };
+        await session.LoadDocumentAsync(document);
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz, preserveAcrossDocumentReload: true));
+
+        await session.LoadDocumentAsync(document, preserveMatchingCompositions: false);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("song"));
+        await WaitUntilAsync(() => Volatile.Read(ref viz.SubmitCount) > 0, TimeSpan.FromSeconds(2));
 
         Assert.False(viz.Disposed);
         Assert.True(await session.HasCompositionVisualizerAsync("screen"));

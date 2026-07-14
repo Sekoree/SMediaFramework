@@ -12,6 +12,7 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
     internal readonly Dictionary<string, Func<string, IVideoSource>> ImageFactories = new(StringComparer.OrdinalIgnoreCase);
     internal Func<IVideoCpuFrameConverter>? CpuConverterFactory;
     internal Func<IAudioSource, int, IAudioSource>? ResamplerFactory;
+    internal Func<IAudioOutput, AudioFormat, IAudioOutput>? ResamplingOutputFactory;
     internal AdaptiveRateOutputFactory? AdaptiveRateFactory;
     internal Func<VideoFormat, IDeinterlacer>? DeinterlacerFactory;
     internal readonly List<IDisposable> Lifetimes = [];
@@ -47,6 +48,12 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
     public IMediaRegistryBuilder SetResamplerFactory(Func<IAudioSource, int, IAudioSource> factory)
     {
         ResamplerFactory = factory ?? throw new ArgumentNullException(nameof(factory));
+        return this;
+    }
+
+    public IMediaRegistryBuilder SetResamplingOutputFactory(Func<IAudioOutput, AudioFormat, IAudioOutput> factory)
+    {
+        ResamplingOutputFactory = factory ?? throw new ArgumentNullException(nameof(factory));
         return this;
     }
 
@@ -96,6 +103,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     private readonly Dictionary<string, Func<string, IVideoSource>> _imageFactories;
     private readonly Func<IVideoCpuFrameConverter>? _cpuConverter;
     private readonly Func<IAudioSource, int, IAudioSource>? _resampler;
+    private readonly Func<IAudioOutput, AudioFormat, IAudioOutput>? _resamplingOutput;
     private readonly AdaptiveRateOutputFactory? _adaptiveRate;
     private readonly Func<VideoFormat, IDeinterlacer>? _deinterlacer;
     private readonly List<IDisposable> _lifetimes;
@@ -112,6 +120,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         _imageFactories = new Dictionary<string, Func<string, IVideoSource>>(b.ImageFactories, StringComparer.OrdinalIgnoreCase);
         _cpuConverter = b.CpuConverterFactory;
         _resampler = b.ResamplerFactory;
+        _resamplingOutput = b.ResamplingOutputFactory;
         _adaptiveRate = b.AdaptiveRateFactory;
         _deinterlacer = b.DeinterlacerFactory;
         _lifetimes = [.. b.Lifetimes];
@@ -284,6 +293,14 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         ArgumentNullException.ThrowIfNull(source);
         ThrowIfDisposed();
         return _resampler?.Invoke(source, targetSampleRate);
+    }
+
+    public IAudioOutput? CreateResamplingOutput(IAudioOutput inner, AudioFormat routerFormat)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        routerFormat.Validate(nameof(routerFormat));
+        ThrowIfDisposed();
+        return _resamplingOutput?.Invoke(inner, routerFormat);
     }
 
     public bool SupportsAdaptiveRateOutput => _adaptiveRate is not null;

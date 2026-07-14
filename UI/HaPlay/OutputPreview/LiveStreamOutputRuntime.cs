@@ -6,6 +6,11 @@ using S.Media.Stream.Http;
 
 namespace HaPlay.OutputPreview;
 
+internal readonly record struct LiveStreamRuntimeState(
+    bool IsLive,
+    LiveStreamStatus? Status,
+    string? LastError);
+
 /// <summary>
 /// The live-stream line's runtime: while LIVE it holds a <see cref="LiveStreamSession"/> (one encode →
 /// N push sinks + optional LAN server) whose sinks playback acquires exactly like the file-record
@@ -18,6 +23,7 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
     private readonly object _gate = new();
     private LiveStreamOutputDefinition _definition;
     private LiveStreamSession? _session;
+    private string? _lastError;
     private bool _videoAcquired;
     private bool _audioAcquired;
     private bool _disposed;
@@ -47,6 +53,15 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
         return session?.GetStatus();
     }
 
+    public LiveStreamRuntimeState GetRuntimeState()
+    {
+        lock (_gate)
+            return new LiveStreamRuntimeState(
+                _session is not null,
+                _session?.GetStatus(),
+                _lastError);
+    }
+
     public IReadOnlyList<string> ValidateOptions() => BuildOptions(Definition).Validate();
 
     public void GoLive(int audioSampleRate = 48_000)
@@ -56,8 +71,17 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_session is not null)
                 return;
-            _session = LiveStreamSession.Start(BuildOptions(_definition), audioSampleRate);
-            Trace.LogInformation("stream live: '{Name}' (local port {Port})", _definition.EffectiveName, _session.LocalServerPort);
+            try
+            {
+                _session = LiveStreamSession.Start(BuildOptions(_definition), audioSampleRate);
+                _lastError = null;
+                Trace.LogInformation("stream live: '{Name}' (local port {Port})", _definition.EffectiveName, _session.LocalServerPort);
+            }
+            catch (Exception ex)
+            {
+                _lastError = ex.Message;
+                throw;
+            }
         }
     }
 
@@ -70,6 +94,7 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
             _session = null;
             _videoAcquired = false;
             _audioAcquired = false;
+            _lastError = null;
         }
 
         if (session is null)
@@ -82,6 +107,8 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
         }
         catch (Exception ex)
         {
+            lock (_gate)
+                _lastError = ex.Message;
             Trace.LogError(ex, "stream stop failed for '{Name}'", Definition.EffectiveName);
         }
         finally
@@ -114,7 +141,8 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
                 audio = combined;
             }
 
-            // Real playback now drives the sinks - tell the blank keep-alive to yield those legs.
+            // Declare which routes playback owns. The keep-alive continues sending filler until the
+            // first actual sample reaches each wrapped sink, then resumes if that route falls silent.
             _session.SetPlaybackActive(_videoAcquired, _audioAcquired);
             return (video, audio);
         }
@@ -140,6 +168,7 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
         {
             // Applies on the NEXT go-live; a live session keeps its destinations.
             _definition = definition;
+            _lastError = null;
         }
     }
 
@@ -157,7 +186,10 @@ internal sealed class LiveStreamOutputRuntime : IDisposable
             .Select(t => new PushTarget(
                 Enum.TryParse<PushProtocol>(t.Protocol, ignoreCase: true, out var p) ? p : PushProtocol.Rtmp,
                 t.Url.Trim(),
-                string.IsNullOrWhiteSpace(t.StreamKey) ? null : t.StreamKey!.Trim()))
+                string.IsNullOrWhiteSpace(t.StreamKey) ? null : t.StreamKey!.Trim())
+            {
+                SrtLatencyMilliseconds = t.SrtLatencyMilliseconds,
+            })
             .ToArray();
 
         var server = definition.EffectiveLocalServer;

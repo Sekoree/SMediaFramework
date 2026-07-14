@@ -1,5 +1,6 @@
 using S.Media.Decode.FFmpeg;
 using S.Media.Decode.FFmpeg.Video;
+using S.Media.Encode.FFmpeg.Internal;
 using Xunit;
 
 namespace S.Media.Encode.FFmpeg.Tests;
@@ -84,6 +85,16 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         await session.Completion;
     }
 
+    private static async Task SubmitVideoWithoutOverflowAsync(FFmpegEncodeSession session, VideoFrame frame)
+    {
+        // The encode queue is deliberately bounded for live use and drops oldest frames under a burst.
+        // Tests that assert an exact encoded count must pace their synthetic producer accordingly.
+        while (session.GetMetrics() is { } metrics
+               && metrics.VideoQueueDepth >= metrics.VideoQueueCapacity - 1)
+            await Task.Delay(1);
+        session.VideoSink!.Submit(frame);
+    }
+
     [Fact]
     public async Task VideoAndAudio_Mp4_RoundTrips()
     {
@@ -106,7 +117,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         {
             session.VideoSink!.Configure(new VideoFormat(160, 120, PixelFormat.Bgra32, fps));
             for (var i = 0; i < 30; i++)
-                session.VideoSink.Submit(MakeBgraFrame(160, 120, i, fps));
+                await SubmitVideoWithoutOverflowAsync(session, MakeBgraFrame(160, 120, i, fps));
             PumpAudio(session.AudioSinks[0], MakeSine(48_000, 2, 1.0), channels: 2);
             await FinishAsync(session);
 
@@ -381,11 +392,11 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
             // reconvert instead of faulting (the auto-sized deck canvas resizes on track changes).
             session.VideoSink!.Configure(new VideoFormat(128, 96, PixelFormat.Bgra32, fps));
             for (var i = 0; i < 10; i++)
-                session.VideoSink.Submit(MakeBgraFrame(128, 96, i, fps));
+                await SubmitVideoWithoutOverflowAsync(session, MakeBgraFrame(128, 96, i, fps));
 
             session.VideoSink.Configure(new VideoFormat(192, 144, PixelFormat.Bgra32, fps));
             for (var i = 10; i < 20; i++)
-                session.VideoSink.Submit(MakeBgraFrame(192, 144, i, fps));
+                await SubmitVideoWithoutOverflowAsync(session, MakeBgraFrame(192, 144, i, fps));
 
             await FinishAsync(session);
             var metrics = session.GetMetrics();
@@ -490,5 +501,357 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
 
         var errors = options.Validate(probeEncoders: false);
         Assert.Contains(errors, e => e.Contains("not both"));
+    }
+
+    [Fact]
+    public async Task FixedFps_KeepAliveAndRestartedMediaTimelines_ContinueWithoutBlackGap()
+    {
+        var outPath = TempPath(".mp4");
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.Mp4,
+            OutputMode = EncodeOutputMode.VideoOnly,
+            Video = new VideoEncodeOptions
+            {
+                Codec = EncodeVideoCodec.H264,
+                Crf = 35,
+                Preset = "ultrafast",
+                GopSize = 10,
+                Fps = 30,
+            },
+        };
+        if (options.Validate().Count > 0)
+            return;
+
+        var fps = new Rational(30, 1);
+        using var session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(outPath));
+        session.VideoSink!.Configure(new VideoFormat(128, 96, PixelFormat.Bgra32, fps));
+
+        // Filler deliberately has no source clock. Then two clips each restart at media time zero,
+        // followed by filler again. Every boundary must advance one target tick instead of dropping
+        // until the restarted clock catches up with the session lifetime.
+        for (var i = 0; i < 10; i++)
+        {
+            session.VideoSink.SubmitTimelineContinuation(MakeBgraFrame(128, 96, 0, fps));
+            await Task.Delay(2);
+        }
+        for (var segment = 0; segment < 2; segment++)
+        for (var i = 0; i < 10; i++)
+        {
+            session.VideoSink.Submit(MakeBgraFrame(128, 96, i, fps));
+            await Task.Delay(2);
+        }
+        for (var i = 0; i < 5; i++)
+        {
+            session.VideoSink.SubmitTimelineContinuation(MakeBgraFrame(128, 96, 0, fps));
+            await Task.Delay(2);
+        }
+
+        await FinishAsync(session);
+        var metrics = session.GetMetrics();
+        Assert.Equal(35, metrics.VideoFramesSubmitted);
+        Assert.Equal(35, metrics.VideoFramesEncoded);
+        Assert.Equal(0, metrics.VideoFramesDropped);
+    }
+
+    [Fact]
+    public async Task FixedFps_VideoPacketsCarryDurationAndStreamCadence()
+    {
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.MpegTs,
+            OutputMode = EncodeOutputMode.VideoOnly,
+            Video = new VideoEncodeOptions
+            {
+                Codec = EncodeVideoCodec.H264,
+                Crf = 35,
+                Preset = "ultrafast",
+                GopSize = 10,
+                Fps = 60,
+            },
+        };
+        if (options.Validate().Count > 0)
+            return;
+
+        var sink = new RecordingPacketSink();
+        using var session = FFmpegEncodeSession.CreateWithSinks(options, [sink]);
+        var fps = new Rational(60, 1);
+        session.VideoSink!.Configure(new VideoFormat(128, 96, PixelFormat.Bgra32, fps));
+        for (var i = 0; i < 12; i++)
+        {
+            session.VideoSink.Submit(MakeBgraFrame(128, 96, i, fps));
+            await Task.Delay(2);
+        }
+
+        await FinishAsync(session);
+
+        Assert.Equal(60, sink.VideoFrameRateNumerator);
+        Assert.Equal(1, sink.VideoFrameRateDenominator);
+        Assert.NotEmpty(sink.VideoPacketDurations);
+        Assert.All(sink.VideoPacketDurations, duration => Assert.Equal(1_500, duration));
+    }
+
+    [Fact]
+    public void FixedFps_UsesFrameClockInsideCodec_NotTransportClock()
+    {
+        var options = new VideoEncodeOptions
+        {
+            Codec = EncodeVideoCodec.H264,
+            Crf = 35,
+            Preset = "ultrafast",
+            Fps = 60,
+        };
+        if (!FfmpegEncodeMaps.VideoEncoderAvailable(options.Codec))
+            return;
+
+        using var core = new FfmpegVideoEncoderCore(
+            options,
+            new VideoFormat(128, 96, PixelFormat.Bgra32, new Rational(60, 1)));
+
+        Assert.Equal(1, core.CodecTimeBase.num);
+        Assert.Equal(60, core.CodecTimeBase.den);
+        Assert.Equal(1, core.TimeBase.num);
+        Assert.Equal(90_000, core.TimeBase.den);
+    }
+
+    [Fact]
+    public void SourceFollowingFps_UsesInputFrameClockInsideCodec()
+    {
+        var options = new VideoEncodeOptions
+        {
+            Codec = EncodeVideoCodec.Mpeg4,
+            BitrateBps = 1_000_000,
+            Fps = 0,
+        };
+        if (!FfmpegEncodeMaps.VideoEncoderAvailable(options.Codec))
+            return;
+
+        using var core = new FfmpegVideoEncoderCore(
+            options,
+            new VideoFormat(128, 96, PixelFormat.Bgra32, new Rational(30_000, 1_001)));
+
+        Assert.Equal(1_001, core.CodecTimeBase.num);
+        Assert.Equal(30_000, core.CodecTimeBase.den);
+        Assert.Equal(1, core.TimeBase.num);
+        Assert.Equal(90_000, core.TimeBase.den);
+    }
+
+    [Fact]
+    public void ConstantBitrateLowLatency_ProgramsVbvAndDisablesBFrames()
+    {
+        var options = new VideoEncodeOptions
+        {
+            Codec = EncodeVideoCodec.H264,
+            BitrateBps = 2_000_000,
+            BitrateMode = EncodeVideoBitrateMode.Constant,
+            BufferSizeBits = 1_000_000,
+            MaxBFrames = 0,
+            LowLatencyTune = true,
+            Preset = "ultrafast",
+            Fps = 30,
+        };
+        if (!FfmpegEncodeMaps.VideoEncoderAvailable(options.Codec))
+            return;
+
+        // Transport mode also exercises libx264's nal-hrd=cbr option. A typo/unsupported option
+        // fails encoder-open here instead of silently degrading the UI's CBR promise.
+        using var core = new FfmpegVideoEncoderCore(
+            options,
+            new VideoFormat(128, 96, PixelFormat.Bgra32, new Rational(30, 1)),
+            enableConstantBitrateFiller: true);
+
+        Assert.Equal(2_000_000, core.MinimumBitrate);
+        Assert.Equal(2_000_000, core.MaximumBitrate);
+        Assert.Equal(1_000_000, core.VbvBufferSize);
+        Assert.Equal(0, core.MaximumBFrames);
+    }
+
+    [Fact]
+    public unsafe void AudioCore_InputGapAdvancesPacketTimeline_InsteadOfCompressingDroppedTime()
+    {
+        if (!FfmpegEncodeMaps.AudioEncoderAvailable(EncodeAudioCodec.Flac))
+            return;
+
+        using var core = new FfmpegAudioEncoderCore(
+            new AudioLegOptions { Codec = EncodeAudioCodec.Flac, Channels = 2, SampleRate = 48_000 },
+            new AudioFormat(48_000, 2));
+        var packetPts = new List<long>();
+        void Capture(IntPtr packet) =>
+            packetPts.Add(((global::FFmpeg.AutoGen.AVPacket*)packet)->pts);
+
+        core.Submit(new float[4_800 * 2], inputStartFrame: 0, Capture);
+        core.Submit(new float[4_800 * 2], inputStartFrame: 48_000, Capture);
+        core.Flush(Capture);
+
+        Assert.NotEmpty(packetPts);
+        Assert.True(packetPts.SequenceEqual(packetPts.Order()), "audio packet PTS must remain monotonic");
+        Assert.Contains(packetPts, pts => pts >= 48_000);
+    }
+
+    [Fact]
+    public void Validate_RejectsUnsupportedEncoderSampleRate_AndInvalidScalarRanges()
+    {
+        if (FfmpegEncodeMaps.AudioEncoderAvailable(EncodeAudioCodec.Opus))
+        {
+            var supported = FfmpegEncodeMaps.AudioEncoderSampleRates(EncodeAudioCodec.Opus);
+            var unsupported = new[] { 44_100, 22_050, 11_025, 96_000 }
+                .FirstOrDefault(rate => !supported.Contains(rate));
+            if (supported.Count > 0 && unsupported > 0)
+            {
+                var opus = new EncodeSessionOptions
+                {
+                    Container = EncodeContainer.Matroska,
+                    OutputMode = EncodeOutputMode.AudioOnly,
+                    AudioLegs = [new AudioLegOptions { Codec = EncodeAudioCodec.Opus, SampleRate = unsupported }],
+                };
+                Assert.Contains(opus.Validate(), error => error.Contains("does not support"));
+            }
+        }
+
+        var invalid = new EncodeSessionOptions
+        {
+            Video = new VideoEncodeOptions
+            {
+                BitrateBps = -1,
+                BitrateMode = EncodeVideoBitrateMode.Constant,
+                BufferSizeBits = -1,
+                GopSize = -1,
+                MaxBFrames = 17,
+                Fps = 241,
+            },
+            AudioLegs = [new AudioLegOptions { BitrateBps = -1, SampleRate = 7_999 }],
+        };
+        var errors = invalid.Validate(probeEncoders: false);
+        Assert.Contains(errors, error => error.Contains("Video bitrate"));
+        Assert.Contains(errors, error => error.Contains("Constant video bitrate"));
+        Assert.Contains(errors, error => error.Contains("VBV"));
+        Assert.Contains(errors, error => error.Contains("GOP"));
+        Assert.Contains(errors, error => error.Contains("B-frames"));
+        Assert.Contains(errors, error => error.Contains("frame rate"));
+        Assert.Contains(errors, error => error.Contains("Audio track 1: bitrate"));
+        Assert.Contains(errors, error => error.Contains("sample rate"));
+    }
+
+    [Fact]
+    public async Task MetricsPolling_IsSafeAcrossFinishAndDispose()
+    {
+        var outPath = TempPath(".mka");
+        var options = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.Matroska,
+            OutputMode = EncodeOutputMode.AudioOnly,
+            AudioLegs = [new AudioLegOptions { Codec = EncodeAudioCodec.Flac, Channels = 2 }],
+        };
+        if (options.Validate().Count > 0)
+            return;
+
+        var session = FFmpegEncodeSession.Create(options, new FileEncodeTarget(outPath));
+        PumpAudio(session.AudioSinks[0], MakeSine(48_000, 2, 0.25), channels: 2);
+        using var stop = new CancellationTokenSource();
+        var poll = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+                _ = session.GetMetrics().Sinks.Sum(sink => sink.BytesWritten);
+        });
+
+        await FinishAsync(session);
+        session.Dispose();
+        await Task.Delay(20);
+        stop.Cancel();
+        await poll;
+    }
+
+    [Fact]
+    public void CreateWithSinks_OwnsAndRollsBackSinksWhenValidationFails()
+    {
+        var sink = new RecordingPacketSink();
+        var options = new EncodeSessionOptions
+        {
+            Video = new VideoEncodeOptions { BitrateBps = -1 },
+        };
+
+        Assert.Throws<ArgumentException>(() => FFmpegEncodeSession.CreateWithSinks(options, [sink]));
+        Assert.True(sink.Disposed);
+    }
+
+    [Fact]
+    public unsafe void ReconnectingSink_RecoversAfterWriteFailureWithoutDetaching()
+    {
+        var created = new List<ScriptedPacketSink>();
+        var reconnecting = new Sinks.ReconnectingPacketSink(
+            "srt://example.test:9000?streamid=…",
+            () =>
+            {
+                var sink = new ScriptedPacketSink(failOnFirstPacket: created.Count == 0);
+                created.Add(sink);
+                return sink;
+            },
+            minimumRetryDelay: TimeSpan.Zero,
+            maximumRetryDelay: TimeSpan.Zero);
+
+        reconnecting.OnStreamsReady([]); // first connection succeeds
+        Assert.True(reconnecting.Healthy);
+
+        reconnecting.OnPacket(null, keyframe: false); // first destination write drops
+        Assert.False(reconnecting.Healthy);
+        Assert.Contains("simulated", reconnecting.Error);
+        Assert.True(created[0].Disposed);
+
+        reconnecting.OnPacket(null, keyframe: false); // audio-only seam may reconnect immediately
+        Assert.True(reconnecting.Healthy);
+        Assert.Null(reconnecting.Error);
+        Assert.Equal(2, created.Count);
+        Assert.Equal(1, created[1].Packets);
+
+        reconnecting.Finish();
+        reconnecting.Dispose();
+        Assert.True(created[1].Finished);
+        Assert.True(created[1].Disposed);
+    }
+
+    private sealed unsafe class RecordingPacketSink : Sinks.IEncodedPacketSink
+    {
+        public bool Disposed { get; private set; }
+        public int VideoFrameRateNumerator { get; private set; }
+        public int VideoFrameRateDenominator { get; private set; }
+        public List<long> VideoPacketDurations { get; } = [];
+        public string Name => "test";
+        public long BytesWritten => 0;
+        public void OnStreamsReady(IReadOnlyList<Sinks.EncodedStreamInfo> streams)
+        {
+            var video = streams.FirstOrDefault(stream => stream.Kind == Sinks.EncodedStreamKind.Video);
+            if (video is null)
+                return;
+            VideoFrameRateNumerator = video.FrameRate.num;
+            VideoFrameRateDenominator = video.FrameRate.den;
+        }
+
+        public void OnPacket(global::FFmpeg.AutoGen.AVPacket* packet, bool keyframe)
+        {
+            if (packet is not null && packet->stream_index == 0)
+                VideoPacketDurations.Add(packet->duration);
+        }
+        public void Finish() { }
+        public void Dispose() => Disposed = true;
+    }
+
+    private sealed unsafe class ScriptedPacketSink(bool failOnFirstPacket) : Sinks.IEncodedPacketSink
+    {
+        public bool Disposed { get; private set; }
+        public bool Finished { get; private set; }
+        public int Packets { get; private set; }
+        public string Name => "scripted";
+        public long BytesWritten => Packets * 188L;
+        public void OnStreamsReady(IReadOnlyList<Sinks.EncodedStreamInfo> streams) { }
+
+        public void OnPacket(global::FFmpeg.AutoGen.AVPacket* packet, bool keyframe)
+        {
+            Packets++;
+            if (failOnFirstPacket && Packets == 1)
+                throw new IOException("simulated network write failure");
+        }
+
+        public void Finish() => Finished = true;
+        public void Dispose() => Disposed = true;
     }
 }

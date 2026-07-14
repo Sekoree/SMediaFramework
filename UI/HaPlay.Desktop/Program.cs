@@ -14,12 +14,15 @@ sealed class Program
     // yet and stuff might break.
     // Resolved log destination (set by ConfigureLogging), reused by the UI-hang watchdog for its dumps.
     private static string _logDirectory = Path.Combine(Directory.GetCurrentDirectory(), "logs");
+    private static bool _safeSoftwareUi;
 
     [STAThread]
     public static void Main(string[] args)
     {
         try
         {
+            _safeSoftwareUi = HasArg(args, "--safe-ui")
+                              || IsTruthy(Environment.GetEnvironmentVariable("HAPLAY_SAFE_UI"));
             ConfigureLogging(args);
 
             var app = BuildAvaloniaApp();
@@ -58,6 +61,12 @@ sealed class Program
             .With(new X11PlatformOptions
             {
                 OverlayPopups = Environment.GetEnvironmentVariable("HAPLAY_OVERLAY_POPUPS") != "0",
+                // Show-safe Linux mode: keep Avalonia out of the GLX driver failure domain. projectM/
+                // output GL can continue on their dedicated threads while window close/measure/paint uses
+                // the software renderer and cannot synchronously wait on a wedged GL swap.
+                RenderingMode = _safeSoftwareUi
+                    ? [X11RenderingMode.Software]
+                    : [X11RenderingMode.Glx, X11RenderingMode.Software],
             })
             .WithInterFont()
             .LogToTrace();
@@ -134,12 +143,13 @@ sealed class Program
         }
 
         MediaDiagnostics.LogInformation(
-            "HaPlay.Desktop logging configured: minLevel={Level} fileSink={FilePath} crashSink={CrashPath} queueCapacity={QueueCapacity} retainCount={RetainCount}",
+            "HaPlay.Desktop logging configured: minLevel={Level} fileSink={FilePath} crashSink={CrashPath} queueCapacity={QueueCapacity} retainCount={RetainCount} safeSoftwareUi={SafeSoftwareUi}",
             level,
             fileProvider.FilePath,
             DesktopCrashDiagnostics.CrashFilePath ?? "<none>",
             queueCapacity,
-            retainCount);
+            retainCount,
+            _safeSoftwareUi);
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
@@ -157,6 +167,12 @@ sealed class Program
 
         return false;
     }
+
+    private static bool IsTruthy(string? value) =>
+        value is not null && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                              || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                              || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                              || value.Equals("on", StringComparison.OrdinalIgnoreCase));
 
     private static string? GetArg(string[] args, string name)
     {

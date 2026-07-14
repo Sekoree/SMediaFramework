@@ -2651,7 +2651,7 @@
     <value>FFmpeg encode</value>
   </data>
   <data name="OutputSummaryFileRecordFormat" xml:space="preserve">
-    <value>{0} · {1}/{2} → {3}</value>
+    <value>{0} · {1}/{2} · {3} → {4}</value>
   </data>
   <data name="RecordArmButton" xml:space="preserve">
     <value>● Record</value>
@@ -2676,6 +2676,27 @@
   </data>
   <data name="FileOutputPatternLabel" xml:space="preserve">
     <value>File name ({timestamp} expands per recording)</value>
+  </data>
+  <data name="FileOutputRecordingModeLabel" xml:space="preserve">
+    <value>Recording timeline</value>
+  </data>
+  <data name="FileOutputRecordingContinuousChoice" xml:space="preserve">
+    <value>Continuous program (black and silence while idle)</value>
+  </data>
+  <data name="FileOutputRecordingContentOnlyChoice" xml:space="preserve">
+    <value>Content only (collapse idle gaps)</value>
+  </data>
+  <data name="FileOutputRecordingModeHint" xml:space="preserve">
+    <value>Continuous program preserves the full Arm-to-Stop duration and requires a fixed video size and frame rate. Content only joins routed media without idle time.</value>
+  </data>
+  <data name="FileOutputContinuousFormatRequired" xml:space="preserve">
+    <value>Continuous video recording requires a non-zero output width, height, and frame rate.</value>
+  </data>
+  <data name="FileOutputRecordingContinuousShort" xml:space="preserve">
+    <value>continuous</value>
+  </data>
+  <data name="FileOutputRecordingContentOnlyShort" xml:space="preserve">
+    <value>content only</value>
   </data>
   <data name="FileOutputContainerLabel" xml:space="preserve">
     <value>Container</value>
@@ -2752,6 +2773,18 @@
   <data name="StopStreamButton" xml:space="preserve">
     <value>■ Stop stream</value>
   </data>
+  <data name="StreamLiveHealthyFormat" xml:space="preserve">
+    <value>Live · {0} destination(s) connected · {1} sent</value>
+  </data>
+  <data name="StreamLiveConnectingFormat" xml:space="preserve">
+    <value>Live · connecting to {0} destination(s)</value>
+  </data>
+  <data name="StreamLiveDegradedFormat" xml:space="preserve">
+    <value>Live · {0} of {1} destination(s) reconnecting: {2}</value>
+  </data>
+  <data name="StreamLiveStartFailedFormat" xml:space="preserve">
+    <value>Could not start stream: {0}</value>
+  </data>
   <data name="AddLiveStreamDialogTitle" xml:space="preserve">
     <value>Add live stream output</value>
   </data>
@@ -2794,11 +2827,41 @@
   <data name="StreamPushKeyWatermark" xml:space="preserve">
     <value>Stream key / auth token (optional — folded into the URL)</value>
   </data>
+  <data name="StreamSrtLatencyLabel" xml:space="preserve">
+    <value>SRT latency (ms)</value>
+  </data>
+  <data name="StreamSrtLatencyHint" xml:space="preserve">
+    <value>Retransmission window for this network hop. 120 ms is a useful starting point; increase it on high-RTT or lossy links. A latency option already present in the URL takes precedence.</value>
+  </data>
   <data name="StreamOutputResolutionLabel" xml:space="preserve">
     <value>Output resolution and frame rate (required)</value>
   </data>
   <data name="StreamOutputResolutionHint" xml:space="preserve">
     <value>A live stream must declare a fixed resolution and frame rate so clients (and the blank keep-alive before media plays) see one unchanging format.</value>
+  </data>
+  <data name="StreamAdvancedVideoHeader" xml:space="preserve">
+    <value>Advanced encoder and latency</value>
+  </data>
+  <data name="StreamApplyLowLatencyPresetButton" xml:space="preserve">
+    <value>Apply low-latency preset</value>
+  </data>
+  <data name="StreamVideoBitrateModeLabel" xml:space="preserve">
+    <value>Bitrate mode</value>
+  </data>
+  <data name="StreamKeyframeIntervalLabel" xml:space="preserve">
+    <value>Keyframe interval (seconds)</value>
+  </data>
+  <data name="StreamMaximumBFramesLabel" xml:space="preserve">
+    <value>Maximum B-frames</value>
+  </data>
+  <data name="StreamVbvBufferLabel" xml:space="preserve">
+    <value>VBV buffer (ms at target bitrate)</value>
+  </data>
+  <data name="StreamLowLatencyTuneLabel" xml:space="preserve">
+    <value>Use encoder zero-latency tune (H.264/H.265)</value>
+  </data>
+  <data name="StreamLowLatencyPlaybackHint" xml:space="preserve">
+    <value>The preset selects CBR, a 1-second GOP, no B-frames, a 500 ms VBV, and zero-latency tuning. These reduce encode/ingest delay, but traditional HLS still buffers several segments; sub-2-second viewing also needs a low-latency server/player protocol such as WebSocket MP4, WebRTC, or LL-HLS.</value>
   </data>
   <data name="StreamRtmpSingleTrackHint" xml:space="preserve">
     <value>An RTMP target limits the stream to one AAC audio track with H.264 video.</value>

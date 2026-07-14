@@ -13,7 +13,7 @@ internal sealed class HttpMount
     public TsFanOutBuffer? TsBuffer { get; init; }
     public string? HlsDirectory { get; init; }
     public long BytesServed;
-    public int Refs = 1;
+    public int ActiveClients;
 }
 
 /// <summary>
@@ -35,6 +35,7 @@ internal sealed class HttpMediaServer : IDisposable
 
     private readonly ConcurrentDictionary<string, HttpMount> _mounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly int _requestedPort;
+    private readonly IPAddress _bindAddress;
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _acceptLoop;
@@ -44,6 +45,7 @@ internal sealed class HttpMediaServer : IDisposable
     private HttpMediaServer(int requestedPort, IPAddress bindAddress)
     {
         _requestedPort = requestedPort;
+        _bindAddress = bindAddress;
         _listener = new TcpListener(bindAddress, requestedPort);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -62,9 +64,12 @@ internal sealed class HttpMediaServer : IDisposable
         int port, string mountName, TsFanOutBuffer? tsBuffer, string? hlsDirectory, IPAddress? bindAddress = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mountName);
+        if (port is < 0 or > 65_535)
+            throw new ArgumentOutOfRangeException(nameof(port), port, "port must be between 0 and 65535.");
         if (tsBuffer is null && hlsDirectory is null)
             throw new ArgumentException("a mount needs at least one of: TS buffer, HLS directory.");
         var normalized = NormalizeMount(mountName);
+        var requestedAddress = bindAddress ?? IPAddress.Any;
 
         lock (ServersGate)
         {
@@ -72,15 +77,18 @@ internal sealed class HttpMediaServer : IDisposable
             HttpMediaServer server;
             if (port == 0)
             {
-                server = new HttpMediaServer(0, bindAddress ?? IPAddress.Any);
+                server = new HttpMediaServer(0, requestedAddress);
             }
             else if (ServersByPort.TryGetValue(port, out var existing))
             {
+                if (!existing._bindAddress.Equals(requestedAddress))
+                    throw new InvalidOperationException(
+                        $"port {port} is already bound to {existing._bindAddress}; it cannot also bind {requestedAddress}.");
                 server = existing;
             }
             else
             {
-                server = new HttpMediaServer(port, bindAddress ?? IPAddress.Any);
+                server = new HttpMediaServer(port, requestedAddress);
                 ServersByPort[port] = server;
             }
 
@@ -88,14 +96,17 @@ internal sealed class HttpMediaServer : IDisposable
             if (!server._mounts.TryAdd(normalized, mount))
             {
                 if (port == 0)
-                    server.DisposeInternal();
+                {
+                    server.BeginDisposeInternal();
+                    server.FinishDisposeInternal();
+                }
                 throw new InvalidOperationException(
                     $"the endpoint '/{normalized}' is already served on port {server.Port} - choose a different endpoint name.");
             }
 
             Trace.LogInformation("mount '/{Mount}' registered on port {Port} (ts={Ts} hls={Hls})",
                 normalized, server.Port, tsBuffer is not null, hlsDirectory is not null);
-            return new MountHandle(server, normalized);
+            return new MountHandle(server, mount);
         }
     }
 
@@ -107,6 +118,7 @@ internal sealed class HttpMediaServer : IDisposable
 
     private void ReleaseMount(string mountName)
     {
+        var stop = false;
         lock (ServersGate)
         {
             _mounts.TryRemove(mountName, out _);
@@ -115,8 +127,12 @@ internal sealed class HttpMediaServer : IDisposable
             // Last mount gone - retire the server.
             if (_requestedPort != 0)
                 ServersByPort.Remove(_requestedPort);
-            DisposeInternal();
+            BeginDisposeInternal();
+            stop = true;
         }
+
+        if (stop)
+            FinishDisposeInternal();
     }
 
     private async Task AcceptLoopAsync()
@@ -140,37 +156,50 @@ internal sealed class HttpMediaServer : IDisposable
                 continue;
             }
 
-            if (Volatile.Read(ref _activeClients) >= MaxConcurrentClients)
+            if (Interlocked.Increment(ref _activeClients) > MaxConcurrentClients)
             {
+                Interlocked.Decrement(ref _activeClients);
                 client.Dispose();
                 continue;
             }
 
-            _ = Task.Run(() => HandleClientAsync(client));
+            try
+            {
+                _ = Task.Run(() => HandleClientAsync(client));
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Decrement(ref _activeClients);
+                client.Dispose();
+                Trace.LogWarning(ex, "could not dispatch accepted client");
+            }
         }
     }
 
     private async Task HandleClientAsync(TcpClient client)
     {
-        Interlocked.Increment(ref _activeClients);
         try
         {
             client.NoDelay = true;
             using var _ = client;
             var stream = client.GetStream();
-            var (method, path) = await ReadRequestAsync(stream, _cts.Token).ConfigureAwait(false);
+            using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            requestTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+            var (method, path) = await ReadRequestAsync(stream, requestTimeout.Token).ConfigureAwait(false);
             if (method is null || path is null)
                 return;
             if (method is not ("GET" or "HEAD"))
             {
-                await WriteSimpleResponseAsync(stream, "405 Method Not Allowed", "text/plain", "GET only"u8.ToArray()).ConfigureAwait(false);
+                await WriteSimpleResponseAsync(
+                    stream, "405 Method Not Allowed", "text/plain", "GET and HEAD only"u8.ToArray(),
+                    extraHeaders: "Allow: GET, HEAD\r\n").ConfigureAwait(false);
                 return;
             }
 
             var headOnly = method == "HEAD";
             if (path is "/" or "/index.html" or "/status")
             {
-                await ServeStatusAsync(stream).ConfigureAwait(false);
+                await ServeStatusAsync(stream, headOnly).ConfigureAwait(false);
                 return;
             }
 
@@ -182,7 +211,9 @@ internal sealed class HttpMediaServer : IDisposable
                 mountName = mountName[..^3]; // strip ".ts"
                 if (_mounts.TryGetValue(mountName, out var mount) && mount.TsBuffer is not null)
                 {
-                    await ServeTsStreamAsync(stream, mount, headOnly).ConfigureAwait(false);
+                    Interlocked.Increment(ref mount.ActiveClients);
+                    try { await ServeTsStreamAsync(stream, mount, headOnly).ConfigureAwait(false); }
+                    finally { Interlocked.Decrement(ref mount.ActiveClients); }
                     return;
                 }
             }
@@ -195,7 +226,9 @@ internal sealed class HttpMediaServer : IDisposable
                 var fileName = path[(hlsIndex + "/hls/".Length)..];
                 if (_mounts.TryGetValue(mountName, out var mount) && mount.HlsDirectory is not null)
                 {
-                    await ServeHlsFileAsync(stream, mount, fileName, headOnly).ConfigureAwait(false);
+                    Interlocked.Increment(ref mount.ActiveClients);
+                    try { await ServeHlsFileAsync(stream, mount, fileName, headOnly).ConfigureAwait(false); }
+                    finally { Interlocked.Decrement(ref mount.ActiveClients); }
                     return;
                 }
             }
@@ -297,10 +330,11 @@ internal sealed class HttpMediaServer : IDisposable
             ? "application/vnd.apple.mpegurl"
             : "video/mp2t";
         await WriteSimpleResponseAsync(stream, "200 OK", mime, headOnly ? [] : content, content.Length).ConfigureAwait(false);
-        Interlocked.Add(ref mount.BytesServed, content.Length);
+        if (!headOnly)
+            Interlocked.Add(ref mount.BytesServed, content.Length);
     }
 
-    private async Task ServeStatusAsync(NetworkStream stream)
+    private async Task ServeStatusAsync(NetworkStream stream, bool headOnly)
     {
         var sb = new StringBuilder($"HaPlay LAN stream server (port {Port}, {ActiveClients} clients)\n\n");
         foreach (var mount in _mounts.Values)
@@ -311,17 +345,20 @@ internal sealed class HttpMediaServer : IDisposable
                 sb.Append($"  /{mount.Name}/hls/live.m3u8\n");
         }
 
-        await WriteSimpleResponseAsync(stream, "200 OK", "text/plain; charset=utf-8",
-            Encoding.UTF8.GetBytes(sb.ToString())).ConfigureAwait(false);
+        var body = Encoding.UTF8.GetBytes(sb.ToString());
+        await WriteSimpleResponseAsync(
+            stream, "200 OK", "text/plain; charset=utf-8", headOnly ? [] : body, body.Length).ConfigureAwait(false);
     }
 
     private async Task WriteSimpleResponseAsync(
-        NetworkStream stream, string status, string contentType, byte[] body, int? contentLength = null)
+        NetworkStream stream, string status, string contentType, byte[] body, int? contentLength = null,
+        string extraHeaders = "")
     {
         var headers =
             $"HTTP/1.1 {status}\r\n" +
             $"Content-Type: {contentType}\r\n" +
             $"Content-Length: {contentLength ?? body.Length}\r\n" +
+            extraHeaders +
             "Cache-Control: no-cache, no-store\r\n" +
             "Connection: close\r\n" +
             "\r\n";
@@ -336,7 +373,7 @@ internal sealed class HttpMediaServer : IDisposable
         // that leaks its MountHandle won't kill the shared server for others.
     }
 
-    private void DisposeInternal()
+    private void BeginDisposeInternal()
     {
         if (_disposed)
             return;
@@ -344,6 +381,10 @@ internal sealed class HttpMediaServer : IDisposable
         _cts.Cancel();
         try { _listener.Stop(); }
         catch { /* best effort */ }
+    }
+
+    private void FinishDisposeInternal()
+    {
         try { _acceptLoop.Wait(TimeSpan.FromSeconds(2)); }
         catch { /* best effort */ }
         _cts.Dispose();
@@ -354,10 +395,10 @@ internal sealed class HttpMediaServer : IDisposable
     internal sealed class MountHandle : IDisposable
     {
         private readonly HttpMediaServer _server;
-        private readonly string _mount;
+        private readonly HttpMount _mount;
         private int _released;
 
-        internal MountHandle(HttpMediaServer server, string mount)
+        internal MountHandle(HttpMediaServer server, HttpMount mount)
         {
             _server = server;
             _mount = mount;
@@ -365,14 +406,16 @@ internal sealed class HttpMediaServer : IDisposable
 
         public int Port => _server.Port;
 
-        public int ActiveClients => _server.ActiveClients;
+        public int ActiveClients => Volatile.Read(ref _mount.ActiveClients);
 
-        public string MountName => _mount;
+        public long BytesServed => Volatile.Read(ref _mount.BytesServed);
+
+        public string MountName => _mount.Name;
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _released, 1) == 0)
-                _server.ReleaseMount(_mount);
+                _server.ReleaseMount(_mount.Name);
         }
     }
 }

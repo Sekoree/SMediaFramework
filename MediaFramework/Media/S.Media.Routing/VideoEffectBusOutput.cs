@@ -35,8 +35,8 @@ public sealed class VideoEffectBusOutput :
     public IReadOnlyList<IVideoBusEffect> Effects => Volatile.Read(ref _effects);
 
     /// <summary>Replaces the chain atomically (new effects are configured first when the output already
-    /// runs). Removed effects are disposed after the swap - a Process racing the swap finishes on the
-    /// old array for at most one frame.</summary>
+    /// runs). Removed effects enter a retire queue drained by the processing thread after the swap, so
+    /// a Process racing the swap can finish on the old array safely.</summary>
     public void SetEffects(IReadOnlyList<IVideoBusEffect> effects)
     {
         ArgumentNullException.ThrowIfNull(effects);
@@ -91,6 +91,25 @@ public sealed class VideoEffectBusOutput :
         DrainRetired();
         var effects = Volatile.Read(ref _effects);
         var working = frame;
+        if (effects.Length > 0 && IsCpuBacked(frame))
+        {
+            try
+            {
+                // Router fan-out views may share their plane backing with sibling outputs. The effect
+                // contract explicitly permits in-place mutation, so establish branch-local ownership
+                // once before the chain (copy-on-write at the mutability boundary).
+                working = VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                frame.Dispose();
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning(
+                    $"VideoEffectBusOutput: could not isolate CPU frame; effects skipped to protect sibling outputs ({ex.Message})");
+                _inner.Submit(frame);
+                return;
+            }
+        }
+
         foreach (var effect in effects)
         {
             try
@@ -105,6 +124,8 @@ public sealed class VideoEffectBusOutput :
 
         _inner.Submit(working);
     }
+
+    private static bool IsCpuBacked(VideoFrame frame) => frame.HardwareBacking is null;
 
     // --- capability forwarding (mirrors VideoOutputPump) ---------------------
 

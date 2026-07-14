@@ -172,6 +172,7 @@ public sealed class BusEffectTests
         var gain = new GainAudioEffect();
         gain.Configure(new AudioFormat(48_000, 2));
         gain.GainDb = float.NegativeInfinity; // target 0 → maximal ramp distance
+        Assert.Equal(double.NegativeInfinity, gain.GainDb);
 
         var stereo = new float[960]; // 480 frames = exactly the 10 ms ramp span at 48 kHz
         Array.Fill(stereo, 1f);
@@ -203,6 +204,25 @@ public sealed class BusEffectTests
         insert.Submit(MakeFrame());
         Assert.True(effect.Disposed);
         sink.Last?.Dispose();
+    }
+
+    [Fact]
+    public void BusRegistry_TryCreateContainsFactoryFailures()
+    {
+        var registry = BusRegistryBuilder.Build(builder =>
+        {
+            builder.AddAudioEffect("broken-audio", _ => throw new InvalidOperationException("boom"));
+            builder.AddVideoEffect("broken-video", _ => throw new InvalidOperationException("boom"));
+            builder.AddVisualSource("broken-visual", _ => throw new InvalidOperationException("boom"));
+        });
+
+        Assert.False(registry.TryCreateAudioEffect("broken-audio", null, out var audio));
+        Assert.Null(audio);
+        Assert.False(registry.TryCreateVideoEffect("broken-video", null, out var video));
+        Assert.Null(video);
+        Assert.False(registry.TryCreateVisualSource(
+            "broken-visual", new VisualSourceCreateArgs(16, 16, new Rational(30, 1)), out var visual));
+        Assert.Null(visual);
     }
 
     private sealed class CapturingAudioOutput(AudioFormat format) : IAudioOutput
@@ -259,11 +279,43 @@ public sealed class BusEffectTests
         insert.Submit(frame);
 
         Assert.Equal(1, effect.Processed);
-        Assert.Same(frame, sink.Last); // pass-through effect: the same frame reaches the inner output
+        // An effect may mutate in place, so even a pass-through implementation receives a branch-local
+        // CPU copy. This is the copy-on-write boundary that protects router fan-out siblings.
+        Assert.NotSame(frame, sink.Last);
 
         insert.Dispose();
         Assert.True(effect.Disposed);
         sink.Last?.Dispose();
+    }
+
+    [Fact]
+    public void VideoEffectBusOutput_InPlaceMutation_DoesNotTouchSharedSiblingBacking()
+    {
+        var format = new VideoFormat(2, 1, PixelFormat.Bgra32, new Rational(30, 1));
+        var sharedPixels = new byte[] { 10, 20, 30, 255, 40, 50, 60, 255 };
+        using var sibling = new VideoFrame(TimeSpan.Zero, format, [sharedPixels], [8]);
+        var effectBranch = new VideoFrame(TimeSpan.Zero, format, [sharedPixels], [8]);
+        var sink = new CapturingVideoOutput();
+        using var insert = new VideoEffectBusOutput(sink, [new InPlaceFirstByteEffect()]);
+        insert.Configure(format);
+
+        insert.Submit(effectBranch);
+
+        Assert.Equal(10, sibling.Planes[0].Span[0]);
+        Assert.Equal(0xEE, sink.Last!.Planes[0].Span[0]);
+        sink.Last.Dispose();
+        sink.Last = null;
+    }
+
+    private sealed class InPlaceFirstByteEffect : IVideoBusEffect
+    {
+        public void Configure(VideoFormat format) { }
+        public VideoFrame Process(VideoFrame frame, TimeSpan presentationTime)
+        {
+            System.Runtime.InteropServices.MemoryMarshal.AsMemory(frame.Planes[0]).Span[0] = 0xEE;
+            return frame;
+        }
+        public void Dispose() { }
     }
 
     [Fact]

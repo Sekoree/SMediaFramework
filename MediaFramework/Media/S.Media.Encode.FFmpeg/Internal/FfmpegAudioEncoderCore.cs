@@ -20,6 +20,7 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
     private AudioFormat _inputFormat;
     private int _frameSamples;
     private long _ptsSamples;
+    private long _nextInputFrame;
     private bool _disposed;
 
     internal FfmpegAudioEncoderCore(AudioLegOptions options, AudioFormat inputFormat)
@@ -28,7 +29,15 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
         FFmpegRuntime.EnsureInitialized();
         inputFormat.Validate(nameof(inputFormat));
         _inputFormat = inputFormat;
-        OpenCodec();
+        try
+        {
+            OpenCodec();
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
     }
 
     internal AVCodecParameters* CodecParameters => _codecParameters;
@@ -39,7 +48,7 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
 
     /// <summary>Feeds interleaved float samples (the input format's channel count); emits packets for
     /// every full codec frame that becomes available. Timestamps are in output-rate samples.</summary>
-    internal void Submit(ReadOnlySpan<float> packedSamples, Action<IntPtr> onPacket)
+    internal void Submit(ReadOnlySpan<float> packedSamples, long inputStartFrame, Action<IntPtr> onPacket)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (packedSamples.IsEmpty)
@@ -50,6 +59,13 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
                 nameof(packedSamples));
 
         var inSamples = packedSamples.Length / _inputFormat.Channels;
+        if (inputStartFrame < _nextInputFrame)
+            throw new ArgumentOutOfRangeException(
+                nameof(inputStartFrame), inputStartFrame,
+                $"audio input moved backwards (next expected frame {_nextInputFrame}).");
+        if (inputStartFrame > _nextInputFrame)
+            AdvanceAcrossInputGap(inputStartFrame, onPacket);
+
         // Worst-case output of this convert call: buffered + rescaled input, padded.
         var outCap = (int)av_rescale_rnd(
             swr_get_delay(_swr, _inputFormat.SampleRate) + inSamples,
@@ -67,6 +83,7 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
         }
 
         DrainFullFrames(onPacket);
+        _nextInputFrame = inputStartFrame + inSamples;
     }
 
     /// <summary>End of stream: drain swr's tail, pad the final partial frame with silence, flush the codec.</summary>
@@ -88,25 +105,57 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
 
         DrainFullFrames(onPacket);
 
-        var remaining = av_audio_fifo_size(_fifo);
-        if (remaining > 0)
-        {
-            // Final partial frame padded with silence.
-            var wr = av_frame_make_writable(_frame);
-            FFmpegException.ThrowIfError(wr, nameof(av_frame_make_writable));
-            av_samples_set_silence(_frame->extended_data, 0, _frameSamples, _codec->ch_layout.nb_channels, _codec->sample_fmt);
-            var read = av_audio_fifo_read(_fifo, (void**)_frame->extended_data, remaining);
-            if (read < 0)
-                FFmpegException.ThrowIfError(read, nameof(av_audio_fifo_read));
-            _frame->pts = _ptsSamples;
-            _ptsSamples += _frameSamples;
-            SendFrame(_frame, onPacket);
-        }
+        PadAndDrainPartialFrame(onPacket);
 
         var ret = avcodec_send_frame(_codec, null);
         if (ret < 0 && ret != AVERROR_EOF)
             FFmpegException.ThrowIfError(ret, nameof(avcodec_send_frame));
         DrainPackets(onPacket);
+    }
+
+    /// <summary>Closes the audio segment before a dropped queue range, then moves the next packet PTS
+    /// to the absolute sample position of the first retained input frame. A partial codec frame is
+    /// padded with silence, preserving the already-submitted samples without compressing the gap.</summary>
+    private void AdvanceAcrossInputGap(long nextInputFrame, Action<IntPtr> onPacket)
+    {
+        while (true)
+        {
+            EnsureConvertBuffer(4096);
+            var converted = swr_convert(_swr, _convertBuffer, 4096, null, 0);
+            if (converted < 0)
+                FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+            if (converted == 0)
+                break;
+            WriteToFifo(converted);
+        }
+
+        DrainFullFrames(onPacket);
+        PadAndDrainPartialFrame(onPacket);
+
+        var absoluteOutputSample = (long)Math.Round(
+            nextInputFrame * (double)_codec->sample_rate / _inputFormat.SampleRate,
+            MidpointRounding.AwayFromZero);
+        _ptsSamples = Math.Max(_ptsSamples, absoluteOutputSample);
+        _nextInputFrame = nextInputFrame;
+    }
+
+    private void PadAndDrainPartialFrame(Action<IntPtr> onPacket)
+    {
+        var remaining = av_audio_fifo_size(_fifo);
+        if (remaining <= 0)
+            return;
+
+        var wr = av_frame_make_writable(_frame);
+        FFmpegException.ThrowIfError(wr, nameof(av_frame_make_writable));
+        av_samples_set_silence(
+            _frame->extended_data, 0, _frameSamples,
+            _codec->ch_layout.nb_channels, _codec->sample_fmt);
+        var read = av_audio_fifo_read(_fifo, (void**)_frame->extended_data, remaining);
+        if (read < 0)
+            FFmpegException.ThrowIfError(read, nameof(av_audio_fifo_read));
+        _frame->pts = _ptsSamples;
+        _ptsSamples += _frameSamples;
+        SendFrame(_frame, onPacket);
     }
 
     private void WriteToFifo(int samples)

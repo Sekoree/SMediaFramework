@@ -22,6 +22,11 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
     public EncodeChoice[] VideoCodecs { get; } = EncodeChoices.VideoCodecs;
     public EncodeChoice[] AudioCodecs { get; } = EncodeChoices.AudioCodecs;
     public string[] Presets { get; } = EncodeChoices.Presets;
+    public EncodeChoice[] RecordingModes { get; } =
+    [
+        new(Strings.FileOutputRecordingContinuousChoice, FileOutputDefinition.ContinuousProgramRecordingMode),
+        new(Strings.FileOutputRecordingContentOnlyChoice, FileOutputDefinition.ContentOnlyRecordingMode),
+    ];
 
     [ObservableProperty] private string _displayName = Strings.OutputKindFileRecordLabel;
     [ObservableProperty] private string _directoryPath =
@@ -29,6 +34,7 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
             ? v
             : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     [ObservableProperty] private string _fileNamePattern = "recording_{timestamp}";
+    [ObservableProperty] private string _recordingMode = FileOutputDefinition.ContinuousProgramRecordingMode;
     [ObservableProperty] private string _container = "Mp4";
 
     [ObservableProperty]
@@ -50,10 +56,11 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
     [ObservableProperty] private int _videoCrf = 23;
     [ObservableProperty] private int _videoBitrateKbps = 8000;
     [ObservableProperty] private string _videoPreset = "veryfast";
-    [ObservableProperty] private int _scaleWidth;
-    [ObservableProperty] private int _scaleHeight;
-    // Output frame rate; 0 = follow the source. Set to pin a fixed rate into the recording.
-    [ObservableProperty] private int _fps;
+    [ObservableProperty] private int _scaleWidth = 1920;
+    [ObservableProperty] private int _scaleHeight = 1080;
+    // A continuous program needs a known shape before the first cue so Arm can record black from t=0.
+    // New outputs mirror the stream dialog's valid-out-of-box 1080p30 carrier defaults.
+    [ObservableProperty] private int _fps = 30;
 
     public ObservableCollection<AudioLegRowViewModel> AudioLegs { get; } = [new AudioLegRowViewModel()];
 
@@ -87,6 +94,7 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
         DisplayName = existing.DisplayName;
         DirectoryPath = existing.DirectoryPath;
         FileNamePattern = existing.FileNamePattern;
+        RecordingMode = existing.EffectiveRecordingMode;
 
         var encode = existing.EffectiveEncode;
         Container = encode.Container;
@@ -133,6 +141,14 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
             return null;
         }
 
+        if (RecordingMode == FileOutputDefinition.ContinuousProgramRecordingMode
+            && ShowVideoSettings
+            && (ScaleWidth <= 0 || ScaleHeight <= 0 || Fps <= 0))
+        {
+            ValidationMessage = Strings.FileOutputContinuousFormatRequired;
+            return null;
+        }
+
         var definition = new FileOutputDefinition(
             _existingId ?? Guid.NewGuid(),
             displayName,
@@ -151,7 +167,10 @@ public partial class AddFileOutputDialogViewModel : ViewModelBase
                 Fps)
             {
                 AudioLegs = AudioLegs.Select(l => l.ToDefinition()).ToArray(),
-            });
+            })
+        {
+            RecordingMode = RecordingMode,
+        };
 
         // Full validation via the encode module (container/codec compatibility + encoder availability).
         var errors = FileOutputRuntime.BuildOptions(definition.EffectiveEncode).Validate();

@@ -11,7 +11,7 @@ namespace S.Media.Encode.FFmpeg.Sinks;
 /// runs (counted) - a live push wants fresh data, not a growing backlog. An inner-sink throw faults
 /// the wrapper (the session detaches it); the drain thread keeps draining to dispose queued refs.
 /// </summary>
-internal sealed unsafe class AsyncPacketSink : IEncodedPacketSink
+internal sealed unsafe class AsyncPacketSink : IEncodedPacketSink, IEncodedPacketSinkHealth
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Encode.FFmpeg.AsyncPacketSink");
 
@@ -39,6 +39,13 @@ internal sealed unsafe class AsyncPacketSink : IEncodedPacketSink
     public long BytesWritten => _inner.BytesWritten;
 
     public long DroppedPackets => Interlocked.Read(ref _dropped);
+
+    public bool Healthy => !_innerFaulted
+                           && (_inner is not IEncodedPacketSinkHealth health || health.Healthy);
+
+    public string? Error => _innerFaulted
+        ? _innerError?.Message
+        : (_inner as IEncodedPacketSinkHealth)?.Error;
 
     public void OnStreamsReady(IReadOnlyList<EncodedStreamInfo> streams)
     {

@@ -105,6 +105,11 @@ public interface IMediaRegistry
     /// <summary>Wraps <paramref name="source"/> to resample to <paramref name="targetSampleRate"/>, or <c>null</c> if unavailable.</summary>
     IAudioSource? CreateResampler(IAudioSource source, int targetSampleRate);
 
+    /// <summary>Wraps a fixed-rate <paramref name="inner"/> output so it can be attached to a router using
+    /// <paramref name="routerFormat"/>, or <c>null</c> when no output resampler is registered. The wrapper is
+    /// owned by the caller and never owns <paramref name="inner"/>.</summary>
+    IAudioOutput? CreateResamplingOutput(IAudioOutput inner, AudioFormat routerFormat) => null;
+
     /// <summary>True when a module registered an adaptive-rate output factory (FFmpeg) - i.e. the router can
     /// drift-correct non-master audio outputs.</summary>
     bool SupportsAdaptiveRateOutput { get; }
