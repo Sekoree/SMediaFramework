@@ -429,3 +429,132 @@ Highest-value tests to add:
 screengrab pass was made this round. The two new dialogs (Add File Output / Add Live Stream) are
 structurally sound - masked stream key, per-kind validation via the runtime's own `Validate()`, and
 dialog-size persistence including title-bar close.*
+
+---
+
+## Verification addendum — 2026-07-14
+
+This addendum independently rechecked the review against `HEAD 6cba5cce` (`test-enhancements`). It
+preserves the original findings above, but separates directly observed evidence from likely causal
+interpretations. No production code was changed during this pass.
+
+### Reproduction and validation
+
+- `dotnet build MFPlayer.sln -c Debug --no-restore --nologo`: **0 warnings, 0 errors**.
+- `dotnet test MFPlayer.sln -c Debug --no-restore --nologo`: **1,865 passed, 9 skipped, 0 failed**
+  (1,874 total).
+- `dotnet build MFPlayer.sln -c Release --no-restore --nologo`: **0 warnings, 0 errors**.
+- Both dumps named in the review exist and were reopened with `dotnet-dump`:
+  - `haplay-uihang-20260713-044457.dmp`: the UI thread is synchronously closing the composition
+    target from `CompositionOutputLayoutDialog.CancelClick`; the render thread is in GLX surface
+    disposal.
+  - `haplay-uihang-20260713-184012.dmp`: the UI thread is in Skia font-family/character matching
+    while Avalonia is measuring a `TextBlock`; the render thread is creating a Skia backend render
+    target.
+- This was a code, test, build, and managed-stack verification. It did not include an interactive UI
+  pass, hardware matrix, real network broadcast, or long-running native leak measurement.
+
+### Disposition of the existing findings
+
+| ID | Disposition | Verification note |
+|---|---|---|
+| H1 | Confirmed, with qualification | The deadlock signature and application call site are confirmed. The exact defect inside the graphics driver/native stack, and whether each proposed mitigation prevents it, remain inferences rather than dump-proven facts. |
+| H2 | Confirmed, with qualification | The Skia/Avalonia font-fallback stack is confirmed. The dump does not retain enough managed heap data to identify the measured string, so attribution to projectM preset names is a plausible hypothesis, not a verified trigger. |
+| H3 | Confirmed | `FFmpegEncodeSession.EncodeAtTargetRate` and `StreamKeepAlive` maintain independent clocks; keepalive can advance the shared video base and make resumed media frames fail the monotonic-tick test. The code defect is deterministic, although its match to a particular field incident remains circumstantial without a captured packet timeline. |
+| H4 | Confirmed | The cue coordinator listens for line reconfiguration but not `RoutingTopologyChanged`; bindings retain removed line IDs, newly added IDs are not reconciled, and the active-cue reload loop can keep retrying without repairing the mapping. |
+| H5 | Confirmed | The compositor-registry factory creates a `ProjectMVisualSource`, returns only its surface, and never disposes the source/renderer thread. |
+| H6 | Confirmed | CPU frames are shared across fan-out branches while the native effect path is permitted to mutate the supplied frame in place. No branch-local copy isolates sibling consumers. |
+| M1 | **Partly confirmed / correction** | The silent `output is null` skip and lack of operator feedback are real. The statement that there is no arm-time retry is too broad: arm/disarm raises the reconfiguration events and `OnOutputLineReconfiguredAsync` calls `AttachCueOutputLineAsync`. Retry is still absent for topology add/remove and for a line becoming available without reconfiguration. |
+| M2 | Confirmed | `MuxPacketSink.BytesWritten` reads `_fmt->pb` without synchronization while `Dispose` can free the same native state. |
+| M3 | Confirmed | A partially started encode session is not reachable from `LiveStreamSession.CreateAsync`'s catch block, and the local-server configuration can validate while producing no usable sink. |
+| M4 | Confirmed | Keepalive activation and submission can race, and the combined audio sink's shared scratch buffer has no serialization contract. |
+| M5 | Confirmed | The history discontinuity, reused-port bind-address behavior, missing request deadline, client-cap race, HEAD/405 semantics, status accounting, long dispose under the server gate, and hostname-advertising concerns are present. |
+| M6 | Confirmed | `ReconfigureLineAsync` continues after `ConfigureAwait(false)` and mutates/broadcasts view-model state without restoring UI-thread affinity. |
+| M7 | Confirmed | Record-value equality can remove the wrong item when duplicate-equal definitions are present. |
+| M8 | Confirmed | Readback is untimed and copied while locked, catch-up can burst, and `CurrentPreset` is assigned after the native load. |
+| M9 | Confirmed | The legacy projectM owner's `Dispose` only sets a flag and does not destroy the native instance. |
+| M10 | Confirmed | Unsupported audio sample-rate/codec combinations are not rejected by framework validation and fail later during codec open. |
+| M11 | Confirmed | User cancellation is converted into a generic failed result rather than preserved as cancellation. |
+| L1–L10 | Confirmed | Each low-severity group was spot-checked against its referenced implementation. The opacity multiplication, metrics/status inconsistencies, ignored native return, `Try*` contract violations, documentation drift, unpinned build script, renderer fallback/settings behavior, lease-map synchronization, style issues, and log-pruning behavior are all present. |
+
+The positive observations were also spot-checked (settings mutation, ABI guards, natural-end tests,
+effect ownership wrapper, and native-library probing). No contradictory evidence was found.
+
+### Additional findings
+
+#### A1 — MEDIUM: Dropping queued audio compresses its PTS instead of representing the lost time
+
+`FFmpegEncodeSession.SubmitAudio` drops the oldest queued chunk on overflow and increments a metric,
+but it does not carry an absolute sample position or advance the encoder timeline
+(`MediaFramework/Media/S.Media.Encode.FFmpeg/FFmpegEncodeSession.cs:281-301`).
+`FfmpegAudioEncoderCore` advances `_ptsSamples` only for frames it actually encodes
+(`Internal/FfmpegAudioEncoderCore.cs:91-103,121-130`). After a drop, later audio is therefore
+timestamped directly after the last encoded audio while video retains its media/wall-clock timeline.
+Every dropped duration can become persistent A/V skew instead of an intentional timestamp gap.
+
+**Recommendation:** queue sample positions with chunks and either advance PTS across a drop or insert
+equivalent silence. Add an overload test that verifies post-drop audio/video PTS alignment.
+
+#### A2 — MEDIUM: Encoder construction leaks native allocations when codec setup throws
+
+The audio and video encoder constructors call `OpenCodec()` directly. That method allocates several
+FFmpeg objects before all format, option, resampler, FIFO, frame, and packet operations have
+succeeded (`Internal/FfmpegAudioEncoderCore.cs:25-31,186+` and
+`Internal/FfmpegVideoEncoderCore.cs:33-44,175+`). A throwing constructor never exposes an object that
+the caller can dispose, and there is no constructor rollback/finalizer. The session constructor also
+does not dispose already-created audio encoders if a later leg fails. Unsupported settings from M10
+make this reachable through normal validation failures and repeated attempts can accumulate native
+resources.
+
+**Recommendation:** make each `OpenCodec` path exception-safe with a shared idempotent cleanup
+routine, and have `FFmpegEncodeSession` roll back already-created encoders/sinks if construction does
+not complete. Test allocation counters across repeated deliberately invalid opens.
+
+#### A3 — MEDIUM: Default recording filenames are not unique or atomically reserved
+
+`FileOutputRuntime.ResolveFilePath` derives the default filename from a timestamp with one-second
+resolution (`UI/HaPlay/OutputPreview/FileOutputRuntime.cs:190-213`). The file is then opened for
+writing without an existence reservation. Rapid re-arm within one second—or two output lines using
+the same directory/pattern—can select the same path, truncating a completed recording or allowing
+two muxers to write the same file.
+
+**Recommendation:** reserve a unique path atomically (with a numeric suffix or session ID), include
+sub-second precision for readability, and expose the final selected path. Cover same-second re-arm
+and simultaneous-line cases.
+
+#### A4 — MEDIUM: Advertised LAN stream paths can differ from the actual mounted path
+
+`HttpMediaServer.NormalizeMount` lowercases the name and removes non-alphanumeric characters
+(`MediaFramework/Media/S.Media.Stream.Http/HttpMediaServer.cs:102-106`). `LiveStreamSession` retains
+the original name for `MountName`, log output, and status URLs instead of using
+`MountHandle.MountName` (`LiveStreamSession.cs:163,219,243-244,276,283-284`). For example, a configured
+`My Stream` is served at `/mystream.ts` but reported as `/My Stream.ts`.
+
+**Recommendation:** validate and normalize once, then retain the handle's canonical mount name for
+every displayed URL and status value. Add names containing spaces, punctuation, and uppercase to
+the server/session integration tests.
+
+#### A5 — LOW: Keepalive audio drifts when sample rate is not divisible by frame rate
+
+`StreamKeepAlive` creates exactly `audioSampleRate / rate` samples per video interval using integer
+division (`StreamKeepAlive.cs:47`). At rates such as 48 kHz/59 fps, repeated truncation makes the
+silence clock steadily fall behind the video/wall clock.
+
+**Recommendation:** use a fractional sample accumulator and alternate chunk lengths so the
+cumulative sample count matches elapsed time.
+
+#### A6 — LOW: A mount's client count is server-wide, not per stream
+
+`HttpMediaServer.MountHandle.ActiveClients` forwards the server's single global client counter
+(`HttpMediaServer.cs:56,368`). If multiple mounts share a port, every `LiveStreamSession` reports the
+combined clients of all streams, which makes per-output monitoring misleading.
+
+**Recommendation:** track active requests per mount (and optionally retain a separate server-wide
+total), with a two-mount concurrency test.
+
+### Revised priority notes
+
+The original ordering still holds after verification. Add A1 beside H3 because both affect encoded
+timeline correctness; address A2 together with M10 so validation failures are resource-safe; and fix
+A3/A4 before relying on file and LAN outputs unattended. M1 should be implemented as topology and
+availability reconciliation plus feedback, not as an arm-event retry—the latter already exists.
