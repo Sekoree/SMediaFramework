@@ -203,7 +203,7 @@ public static class HaPlayShowMapper
     }
 
     /// <summary>GUI per-cue <see cref="CueAudioRoute"/>s → per-clip <see cref="ShowClipAudioRoute"/>s, one per
-    /// output line: the line's PortAudio device, an N→M <see cref="ChannelMap"/> array (out-channel ← src-channel,
+    /// output line: the line's shared PortAudio runtime, an N→M <see cref="ChannelMap"/> array (out-channel ← src-channel,
     /// unrouted = silent), and a line gain (mean of its routes' dB → linear). Muted routes are dropped; a fully
     /// muted line contributes no output. Returns an explicit empty list when the cue has no usable routes so
     /// HaPlay never falls back to an inferred/default device.</summary>
@@ -243,6 +243,9 @@ public static class HaPlayShowMapper
             // default mixing bleeds audio across tracks. Unrouted combined channels stay silent (-1).
             var minChannels = def switch
             {
+                // The shared hardware runtime is opened at the line's declared width. Preserve
+                // silent trailing channels so no generic channel adapter can upmix into them.
+                PortAudioOutputDefinition p => p.ChannelCount,
                 FileOutputDefinition f when f.EffectiveEncode.OutputMode != "VideoOnly" =>
                     f.EffectiveEncode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2),
                 LiveStreamOutputDefinition s when s.EffectiveEncode.OutputMode != "VideoOnly" =>
@@ -256,10 +259,12 @@ public static class HaPlayShowMapper
                     matrix[r.OutputChannel - 1] = r.SourceChannel;
             var deviceId = def switch
             {
-                PortAudioOutputDefinition pa => pa.EffectiveAudioBackendDeviceId,
+                // Resolve the configured line's already-open shared runtime in the host factory.
+                // Emitting the backend hardware id here would make ShowSession open a second stream.
+                PortAudioOutputDefinition => OutputAudioRouteDeviceIds.PortAudio(line.Key),
                 // Encode lines resolve through the cue session's audio-output factory (the armed
                 // session's combined multi-track sink) - same carrier pattern as the deck.
-                FileOutputDefinition or LiveStreamOutputDefinition => $"file-audio:{line.Key}",
+                FileOutputDefinition or LiveStreamOutputDefinition => OutputAudioRouteDeviceIds.Encode(line.Key),
                 _ => null,
             };
             var sampleRate = def switch

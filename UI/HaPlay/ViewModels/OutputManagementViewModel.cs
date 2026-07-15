@@ -18,6 +18,7 @@ using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.Audio.PortAudio;
+using S.Media.Routing;
 
 namespace HaPlay.ViewModels;
 
@@ -932,12 +933,12 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Returns the persistent audio output for the line so a playback session can route audio into the
-    /// already-open stream. Returns <c>null</c> if the line isn't an audio output, the runtime
-    /// isn't started yet, or another session already holds it. Callers MUST pair every successful acquire
-    /// with <see cref="ReleasePortAudioForPlayback"/>.
+    /// Returns an isolated producer lease into the line's shared persistent audio output. Multiple
+    /// sessions may acquire the same line concurrently without opening another backend stream.
     /// </summary>
-    internal IAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
+    internal SharedAudioOutputLease? TryAcquirePortAudioForPlayback(
+        OutputLineViewModel line,
+        bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
@@ -949,17 +950,21 @@ public partial class OutputManagementViewModel : ViewModelBase
         return rt.AcquireForPlayback(liveMonitoring);
     }
 
-    /// <summary>Releases the acquirer hold added by <see cref="TryAcquirePortAudioForPlayback"/>.</summary>
-    internal void ReleasePortAudioForPlayback(OutputLineViewModel line)
+    /// <summary>
+    /// Thread-safe line-id lookup for ShowSession audio factories, which run outside the UI thread
+    /// and therefore cannot enumerate the UI-bound <see cref="Outputs"/> collection.
+    /// </summary>
+    internal SharedAudioOutputLease? TryAcquirePortAudioByLineId(Guid lineId, bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
         {
-            if (!_portAudioOutputs.TryGetValue(line, out rt))
-                return;
+            rt = _portAudioOutputs
+                .FirstOrDefault(pair => pair.Value.Definition.Id == lineId)
+                .Value;
         }
 
-        rt.ReleaseFromPlayback();
+        return rt?.AcquireForPlayback(liveMonitoring);
     }
 
     private void EnsureFileRuntime(OutputLineViewModel line, FileOutputDefinition definition)

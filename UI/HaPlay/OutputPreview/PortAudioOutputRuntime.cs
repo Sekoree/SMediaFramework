@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Audio.PortAudio;
+using S.Media.Routing;
 
 namespace HaPlay.OutputPreview;
 
@@ -11,15 +12,17 @@ namespace HaPlay.OutputPreview;
 /// The device is opened once (at the line's declared sample rate / channel count) and stays open
 /// across playback sessions - receivers don't see Pa_OpenStream cost on every track change, and the
 /// device callback keeps draining silence between sessions so the OS doesn't release the device.
-/// Sessions acquire the output via <see cref="AcquireForPlayback"/> and release it on Dispose; the
-/// stream is only closed when the line is removed.
+/// Sessions acquire isolated inputs via <see cref="AcquireForPlayback"/>. A persistent fan-in mixer
+/// is the sole producer for the hardware stream, so simultaneous cues/decks share one OS audio node
+/// without violating PortAudio's single-producer ring contract. The stream is only closed when the
+/// line is removed or structurally reconfigured.
 /// </summary>
 internal sealed class PortAudioOutputRuntime : IDisposable
 {
     private PortAudioOutputDefinition _definition;
     private readonly Lock _gate = new();
     private IAudioOutput? _output;
-    private int _holders;
+    private SharedAudioOutput? _sharedOutput;
     private bool _disposed;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.OutputPreview.PortAudioOutputRuntime");
@@ -53,9 +56,17 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             if (_output is not null)
                 return;
             var output = CreateOutput(_definition, out var resolvedDefinition);
-
-            _definition = resolvedDefinition;
-            _output = output;
+            try
+            {
+                _sharedOutput = new SharedAudioOutput(output, chunkSamples: 480, pumpCapacityChunks: 2);
+                _definition = resolvedDefinition;
+                _output = output;
+            }
+            catch
+            {
+                DisposeOutput(output);
+                throw;
+            }
         }
         Trace.LogInformation("Start: '{Name}' backend={Backend} device={Device} rate={Rate}Hz channels={Ch}",
             _definition.DisplayName, _definition.EffectiveAudioBackendName, _definition.DeviceName,
@@ -63,73 +74,35 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     }
 
     /// <summary>
-    /// Returns the persistent audio output for use as an audio output. Returns <c>null</c>
-    /// when the runtime is disposed / never started, or when another acquirer already holds it. The ring
-    /// buffer is flushed so the next Submit plays cleanly. Pair every acquire with <see cref="ReleaseFromPlayback"/>.
+    /// Returns a private producer endpoint feeding the persistent output's fan-in mixer. Returns
+    /// <c>null</c> when the runtime is disposed or never started. Multiple leases may coexist; dispose
+    /// each lease when its playback route is detached.
     /// </summary>
-    public IAudioOutput? AcquireForPlayback(bool liveMonitoring = false) =>
+    public SharedAudioOutputLease? AcquireForPlayback(bool liveMonitoring = false) =>
         AcquireForPlaybackCore(liveMonitoring);
 
-    private IAudioOutput? AcquireForPlaybackCore(bool liveMonitoring)
+    private SharedAudioOutputLease? AcquireForPlaybackCore(bool liveMonitoring)
     {
         lock (_gate)
         {
-            if (_disposed || _output is null)
+            if (_disposed || _output is null || _sharedOutput is null)
             {
                 Trace.LogTrace("AcquireForPlayback: '{Name}' returning null (disposed={D} hasOutput={H})",
                     _definition.DisplayName, _disposed, _output is not null);
                 return null;
             }
-            if (Interlocked.CompareExchange(ref _holders, 1, 0) != 0)
-            {
-                Trace.LogWarning("AcquireForPlayback: '{Name}' already held", _definition.DisplayName);
-                return null;
-            }
 
             if (liveMonitoring)
             {
-                EnsureLiveSizedOutputLocked();
                 if (_output is PortAudioOutput portAudio)
                     PortAudioLiveMonitoring.ApplyTo(portAudio, _definition.SampleRate);
-                else
-                    FlushIfSupported(_output);
-            }
-            else
-            {
-                try { FlushIfSupported(_output); }
-                catch (Exception ex) { Trace.LogError(ex, $"PortAudioOutputRuntime '{_definition.DisplayName}' Acquire.Flush"); }
             }
 
-            Trace.LogDebug("AcquireForPlayback: '{Name}' acquired liveMonitoring={Live}", _definition.DisplayName, liveMonitoring);
-            return _output;
+            var lease = _sharedOutput.Acquire();
+            Trace.LogDebug("AcquireForPlayback: '{Name}' acquired client={Clients} liveMonitoring={Live}",
+                _definition.DisplayName, _sharedOutput.ActiveLeaseCount, liveMonitoring);
+            return lease;
         }
-    }
-
-    /// <summary>
-    /// Reopens the stream with a live-monitoring ring when an older session opened a multi-second buffer.
-    /// </summary>
-    private void EnsureLiveSizedOutputLocked()
-    {
-        if (_output is not PortAudioOutput portAudio)
-            return;
-
-        var liveCap = PortAudioLiveMonitoring.RingCapacityFrames(_definition.SampleRate);
-        if (portAudio.CapacitySamples <= liveCap * 2)
-            return;
-
-        Trace.LogInformation(
-            "EnsureLiveSizedOutput: '{Name}' reopening stream (capacity={Cap} liveCap={LiveCap})",
-            _definition.DisplayName, portAudio.CapacitySamples, liveCap);
-
-        try { portAudio.Stop(); }
-        catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Stop"); }
-
-        try { portAudio.Dispose(); }
-        catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Dispose"); }
-
-        var output = CreateOutput(_definition, out var resolvedDefinition);
-        _definition = resolvedDefinition;
-        _output = output;
     }
 
     private IAudioOutput CreateOutput(
@@ -334,22 +307,6 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     }
 
     /// <summary>
-    /// Releases the acquirer's hold. The stream stays open and continues to drain silence on its callback;
-    /// the next acquire will see an empty ring.
-    /// </summary>
-    public void ReleaseFromPlayback()
-    {
-        lock (_gate)
-        {
-            Interlocked.Exchange(ref _holders, 0);
-            if (_disposed || _output is null)
-                return;
-            try { FlushIfSupported(_output); }
-            catch { /* best effort */ }
-        }
-    }
-
-    /// <summary>
     /// Phase A foundations (§9.6) - swaps the underlying audio output for one opened at
     /// <paramref name="newDefinition"/>'s sample rate / channel count / device. Hot semantics per §3.6:
     /// no policy enforcement here, callers see a brief silence/glitch window and react to <see cref="Reconfigured"/>.
@@ -372,22 +329,28 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             IAudioOutput? toDispose;
+            SharedAudioOutput? sharedToDispose;
             IAudioOutput? newOutput = null;
+            SharedAudioOutput? newSharedOutput = null;
             lock (_gate)
             {
                 if (_disposed)
                     throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));
                 toDispose = _output;
+                sharedToDispose = _sharedOutput;
                 // Build the new output before dropping the old reference so any failure leaves the line
                 // in the "no current output" state rather than half-reconfigured. Hot semantics still hold
                 // - acquirers will see null until the new stream comes up.
                 _output = null;
+                _sharedOutput = null;
             }
 
-            try
+            try { sharedToDispose?.Dispose(); }
+            catch (Exception ex)
             {
-                DisposeOutput(toDispose);
+                Trace.LogWarning(ex, "ReconfigureAsync: '{Name}' old shared mixer Dispose threw", newDefinition.DisplayName);
             }
+            try { DisposeOutput(toDispose); }
             catch (Exception ex)
             {
                 Trace.LogWarning(ex, "ReconfigureAsync: '{Name}' old output Dispose threw", newDefinition.DisplayName);
@@ -398,10 +361,12 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             try
             {
                 newOutput = CreateOutput(newDefinition, out var resolvedDefinition);
+                newSharedOutput = new SharedAudioOutput(newOutput, chunkSamples: 480, pumpCapacityChunks: 2);
                 newDefinition = resolvedDefinition;
             }
             catch
             {
+                newSharedOutput?.Dispose();
                 DisposeOutput(newOutput);
                 throw;
             }
@@ -411,12 +376,16 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 if (_disposed)
                 {
                     // Concurrent Dispose during reconfigure - drop the just-built output rather than leaking.
+                    try { newSharedOutput?.Dispose(); }
+                    catch { /* best effort */ }
                     try { DisposeOutput(newOutput); }
                     catch { /* best effort */ }
                     throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));
                 }
 
+                _definition = newDefinition;
                 _output = newOutput;
+                _sharedOutput = newSharedOutput;
             }
 
             Trace.LogInformation("ReconfigureAsync: '{Name}' backend={Backend} device={Device} rate={Rate}Hz channels={Ch}",
@@ -430,23 +399,22 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     public void Dispose()
     {
         IAudioOutput? toDispose;
+        SharedAudioOutput? sharedToDispose;
         lock (_gate)
         {
             if (_disposed)
                 return;
             _disposed = true;
             toDispose = _output;
+            sharedToDispose = _sharedOutput;
             _output = null;
+            _sharedOutput = null;
         }
 
+        try { sharedToDispose?.Dispose(); }
+        catch { /* best effort */ }
         try { DisposeOutput(toDispose); }
         catch { /* best effort */ }
-    }
-
-    private static void FlushIfSupported(IAudioOutput? output)
-    {
-        if (output is IFlushableOutput flushable)
-            flushable.Flush();
     }
 
     private static void DisposeOutput(IAudioOutput? output)

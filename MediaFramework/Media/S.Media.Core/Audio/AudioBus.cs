@@ -27,7 +27,7 @@ namespace S.Media.Core.Audio;
 /// upstream sources exhaust).
 /// </para>
 /// </remarks>
-public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IAudioSource
+public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IAudioSource, IFlushableOutput
 {
     private readonly AudioFormat _format;
     private readonly int _channels;
@@ -62,6 +62,13 @@ public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IA
     public AudioFormat Format => _format;
     public AudioOutputChannelCapabilities ChannelCapabilities => AudioOutputChannelCapabilities.Fixed(_channels);
     public bool IsExhausted => false;
+
+    /// <summary>Approximate samples-per-channel currently buffered between the producer and consumer.</summary>
+    public int BufferedSamples =>
+        Math.Max(0, (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _channels));
+
+    /// <summary>Maximum samples-per-channel the ring can hold.</summary>
+    public int CapacitySamples => _ring.Length / _channels;
 
     /// <summary>Total floats dropped by Submit because the ring was full (router buffer too small or downstream stuck).</summary>
     public long OverflowFloats => Volatile.Read(ref _overflowFloats);
@@ -117,12 +124,29 @@ public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IA
             _ring.AsSpan(startIdx, firstChunk).CopyTo(destination);
             if (firstChunk < toRead)
                 _ring.AsSpan(0, toRead - firstChunk).CopyTo(destination[firstChunk..]);
-            Volatile.Write(ref _readIndex, read + toRead);
+            // Flush may advance the read cursor while this consumer is copying. Never move the
+            // cursor backwards in that race or return samples the caller explicitly discarded.
+            if (Interlocked.CompareExchange(ref _readIndex, read + toRead, read) != read)
+            {
+                destination[..toRead].Clear();
+                toRead = 0;
+            }
         }
 
         var shortfall = destination.Length - toRead;
         if (shortfall > 0)
             Interlocked.Add(ref _underflowFloats, shortfall);
         return toRead;
+    }
+
+    /// <summary>
+    /// Discards samples queued by this producer without affecting any downstream hardware output.
+    /// This makes a bus safe as one client of a shared physical output: pausing one client cannot
+    /// flush audio submitted by the other clients.
+    /// </summary>
+    public void Flush()
+    {
+        var write = Volatile.Read(ref _writeIndex);
+        Volatile.Write(ref _readIndex, write);
     }
 }

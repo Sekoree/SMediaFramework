@@ -38,20 +38,34 @@ public sealed class CueShowSessionCoordinator
     /// Lock-free snapshot readers only - see <see cref="ShowSession.GetActiveClipPipelineMetrics"/>.</summary>
     internal ShowSession? PipelineStatsSession => _cueShowSession;
 
-    /// <summary>The cue session's audio-output factory arm for encode ("file-audio:{lineId}") routes.
-    /// Runs on the session dispatcher: resolves through OutputManagement's THREAD-SAFE runtime lookup
-    /// (never the UI-bound Outputs collection). Rate mismatches get a per-fire resampler the session
-    /// owns; the carrier itself is borrowed and released via the lease hook.</summary>
-    private ClipAudioOutputLease? BuildCueEncodeAudioLease(string deviceId, AudioFormat format)
+    /// <summary>The cue session's factory for app-owned audio line routes. PortAudio lines acquire a
+    /// private input into their persistent shared mixer; encode routes borrow the armed carrier. Runs
+    /// on the session dispatcher and resolves only through thread-safe OutputManagement lookups.
+    /// Rate mismatches get a per-fire resampler retired with the borrowed lease.</summary>
+    private ClipAudioOutputLease? BuildCueAudioLease(string deviceId, AudioFormat format)
     {
-        if (!deviceId.StartsWith("file-audio:", StringComparison.Ordinal)
-            || !Guid.TryParse(deviceId["file-audio:".Length..], out var lineId))
-        {
-            return null; // not an encode route - the session opens it as a normal backend device
-        }
+        IAudioOutput rawCarrier;
+        Action releaseRawCarrier;
+        Guid lineId;
 
-        if (OutputManagement.TryAcquireEncodeAudioByLineId(lineId) is not { } rawCarrier)
-            return null; // disarmed/unknown - the cue plays without this route
+        if (OutputAudioRouteDeviceIds.TryParsePortAudio(deviceId, out lineId))
+        {
+            if (OutputManagement.TryAcquirePortAudioByLineId(lineId, liveMonitoring: true) is not { } lease)
+                return null;
+            rawCarrier = lease.Output;
+            releaseRawCarrier = lease.Dispose;
+        }
+        else if (OutputAudioRouteDeviceIds.TryParseEncode(deviceId, out lineId))
+        {
+            if (OutputManagement.TryAcquireEncodeAudioByLineId(lineId) is not { } encodeCarrier)
+                return null; // disarmed/unknown - the cue plays without this route
+            rawCarrier = encodeCarrier;
+            releaseRawCarrier = () => OutputManagement.ReleaseEncodeAudioByLineId(lineId);
+        }
+        else
+        {
+            return null; // ordinary backend id - let ShowSession create its own output
+        }
 
         // Line audio effects run between the route and the encoder (same insert point as the deck).
         // The carrier stays BORROWED (disposeInner:false); the Release hook retires OUR effect wrapper
@@ -66,18 +80,23 @@ public sealed class CueShowSessionCoordinator
                 catch { /* best effort */ }
             }
 
-            OutputManagement.ReleaseEncodeAudioByLineId(lineId);
+            releaseRawCarrier();
         }
 
         if (carrier.Format.SampleRate == format.SampleRate && carrier.Format.Channels == format.Channels)
             return new ClipAudioOutputLease(carrier, DisposeOutputOnRuntimeDispose: false, Release: Release);
 
-        // Rate (or short-matrix channel) mismatch: adapt the clip into the carrier's format. The session
-        // disposes only the resampler wrapper; the effect wrapper + carrier retire via the hook above.
+        // Rate (or short-matrix channel) mismatch: adapt the clip into the carrier's format. The release
+        // hook retires the adapter first, then the effect wrapper and borrowed carrier in dependency order.
+        var adapted = S.Media.Decode.FFmpeg.Audio.ResamplingAudioOutput.Wrap(carrier, format);
         return new ClipAudioOutputLease(
-            S.Media.Decode.FFmpeg.Audio.ResamplingAudioOutput.Wrap(carrier, format),
-            DisposeOutputOnRuntimeDispose: true,
-            Release: Release);
+            adapted,
+            DisposeOutputOnRuntimeDispose: false,
+            Release: () =>
+            {
+                try { (adapted as IDisposable)?.Dispose(); }
+                finally { Release(); }
+            });
     }
     // compositionId → the real video outputs it renders to, acquired on the UI thread in the cue reload
     // so ShowSession's video factory is a pure lookup during LoadDocumentAsync.
@@ -205,7 +224,7 @@ public sealed class CueShowSessionCoordinator
                 // session's combined multi-track sink (borrowed - the runtime owns it; a per-fire
                 // resampler adapts the clip rate when needed). Disarmed line ⇒ null ⇒ the cue plays
                 // without that route, exactly like an unopenable device.
-                audioOutputFactory: BuildCueEncodeAudioLease,
+                audioOutputFactory: BuildCueAudioLease,
                 // Effect buses (Phase 4): tags + cover art for the metadata hub (visualizers/overlays).
                 metadataProbe: S.Media.Decode.FFmpeg.MediaTagProbe.TryRead);
 
@@ -670,7 +689,7 @@ public sealed class CueShowSessionCoordinator
 
     /// <summary>ShowSession replacement for <c>CuePlaybackEngine.TryGetLineHealthMetrics</c>: sums the video
     /// throughput of the composition(s) feeding <paramref name="outputLineId"/> AND the audio-pump chunks of any
-    /// cue routing audio to the line's device (reverse-mapped via its PortAudio device id), scoring a combined
+    /// cue routing audio to the line's stable carrier id, scoring a combined
     /// health state that mirrors the engine. Both sides read the session's lock-free snapshots, so a video, audio,
     /// or audio-only cue line all light up. Null only when the line is genuinely undriven (the outputs panel then
     /// falls back to the media-player probe / Idle). Runs off the UI poll thread with no dispatcher marshaling.</summary>
@@ -703,14 +722,16 @@ public sealed class CueShowSessionCoordinator
             ? OutputLineHealthEvaluator.RecentDelta(_lineHealthPrevVideoLate, outputLineId, videoLateTotal)
             : 0;
 
-        // Audio: reverse-map the line to its PortAudio device and sum this line's active cue-audio pump chunks
+        // Audio: map the line to its app-owned shared runtime and sum this line's active cue-audio pump chunks
         // (enqueued/dropped). Closes the "audio-only cue line reports Idle" gap - an audio-only line now lights up
         // once a cue routes audio to its device. Device-addressed routes only (matches the session-side tracking).
         long audioEnqueued = 0;
         long audioDropped = 0;
         var deviceId = OutputManagement.DefinitionsSnapshot
             .OfType<PortAudioOutputDefinition>()
-            .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId;
+            .Any(d => d.Id == outputLineId)
+                ? OutputAudioRouteDeviceIds.PortAudio(outputLineId)
+                : null;
         if (deviceId is not null
             && session.TryGetActiveAudioPumpStats(deviceId, out var audio))
         {

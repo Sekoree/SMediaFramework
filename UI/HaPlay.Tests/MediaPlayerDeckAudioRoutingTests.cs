@@ -53,6 +53,15 @@ public sealed class MediaPlayerDeckAudioRoutingTests
     }
 
     [Fact]
+    public void DefaultHardwareMatrix_PreservesThirtyTwoChannelWidth_WithSilentTrailingOutputs()
+    {
+        var matrix = MediaPlayerViewModel.BuildDefaultHardwareChannelMatrix(32);
+
+        Assert.Equal(new[] { 0, 1 }, matrix.Take(2));
+        Assert.All(matrix.Skip(2), channel => Assert.Equal(-1, channel));
+    }
+
+    [Fact]
     public void StereoIdentityCells_MapLeftToLeftRightToRight()
     {
         var map = MediaPlayerViewModel.BuildDeckChannelMatrix([(0, 0, false), (1, 1, false)]);

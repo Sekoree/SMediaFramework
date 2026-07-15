@@ -388,11 +388,6 @@ public partial class MediaPlayerViewModel
     // on stop/switch - the audio analogue of _playerVideoOutputs / _playerAcquiredLines.
     private readonly Dictionary<string, IAudioOutput> _playerNDIAudioOutputs = new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredAudioLines = new();
-    // PortAudio route device id → the LINE's configured sample rate, so the audio-output factory can fall back
-    // to opening a device at its own rate (behind an egress resampler) when it rejects the clip's mix rate.
-    // Concurrent: written on the UI thread (route building), read on the session thread (the factory).
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _playerPaDeviceRates =
-        new(StringComparer.Ordinal);
     private DispatcherTimer? _playerShowPoll;
     // Consecutive poll ticks that observed the clip stopped-while-playing. A coordinated seek transiently
     // pauses the clip, so the deck only treats "not running" as end-of-track once it PERSISTS across ticks.
@@ -840,14 +835,15 @@ public partial class MediaPlayerViewModel
                 _lineHealthPrevVideoLate, outputLineId, stats.PumpOverruns);
         }
 
-        // Audio: reverse-map the line to the device id the deck routes to - PortAudio lines by their backend
-        // device, NDI lines by their carrier-audio key - and sum the active clip's pump chunks for it.
+        // Audio: reverse-map the line to the stable app-owned carrier id the deck routes to and sum
+        // the active clip's pump chunks for it.
         long audioEnqueued = 0;
         long audioDropped = 0;
         var deviceId = _outputs.DefinitionsSnapshot
                 .OfType<PortAudioOutputDefinition>()
-                .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId
-            ?? (_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(outputLineId))
+                .Any(d => d.Id == outputLineId)
+            ? OutputAudioRouteDeviceIds.PortAudio(outputLineId)
+            : (_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(outputLineId))
                 ? NDIAudioDeviceId(outputLineId)
                 : _playerNDIAudioOutputs.ContainsKey(FileAudioDeviceId(outputLineId))
                     ? FileAudioDeviceId(outputLineId)
@@ -875,9 +871,8 @@ public partial class MediaPlayerViewModel
     /// map + effective gain) instead of the default device - the core parity fix for the flipped default.
     /// Runs on the UI thread (reads deck observable state).</summary>
     /// <remarks>One device route per selected audio line with a full per-cell gain matrix + the compound
-    /// (master × per-output) gain. PortAudio lines route to their backend device; audio-capable NDI lines route
-    /// to their carrier's audio side (its device id resolves through <see cref="BuildNDIAudioLease"/>, populated
-    /// on open).</remarks>
+    /// (master × per-output) gain. PortAudio lines route to the configured line's shared mixer; audio-capable
+    /// NDI lines route to their carrier's audio side.</remarks>
     private IReadOnlyList<ShowClipAudioRoute> BuildDeckShowAudioRoutes(IReadOnlyList<OutputLineViewModel> lines)
     {
         var routes = new List<ShowClipAudioRoute>();
@@ -896,20 +891,28 @@ public partial class MediaPlayerViewModel
             var matrix = declaredCells.Count == 0 ? new[] { 0, 1 } : null; // unsized grid → stereo default
             int? matrixOutputs = declaredCells.Count == 0 ? null : declaredCells.Max(c => c.OutputChannel) + 1;
 
-            ShowClipAudioRoute Route(string? deviceId, float gain, int? sampleRate) => new(
-                deviceId, matrix, gain, sampleRate)
+            ShowClipAudioRoute Route(
+                string? deviceId,
+                float gain,
+                int? sampleRate,
+                int[]? channelMatrixOverride = null,
+                int? outputChannelsOverride = null) => new(
+                deviceId, channelMatrixOverride ?? matrix, gain, sampleRate)
             {
                 MatrixCells = gainCells,
-                MatrixOutputChannels = matrixOutputs,
+                MatrixOutputChannels = outputChannelsOverride ?? matrixOutputs,
             };
 
             switch (line.Definition)
             {
                 case PortAudioOutputDefinition pa:
-                    if (pa.EffectiveAudioBackendDeviceId is { } paDevice)
-                        _playerPaDeviceRates[paDevice] = pa.SampleRate; // factory rate-fallback lookup
-                    routes.Add(Route(pa.EffectiveAudioBackendDeviceId, CompoundEnvelope(binding),
-                        pa.SampleRate > 0 ? pa.SampleRate : null));
+                    int[]? fullWidthDefaultMatrix = null;
+                    if (declaredCells.Count == 0)
+                        fullWidthDefaultMatrix = BuildDefaultHardwareChannelMatrix(pa.ChannelCount);
+                    routes.Add(Route(OutputAudioRouteDeviceIds.PortAudio(line.Definition.Id), CompoundEnvelope(binding),
+                        pa.SampleRate > 0 ? pa.SampleRate : null,
+                        channelMatrixOverride: fullWidthDefaultMatrix,
+                        outputChannelsOverride: pa.ChannelCount));
                     break;
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly:
                     // Only route to an NDI line whose carrier audio was acquired on open; the device id maps back
@@ -934,31 +937,18 @@ public partial class MediaPlayerViewModel
     /// <summary>Stable route device id for an NDI line's carrier audio - the key shared by
     /// <see cref="BuildDeckShowAudioRoutes"/> (emits it), the <c>_playerNDIAudioOutputs</c> map (populated on
     /// open), and <see cref="BuildNDIAudioLease"/> (resolves it in the audio-output factory).</summary>
-    private static string NDIAudioDeviceId(Guid lineId) => $"ndi-audio:{lineId}";
+    private static string NDIAudioDeviceId(Guid lineId) => OutputAudioRouteDeviceIds.Ndi(lineId);
 
     /// <summary>Stable route device id for an armed file-record line's primary encode track - same
     /// carrier-audio pattern as <see cref="NDIAudioDeviceId"/> (emitted by the routes, resolved by the
     /// audio-output factory via the borrowed-carrier map).</summary>
-    private static string FileAudioDeviceId(Guid lineId) => $"file-audio:{lineId}";
+    private static string FileAudioDeviceId(Guid lineId) => OutputAudioRouteDeviceIds.Encode(lineId);
 
     /// <summary>Maps a route device id back to its output LINE (for the line's audio-effect inserts):
-    /// carrier ids ("ndi-audio:{id}" / "file-audio:{id}") parse directly; PortAudio backend device ids
-    /// reverse-look-up through the definitions snapshot. Null for default-device routes.</summary>
+    /// app-owned carrier ids encode their output-line id directly. Null for ordinary backend routes.</summary>
     private Guid? TryResolveLineIdForAudioDevice(string deviceId)
     {
-        foreach (var prefix in (ReadOnlySpan<string>)["ndi-audio:", "file-audio:"])
-        {
-            if (deviceId.StartsWith(prefix, StringComparison.Ordinal)
-                && Guid.TryParse(deviceId[prefix.Length..], out var carrierLineId))
-            {
-                return carrierLineId;
-            }
-        }
-
-        return _outputs.DefinitionsSnapshot
-            .OfType<PortAudioOutputDefinition>()
-            .FirstOrDefault(d => string.Equals(d.EffectiveAudioBackendDeviceId, deviceId, StringComparison.Ordinal))
-            ?.Id;
+        return OutputAudioRouteDeviceIds.TryParseLineId(deviceId, out var lineId) ? lineId : null;
     }
 
     /// <summary>Stable composition-output id for a driven output line - shared by the video-output factory (fire
@@ -1007,13 +997,34 @@ public partial class MediaPlayerViewModel
     }
 
     /// <summary>The audio-output factory body. NDI route device ids resolve to the borrowed carrier audio held
-    /// since open (wrapped in a per-fire resampler only when the carrier's format differs). Every other device id
-    /// is a PortAudio route: the deck creates it here so a device that rejects the clip's mix rate (a fixed-rate
-    /// JACK graph, mismatched hardware) can be opened at the LINE's configured rate behind an egress resampler -
-    /// without this, routing a device to an already-playing clip whose mix rate the device can't open simply
-    /// failed (the mid-play "route → no output" bug). Safe on the session thread.</summary>
+    /// since open (wrapped in a per-fire resampler only when the carrier's format differs). PortAudio line ids
+    /// resolve to isolated inputs on the already-open shared line runtime. Unrecognized ids remain ordinary
+    /// backend routes. Safe on the session thread.</summary>
     private ClipAudioOutputLease? BuildDeckAudioLeaseCore(string deviceId, AudioFormat format)
     {
+        if (OutputAudioRouteDeviceIds.TryParsePortAudio(deviceId, out var lineId))
+        {
+            if (_outputs.TryAcquirePortAudioByLineId(lineId, liveMonitoring: true) is not { } sharedLease)
+                return null;
+
+            var sharedInput = sharedLease.Output;
+            if (sharedInput.Format.SampleRate == format.SampleRate && sharedInput.Format.Channels == format.Channels)
+                return new ClipAudioOutputLease(
+                    sharedInput,
+                    DisposeOutputOnRuntimeDispose: false,
+                    Release: sharedLease.Dispose);
+
+            var adapted = ResamplingAudioOutput.Wrap(sharedInput, format);
+            return new ClipAudioOutputLease(
+                adapted,
+                DisposeOutputOnRuntimeDispose: false,
+                Release: () =>
+                {
+                    try { (adapted as IDisposable)?.Dispose(); }
+                    finally { sharedLease.Dispose(); }
+                });
+        }
+
         if (_playerNDIAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
         {
             if (carrierAudio.Format.SampleRate == format.SampleRate && carrierAudio.Format.Channels == format.Channels)
@@ -1028,28 +1039,9 @@ public partial class MediaPlayerViewModel
         if (MediaRuntime.Registry.AudioBackends.FirstOrDefault() is not { } backend)
             return null; // no backend - let the session report the failure its own way
 
-        try
-        {
-            // The common case: the device accepts the clip's mix rate directly (session-owned output).
-            return new ClipAudioOutputLease(backend.CreateOutput(deviceId, format), DisposeOutputOnRuntimeDispose: true);
-        }
-        catch
-        {
-            // The device rejected the clip's mix rate. Open it at ITS rate (the line's configured rate, else
-            // the device default) and egress-resample the router format into it. The session owns the wrapper;
-            // the created device is released via the lease hook (ResamplingAudioOutput never owns its inner).
-            var deviceRate = _playerPaDeviceRates.GetValueOrDefault(deviceId, 0);
-            if (deviceRate <= 0)
-                deviceRate = (int)Math.Round(backend.EnumerateOutputDevices()
-                    .FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))?.DefaultSampleRate ?? 0);
-            if (deviceRate <= 0 || deviceRate == format.SampleRate)
-                throw; // no viable alternative rate - surface the real open failure
-            var device = backend.CreateOutput(deviceId, new AudioFormat(deviceRate, format.Channels));
-            return new ClipAudioOutputLease(
-                ResamplingAudioOutput.Wrap(device, format),
-                DisposeOutputOnRuntimeDispose: true,
-                Release: () => (device as IDisposable)?.Dispose());
-        }
+        return new ClipAudioOutputLease(
+            backend.CreateOutput(deviceId, format),
+            DisposeOutputOnRuntimeDispose: true);
     }
 
     /// <summary>Pure: the deck's composition-canvas size = the LARGEST driven output resolution (by pixel area),
@@ -1125,6 +1117,19 @@ public partial class MediaPlayerViewModel
         Array.Fill(matrix, -1); // ChannelMap.Silence
         foreach (var c in audible)
             matrix[c.Output] = c.Input;
+        return matrix;
+    }
+
+    /// <summary>Default stereo identity widened to the configured hardware output count. Every trailing
+    /// channel is explicit silence so a shared multi-channel interface never receives an automatic upmix.</summary>
+    internal static int[] BuildDefaultHardwareChannelMatrix(int outputChannels)
+    {
+        if (outputChannels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(outputChannels));
+        var matrix = new int[outputChannels];
+        Array.Fill(matrix, -1);
+        for (var channel = 0; channel < Math.Min(2, matrix.Length); channel++)
+            matrix[channel] = channel;
         return matrix;
     }
 
@@ -1375,7 +1380,6 @@ public partial class MediaPlayerViewModel
                 _outputs.ReleaseAudioOutputForLine(held);
             _playerAcquiredAudioLines.Clear();
             _playerNDIAudioOutputs.Clear();
-            _playerPaDeviceRates.Clear();
             ShowSessionActive = false;
             IsPlaying = false;
             IsMediaLoaded = false;
