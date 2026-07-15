@@ -366,15 +366,30 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanBrowseMediaSource))]
     private async Task BrowseMediaSourceAsync()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } mediaCue)
+        if (SelectedMediaCue is null)
             return;
         var path = await PickMediaFilePathAsync();
         if (!string.IsNullOrWhiteSpace(path))
         {
-            mediaCue.MediaSourceItem = new FilePlaylistItem(path);
-            mediaCue.SourceOrAction = path;
-            mediaCue.Label = Path.GetFileNameWithoutExtension(path);
-            await ProbeAndAssignDurationAsync(mediaCue, path);
+            var targets = SelectedMediaTargets();
+            _isApplyingMultiEdit = true;
+            try
+            {
+                foreach (var mediaCue in targets)
+                {
+                    mediaCue.MediaSourceItem = new FilePlaylistItem(path);
+                    mediaCue.SourceCapabilitiesKnown = false;
+                    mediaCue.SourceOrAction = path;
+                    mediaCue.Label = Path.GetFileNameWithoutExtension(path);
+                }
+            }
+            finally
+            {
+                _isApplyingMultiEdit = false;
+            }
+
+            await Task.WhenAll(targets.Select(cue => ProbeAndAssignDurationAsync(cue, path)));
+            RefreshMultiEditSelectionState();
         }
     }
 
@@ -389,6 +404,7 @@ public partial class CuePlayerViewModel
         {
             if (probe is null)
             {
+                row.SourceCapabilitiesKnown = true;
                 row.DurationMs = 0;
                 row.SourceHasVideo = false;
                 row.SourceHasAudio = false;
@@ -403,6 +419,7 @@ public partial class CuePlayerViewModel
                 return;
             }
 
+            row.SourceCapabilitiesKnown = true;
             row.DurationMs = probe.Value.DurationMs ?? 0;
             row.SourceHasVideo = probe.Value.HasVideo;
             row.SourceHasAudio = probe.Value.HasAudio;
@@ -417,7 +434,7 @@ public partial class CuePlayerViewModel
         });
     }
 
-    private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
+    private bool CanBrowseMediaSource() => SelectedMediaCue is not null;
 
     /// <summary>Fills the audio-track picker for cues that were loaded from disk (no probe yet).
     /// Stream-table probe only - cheap enough to run on first selection.</summary>

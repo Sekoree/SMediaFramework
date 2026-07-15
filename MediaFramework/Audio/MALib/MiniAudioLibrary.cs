@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using S.Media.NativeInterop;
 
 namespace MALib;
 
@@ -35,11 +36,15 @@ internal static class MiniAudioLibrary
         if (!string.Equals(libraryName, ImportName, StringComparison.Ordinal))
             return nint.Zero;
 
-        foreach (var candidate in Candidates)
-        {
-            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out var handle))
-                return handle;
-        }
+        if (SystemFirstNativeLibraryResolver.TryLoad(
+                assembly,
+                searchPath,
+                Candidates,
+                installedPaths: null,
+                SystemFirstNativeLibraryResolver.AppLocalPaths(Candidates),
+                out var handle,
+                out _))
+            return handle;
 
         return nint.Zero;
     }

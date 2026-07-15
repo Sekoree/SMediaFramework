@@ -1021,6 +1021,94 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void MultiEdit_MixedMediaSelection_AppliesCommonAudioAndVideoFieldsByCapability()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddEmptyMediaCue();
+        var audioOnly = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        audioOnly.SourceHasAudio = true;
+        audioOnly.SourceAudioChannels = 2;
+        audioOnly.AudioRoutes.Add(new CueAudioRouteViewModel());
+
+        vm.AddEmptyMediaCue();
+        var audioWithCover = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        audioWithCover.SourceHasAudio = true;
+        audioWithCover.SourceAudioChannels = 2;
+        audioWithCover.SourceHasVideo = true;
+        audioWithCover.SourceVideoIsAttachedPicture = true;
+        audioWithCover.AudioRoutes.Add(new CueAudioRouteViewModel());
+        audioWithCover.VideoPlacements.Add(new CueVideoPlacementViewModel());
+
+        vm.AddEmptyMediaCue();
+        var image = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        image.MediaSourceItem = new ImagePlaylistItem("/tmp/still.png");
+        image.SourceHasVideo = true;
+        image.VideoPlacements.Add(new CueVideoPlacementViewModel());
+
+        vm.UpdateSelection([audioOnly, audioWithCover, image]);
+
+        Assert.Same(audioOnly, vm.SelectedAudioCue);
+        Assert.Same(audioWithCover, vm.SelectedVideoCue);
+        Assert.True(vm.HasSelectedMediaCueWithAudio);
+        Assert.True(vm.HasSelectedMediaCueWithVideo);
+
+        audioOnly.TriggerMode = CueTriggerMode.AutoFollow;
+        vm.SelectedCueLabel = "Shared label";
+        var audioTarget = Guid.NewGuid();
+        vm.SelectedAudioRoute!.OutputLineId = audioTarget;
+        vm.SelectedAudioRoute.OutputChannel = 7;
+        var videoTarget = Guid.NewGuid();
+        vm.SelectedVideoPlacement!.CompositionId = videoTarget;
+        vm.SelectedVideoPlacement!.Opacity = 0.35;
+
+        Assert.All(new[] { audioOnly, audioWithCover, image }, cue =>
+        {
+            Assert.Equal(CueTriggerMode.AutoFollow, cue.TriggerMode);
+            Assert.Equal("Shared label", cue.Label);
+        });
+        Assert.Equal(7, audioOnly.AudioRoutes[0].OutputChannel);
+        Assert.Equal(7, audioWithCover.AudioRoutes[0].OutputChannel);
+        Assert.Equal(audioTarget, audioOnly.AudioRoutes[0].OutputLineId);
+        Assert.Equal(audioTarget, audioWithCover.AudioRoutes[0].OutputLineId);
+        Assert.Empty(image.AudioRoutes);
+        Assert.Empty(audioOnly.VideoPlacements);
+        Assert.Equal(videoTarget, audioWithCover.VideoPlacements[0].CompositionId);
+        Assert.Equal(videoTarget, image.VideoPlacements[0].CompositionId);
+        Assert.Equal(0.35, audioWithCover.VideoPlacements[0].Opacity);
+        Assert.Equal(0.35, image.VideoPlacements[0].Opacity);
+    }
+
+    [Fact]
+    public void MultiEdit_AddAndRemoveRoutesAndPlacements_SkipsIncompatibleCues()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddEmptyMediaCue();
+        var audio = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        audio.SourceHasAudio = true;
+        audio.SourceAudioChannels = 2;
+
+        vm.AddEmptyMediaCue();
+        var image = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        image.MediaSourceItem = new ImagePlaylistItem("/tmp/still.png");
+        image.SourceHasVideo = true;
+
+        vm.UpdateSelection([audio, image]);
+        vm.AddAudioRouteCommand.Execute(null);
+        vm.AddVideoPlacementCommand.Execute(null);
+
+        Assert.Single(audio.AudioRoutes);
+        Assert.Empty(image.AudioRoutes);
+        Assert.Empty(audio.VideoPlacements);
+        Assert.Single(image.VideoPlacements);
+
+        vm.RemoveAudioRouteCommand.Execute(null);
+        vm.RemoveVideoPlacementCommand.Execute(null);
+
+        Assert.Empty(audio.AudioRoutes);
+        Assert.Empty(image.VideoPlacements);
+    }
+
+    [Fact]
     public void GoAdvancesFromStandbyToNextCue()
     {
         var vm = new CuePlayerViewModel();

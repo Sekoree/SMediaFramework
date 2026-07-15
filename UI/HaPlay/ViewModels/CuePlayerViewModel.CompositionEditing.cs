@@ -94,7 +94,7 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanAddAudioRoute))]
     private void AddAudioRoute()
     {
-        var targets = MediaCuesInSelection();
+        var targets = SelectedAudioTargets();
         if (targets.Count == 0) return;
         var firstOutput = AvailableAudioOutputs.FirstOrDefault();
         var channelCount = GetAudioOutputChannelCount(firstOutput);
@@ -110,7 +110,7 @@ public partial class CuePlayerViewModel
             };
             route.SetLineResolver(ResolveOutputLine);
             media.AudioRoutes.Add(route);
-            if (ReferenceEquals(media, SelectedCueNode))
+            if (ReferenceEquals(media, SelectedAudioCue))
                 lastOnPrimary = route;
         }
         if (lastOnPrimary is not null)
@@ -138,23 +138,27 @@ public partial class CuePlayerViewModel
             ? 0
             : encode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2);
 
-    private bool CanAddAudioRoute() => SelectedCueNode is { Kind: CueNodeKind.Media };
+    private bool CanAddAudioRoute() => SelectedAudioCue is not null;
 
     [RelayCommand(CanExecute = nameof(CanRemoveAudioRoute))]
     private void RemoveAudioRoute()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedAudioRoute is null) return;
-        if (media.AudioRoutes.Remove(SelectedAudioRoute))
-        {
-            SelectedAudioRoute = media.AudioRoutes.FirstOrDefault();
-            OnPropertyChanged(nameof(VisibleAudioRoutes));
-            OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
-            SuggestPreRollRefresh();
-        }
+        if (SelectedAudioCue is not { } owner || SelectedAudioRoute is null) return;
+        var index = owner.AudioRoutes.IndexOf(SelectedAudioRoute);
+        if (index < 0) return;
+        foreach (var cue in SelectedAudioTargets())
+            if (index < cue.AudioRoutes.Count)
+                cue.AudioRoutes.RemoveAt(index);
+        SelectedAudioRoute = owner.AudioRoutes.Count == 0
+            ? null
+            : owner.AudioRoutes[Math.Min(index, owner.AudioRoutes.Count - 1)];
+        OnPropertyChanged(nameof(VisibleAudioRoutes));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
+        SuggestPreRollRefresh();
     }
 
     private bool CanRemoveAudioRoute() =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedAudioRoute is not null;
+        SelectedAudioCue is not null && SelectedAudioRoute is not null;
 
     /// <summary>Quick-apply a multichannel downmix preset to the selected cue's audio routes for one
     /// output line (the selected route's line, else the first available audio output). Replaces that
@@ -163,7 +167,7 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanApplyCueDownmix))]
     private void ApplyCueDownmixPreset(AudioDownmixPreset preset)
     {
-        var targets = MediaCuesInSelection();
+        var targets = SelectedAudioTargets();
         if (targets.Count == 0)
             return;
 
@@ -210,7 +214,7 @@ public partial class CuePlayerViewModel
                 first ??= route;
             }
 
-            if (ReferenceEquals(media, SelectedCueNode) && first is not null)
+            if (ReferenceEquals(media, SelectedAudioCue) && first is not null)
                 SelectedAudioRoute = first;
             applied++;
         }
@@ -230,7 +234,7 @@ public partial class CuePlayerViewModel
     }
 
     private bool CanApplyCueDownmix() =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } && AvailableAudioOutputs.Count > 0;
+        SelectedAudioCue is not null && AvailableAudioOutputs.Count > 0;
 
     /// <summary>P5c follow-through - load a framework <c>.mfmix</c> preset file into the selected
     /// cues' routes on the chosen target line (same replace semantics as the enum quick-applies;
@@ -238,7 +242,7 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanApplyCueDownmix))]
     private async Task LoadCueMixPresetAsync()
     {
-        var targets = MediaCuesInSelection();
+        var targets = SelectedAudioTargets();
         if (targets.Count == 0)
             return;
         var line = SelectedAudioRoute?.OutputLineId is { } selId && selId != Guid.Empty
@@ -310,7 +314,7 @@ public partial class CuePlayerViewModel
                 }
             }
 
-            if (ReferenceEquals(media, SelectedCueNode) && first is not null)
+            if (ReferenceEquals(media, SelectedAudioCue) && first is not null)
                 SelectedAudioRoute = first;
             applied++;
         }
@@ -326,7 +330,7 @@ public partial class CuePlayerViewModel
     private void AddVideoPlacement()
     {
         if (SelectedCueList is null) return;
-        var targets = MediaCuesInSelection();
+        var targets = SelectedVideoTargets();
         if (targets.Count == 0) return;
         var firstComp = SelectedCueList.Compositions.FirstOrDefault();
 
@@ -344,7 +348,7 @@ public partial class CuePlayerViewModel
             };
             placement.SetDestRect(fx, fy, fw, fh);
             media.VideoPlacements.Add(placement);
-            if (ReferenceEquals(media, SelectedCueNode))
+            if (ReferenceEquals(media, SelectedVideoCue))
                 lastOnPrimary = placement;
         }
         if (lastOnPrimary is not null)
@@ -354,33 +358,26 @@ public partial class CuePlayerViewModel
         SuggestPreRollRefresh();
     }
 
-    private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer };
-
-    /// <summary>Media cues in the current multi-selection. Falls back to the singular
-    /// <see cref="SelectedCueNode"/> when only one row is selected (the common case).</summary>
-    private List<CueNodeViewModel> MediaCuesInSelection()
-    {
-        if (_selectedCueNodes.Count > 1)
-            return _selectedCueNodes.Where(n => n.Kind is CueNodeKind.Media or CueNodeKind.Visualizer).ToList();
-        return SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } single
-            ? new List<CueNodeViewModel> { single }
-            : new List<CueNodeViewModel>();
-    }
+    private bool CanAddVideoPlacement() => SelectedVideoCue is not null;
 
     [RelayCommand(CanExecute = nameof(CanRemoveVideoPlacement))]
     private void RemoveVideoPlacement()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } media || SelectedVideoPlacement is null) return;
-        if (media.VideoPlacements.Remove(SelectedVideoPlacement))
-        {
-            SelectedVideoPlacement = media.VideoPlacements.FirstOrDefault();
-            OnPropertyChanged(nameof(VisibleVideoPlacements));
-            SuggestPreRollRefresh();
-        }
+        if (SelectedVideoCue is not { } owner || SelectedVideoPlacement is null) return;
+        var index = owner.VideoPlacements.IndexOf(SelectedVideoPlacement);
+        if (index < 0) return;
+        foreach (var cue in SelectedVideoTargets())
+            if (index < cue.VideoPlacements.Count)
+                cue.VideoPlacements.RemoveAt(index);
+        SelectedVideoPlacement = owner.VideoPlacements.Count == 0
+            ? null
+            : owner.VideoPlacements[Math.Min(index, owner.VideoPlacements.Count - 1)];
+        OnPropertyChanged(nameof(VisibleVideoPlacements));
+        SuggestPreRollRefresh();
     }
 
     private bool CanRemoveVideoPlacement() =>
-        SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } && SelectedVideoPlacement is not null;
+        SelectedVideoCue is not null && SelectedVideoPlacement is not null;
 
     [RelayCommand(CanExecute = nameof(CanEditSelectedPlacement))]
     private void EditSelectedPlacementVideoFx()
@@ -391,8 +388,8 @@ public partial class CuePlayerViewModel
         if (owner is null)
             return;
 
-        var sourceWidth = SelectedCueNode?.SourceVideoWidth ?? 0;
-        var sourceHeight = SelectedCueNode?.SourceVideoHeight ?? 0;
+        var sourceWidth = SelectedVideoCue?.SourceVideoWidth ?? 0;
+        var sourceHeight = SelectedVideoCue?.SourceVideoHeight ?? 0;
         if (sourceWidth <= 0 || sourceHeight <= 0)
         {
             sourceWidth = 1920;
@@ -404,9 +401,9 @@ public partial class CuePlayerViewModel
             sourceHeight = Math.Max(16, sourceHeight);
         }
 
-        var targetName = string.IsNullOrWhiteSpace(SelectedCueNode?.Label)
+        var targetName = string.IsNullOrWhiteSpace(SelectedVideoCue?.Label)
             ? "Selected placement"
-            : SelectedCueNode.Label;
+            : SelectedVideoCue.Label;
         var vm = new Dialogs.MappingEditorViewModel(
             targetName,
             sourceWidth,
@@ -437,7 +434,7 @@ public partial class CuePlayerViewModel
             {
                 var comp = SelectedCueList?.Compositions.FirstOrDefault(c => c.Id == p.CompositionId)
                     ?? SelectedCueList?.Compositions.FirstOrDefault();
-                var node = SelectedCueNode;
+                var node = SelectedVideoCue;
                 var (fx, fy, fw, fh) = SourceFitRect(
                     node?.SourceVideoWidth ?? 0, node?.SourceVideoHeight ?? 0, comp?.Width ?? 0, comp?.Height ?? 0);
                 p.SetDestRect(fx, fy, fw, fh);

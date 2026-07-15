@@ -85,7 +85,7 @@ public sealed class ArchitectureTests
     // exempt). Includes the native-wrapper trees (TEST-02) so PALib/MALib/PMLib/NDILib/OSCLib/LibAssLib are
     // checked too, not just the S.Media.* / S.Control.* / S.Abi projects.
     private static readonly string[] FrameworkDirs =
-        ["Media", "Control", "Interop", "Audio", "MIDI", "NDI", "OSC", "Subtitles"];
+        ["Media", "Control", "Interop", "Audio", "MIDI", "NDI", "OSC", "Subtitles", "Visualizer"];
 
     private static string RepoRoot()  // repo root = the directory holding MFPlayer.sln
     {
@@ -165,6 +165,26 @@ public sealed class ArchitectureTests
     {
         var project = Path.Combine(RepoRoot(), "MediaFramework", relativePath);
         Assert.Empty(ProjectRefNames(project));
+    }
+
+    [Theory]
+    [InlineData("Audio/PALib/PALib.csproj")]
+    [InlineData("Audio/MALib/MALib.csproj")]
+    [InlineData("MIDI/PMLib/PMLib.csproj")]
+    [InlineData("NDI/NDILib/NDILib.csproj")]
+    [InlineData("Subtitles/LibAssLib/LibAssLib.csproj")]
+    [InlineData("Visualizer/ProjectMLib/ProjectMLib.csproj")]
+    [InlineData("Media/S.Media.Source.MMD/S.Media.Source.MMD.csproj")]
+    [InlineData("Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj")]
+    public void BundledNativeWrappersUseSharedSystemFirstResolverPolicy(string relativePath)
+    {
+        var project = Path.Combine(RepoRoot(), "MediaFramework", relativePath);
+        var linkedSources = XDocument.Load(project).Descendants("Compile")
+            .Select(element => (string?)element.Attribute("Include"))
+            .Where(include => !string.IsNullOrWhiteSpace(include));
+
+        Assert.Contains(linkedSources, include =>
+            include!.Replace('\\', '/').EndsWith("Shared/SystemFirstNativeLibraryResolver.cs", StringComparison.Ordinal));
     }
 
     [Fact]

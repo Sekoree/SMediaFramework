@@ -93,6 +93,14 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private bool _sourceHasVideo;
 
+    /// <summary>
+    /// True once the source type or media probe has authoritatively determined its stream
+    /// capabilities. A new/legacy unprobed media cue deliberately remains false so routes and
+    /// placements can still be prepared before a source is assigned.
+    /// </summary>
+    [ObservableProperty]
+    private bool _sourceCapabilitiesKnown;
+
     public bool IsTextCue => MediaSourceItem is TextPlaylistItem;
 
     public bool IsImageCue => MediaSourceItem is ImagePlaylistItem;
@@ -136,6 +144,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         switch (source)
         {
             case PortAudioInputPlaylistItem pa:
+                SourceCapabilitiesKnown = true;
                 SourceHasAudio = true;
                 SourceAudioChannels = Math.Max(1, pa.Channels);
                 SourceHasVideo = false;
@@ -146,6 +155,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 SourceVideoHeight = 0;
                 break;
             case NDIInputPlaylistItem ndi:
+                SourceCapabilitiesKnown = true;
                 SourceHasAudio = !ndi.VideoOnly;
                 SourceAudioChannels = ndi.VideoOnly
                     ? 0
@@ -164,6 +174,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             // leg) - without these flags the drawer never offers the Video tab, so the cue could not
             // be placed on a composition at all.
             case MMDPlaylistItem mmd:
+                SourceCapabilitiesKnown = true;
                 SourceHasVideo = true;
                 SourceHasAudio = false;
                 SourceAudioChannels = 0;
@@ -177,6 +188,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             // here (stereo audio, video unless deliberately audio-only) so the Audio/Video tabs show
             // immediately; the add path refines them by probing the cached asset when it exists.
             case YouTubePlaylistItem yt:
+                SourceCapabilitiesKnown = true;
                 SourceHasVideo = !yt.AudioOnly;
                 SourceHasAudio = true;
                 SourceAudioChannels = Math.Max(SourceAudioChannels, 2);
@@ -188,6 +200,29 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceVideoWidth = 0;
                     SourceVideoHeight = 0;
                 }
+                break;
+            case ImagePlaylistItem:
+                SourceCapabilitiesKnown = true;
+                SourceHasVideo = true;
+                SourceHasAudio = false;
+                SourceAudioChannels = 0;
+                SourceVideoIsAttachedPicture = false;
+                break;
+            case TextPlaylistItem text:
+                SourceCapabilitiesKnown = true;
+                SourceHasVideo = true;
+                SourceHasAudio = false;
+                SourceAudioChannels = 0;
+                SourceVideoIsAttachedPicture = false;
+                SourceVideoWidth = text.CanvasWidth;
+                SourceVideoHeight = text.CanvasHeight;
+                break;
+            case SubtitlePlaylistItem:
+                SourceCapabilitiesKnown = true;
+                SourceHasVideo = true;
+                SourceHasAudio = false;
+                SourceAudioChannels = 0;
+                SourceVideoIsAttachedPicture = false;
                 break;
         }
     }
@@ -614,37 +649,49 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     /// <summary>Media FX send (#26): this media cue's audio also drives a selective-feed visualizer.</summary>
-    public bool SendToVisualizer { get; set; }
+    [ObservableProperty]
+    private bool _sendToVisualizer;
 
     /// <summary>On natural end, fire this cue (null = rely on the next cue's Auto-Follow).</summary>
-    public Guid? EndTargetCueId { get; set; }
+    [ObservableProperty]
+    private Guid? _endTargetCueId;
 
     /// <summary>Visualizer timeline duration (ms): 0 = infinite; &gt;0 = the chain advances after it.</summary>
-    public int VisualizerDurationMs { get; set; }
+    [ObservableProperty]
+    private int _visualizerDurationMs;
 
     /// <summary>Visualizer render resolution/fps (0 = follow the composition).</summary>
-    public int VisualizerRenderWidth { get; set; }
+    [ObservableProperty]
+    private int _visualizerRenderWidth;
 
-    public int VisualizerRenderHeight { get; set; }
+    [ObservableProperty]
+    private int _visualizerRenderHeight;
 
-    public int VisualizerRenderFps { get; set; }
+    [ObservableProperty]
+    private int _visualizerRenderFps;
 
-    public double VisualizerPresetDurationSeconds { get; set; } = 30;
+    [ObservableProperty]
+    private double _visualizerPresetDurationSeconds = 30;
 
-    public bool VisualizerShufflePresets { get; set; } = true;
+    [ObservableProperty]
+    private bool _visualizerShufflePresets = true;
 
-    public double VisualizerBeatSensitivity { get; set; } = 1;
+    [ObservableProperty]
+    private double _visualizerBeatSensitivity = 1;
 
-    public double VisualizerTransitionSeconds { get; set; } = 2;
+    [ObservableProperty]
+    private double _visualizerTransitionSeconds = 2;
 
     /// <summary>Visualizer-cue feed (#26): true = every clip; false = FeedCueIds + flagged media cues.</summary>
-    public bool VisualizerFeedAll { get; set; } = true;
+    [ObservableProperty]
+    private bool _visualizerFeedAll = true;
 
     public List<Guid> VisualizerFeedCueIds { get; set; } = [];
 
     /// <summary>Visualizer-cue payload (#26): target composition + normalized dest rect + opacity.
     /// StartVisualizer/preset dir ride Extra ("Stop" sentinel) and SourceOrAction respectively.</summary>
-    public Guid VisualizerCompositionId { get; set; }
+    [ObservableProperty]
+    private Guid _visualizerCompositionId;
 
     public double VisualizerDestX { get; set; }
 
@@ -667,7 +714,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     /// <summary>Random Jump cues can exclude their immediately previous target when alternatives exist.</summary>
-    public bool JumpAvoidImmediateRepeat { get; set; }
+    [ObservableProperty]
+    private bool _jumpAvoidImmediateRepeat;
 
     public bool IsGroup => Kind == CueNodeKind.Group;
 
@@ -1016,6 +1064,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
+                    SourceCapabilitiesKnown = m.HasVideo || m.HasAudio || m.AudioChannels > 0,
                 };
                 foreach (var route in m.AudioRoutes)
                     vm.AudioRoutes.Add(CueAudioRouteViewModel.FromModel(route, resolveLine));

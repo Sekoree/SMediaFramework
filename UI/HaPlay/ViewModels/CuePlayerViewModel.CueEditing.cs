@@ -367,19 +367,19 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanAssignSelectedActionEndpoint))]
     private void AssignSelectedActionEndpoint()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Action } actionCue || SelectedActionEndpoint is null)
+        if (SelectedActionCue is not { } actionCue || SelectedActionEndpoint is null)
             return;
         actionCue.EndpointIdText = SelectedActionEndpoint.Id.ToString();
         OnPropertyChanged(nameof(SelectedActionEndpointSummary));
     }
 
     private bool CanAssignSelectedActionEndpoint() =>
-        SelectedCueNode?.Kind == CueNodeKind.Action && SelectedActionEndpoint is not null;
+        SelectedActionCue is not null && SelectedActionEndpoint is not null;
 
     [RelayCommand(CanExecute = nameof(CanEditActionCue))]
     private async Task EditActionCueAsync()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Action } cue)
+        if (SelectedActionCue is not { } cue)
             return;
 
         var owner = TryGetMainWindow();
@@ -411,5 +411,5 @@ public partial class CuePlayerViewModel
         StatusMessage = Strings.Format(nameof(Strings.UpdatedActionCueStatusFormat), CueDisplay(cue));
     }
 
-    private bool CanEditActionCue() => SelectedCueNode?.Kind == CueNodeKind.Action;
+    private bool CanEditActionCue() => SelectedActionCue is not null;
 }

@@ -2,13 +2,14 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using S.Media.NativeInterop;
 
 namespace ProjectMLib.Runtime;
 
 /// <summary>
 /// Cross-platform DllImport resolver for libprojectM-4 (same pattern as NDILibraryResolver).
-/// Probe order: the <c>MFP_PROJECTM_LIB</c> environment variable (a full library path OR a directory
-/// containing the library - what scripts/build-projectm.sh prints), then the per-OS system candidates.
+/// Probe order: system-installed projectM, then the <c>MFP_PROJECTM_LIB</c> environment fallback
+/// (a full library path OR a directory containing the library), development builds, and app-local assets.
 /// Registered by <see cref="ProjectMLibModuleInit"/> before any P/Invoke fires.
 /// </summary>
 public static class ProjectMLibraryResolver
@@ -40,28 +41,42 @@ public static class ProjectMLibraryResolver
         if (!string.Equals(libraryName, ProjectMLibraryNames.Default, StringComparison.Ordinal))
             return nint.Zero;
 
-        foreach (var candidate in GetCandidates())
+        var names = PlatformNames();
+        if (SystemFirstNativeLibraryResolver.TryLoad(
+                assembly,
+                searchPath,
+                names,
+                EnvironmentFallbackPaths(names),
+                BundledFallbackPaths(names),
+                out var handle,
+                out var loadedCandidate))
         {
-            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out var handle))
-            {
-                _logger.LogDebug("Loaded projectM native library candidate '{Candidate}'.", candidate);
-                return handle;
-            }
+            _logger.LogDebug("Loaded projectM native library candidate '{Candidate}'.", loadedCandidate);
+            return handle;
         }
 
         _logger.LogDebug("Unable to load libprojectM-4 using ProjectMLib fallback candidates.");
         return nint.Zero;
     }
 
-    /// <summary>Probe order: env override (exact file, then dir + per-OS names), the repo's dev build
-    /// (<c>External/projectm/&lt;rid&gt;</c> from scripts/build-projectm.sh, discovered by walking up
-    /// from the app directory - zero-setup for dev runs), then the system names.</summary>
+    /// <summary>High-level probe order used by tests and diagnostics. Bare system names are always
+    /// first; explicit override/development/application paths are fallbacks.</summary>
     internal static IEnumerable<string> GetCandidates()
     {
-        var names = OperatingSystem.IsWindows() ? ProjectMLibraryNames.WindowsCandidates
-            : OperatingSystem.IsMacOS() ? ProjectMLibraryNames.MacCandidates
-            : ProjectMLibraryNames.LinuxCandidates;
+        var names = PlatformNames();
+        return SystemFirstNativeLibraryResolver.OrderedCandidates(
+            names,
+            EnvironmentFallbackPaths(names),
+            BundledFallbackPaths(names));
+    }
 
+    private static string[] PlatformNames() =>
+        OperatingSystem.IsWindows() ? ProjectMLibraryNames.WindowsCandidates
+        : OperatingSystem.IsMacOS() ? ProjectMLibraryNames.MacCandidates
+        : ProjectMLibraryNames.LinuxCandidates;
+
+    private static IEnumerable<string> EnvironmentFallbackPaths(IReadOnlyList<string> names)
+    {
         var overridePath = Environment.GetEnvironmentVariable(EnvironmentOverride);
         if (!string.IsNullOrWhiteSpace(overridePath))
         {
@@ -73,7 +88,10 @@ public static class ProjectMLibraryResolver
                     yield return Path.Combine(overridePath, LibraryFileName(name));
             }
         }
+    }
 
+    private static IEnumerable<string> BundledFallbackPaths(IReadOnlyList<string> names)
+    {
         if (TryFindDevBuildRoot() is { } devRoot)
         {
             foreach (var libDir in DevLibDirectories(devRoot))
@@ -81,8 +99,9 @@ public static class ProjectMLibraryResolver
                 yield return Path.Combine(libDir, LibraryFileName(name));
         }
 
-        foreach (var name in names)
-            yield return name;
+        // A deployed artifact commonly ships the projectM native library next to the executable.
+        foreach (var path in SystemFirstNativeLibraryResolver.AppLocalPaths(names))
+            yield return path;
     }
 
     private static string LibraryFileName(string name) =>

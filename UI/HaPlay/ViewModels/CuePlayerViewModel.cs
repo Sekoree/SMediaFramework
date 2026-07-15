@@ -346,6 +346,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         _selectedCueNodes.Clear();
         _selectedCueNodes.AddRange(selected);
         SelectedCueNode = _selectedCueNodes.FirstOrDefault();
+        ResubscribeMultiEditSelection();
+        RefreshMultiEditSelectionState();
         OnPropertyChanged(nameof(SelectedCueCount));
         OnPropertyChanged(nameof(IsMultiSelected));
     }
@@ -423,13 +425,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedCueList?.VideoOutputs ?? _emptyVideoOutputs;
 
     public ObservableCollection<CueAudioRouteViewModel> VisibleAudioRoutes =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } node ? node.AudioRoutes : _emptyAudioRoutes;
+        SelectedAudioCue?.AudioRoutes ?? _emptyAudioRoutes;
 
     public ObservableCollection<CueVideoPlacementViewModel> VisibleVideoPlacements =>
-        // Visualizer cues share the media Video tab (#26 v3) - their placements must show here too.
-        SelectedCueNode is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } node
-            ? node.VideoPlacements
-            : _emptyVideoPlacements;
+        SelectedVideoCue?.VideoPlacements ?? _emptyVideoPlacements;
 
     /// <summary>Aspect ratio (w/h) of the composition the placement editor canvas should mirror.</summary>
     public double PlacementCanvasAspect
@@ -469,36 +468,33 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
-    public bool HasSelectedMediaCue => SelectedCueNode?.Kind == CueNodeKind.Media;
-    public bool HasSelectedTextCue => SelectedCueNode is { Kind: CueNodeKind.Media } media && media.IsTextCue;
+    public bool HasSelectedMediaCue => SelectedMediaCue is not null;
+    public bool HasSelectedTextCue => SelectedTextCue is not null;
 
     /// <summary>Image/text cues have no inherent length, so the operator sets the hold duration directly.</summary>
     public bool HasSelectedStaticCue =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } media && (media.IsImageCue || media.IsTextCue);
-    public bool HasSelectedActionCue => SelectedCueNode?.Kind == CueNodeKind.Action;
-    public bool HasSelectedCommentCue => SelectedCueNode?.Kind == CueNodeKind.Comment;
-    public bool HasSelectedGroupCue => SelectedCueNode?.Kind == CueNodeKind.Group;
+        SelectedStaticCue is not null;
+    public bool HasSelectedActionCue => SelectedActionCue is not null;
+    public bool HasSelectedCommentCue => SelectedCommentCue is not null;
+    public bool HasSelectedGroupCue => SelectedGroupCue is not null;
     public bool HasSelectedCue => SelectedCueNode is not null;
 
     /// <summary>Video tab visibility: media cue AND the source actually has a video stream
     /// (decodable - covers regular video files and audio files with attached picture cover art).</summary>
     public bool HasSelectedMediaCueWithVideo =>
-        (SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceHasVideo)
-        // Visualizer cues place onto compositions with the SAME Video tab as media cues (#26 v3).
-        || SelectedCueNode?.Kind == CueNodeKind.Visualizer;
+        SelectedVideoCue is not null;
 
     /// <summary>Audio tab visibility: media cue AND (the probe found audio OR the cue already
     /// has routes wired). The "has routes" branch keeps the tab editable for pre-Phase-5.1 cues
     /// that never went through the audio-stream probe but already have routes saved on disk.</summary>
     public bool HasSelectedMediaCueWithAudio =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } media
-        && (media.SourceHasAudio || media.AudioRoutes.Count > 0);
+        SelectedAudioCue is not null;
 
     /// <summary>Operator hint banner - true when the only "video" the source offers is an
     /// attached picture (e.g. MP3 album art). The Video tab still works (the still frame can be
     /// placed into a composition for a now-playing slate) but it's worth flagging.</summary>
     public bool HasSelectedMediaCueWithAttachedPictureOnly =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceVideoIsAttachedPicture;
+        SelectedVideoCue is { Kind: CueNodeKind.Media, SourceVideoIsAttachedPicture: true };
 
     /// <summary>Non-null when the selected media cue's probed frame rate doesn't divide evenly
     /// into at least one wired composition's canvas rate (Phase 5.9.2).</summary>
@@ -528,10 +524,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         get
         {
-            if (SelectedCueNode?.Kind != CueNodeKind.Action)
+            if (SelectedActionCue is not { } actionCue)
                 return string.Empty;
 
-            if (!Guid.TryParse(SelectedCueNode.EndpointIdText, out var endpointId))
+            if (!Guid.TryParse(actionCue.EndpointIdText, out var endpointId))
                 return Strings.NoActionTargetSelected;
 
             return SelectedActionEndpoint is null
@@ -689,6 +685,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void OnSelectedCueProbeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(CueNodeViewModel.MediaSourceItem)
+            or nameof(CueNodeViewModel.SourceCapabilitiesKnown)
             or nameof(CueNodeViewModel.SourceHasVideo)
             or nameof(CueNodeViewModel.SourceHasAudio)
             or nameof(CueNodeViewModel.SourceAudioChannels)
@@ -710,6 +707,12 @@ public partial class CuePlayerViewModel : ViewModelBase
             SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
             if (e.PropertyName is nameof(CueNodeViewModel.SourceHasAudio))
                 ExtractCueWaveform(_watchedSelectedCueForProbe);
+            RefreshMultiEditSelectionState(resetSelectedItems:
+                e.PropertyName is not nameof(CueNodeViewModel.MediaSourceItem));
+        }
+        else if (e.PropertyName is nameof(CueNodeViewModel.HasSubtitleTracks))
+        {
+            RefreshMultiEditSelectionState();
         }
     }
 
@@ -936,7 +939,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private string? BuildVideoFrameRateMismatchWarning()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } node || !node.SourceHasVideo)
+        if (SelectedVideoCue is not { Kind: CueNodeKind.Media } node || !node.SourceHasVideo)
             return null;
         if (!CueFrameRatePolicy.IsKnown(node.SourceFrameRateNum, node.SourceFrameRateDen))
             return null;
@@ -1021,7 +1024,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         get
         {
-            if (SelectedCueNode is not { Kind: CueNodeKind.Visualizer } viz)
+            if (SelectedVisualizerCue is not { } viz)
                 return string.Empty;
             var byId = EnumerateAllCueNodes().ToDictionary(c => c.Id, c => c);
             return string.Join(", ", viz.VisualizerFeedCueIds.Select(id =>
@@ -1031,7 +1034,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
         set
         {
-            if (SelectedCueNode is not { Kind: CueNodeKind.Visualizer } viz)
+            if (SelectedVisualizerCue is not { } viz)
                 return;
             var tokens = (value ?? string.Empty)
                 .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -1049,6 +1052,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             }
 
             viz.VisualizerFeedCueIds = resolved;
+            foreach (var target in SelectedKindTargets(CueNodeKind.Visualizer))
+                if (!ReferenceEquals(target, viz))
+                    target.VisualizerFeedCueIds = [.. resolved];
             StatusMessage = unknown.Count > 0
                 ? Strings.Format(nameof(Strings.CueJumpUnknownNumbersFormat), string.Join(", ", unknown))
                 : null;
@@ -1058,10 +1064,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public bool SelectedVisualizerFeedAll
     {
-        get => SelectedCueNode is not { Kind: CueNodeKind.Visualizer } v || v.VisualizerFeedAll;
+        get => SelectedVisualizerCue is not { } v || v.VisualizerFeedAll;
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Visualizer } v)
+            if (SelectedVisualizerCue is { } v)
             {
                 v.VisualizerFeedAll = value;
                 OnPropertyChanged(nameof(SelectedVisualizerFeedAll));
@@ -1074,14 +1080,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         get
         {
-            if (SelectedCueNode is not { Kind: CueNodeKind.Media } m || m.EndTargetCueId is not { } id)
+            if (SelectedMediaCue is not { } m || m.EndTargetCueId is not { } id)
                 return string.Empty;
             var target = EnumerateAllCueNodes().FirstOrDefault(c => c.Id == id);
             return target is null ? "?" : (string.IsNullOrWhiteSpace(target.Number) ? target.Label : target.Number);
         }
         set
         {
-            if (SelectedCueNode is not { Kind: CueNodeKind.Media } m)
+            if (SelectedMediaCue is not { } m)
                 return;
             var token = (value ?? string.Empty).Trim();
             if (token.Length == 0)
@@ -1112,10 +1118,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Visualizer timeline duration in seconds (0 = infinite).</summary>
     public double SelectedVisualizerDurationSeconds
     {
-        get => SelectedCueNode is { Kind: CueNodeKind.Visualizer } v ? v.VisualizerDurationMs / 1000.0 : 0;
+        get => SelectedVisualizerCue is { } v ? v.VisualizerDurationMs / 1000.0 : 0;
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Visualizer } v)
+            if (SelectedVisualizerCue is { } v)
             {
                 v.VisualizerDurationMs = (int)Math.Clamp(value * 1000.0, 0, int.MaxValue);
                 OnPropertyChanged(nameof(SelectedVisualizerDurationSeconds));
@@ -1127,7 +1133,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     [RelayCommand]
     private void SetVisualizerCueResolution(string spec)
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Visualizer } viz)
+        if (SelectedVisualizerCue is not { } viz)
             return;
         var parts = spec.Split(['x', '@']);
         if (parts.Length != 3
@@ -1138,13 +1144,13 @@ public partial class CuePlayerViewModel : ViewModelBase
         viz.VisualizerRenderWidth = w;
         viz.VisualizerRenderHeight = h;
         viz.VisualizerRenderFps = f;
-        OnPropertyChanged(nameof(SelectedCueNode)); // refresh the numerics
+        OnPropertyChanged(nameof(SelectedVisualizerCue)); // refresh the numerics
     }
 
     [RelayCommand(CanExecute = nameof(CanNextVisualizerPreset))]
     private async Task NextVisualizerPresetAsync()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Visualizer } cue
+        if (SelectedVisualizerCue is not { } cue
             || NextVisualizerPresetCallback is not { } callback)
             return;
 
@@ -1154,32 +1160,32 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     private bool CanNextVisualizerPreset() =>
-        SelectedCueNode is { Kind: CueNodeKind.Visualizer }
+        SelectedVisualizerCue is not null
         && NextVisualizerPresetCallback is not null;
 
     /// <summary>Drawer gate for the jump-cue section.</summary>
-    public bool IsJumpCueSelected => SelectedCueNode?.Kind == CueNodeKind.Jump;
+    public bool IsJumpCueSelected => SelectedJumpCue is not null;
 
     /// <summary>Drawer gate for the visualizer-cue section (#26).</summary>
-    public bool IsVisualizerCueSelected => SelectedCueNode?.Kind == CueNodeKind.Visualizer;
+    public bool IsVisualizerCueSelected => SelectedVisualizerCue is not null;
 
     public Guid SelectedVisualizerCompositionId
     {
-        get => SelectedCueNode is { Kind: CueNodeKind.Visualizer } v ? v.VisualizerCompositionId : Guid.Empty;
+        get => SelectedVisualizerCue?.VisualizerCompositionId ?? Guid.Empty;
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Visualizer } v)
+            if (SelectedVisualizerCue is { } v)
                 v.VisualizerCompositionId = value;
         }
     }
 
     public bool SelectedVisualizerStarts
     {
-        get => SelectedCueNode is { Kind: CueNodeKind.Visualizer } v
+        get => SelectedVisualizerCue is { } v
                && !string.Equals(v.Extra, "Stop", StringComparison.OrdinalIgnoreCase);
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Visualizer } v)
+            if (SelectedVisualizerCue is { } v)
             {
                 v.Extra = value ? "Start" : "Stop";
                 OnPropertyChanged(nameof(SelectedVisualizerStarts));
@@ -1195,7 +1201,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         get
         {
-            if (SelectedCueNode is not { Kind: CueNodeKind.Jump } jump)
+            if (SelectedJumpCue is not { } jump)
                 return string.Empty;
             var byId = EnumerateAllCueNodes().ToDictionary(c => c.Id, c => c);
             return string.Join(", ", jump.JumpTargetIds.Select(id =>
@@ -1205,7 +1211,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
         set
         {
-            if (SelectedCueNode is not { Kind: CueNodeKind.Jump } jump)
+            if (SelectedJumpCue is not { } jump)
                 return;
             var tokens = (value ?? string.Empty)
                 .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -1227,7 +1233,11 @@ public partial class CuePlayerViewModel : ViewModelBase
             }
 
             jump.JumpTargetIds = resolved;
-            _lastRandomJumpTargetIds.Remove(jump.Id);
+            foreach (var target in SelectedKindTargets(CueNodeKind.Jump))
+                if (!ReferenceEquals(target, jump))
+                    target.JumpTargetIds = [.. resolved];
+            foreach (var target in SelectedKindTargets(CueNodeKind.Jump))
+                _lastRandomJumpTargetIds.Remove(target.Id);
             StatusMessage = unknown.Count > 0
                 ? Strings.Format(nameof(Strings.CueJumpUnknownNumbersFormat), string.Join(", ", unknown))
                 : null;
@@ -1296,10 +1306,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public bool SelectedJumpRandom
     {
-        get => SelectedCueNode is { Kind: CueNodeKind.Jump } j && j.JumpRandom;
+        get => SelectedJumpCue is { } j && j.JumpRandom;
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Jump } j)
+            if (SelectedJumpCue is { } j)
             {
                 j.JumpRandom = value;
                 _lastRandomJumpTargetIds.Remove(j.Id);
@@ -1311,10 +1321,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public bool SelectedJumpAvoidImmediateRepeat
     {
-        get => SelectedCueNode is { Kind: CueNodeKind.Jump } j && j.JumpAvoidImmediateRepeat;
+        get => SelectedJumpCue is { } j && j.JumpAvoidImmediateRepeat;
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Jump } j)
+            if (SelectedJumpCue is { } j)
             {
                 j.JumpAvoidImmediateRepeat = value;
                 _lastRandomJumpTargetIds.Remove(j.Id);
@@ -1326,11 +1336,11 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public bool SelectedJumpFiresTarget
     {
-        get => SelectedCueNode is { Kind: CueNodeKind.Jump } j
+        get => SelectedJumpCue is { } j
                && !string.Equals(j.SourceOrAction, "standby", StringComparison.OrdinalIgnoreCase);
         set
         {
-            if (SelectedCueNode is { Kind: CueNodeKind.Jump } j)
+            if (SelectedJumpCue is { } j)
             {
                 j.SourceOrAction = value ? "fire" : "standby";
                 RefreshCueTargetDisplays();
@@ -1340,6 +1350,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     partial void OnSelectedCueNodeChanged(CueNodeViewModel? value)
     {
+        // Programmatic selections (add/duplicate/load) do not necessarily pass through
+        // UpdateSelection. Keep the multi-edit subscriptions aligned in that path too.
+        ResubscribeMultiEditSelection();
         _selectedCuePendingForGo = value is not null;
         OnPropertyChanged(nameof(SelectedCueNumber));
         OnPropertyChanged(nameof(SelectedEndTargetText));
@@ -1374,12 +1387,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (value is { Kind: CueNodeKind.Media })
             _ = EnsureAudioTrackChoicesAsync(value);
 
-        SelectedAudioRoute = value is { Kind: CueNodeKind.Media } media
-            ? media.AudioRoutes.FirstOrDefault()
-            : null;
-        SelectedVideoPlacement = value is { Kind: CueNodeKind.Media or CueNodeKind.Visualizer } placeable
-            ? placeable.VideoPlacements.FirstOrDefault()
-            : null;
+        SelectedAudioRoute = SelectedAudioCue?.AudioRoutes.FirstOrDefault();
+        SelectedVideoPlacement = SelectedVideoCue?.VideoPlacements.FirstOrDefault();
         RemoveNodeCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(VisibleAudioRoutes));
         OnPropertyChanged(nameof(VisibleVideoPlacements));
@@ -1416,8 +1425,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
         RefreshVideoFrameRateMismatchWarning();
         ExtractCueWaveform(value);
+        RefreshMultiEditSelectionState(resetSelectedItems: false);
 
-        if (value?.Kind == CueNodeKind.Action && Guid.TryParse(value.EndpointIdText, out var endpointId))
+        if (SelectedActionCue is { } actionCue && Guid.TryParse(actionCue.EndpointIdText, out var endpointId))
             SelectedActionEndpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);
         else
             SelectedActionEndpoint = null;
@@ -1425,13 +1435,13 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     partial void OnSelectedAudioRouteChanged(CueAudioRouteViewModel? value)
     {
-        _ = value;
+        WatchSelectedAudioRouteForMultiEdit(value);
         RemoveAudioRouteCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedVideoPlacementChanged(CueVideoPlacementViewModel? value)
     {
-        _ = value;
+        WatchSelectedVideoPlacementForMultiEdit(value);
         RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
         ApplyPlacementLayoutCommand.NotifyCanExecuteChanged();
         EditSelectedPlacementVideoFxCommand.NotifyCanExecuteChanged();
@@ -2954,7 +2964,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         ActionEndpoints.Clear();
         foreach (var endpoint in endpoints.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
             ActionEndpoints.Add(endpoint);
-        if (SelectedCueNode?.Kind == CueNodeKind.Action && Guid.TryParse(SelectedCueNode.EndpointIdText, out var endpointId))
+        if (SelectedActionCue is { } actionCue && Guid.TryParse(actionCue.EndpointIdText, out var endpointId))
             SelectedActionEndpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);
         RefreshBrokenEndpointFlags();
     }

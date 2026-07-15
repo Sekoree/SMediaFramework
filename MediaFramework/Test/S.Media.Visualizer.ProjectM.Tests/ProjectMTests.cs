@@ -10,7 +10,7 @@ namespace S.Media.Visualizer.ProjectM.Tests;
 public sealed class ProjectMTests
 {
     [Fact]
-    public void ResolverCandidates_EnvDirectoryTakesPrecedence()
+    public void ResolverCandidates_SystemNamesPrecedeEnvironmentDirectoryFallback()
     {
         var original = Environment.GetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride);
         var dir = Path.Combine(Path.GetTempPath(), $"pm_test_{Guid.NewGuid():N}");
@@ -21,8 +21,10 @@ public sealed class ProjectMTests
             var candidates = ProjectMLibraryResolver.GetCandidates().ToArray();
 
             Assert.True(candidates.Length > 2);
-            Assert.StartsWith(dir, candidates[0]); // env dir probes first
-            Assert.Contains(candidates, c => !c.Contains(dir)); // system names still follow
+            var systemNameIndex = Array.FindIndex(candidates, c => !Path.IsPathRooted(c));
+            var environmentIndex = Array.FindIndex(candidates, c => c.StartsWith(dir, StringComparison.Ordinal));
+            Assert.True(systemNameIndex >= 0);
+            Assert.True(environmentIndex > systemNameIndex);
         }
         finally
         {
@@ -41,12 +43,39 @@ public sealed class ProjectMTests
         {
             Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, file);
             var candidates = ProjectMLibraryResolver.GetCandidates().ToArray();
-            Assert.Equal(file, candidates[0]);
+            Assert.Contains(file, candidates);
+            Assert.True(Array.IndexOf(candidates, file)
+                        > Array.FindIndex(candidates, c => !Path.IsPathRooted(c)));
         }
         finally
         {
             Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, original);
             File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void ResolverCandidates_ProbeSystemNames_BeforeApplicationDirectory()
+    {
+        var original = Environment.GetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride);
+        try
+        {
+            Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, null);
+            var candidates = ProjectMLibraryResolver.GetCandidates().ToArray();
+
+            // A native library bundled next to the executable (AppContext.BaseDirectory) must be probed:
+            // the OS loader behind the bare system-name candidates does not search the app directory.
+            var appDir = AppContext.BaseDirectory;
+            var appDirIndex = Array.FindIndex(candidates, c => c.StartsWith(appDir, StringComparison.Ordinal));
+            Assert.True(appDirIndex >= 0, "the application directory must be probed for a bundled native library");
+
+            // System-installed libraries must win; the app-local copy is only a portable fallback.
+            var systemNameIndex = Array.FindIndex(candidates, c => !Path.IsPathRooted(c));
+            Assert.True(systemNameIndex >= 0 && systemNameIndex < appDirIndex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, original);
         }
     }
 

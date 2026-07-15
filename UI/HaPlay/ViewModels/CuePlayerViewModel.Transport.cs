@@ -36,7 +36,7 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanFireSelectedVisualizer))]
     private Task FireSelectedVisualizer()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Visualizer } cue)
+        if (SelectedVisualizerCue is not { } cue)
             return Task.CompletedTask;
 
         _selectedCuePendingForGo = false;
@@ -64,7 +64,7 @@ public partial class CuePlayerViewModel
     }
 
     private bool CanFireSelectedVisualizer() =>
-        SelectedCueNode is { Kind: CueNodeKind.Visualizer };
+        SelectedVisualizerCue is not null;
 
     [RelayCommand(CanExecute = nameof(CanStandbySelected))]
     private Task FireSelectedCueNow()
