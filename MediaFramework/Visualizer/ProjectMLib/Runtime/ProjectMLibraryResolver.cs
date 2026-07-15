@@ -49,7 +49,8 @@ public static class ProjectMLibraryResolver
                 EnvironmentFallbackPaths(names),
                 BundledFallbackPaths(names),
                 out var handle,
-                out var loadedCandidate))
+                out var loadedCandidate,
+                acceptCandidate: IsUsableProjectMBuild))
         {
             _logger.LogDebug("Loaded projectM native library candidate '{Candidate}'.", loadedCandidate);
             return handle;
@@ -68,6 +69,34 @@ public static class ProjectMLibraryResolver
             names,
             EnvironmentFallbackPaths(names),
             BundledFallbackPaths(names));
+    }
+
+    /// <summary>Rejects a projectM candidate that is an OpenGL ES build (DT_NEEDED <c>libGLESv2</c>). Such
+    /// a build loads fine but SEGFAULTS - uncatchably - inside <c>projectm_create</c> when handed the
+    /// desktop-GL compositor context. Rejecting it here lets probing continue past an unusable system
+    /// default (Arch/CachyOS ship a GLES build) to a usable desktop-GL build supplied via the env override,
+    /// the dev build, or an app-local bundle. Non-Linux and undeterminable cases are accepted; the
+    /// post-load <see cref="ProjectMRuntime"/> probe remains the backstop.</summary>
+    private static bool IsUsableProjectMBuild(string candidate)
+    {
+        if (!OperatingSystem.IsLinux())
+            return true;
+
+        var path = File.Exists(candidate)
+            ? candidate
+            : ElfNeededReader.TryFindLoadedLibraryPath("libprojectM-4");
+        if (path is null)
+            return true; // cannot inspect - don't over-veto
+
+        if (ElfNeededReader.TryReadNeeded(path).Any(n => n.StartsWith("libGLESv2", StringComparison.Ordinal)))
+        {
+            _logger.LogDebug(
+                "Skipping OpenGL ES projectM build '{Path}' - it crashes the desktop-GL compositor; continuing probe.",
+                path);
+            return false;
+        }
+
+        return true;
     }
 
     private static string[] PlatformNames() =>

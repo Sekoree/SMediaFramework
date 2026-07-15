@@ -60,6 +60,10 @@ internal static unsafe partial class Native
     internal static partial void projectm_set_preset_locked(
         nint instance, [MarshalAs(UnmanagedType.I1)] bool locked);
 
+    [LibraryImport(LibraryName)]
+    internal static partial void projectm_set_texture_search_paths(
+        nint instance, nint* textureSearchPaths, nuint count);
+
     // audio.h
     [LibraryImport(LibraryName)]
     internal static partial uint projectm_pcm_get_max_samples();

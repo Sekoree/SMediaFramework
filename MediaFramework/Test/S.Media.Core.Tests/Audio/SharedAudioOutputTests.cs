@@ -39,6 +39,32 @@ public sealed class SharedAudioOutputTests
         Assert.All(terminal.FirstSubmission, sample => Assert.Equal(3f, sample));
     }
 
+    [Fact]
+    public void ClientInput_BuffersFullHardwareRefillBurst_BeforeApplyingBackpressure()
+    {
+        using var terminal = new GatedOutput(Stereo48k);
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 4);
+        using var lease = shared.Acquire();
+        var clocked = Assert.IsAssignableFrom<IClockedOutput>(lease.Output);
+        var chunk = new float[64 * Stereo48k.Channels];
+
+        // The terminal is gated, so the shared mixer cannot consume yet. All eight chunks must
+        // fit: JACK/PipeWire may release several callback periods of capacity at once, and a
+        // three-chunk reservoir produced audible zero-filled gaps during those refill bursts.
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.True(clocked.WaitForCapacity(64, CancellationToken.None));
+            lease.Output.Submit(chunk);
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
+        Assert.False(clocked.WaitForCapacity(64, timeout.Token));
+
+        terminal.AllowPlayback();
+        using var resumed = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        Assert.True(clocked.WaitForCapacity(64, resumed.Token));
+    }
+
     private sealed class GatedOutput(AudioFormat format) : IAudioOutput, IClockedOutput, IDisposable
     {
         private readonly ManualResetEventSlim _playbackAllowed = new(false);

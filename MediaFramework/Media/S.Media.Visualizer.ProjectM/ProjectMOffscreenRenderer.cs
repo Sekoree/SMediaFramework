@@ -122,6 +122,8 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                 return;
             }
 
+            var texturePaths = ProjectMTextureSearchPaths.Configure(projectM, _options.PresetDirectory);
+
             Native.projectm_set_window_size(projectM, (nuint)_width, (nuint)_height);
             Native.projectm_set_fps(projectM, _fps);
             Native.projectm_set_preset_duration(projectM, double.MaxValue); // rotation is ours
@@ -135,8 +137,8 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             if (_presets.Length > 0)
                 LoadNextPreset(projectM, smooth: false);
             Trace.LogInformation(
-                "continuous projectM {Version} renderer running ({Presets} presets, {W}x{H}@{Fps})",
-                ProjectMRuntime.Version, _presets.Length, _width, _height, _fps);
+                "continuous projectM {Version} renderer running ({Presets} presets, {Textures} texture paths, {W}x{H}@{Fps})",
+                ProjectMRuntime.Version, _presets.Length, texturePaths.Length, _width, _height, _fps);
 
             // Private FBO (color + depth - some presets enable depth ops).
             fbo = gl.GenFramebuffer();

@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using ProjectMLib;
 using ProjectMLib.Runtime;
+using S.Media.NativeInterop;
 using Xunit;
 
 namespace S.Media.Visualizer.ProjectM.Tests;
@@ -77,6 +79,32 @@ public sealed class ProjectMTests
         {
             Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, original);
         }
+    }
+
+    [Fact]
+    public void SystemFirstResolver_RejectedCandidate_IsUnloaded_AndProbingContinues()
+    {
+        // A GLES projectM loads but is unusable, so the resolver rejects it and keeps probing. Verify that
+        // shared skip mechanism with a universally-loadable library (projectM itself may be absent here).
+        var name = OperatingSystem.IsWindows() ? "kernel32"
+            : OperatingSystem.IsMacOS() ? "libSystem.dylib"
+            : "libc.so.6";
+        var assembly = typeof(ProjectMLibraryResolver).Assembly;
+
+        // Rejecting every candidate must free the handle and report no load (nothing left to fall through to).
+        var rejectedAll = SystemFirstNativeLibraryResolver.TryLoad(
+            assembly, null, [name], installedPaths: null, bundledPaths: null,
+            out var rejectedHandle, out _, acceptCandidate: _ => false);
+        Assert.False(rejectedAll);
+        Assert.Equal(nint.Zero, rejectedHandle);
+
+        // Accepting the same candidate returns a real handle (the normal path is unchanged).
+        var accepted = SystemFirstNativeLibraryResolver.TryLoad(
+            assembly, null, [name], installedPaths: null, bundledPaths: null,
+            out var handle, out _, acceptCandidate: _ => true);
+        Assert.True(accepted);
+        Assert.NotEqual(nint.Zero, handle);
+        NativeLibrary.Free(handle);
     }
 
     [Fact]

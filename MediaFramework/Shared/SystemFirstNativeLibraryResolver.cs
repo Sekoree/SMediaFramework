@@ -12,6 +12,9 @@ namespace S.Media.NativeInterop;
 /// </summary>
 internal static class SystemFirstNativeLibraryResolver
 {
+    /// <param name="acceptCandidate">Optional post-load gate keyed on the candidate string. Returning
+    /// false unloads the just-loaded library and continues probing to the next candidate - used to reject
+    /// a library that loads but is unusable (e.g. an OpenGL ES projectM build). Null accepts every load.</param>
     internal static bool TryLoad(
         Assembly assembly,
         DllImportSearchPath? searchPath,
@@ -19,26 +22,28 @@ internal static class SystemFirstNativeLibraryResolver
         IEnumerable<string>? installedPaths,
         IEnumerable<string>? bundledPaths,
         out nint handle,
-        out string? loadedCandidate)
+        out string? loadedCandidate,
+        Func<string, bool>? acceptCandidate = null)
     {
         foreach (var candidate in SystemCandidates(systemNames))
         {
-            if (NativeLibrary.TryLoad(candidate, out handle))
+            if (NativeLibrary.TryLoad(candidate, out handle) && Accept(candidate, ref handle, acceptCandidate))
             {
                 loadedCandidate = candidate;
                 return true;
             }
         }
 
-        if (TryLoadExplicitPaths(installedPaths, out handle, out loadedCandidate)
-            || TryLoadExplicitPaths(bundledPaths, out handle, out loadedCandidate))
+        if (TryLoadExplicitPaths(installedPaths, acceptCandidate, out handle, out loadedCandidate)
+            || TryLoadExplicitPaths(bundledPaths, acceptCandidate, out handle, out loadedCandidate))
             return true;
 
         // Keep .NET's normal assembly/RID probing as the final compatibility fallback. It is
         // deliberately last because it may select an app-local native asset.
         foreach (var candidate in systemNames)
         {
-            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out handle))
+            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out handle)
+                && Accept(candidate, ref handle, acceptCandidate))
             {
                 loadedCandidate = candidate;
                 return true;
@@ -47,6 +52,17 @@ internal static class SystemFirstNativeLibraryResolver
 
         handle = nint.Zero;
         loadedCandidate = null;
+        return false;
+    }
+
+    private static bool Accept(string candidate, ref nint handle, Func<string, bool>? acceptCandidate)
+    {
+        if (acceptCandidate is null || acceptCandidate(candidate))
+            return true;
+
+        // Rejected: unload so it does not linger in the process, then let probing try the next candidate.
+        NativeLibrary.Free(handle);
+        handle = nint.Zero;
         return false;
     }
 
@@ -120,7 +136,8 @@ internal static class SystemFirstNativeLibraryResolver
     }
 
     private static bool TryLoadExplicitPaths(
-        IEnumerable<string>? candidates, out nint handle, out string? loadedCandidate)
+        IEnumerable<string>? candidates, Func<string, bool>? acceptCandidate,
+        out nint handle, out string? loadedCandidate)
     {
         if (candidates is not null)
         {
@@ -128,7 +145,7 @@ internal static class SystemFirstNativeLibraryResolver
             {
                 if (string.IsNullOrWhiteSpace(candidate) || !Path.IsPathFullyQualified(candidate))
                     continue;
-                if (NativeLibrary.TryLoad(candidate, out handle))
+                if (NativeLibrary.TryLoad(candidate, out handle) && Accept(candidate, ref handle, acceptCandidate))
                 {
                     loadedCandidate = candidate;
                     return true;

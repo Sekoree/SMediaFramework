@@ -72,6 +72,8 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVi
                 return;
             }
 
+            var texturePaths = ProjectMTextureSearchPaths.Configure(_projectM, _options.PresetDirectory);
+
             // Render at the configured resolution (decoupled from the canvas) when set, else follow the
             // canvas. The blit into the canvas scales, so a high internal res stays crisp even on a
             // small canvas, and vice-versa.
@@ -95,8 +97,8 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVi
             _source.ReportLegacyPresets(_presets.Length);
             if (_presets.Length > 0)
                 LoadNextPreset(smooth: false);
-            Trace.LogInformation("projectM {Version} surface ready ({Presets} presets, {W}x{H})",
-                ProjectMRuntime.Version, _presets.Length, _sceneWidth, _sceneHeight);
+            Trace.LogInformation("projectM {Version} surface ready ({Presets} presets, {Textures} texture paths, {W}x{H})",
+                ProjectMRuntime.Version, _presets.Length, texturePaths.Length, _sceneWidth, _sceneHeight);
 
             CreateSceneFbo(gl);
             CreateBlitProgram(gl);

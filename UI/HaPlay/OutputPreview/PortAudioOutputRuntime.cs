@@ -58,7 +58,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             var output = CreateOutput(_definition, out var resolvedDefinition);
             try
             {
-                _sharedOutput = new SharedAudioOutput(output, chunkSamples: 480, pumpCapacityChunks: 2);
+                _sharedOutput = new SharedAudioOutput(output, chunkSamples: 480, pumpCapacityChunks: 4);
                 _definition = resolvedDefinition;
                 _output = output;
             }
@@ -361,7 +361,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             try
             {
                 newOutput = CreateOutput(newDefinition, out var resolvedDefinition);
-                newSharedOutput = new SharedAudioOutput(newOutput, chunkSamples: 480, pumpCapacityChunks: 2);
+                newSharedOutput = new SharedAudioOutput(newOutput, chunkSamples: 480, pumpCapacityChunks: 4);
                 newDefinition = resolvedDefinition;
             }
             catch

@@ -19,6 +19,7 @@ public sealed class SharedAudioOutput : IDisposable
     private readonly IAudioOutput _terminal;
     private readonly AudioRouter _mixer;
     private readonly TimeSpan _clientBufferDuration;
+    private readonly int _clientTargetQueueSamples;
     private readonly bool _disposeTerminalOutput;
     private readonly Dictionary<long, ClientInput> _clients = [];
     private long _nextClientId;
@@ -31,21 +32,29 @@ public sealed class SharedAudioOutput : IDisposable
     /// <param name="chunkSamples">Mixer chunk size in samples per channel.</param>
     /// <param name="pumpCapacityChunks">Short jitter queue in front of the physical output.</param>
     /// <param name="clientBufferDuration">Maximum buffer available to each independent producer.</param>
+    /// <param name="clientTargetQueueChunks">
+    /// Per-client refill reservoir. Hardware callbacks release capacity in bursts, so this must span
+    /// more than the usual three-chunk steady-state jitter allowance.
+    /// </param>
     public SharedAudioOutput(
         IAudioOutput terminalOutput,
         bool disposeTerminalOutput = false,
         int chunkSamples = 480,
-        int pumpCapacityChunks = 2,
-        TimeSpan? clientBufferDuration = null)
+        int pumpCapacityChunks = 4,
+        TimeSpan? clientBufferDuration = null,
+        int clientTargetQueueChunks = 8)
     {
         ArgumentNullException.ThrowIfNull(terminalOutput);
         terminalOutput.Format.Validate(nameof(terminalOutput));
 
         _terminal = terminalOutput;
         _disposeTerminalOutput = disposeTerminalOutput;
-        _clientBufferDuration = clientBufferDuration ?? TimeSpan.FromMilliseconds(60);
+        _clientBufferDuration = clientBufferDuration ?? TimeSpan.FromMilliseconds(120);
         if (_clientBufferDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(clientBufferDuration), "must be > 0");
+        if (clientTargetQueueChunks < 2)
+            throw new ArgumentOutOfRangeException(nameof(clientTargetQueueChunks), "must be >= 2");
+        _clientTargetQueueSamples = checked(chunkSamples * clientTargetQueueChunks);
 
         _mixer = new AudioRouter(terminalOutput.Format.SampleRate, chunkSamples, pumpCapacityChunks)
         {
@@ -95,7 +104,7 @@ public sealed class SharedAudioOutput : IDisposable
 
             var clientId = ++_nextClientId;
             var sourceId = $"client_{clientId}";
-            var input = new ClientInput(Format, _clientBufferDuration, _mixer.ChunkSamples);
+            var input = new ClientInput(Format, _clientBufferDuration, _clientTargetQueueSamples);
             _mixer.AddSource(input, sourceId, autoResample: false);
             try
             {
@@ -166,12 +175,13 @@ public sealed class SharedAudioOutput : IDisposable
     {
         private readonly AudioBus _bus;
         private readonly int _targetQueueSamples;
+        private readonly ManualResetEventSlim _spaceAvailable = new(false);
         private int _disposed;
 
-        public ClientInput(AudioFormat format, TimeSpan bufferDuration, int chunkSamples)
+        public ClientInput(AudioFormat format, TimeSpan bufferDuration, int targetQueueSamples)
         {
             _bus = new AudioBus(format, bufferDuration);
-            _targetQueueSamples = Math.Min(_bus.CapacitySamples, Math.Max(chunkSamples * 3, chunkSamples));
+            _targetQueueSamples = Math.Min(_bus.CapacitySamples, targetQueueSamples);
         }
 
         public AudioFormat Format => _bus.Format;
@@ -185,38 +195,60 @@ public sealed class SharedAudioOutput : IDisposable
             _bus.Submit(packedSamples);
         }
 
-        public int ReadInto(Span<float> destination) =>
-            Volatile.Read(ref _disposed) != 0 ? 0 : _bus.ReadInto(destination);
+        public int ReadInto(Span<float> destination)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+                return 0;
+            var read = _bus.ReadInto(destination);
+            if (read > 0)
+                _spaceAvailable.Set();
+            return read;
+        }
 
         public bool WaitForCapacity(int chunkSamples, CancellationToken token)
         {
             if (chunkSamples <= 0)
                 return Volatile.Read(ref _disposed) == 0 && !token.IsCancellationRequested;
 
-            var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
             while (Volatile.Read(ref _disposed) == 0 && !token.IsCancellationRequested)
             {
                 var queued = _bus.BufferedSamples;
                 if (queued + chunkSamples <= _targetQueueSamples)
                     return true;
-                if (Environment.TickCount64 >= deadline)
-                    return false;
 
-                var excess = queued + chunkSamples - _targetQueueSamples;
-                var waitMs = Math.Max(1, (int)Math.Ceiling(1000.0 * excess / Format.SampleRate));
-                if (token.WaitHandle.WaitOne(waitMs))
+                // Reset then re-check to close the race where the mixer consumes between the
+                // occupancy read and the reset. Unlike a duration estimate, this wakes on the
+                // exact consumption event and does not alternately oversleep/catch up.
+                _spaceAvailable.Reset();
+                if (_bus.BufferedSamples + chunkSamples <= _targetQueueSamples)
+                    continue;
+                try
+                {
+                    if (!_spaceAvailable.Wait(TimeSpan.FromSeconds(5), token))
+                        return false;
+                }
+                catch (OperationCanceledException)
+                {
                     return false;
+                }
             }
 
             return false;
         }
 
-        public void Flush() => _bus.Flush();
+        public void Flush()
+        {
+            _bus.Flush();
+            _spaceAvailable.Set();
+        }
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
                 _bus.Flush();
+                _spaceAvailable.Set();
+            }
         }
     }
 

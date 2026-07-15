@@ -535,33 +535,53 @@
                          SelectedItem="{Binding SelectedVideoPlacement, Mode=TwoWay}">
                   <ListBox.ItemTemplate>
                     <DataTemplate DataType="vm:CueVideoPlacementViewModel">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{x:Static res:Strings.CompositionLabel}" VerticalAlignment="Center" />
-                        <ComboBox SelectedValue="{Binding CompositionId, Mode=TwoWay}"
-                                  SelectedValueBinding="{Binding Id}"
-                                  DisplayMemberBinding="{Binding DisplayName}"
-                                  ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
-                                  MinWidth="220" />
-                        <TextBlock Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
-                        <NumericUpDown FormatString="0" Value="{Binding LayerIndex, Mode=TwoWay}" VerticalAlignment="Center" Minimum="-100" Maximum="100" />
-                        <TextBlock Text="{x:Static res:Strings.LayerPositionLabel}" VerticalAlignment="Center" />
-                        <ComboBox SelectedItem="{Binding Position, Mode=TwoWay}"
-                                  ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).LayerPositions}"
-                                  MinWidth="120">
-                          <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                              <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
-                            </DataTemplate>
-                          </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <TextBlock Text="{x:Static res:Strings.OpacityLabel}" VerticalAlignment="Center" />
-                        <Slider Minimum="0" Maximum="1" SmallChange="0.05"
-                                VerticalAlignment="Center"
-                                Value="{Binding Opacity, Mode=TwoWay}" Width="105" />
-                        <NumericUpDown Width="82" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
-                                       ToolTip.Tip="Exact layer opacity (0.00–1.00)"
-                                       Value="{Binding Opacity, Mode=TwoWay}" />
-                      </StackPanel>
+                      <!-- Keep each label/editor pair together when the drawer narrows. Using a grid
+                           inside each group also gives every item the same vertical centre; the former
+                           horizontal StackPanel aligned controls by their differing desired heights. -->
+                      <WrapPanel ItemSpacing="12" LineSpacing="6">
+                        <Grid ColumnDefinitions="Auto,8,220">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CompositionLabel}" VerticalAlignment="Center" />
+                          <ComboBox Grid.Column="2"
+                                    SelectedValue="{Binding CompositionId, Mode=TwoWay}"
+                                    SelectedValueBinding="{Binding Id}"
+                                    DisplayMemberBinding="{Binding DisplayName}"
+                                    ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,8,110">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
+                          <NumericUpDown Grid.Column="2" Width="110"
+                                         FormatString="0"
+                                         Value="{Binding LayerIndex, Mode=TwoWay}"
+                                         VerticalAlignment="Center"
+                                         Minimum="-100" Maximum="100" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,8,140">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.LayerPositionLabel}" VerticalAlignment="Center" />
+                          <ComboBox Grid.Column="2"
+                                    SelectedItem="{Binding Position, Mode=TwoWay}"
+                                    ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).LayerPositions}"
+                                    VerticalAlignment="Center">
+                            <ComboBox.ItemTemplate>
+                              <DataTemplate>
+                                <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                              </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                          </ComboBox>
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,8,105,6,130">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.OpacityLabel}" VerticalAlignment="Center" />
+                          <Slider Grid.Column="2" Width="105"
+                                  Minimum="0" Maximum="1" SmallChange="0.05"
+                                  VerticalAlignment="Center"
+                                  Value="{Binding Opacity, Mode=TwoWay}" />
+                          <NumericUpDown Grid.Column="4" Width="130"
+                                         Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                         VerticalAlignment="Center"
+                                         ToolTip.Tip="Exact layer opacity (0.00–1.00)"
+                                         Value="{Binding Opacity, Mode=TwoWay}" />
+                        </Grid>
+                      </WrapPanel>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
