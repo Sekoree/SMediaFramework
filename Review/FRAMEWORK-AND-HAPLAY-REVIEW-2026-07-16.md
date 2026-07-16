@@ -2,7 +2,7 @@
 
 **Review date:** 2026-07-16
 
-**Baseline:** branch `test-enhancements`, commit `2e645d8b`
+**Code baseline:** branch `test-enhancements`, commit `2e645d8b`. The review document was introduced by commit `32f6a516`; its follow-up verification was performed against that commit's worktree on 2026-07-16.
 
 **Scope:** the current framework, native bindings, extras, HaPlay application, tests, build/package/release automation, and the versions of externally supplied native libraries.
 
@@ -18,6 +18,8 @@ It is not release-ready without addressing three issues:
 
 The next tier is release/product-definition work: projectM is a confirmed part of the full feature set but is neither reproducibly buildable from a fresh checkout nor included in the full artifact; the CI serialization setting is ineffective; and the 33 generated NuGet packages lack clear entry points, documentation, and a native-prerequisite contract.
 
+A follow-up audit verified that the findings and core evidence make sense. It also found two concrete omissions: HaPlay's documented `--media-live-uyvy-passthrough` switch is a no-op that nevertheless logs success, and tests intended to compile a now-deleted control guide silently return as passing. The visual review found that all three base themes load, including Simple/Fluent dark mode, but the shared semantic palette and active-navigation treatment are still Classic/light-oriented. Those additions do not displace the three release blockers above, but they should be included in the reliability and UI work.
+
 ### Priority legend
 
 - **P0:** release/security blocker.
@@ -29,16 +31,22 @@ The next tier is release/product-definition work: projectM is a confirmed part o
 
 | Check | Result |
 |---|---|
-| `dotnet build MFPlayer.sln -c Release --no-restore --nologo` | Passed, no warnings |
+| Original `dotnet build MFPlayer.sln -c Release --no-restore --nologo` | Passed, no warnings |
 | Default solution-wide Release test run | 1,917 passed, 10 skipped, 1 failed |
 | Exact failed test in isolation | Passed |
 | Full run with `-- RunConfiguration.MaxCpuCount=1` | 1,918 passed, 10 skipped, but test projects still ran concurrently |
 | Full run with MSBuild `-m:1` | 1,918 passed, 10 skipped, 0 failed; test projects actually serialized |
 | `dotnet pack MFPlayer.sln -c Release` | Passed; 33 packages emitted, all with missing-README warnings |
-| `dotnet list MFPlayer.sln package --vulnerable --include-transitive` | No known vulnerable NuGet packages reported |
-| `dotnet list MFPlayer.sln package --outdated` | Small Microsoft package updates plus a major SkiaSharp update; details below |
+| Original `dotnet list MFPlayer.sln package --vulnerable --include-transitive` | No known vulnerable NuGet packages reported |
+| Original `dotnet list MFPlayer.sln package --outdated` | Small Microsoft package updates plus a major SkiaSharp update; details below |
 | Isolated HaPlay JIT/Xvfb smoke | Passed: runtime ready and first frame rendered before clean exit |
 | `scripts/build-projectm.sh` from this checkout | Failed immediately because `Reference/projectm-4.1.6` is absent and ignored |
+| Follow-up Release build (`--no-restore`) | Passed in 2.12 s, no warnings or errors |
+| Follow-up serialized full test run (`-m:1`) | 1,918 passed, 9 skipped, 1 failed; the OSC test failed on a racy free-port handoff and passed immediately in isolation |
+| Follow-up Release pack (`--no-build --no-restore -m:1`) | Passed; reconfirmed 33 packages and a missing-README warning for every package |
+| Follow-up NuGet vulnerability scan | No known vulnerable direct or transitive packages reported by the configured NuGet source |
+| Follow-up NuGet outdated scan | Confirmed Logging 10.0.10, Test SDK 18.8.1, and SkiaSharp 4.150.1 as the only update families described below |
+| Follow-up real-UI theme captures | Classic/Light, Simple/Dark, and Fluent/Dark all launched and rendered representative workspaces at a 1280×800 window size under Xvfb |
 
 The default test failure was:
 
@@ -46,7 +54,9 @@ The default test failure was:
 
 The test waits only for the fake output's frame count to become non-zero and then immediately asserts a content pixel. The composition is allowed to submit an initial black canvas before the synthetic source is visible, so that condition does not mean the expected source frame has arrived. It passed alone and in the actually serialized full run. This is a **load-sensitive test synchronization defect**, not currently evidence of a production fan-out defect. Replace the count-only wait with a wait for the expected pixel/frame predicate.
 
-The smoke used isolated settings/cache roots, software GL, Xvfb, and `HAPLAY_SMOKE=1`. It reached `MediaRuntime ready` and `HAPLAY_SMOKE: first frame rendered - shutting down (exit 0)`. No real PortAudio/miniaudio device, MIDI device, NDI sender/receiver, projectM library, Windows host, or macOS host was available, so those paths received static/API review and their existing automated coverage but not physical-device validation.
+The follow-up serialized run failed in `OSCLib.Tests.OSCClientReceiveTests.FixedLocalPort_BindsTheClientSourcePort` with `SocketException: Address already in use`. Its helper binds a loopback UDP socket to port zero, reads the selected port, disposes the socket, and then asks `OSCClient` to bind that number (`OSCClientReceiveTests.cs:45-64`). The release/rebind gap is a time-of-check/time-of-use race, and the probe's loopback bind is not identical to the production wildcard bind. The exact test passed immediately in isolation. This is a test-fixture defect, not evidence that an already available, explicitly configured OSC port cannot bind.
+
+The smoke used isolated settings/cache roots, software GL, Xvfb, and `HAPLAY_SMOKE=1`. It reached `MediaRuntime ready` and `HAPLAY_SMOKE: first frame rendered - shutting down (exit 0)`. The follow-up captures launched the real desktop application with isolated settings and visited Players, Cues, Soundboard, Control, I/O, and Project across the three representative theme combinations. No real PortAudio/miniaudio device, MIDI device, NDI sender/receiver, projectM library, Windows host, or macOS host was available, so those paths received static/API review and their existing automated coverage but not physical-device validation.
 
 `Reference/` is excluded by `.git/info/exclude` and is not tracked repository content. Its large local third-party/test corpus was therefore not treated as shipping source or included in the line-by-line review. The vendored `External/Classic.Avalonia` fork was reviewed at its integration boundary, not re-audited as an independent upstream framework.
 
@@ -129,7 +139,7 @@ The visualizer can work on a configured developer machine but silently be unavai
 
 projectM is a required part of the full HaPlay feature set. Make the build acquire an immutable 4.1.7 archive with a checked SHA-256, fetch the pinned preset/texture revisions, apply only still-needed patches, build it in CI, stage the library plus preset/texture assets, and add version/load/render gates. Specifically retest the bound-FBO patch against upstream's new FBO-0 reset. The full artifact should fail rather than silently publish when this feature cannot be staged.
 
-### P2-1: CI's documented test serialization setting does not serialize test projects
+### P2-1: CI serialization and several test completion signals are unreliable
 
 **Evidence**
 
@@ -137,9 +147,13 @@ projectM is a required part of the full HaPlay feature set. Make the build acqui
 
 The current job then retries the whole test suite twice (`build.yml:126-135`). A retry is useful for infrastructure failure, but it can also convert a genuine timing defect into a green build without preserving a concise flaky-test signal.
 
+The follow-up `-m:1` run found a second, independent synchronization defect. `OSCClientReceiveTests.GetFreeUdpPort()` releases its probe socket before the client binds the chosen number (`MediaFramework/Test/OSCLib.Tests/OSCClientReceiveTests.cs:45-64`). Another socket can claim the port in that interval, and the loopback-only probe does not exactly model `OSCClient`'s wildcard bind. It failed with `Address already in use` in the serialized suite and passed immediately in isolation.
+
+Test-result fidelity is also inconsistent for optional environments. Nine HaPlay GL tests log “GL unavailable, skipping” and `return`, which xUnit reports as passes rather than skips. Environment-gated coverage is legitimate, but the result should say what was actually exercised; a green count currently cannot distinguish an executed GL assertion from an unavailable renderer. P2-9 covers the more serious version of this pattern, where a required guide was deleted and four tests now silently pass without compiling anything.
+
 **Recommendation**
 
-Use MSBuild `-m:1` (and retain VSTest's setting only if needed for a multi-target test project). Fix the fan-out test's completion condition. On a failed first attempt, always publish TRX/blame output and emit a prominent “passed only on retry” annotation. Prefer retrying failed test projects or classified infrastructure failures rather than unconditionally rerunning the entire suite.
+Use MSBuild `-m:1` (and retain VSTest's setting only if needed for a multi-target test project). Fix the fan-out test's completion condition. Replace free-port probe/handoff helpers with a retrying same-bind-semantics helper, or let the component bind port zero and expose the assigned endpoint where the behavior under test permits it. Use real dynamic skips for missing optional renderers/assets. On a failed first attempt, always publish TRX/blame output and emit a prominent “passed only on retry” annotation. Prefer retrying failed test projects or classified infrastructure failures rather than unconditionally rerunning the entire suite.
 
 ### P2-2: HLS serving allocates a complete segment for every request, including HEAD
 
@@ -236,6 +250,34 @@ Unauthenticated LAN control is a required workflow for low-friction integrations
 
 The media-stream HTTP server also binds `IPAddress.Any` by default (`S.Media.Stream.Http/HttpMediaServer.cs:72`) without authentication. That is defensible for a LAN playback output, but the trust boundary and exposure should be prominent in configuration and documentation.
 
+### P2-8: `--media-live-uyvy-passthrough` reports success but does nothing
+
+**Evidence**
+
+`UI/HaPlay.Desktop/Program.cs:80-86` documents the switch as skipping live UYVY-to-BGRA conversion. The handling block at lines 138-143 finds the switch and logs “live video using native pixel format,” but both assignments that would set `PlaybackVideoPipeline.CliRequestedUyvyPassthrough` and `PreferNativePixelFormatForLiveVideo` are commented out. `MainViewModel.cs:134-135` consequently sees no CLI override and replaces the preference with the persisted setting. The parsing is also incorrectly nested inside `ConfigureLogging`: `--media-log off` returns at `Program.cs:90-103` before reaching the playback switch at all.
+
+**Impact**
+
+An operator can start HaPlay with a documented performance/compatibility override, receive an affirmative log message, and still run the conversion path selected by saved settings. This makes live-video diagnosis misleading and could invalidate a workaround chosen for a specific capture/output path.
+
+**Recommendation**
+
+Parse non-logging startup options before logging configuration, set both fields before constructing `MainViewModel`, and emit the success message only after the state is applied. Add a small command-line configuration test for the switch alone, together with `--media-log off`, and with a conflicting persisted preference. If the override is no longer supported, remove the option and success log instead of keeping a no-op compatibility surface.
+
+### P2-9: deleted documentation makes guide tests silently pass without testing
+
+**Evidence**
+
+The repository no longer contains a `Doc/` directory, but source comments still point to at least nine deleted documents, including the architecture, output mapping, multi-output sync, NDI terminology, UI rewrite, and control guides. `Bcf2000GuideScriptsTests` is duplicated in `UI/HaPlay.Tests` and `MediaFramework/Test/S.Control.Tests`; each copy says it compiles scripts embedded in `Doc/HaPlay-Control-X32-BCF2000-Layers.md` so the guide cannot ship invalid code. When the document is absent, both test methods merely write “skipping” and return (`Bcf2000GuideScriptsTests.cs:17-25,97-105`). The four methods are therefore counted as passes even though no guide or script was read. `Program.cs:57-58` similarly points incident rationale at a deleted `Review/CODE-REVIEW-2026-07-12.md`.
+
+**Impact**
+
+The test suite communicates coverage that no longer exists, maintainers cannot follow important design/incident references from the code, and the user-facing control setup material promised by the test has disappeared. This reinforces the package/documentation problem in P2-5 and P3-3, but the false-green test result warrants a separate reliability finding.
+
+**Recommendation**
+
+Decide which deleted documents remain product contracts. Restore and update the control guide and essential architecture/operations documentation, or move required snippets into a tracked canonical fixture and remove claims that a guide is being tested. Keep only one copy of the guide test and make a missing required input fail; optional external assets should use a real skipped result. Add a lightweight link/reference check covering tracked Markdown and source-code `Doc/`/`Review/` references.
+
 ### P3-1: `ManualResetEventSlim` is not disposed for shared-output client leases
 
 `S.Media.Routing/Audio/SharedAudioOutput.cs:178` creates one `ManualResetEventSlim` per `ClientInput`. `Dispose` flushes and sets it but never disposes it (`SharedAudioOutput.cs:245-251`). A timed/cancellable wait can inflate the event to a kernel-backed handle. Frequent creation/removal of shared output clients can therefore retain native handles until finalization/GC.
@@ -253,6 +295,43 @@ Use rational rescaling of a frame ordinal, or accumulate the division remainder,
 The source contains strong comments, but external documentation does not yet explain the architecture, supported workflows, native provisioning, platform support, lifecycle/ownership rules, or the difference between full/core/minimal bundles. Naming also varies between HaPlay and older HaPlayer references. This raises the cost of using the framework without reading its internals and makes the release promises above ambiguous.
 
 Create an architecture overview, a minimal playback example, a show/session example, a native dependency matrix, an AOT guide, and a release-tier contract. Link those from the root README and package READMEs. State the supported platform policy explicitly: Linux is primary, Windows is supported, and macOS is currently unsupported. Existing macOS resolver branches can remain best-effort portability code, but they should not imply a tested support promise.
+
+### P3-4: the MMD preview can retain bitmaps and publish stale render state
+
+`AddMMDDialogViewModel` creates a new `WriteableBitmap` for each preview and directly assigns it to `PreviewImage` (`UI/HaPlay/ViewModels/Dialogs/AddMMDDialogViewModel.cs:247-255`). The replaced bitmap is never disposed, the final bitmap is not disposed when the dialog closes, and replaced `CancellationTokenSource` instances are cancelled but not disposed (`AddMMDDialogViewModel.cs:190-207,271`; `AddMMDDialog.axaml.cs:15`). Repeated camera/slider edits can therefore defer native pixel-buffer cleanup to finalization/GC.
+
+Cancellation does not fully order the results. An older render can pass the cancellation check at line 242, be cancelled while its UI callback is queued, and still replace a newer preview. Each overlapping render also independently sets `IsRendering = false` in `finally`, so the busy indicator can clear while the newest render is active.
+
+Give the dialog view model an explicit disposal/close lifetime. Cancel and dispose the active CTS, atomically replace and dispose superseded bitmaps after the `Image` releases them, and tag each render with a monotonically increasing generation checked inside the UI-thread publish callback. Track in-flight renders so only the current generation clears `IsRendering`. Add a rapid-edit/close test using a fake renderer that deliberately completes requests out of order.
+
+### P3-5: shared theme, accessibility, and localization contracts are incomplete
+
+The theme bundle architecture itself is good: Classic is intentionally light-only, Simple and Fluent honor light/dark, Fluent alone owns density, and resource-resolution tests cover several previously fragile third-party controls. The application launched successfully in all three representative combinations. The remaining issues are in app-level semantics:
+
+- `Styles/Tokens.axaml:24-52` defines one fixed set of status/state/text brushes outside a `ThemeDictionaries` block. Its comment still says dark values can be added “if/when a real dark theme lands,” although Simple/Dark and Fluent/Dark are already supported. Dark status text chosen for Classic surfaces is reused unchanged on dark surfaces.
+- A static scan found 67 direct color literals across 22 view XAML files, including duplicated local `card`/`hint` styles in `OutputManagementView` and `PipelineStatsView`. Some colors are intentionally canvas/media colors, but status, validation, selection, and chrome colors should come from semantic, variant-aware roles.
+- `MainView.axaml:27-33` gives the selected sidebar item only semibold text in the shared style; the visible raised/dithered selection is a Classic-template-only selector. In Simple and Fluent captures, the active workspace is consequently much less obvious.
+- The icon accessibility test realizes only `MediaPlayerView` and detects `PathIcon`/`Image` descendants (`IconButtonAccessibilityTests.cs:12-55`). It does not cover Cues, Control, I/O, or dialogs and treats symbolic text buttons such as `+`, `–`, `↑`, and `↓` as ordinary text. Several such controls expose only a tooltip, so an automation client may announce the symbol rather than the action.
+- Large portions of the visualizer drawer, Control dock panes, script editor, and mapping/visualizer dialogs still contain hard-coded English strings while the primary shell uses `Strings.resx`. This prevents complete localization and means longer translated layouts are not exercised.
+
+Move semantic color roles into light/dark theme dictionaries and migrate view-local operational colors incrementally. Add a base-theme-independent selected-navigation indicator (for example, a left accent bar plus subtle semantic background) while retaining the Classic bevel as an enhancement. Expand accessibility tests to realize every primary workspace and representative dialogs, require meaningful names or labels for symbol/icon controls, and check keyboard focus/order. Move remaining operator-facing strings into resources and add at least one pseudo-localized layout smoke. Automated contrast checks and a small set of image baselines per base theme should complement, not replace, the existing resource-resolution tests.
+
+## HaPlay visual and structural review
+
+Representative real-application captures were taken at 1280×800 for Classic/Light, Simple/Dark, and Fluent/Dark. Players, Cues, Soundboard, Control, I/O, and Project were visited across the matrix. There were no theme-load crashes, missing-control-template failures, or gross overlaps in those captures. Classic has the clearest deliberately retro identity; Simple and Fluent are viable alternatives rather than superficial recolors. A wholesale redesign is not justified, but the information architecture and shared semantic styling would benefit from a focused update.
+
+| Area | Observation | Recommended update |
+|---|---|---|
+| Navigation | The fixed sidebar is understandable and has useful shortcuts/collapse behavior. Active selection is strong only in Classic. | Add the theme-independent selected marker described in P3-5; keep icons, labels, and shortcuts unchanged. |
+| Players | The transport deck is stable and appropriately prioritizes controls, but an empty playlist is a large blank list whose creation actions live only in the toolbar/flyout. | Add a centered empty-state sentence plus “Add media” primary action and a drag/drop hint, reusing the successful Soundboard empty-state pattern. |
+| Cues | The master/detail model and large GO/HOLD controls fit show operation. The authoring toolbar and visualizer drawer carry many secondary actions and long explanations in the main surface. | Keep GO/HOLD/Stop fixed; group authoring actions into a primary Add menu plus contextual overflow, and make advanced visualizer help collapsible or link it to Help. Preserve keyboard shortcuts. |
+| I/O | The master/detail split is good, but five “Add …” buttons plus health actions form a long non-wrapping header that will be fragile under narrower windows and localization. The empty state has text but no direct action. | Keep the most common Add action visible and move other output types to an Add split/menu; add the same action to the empty state. Let health/status remain separate. |
+| Project/settings | One workspace mixes document actions, autosave/recovery, recent projects, appearance, Remote API configuration, a long endpoint cheat sheet, and caches. The two-column layout leaves unused recent-project space while the right column becomes a long scroll. | Keep Project focused on current/recent files and recovery. Move appearance, remote control, and cache management to a Preferences workspace/dialog with sections. Move the endpoint catalogue to searchable Help or an expandable/copyable API reference. Collapse to one column at narrow widths. |
+| Soundboard | The tile hierarchy, edit mode, state colors, and empty-state call to action are among the clearest parts of the app. | Reuse its empty-state and direct-manipulation patterns elsewhere; migrate its operational colors to theme dictionaries without changing the layout. |
+| Control | Docking suits expert users and rendered under every base theme. The panes and script editor contain dense, mostly hard-coded English UI and several symbol-only actions. | Preserve docking/custom layouts, but resource the strings, add meaningful automation names, and offer a reset-layout command that is easy to discover. |
+| Dialogs | Most are structurally consistent and scroll where needed; advanced mapping/MMD/visualizer dialogs mix semantic UI colors with fixed dark canvases. | Keep intentionally dark preview canvases isolated, use shared semantic resources for validation/chrome, and test representative dialogs in both dark-capable themes. |
+
+The update should be staged through shared tokens and reusable empty-state/header components first. That produces consistent improvements across all themes without maintaining three separate visual designs.
 
 ## Native/P\Invoke currency review
 
@@ -305,15 +384,17 @@ The session layer has a legitimate purpose: it owns a document-like show topolog
 
 ### Control, scripting, MIDI/OSC, and C ABI
 
-The control queue, bindings, command dispatch, Mond scripting, MIDI/OSC surfaces, inbound native plugin host, and exported C ABI are distinct integration features rather than obvious dead code. Bounded queues, coalescing, cancellation, and the MMD shim ABI marker are strong patterns. Present them through the recommended `S.Media.Control`, `S.Abi`, and `S.Media.Interop` entry packages while retaining their lower-level contract packages for implementers and transitive dependencies.
+The control queue, bindings, command dispatch, Mond scripting, MIDI/OSC surfaces, inbound native plugin host, and exported C ABI are distinct integration features rather than obvious dead code. Bounded queues, coalescing, cancellation, and the MMD shim ABI marker are strong patterns. Present them through the recommended `S.Media.Control`, `S.Abi`, and `S.Media.Interop` entry packages while retaining their lower-level contract packages for implementers and transitive dependencies. Fix the racy UDP test helper and restore or deliberately replace the deleted control-guide contract; the runtime tests are broad, but the current green count overstates documentation coverage.
 
 ### HaPlay UI, persistence, recovery, and remote control
 
-HaPlay is more than a demo shell: it exercises output lifecycle, cue/show mapping, players, recovery, visualizer settings, live reconfiguration, remote control, and diagnostics. The app's service extraction and restore/reconcile tests are valuable, but several view models still mix UI state with resource lifetime. Continue moving native/runtime creation and reconciliation behind narrow services while keeping dispatcher-bound collection mutation explicit. The REST API is technically hardened against simple resource exhaustion. Its required no-token LAN mode should retain the current opt-in binding while clearly communicating its trusted-network assumption.
+HaPlay is more than a demo shell: it exercises output lifecycle, cue/show mapping, players, recovery, visualizer settings, live reconfiguration, remote control, and diagnostics. The app's service extraction and restore/reconcile tests are valuable, but several view models still mix UI state with resource lifetime; the MMD preview is a concrete example where cancellation, bitmap ownership, and visible busy state should move behind a narrow render-preview service/lifetime. The REST API is technically hardened against simple resource exhaustion. Its required no-token LAN mode should retain the current opt-in binding while clearly communicating its trusted-network assumption.
+
+The three-theme system is structurally sound and all representative combinations rendered. The main UI work is consolidation rather than reinvention: make semantic colors variant-aware, give Simple/Fluent a strong selected-workspace state, reuse consistent empty states, separate Project from machine-wide preferences, and expand accessibility/localization coverage beyond the media deck and Soundboard. The detailed visual matrix above should be used as a staged backlog.
 
 ### Build, tests, packaging, and release
 
-This is one of the repository's strongest areas: clean analyzers, architecture tests, focused native/ABI/subtitle/GL smokes, AOT publishing, manifests, SBOM generation, and launch gates are all appropriate. Correct the ineffective serialization option, make native sources immutable and versions executable assertions, and turn package documentation into part of the pack gate. A release gate should validate what an artifact **contains**, not what the workflow intended to download.
+This is one of the repository's strongest areas: clean analyzers, architecture tests, focused native/ABI/subtitle/GL smokes, AOT publishing, manifests, SBOM generation, and launch gates are all appropriate. Correct the ineffective serialization option and misleading skip/pass patterns, make native sources immutable and versions executable assertions, and turn package documentation into part of the pack gate. Add startup-option tests so a diagnostic switch cannot log success while remaining inactive. A release gate should validate what an artifact **contains** and what a test actually exercised, not what the workflow or test name intended.
 
 ## Simplification and optimization order
 
@@ -322,10 +403,12 @@ Do not begin with broad rewrites. The highest-return sequence is:
 1. Fix and conformance-test whole-frame audio ring behavior across all backends.
 2. Replace or strictly gate the miniaudio ABI boundary.
 3. Pin/verify libass 0.17.5 and reproducibly stage projectM 4.1.7 plus its assets in the full artifact.
-4. Correct CI serialization and the fan-out test predicate.
-5. Stream HLS files and pool encode audio chunks; measure allocation rate and GC pauses before/after.
-6. Add the recommended entry/meta packages, platform policy, and feature-tier documentation without breaking the existing leaf package graph.
-7. Extract runtime services from the largest coordinators one responsibility at a time, keeping ownership and sequencing tests around every extraction.
+4. Make the UYVY startup override truthful and independent of logging configuration; add startup-option tests.
+5. Correct CI serialization, the fan-out predicate, the OSC port helper, and false-pass skip/documentation tests.
+6. Stream HLS files and pool encode audio chunks; measure allocation rate and GC pauses before/after.
+7. Add the recommended entry/meta packages, restore essential documentation, and define platform/feature tiers without breaking the existing leaf package graph.
+8. Consolidate HaPlay's light/dark semantic tokens and reusable empty-state/header patterns, then simplify Project/settings and the I/O/Cue action surfaces without changing show-critical transport placement.
+9. Extract runtime services from the largest coordinators one responsibility at a time, keeping ownership and sequencing tests around every extraction.
 
 Useful benchmarks/counters to add before further optimization:
 
@@ -397,10 +480,62 @@ Before calling a binary release-ready:
 - the full artifact's manifest lists exact native versions, paths, and hashes and fails on missing promised features;
 - projectM 4.1.7, its presets, and its textures are staged and render-smoked through HaPlay's bound-FBO path;
 - the full test suite passes with actual project serialization, without relying on a retry;
+- required guide/document tests fail when their tracked inputs disappear, while unavailable optional hardware/GL tests are reported as skipped rather than passed;
+- startup-option tests prove that `--media-live-uyvy-passthrough` changes the live pipeline both with normal logging and `--media-log off`;
 - Linux and Windows AOT artifacts reach the first rendered frame using only their bundled/declared tier dependencies;
 - NuGet entry packages contain README/XML docs and document native prerequisites;
+- primary workspaces and representative dialogs render in Classic/Light, Simple/Light/Dark, and Fluent/Light/Dark with semantic contrast, visible keyboard focus, and meaningful automation names;
 - both supported OS families have build, native-load, and application-launch gates, with Linux receiving the primary/deepest validation.
 
 ## Final verdict
 
-The framework has a coherent purpose and a strong foundation; there is no case for a wholesale rewrite. Most modules correspond to real media/show-control responsibilities. The product decisions are now clear: Linux-first plus Windows, a full projectM-capable artifact, arbitrary channel counts, both audio backends, and intentionally optional authentication for LAN control. The critical work is therefore concrete: make all audio queues frame-based, make native ABI/version assumptions executable, make the full artifact match that feature promise, and introduce purpose-led NuGet entry packages. After those items, allocation work in HLS and encoding and responsibility-based extraction from the large coordinators should improve long-running reliability without destabilizing the architecture.
+The framework has a coherent purpose and a strong foundation; there is no case for a wholesale rewrite. Most modules correspond to real media/show-control responsibilities. The product decisions are now clear: Linux-first plus Windows, a full projectM-capable artifact, arbitrary channel counts, both audio backends, and intentionally optional authentication for LAN control. The critical work is therefore concrete: make all audio queues frame-based, make native ABI/version assumptions executable, make the full artifact match that feature promise, and introduce purpose-led NuGet entry packages. The follow-up adds a smaller but important truthfulness theme: startup flags, skipped tests, guide tests, and artifact labels must report what actually happened. After those items, allocation work, theme-token consolidation, focused UI restructuring, and responsibility-based extraction from the large coordinators should improve long-running reliability and usability without destabilizing the architecture.
+
+## Addendum: independent second-pass verification and additional findings (2026-07-16)
+
+A second, independent pass re-verified this document's claims against the worktree, re-ran the build and the serialized test suite, swept the framework and application for defects the document does not cover, and extended the visual review to all five theme combinations plus a headless dialog gallery. Screenshot evidence referenced below lives in `Review/Screens-2026-07-16/`.
+
+### Verification outcome
+
+Every evidence citation spot-checked in P0-1 through P3-5 matched the code exactly, including the `AudioBus`/`MiniAudioOutput` unaligned overflow truncation, NDI's contrasting channel-aligned `UsableFloats` model, the apt `libass9` vs. claimed 0.17.5 mismatch, the hand-mirrored miniaudio layouts behind an ungated system-first resolver, the commented-out UYVY assignments inside `ConfigureLogging`, the guide tests' silent-return pattern, the undisposed `ManualResetEventSlim` and MMD preview lifetimes, and the Classic-only token/selection styling. The size table is exact (`MediaPlayerViewModel.cs` 2,439 + its ShowSession partial 1,549 = 3,988). Two garbled sentences introduced by the previous edit (executive summary and the P0-1 recommendation) were repaired in place.
+
+Checks that came back clean in this pass, for the record: `HttpMediaServer` request handling is bounded (10 s per-request deadline, 8 KiB request cap, extension/segment allowlist with no URL decoding, so no traversal); `TsFanOutBuffer` uses bounded per-client channels with keyframe-aware eviction; `RestApiServer` never reads request bodies and bounds headers/query before auth; `SessionRecoveryService` is single-flight with an atomic-write path; the OSC codec length-checks strings/blobs; the YouTube module wraps YoutubeExplode with one shared `HttpClient`; and the new `FFmpegRuntime` Windows resolver correctly requires one complete coherent library set per directory. No new memory-safety or protocol-level defect was found in those areas.
+
+Two factual updates to earlier text:
+
+- **`Reference/projectm-4.1.6` is present in this working copy** (git-ignored, alongside the other vendored trees), so `scripts/build-projectm.sh` can run on this machine today. The validation-table row describing it as absent reflects an earlier state. The P1-3 substance is unchanged: `Reference/` is not tracked, so a fresh clone still cannot reproduce the build, and CI still neither builds nor stages projectM.
+- **A fresh serialized run (`-m:1`, Release, no retry) passed completely** — 0 failures including `FixedLocalPort_BindsTheClientSourcePort` — consistent with the P2-1 diagnosis that both failures are load-sensitive test races rather than product defects.
+
+### P2-10: the Players transport row clips at the default window size
+
+**Evidence**
+
+`MainWindow.axaml:10` opens at 960×640 with `MinWidth` 720. The transport is a centered horizontal `StackPanel` inside the star column of a two-column grid (`MediaPlayerView.axaml:356-421`), and compact mode only engages below 500 px of view width (`MediaPlayerView.axaml.cs:16`). The row's natural width (Prev · Play · HOLD · ▾ · VIZ · ▾ · Next plus the right-hand Mute/volume/dB/Playback/Stop group) is roughly 1,000 px, so between ~500 and ~1,000 px the centered panel overflows both edges and is clipped by the right group. At the default first-launch size, the VIZ toggle is cut to a sliver and Next is partially eclipsed (`Screens-2026-07-16/classic-light-players-960default.png`); at 1,280 px everything fits (`classic-light-players.png`).
+
+**Impact**
+
+On first launch, before any window resize, transport controls that the view's own comments call panic-path (Next; also the visualizer toggle) are partially invisible and can overlap the Mute/volume group's hit-targets. At `MinWidth` 720 the overlap is worse. This contradicts the deck's otherwise deliberate touch-tier design.
+
+**Recommendation**
+
+Trigger compact mode from measured content width rather than a fixed 500 px constant (or raise the threshold above the row's real natural width), and verify the hide-compact set actually brings the row under the narrow budget. Alternatively let the two transport groups share one wrapping/adaptive container. Add a headless layout test that lays out `MediaPlayerView` at 960 and at 720 and asserts the transport buttons' bounds neither clip nor overlap.
+
+### P3-6: the I/O capability status line wraps mid-item
+
+The Outputs header's module line (`FFmpeg ✓ PortAudio ✓ MiniAudio ✓ NDI ✓ YouTube ✓ MMD ✓`) wraps as plain text, so a module name and its checkmark split across lines (Classic and Simple at 1,280: `NDI` ends line one, its `✓` starts line two — `classic-light-io.png`, `simple-dark-io.png`); under Fluent's larger type the same text crams into three lines squeezed between the description and the six-button Add row (`fluent-dark-io.png`). Render each module+state as an unbreakable unit (chips or a `WrapPanel` of name-check pairs), which also gives the health/tooltip affordance a natural home; this pairs with the Add-row consolidation already recommended in the visual matrix.
+
+### P3-7: smaller cross-theme consistency findings from the capture matrix
+
+The five-combination matrix (Classic/Light, Simple/Light, Simple/Dark, Fluent/Light, Fluent/Dark across all six workspaces) and a 10-dialog × 3-theme headless gallery rendered without a single crash, missing template, or gross overlap beyond P2-10 — confirming the theme architecture is sound. The residual issues are consistency-level and mostly reinforce P3-5 with concrete instances:
+
+- **Fluent keeps its default magenta/pink accent** (selected-tab underline, volume slider track, Edit-cues toggle — `fluent-dark-players.png`, `fluent-dark-cues.png`), which clashes with the app's operational green/amber/red language. Set an explicit accent color in the Fluent bundle so the brand and state colors are deliberate on both variants.
+- **Disabled emphasis is inconsistent across themes for the same state.** With no media loaded, Simple/Light renders Play/Stop as washed-out pastels (`simple-light-players.png`) while Classic renders the identical disabled state fully saturated (`classic-light-players.png`). One direction should be chosen: semantic Go/Danger styles need explicit, similar disabled treatments in all three bundles.
+- **`CuePlayerView.axaml:954` hard-codes the cue splitter as `#22000000`**, which is nearly invisible on dark surfaces — a concrete instance of the P3-5 color-literal migration, worth using as the template fix (shared `BorderSubtle`-class token).
+- **The cue empty state's icon is the plain filled-circle `AppIcons.Cue` glyph at 34 px**, which reads as an unrendered placeholder blob rather than an icon (`classic-light-cues.png`, `fluent-dark-cues.png`). A cue-list glyph (e.g. stacked rows with a GO arrow) would carry the empty state better.
+- **The mapping editor's toolbar is symbol-only** (`+`, duplicate, `–`, `↑`, `↓` — `fluent-dark-mapping-editor.png`), confirming the P3-5 accessibility item extends into dialogs, not just workspaces.
+
+The dialog gallery itself is worth keeping: a ~100-line console harness (headless Skia + the public theme bundles + parameterless dialog constructors) rendered every dialog in every theme in seconds. Promoting it into the test tree — asserting a frame renders and, later, comparing against per-theme baselines — would give the "representative dialogs render in every theme" release gate an executable form.
+
+### Addendum verdict
+
+The prior document's findings, priorities, and product decisions all held up under independent re-verification; nothing in it needs to be walked back beyond the two factual updates above. The additions are one new P2 (a first-launch transport clipping defect with screenshot evidence and a clear fix) and consistency-level UI work that slots into the existing P3-5/visual-matrix backlog. The release blockers remain exactly the three named at the top.
