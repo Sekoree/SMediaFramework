@@ -39,40 +39,73 @@ sys.exit(2)
 PY
 }
 
+# The probe body lives in a compiled C# helper, not PowerShell marshaling:
+# - Marshal.GetDelegateForFunctionPointer rejects GENERIC delegate types, so the previous
+#   [Func[int]]/[Action[...]] approach threw (and the ma_version fallback then read garbage).
+#   Real Cdecl delegate types fix that.
+# - ass.dll's dependents (freetype/harfbuzz/fribidi/...) sit NEXT TO IT in the publish dir, which
+#   is not in the probing process's DLL search path - SetDllDirectory + LOAD_WITH_ALTERED_SEARCH_PATH
+#   resolve them from the probed DLL's own directory (same reason the REL-01 load-probe passes).
 probe_windows() {
     local kind="$1" path="$2"
     MFP_KIND="$kind" MFP_PATH="$(cygpath -w "$path")" pwsh -NoProfile -NonInteractive -Command '
-      Add-Type -Namespace Probe -Name Native -MemberDefinition @"
-        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
-        public static extern System.IntPtr LoadLibrary(string path);
-        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError=true)]
-        public static extern System.IntPtr GetProcAddress(System.IntPtr module, string name);
+      Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+namespace Probe {
+  public static class Native {
+    [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
+    [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool SetDllDirectory(string path);
+    [DllImport("kernel32", SetLastError = true)]
+    static extern IntPtr GetProcAddress(IntPtr module, string name);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int AssLibraryVersion();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void MaVersion(out uint major, out uint minor, out uint revision);
+
+    const uint LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008;
+
+    static IntPtr GetExport(string path, string name) {
+      SetDllDirectory(System.IO.Path.GetDirectoryName(path));
+      IntPtr module = LoadLibraryEx(path, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
+      if (module == IntPtr.Zero)
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "LoadLibrary failed for " + path);
+      IntPtr fn = GetProcAddress(module, name);
+      if (fn == IntPtr.Zero)
+        throw new EntryPointNotFoundException("no " + name + " export in " + path);
+      return fn;
+    }
+
+    public static int AssVersion(string path) {
+      return Marshal.GetDelegateForFunctionPointer<AssLibraryVersion>(GetExport(path, "ass_library_version"))();
+    }
+
+    public static uint[] MiniaudioVersion(string path) {
+      uint maj, min, rev;
+      Marshal.GetDelegateForFunctionPointer<MaVersion>(GetExport(path, "ma_version"))(out maj, out min, out rev);
+      return new uint[] { maj, min, rev };
+    }
+  }
+}
 "@
-      $module = [Probe.Native]::LoadLibrary($env:MFP_PATH)
-      if ($module -eq [System.IntPtr]::Zero) { Write-Error "LoadLibrary failed for $env:MFP_PATH"; exit 2 }
-      switch ($env:MFP_KIND) {
-        "libass" {
-          $fn = [Probe.Native]::GetProcAddress($module, "ass_library_version")
-          if ($fn -eq [System.IntPtr]::Zero) { Write-Error "no ass_library_version export"; exit 1 }
-          $del = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($fn, [System.Func[int]])
-          $v = $del.Invoke()
-          Write-Host ("libass runtime version: 0x{0:x8}" -f $v)
-          if ($v -ge 0x01705000) { exit 0 } else { exit 1 }
+      try {
+        switch ($env:MFP_KIND) {
+          "libass" {
+            $v = [Probe.Native]::AssVersion($env:MFP_PATH)
+            Write-Host ("libass runtime version: 0x{0:x8}" -f $v)
+            if ($v -ge 0x01705000) { exit 0 } else { exit 1 }
+          }
+          "miniaudio" {
+            $v = [Probe.Native]::MiniaudioVersion($env:MFP_PATH)
+            Write-Host ("miniaudio runtime version: {0}.{1}.{2}" -f $v[0], $v[1], $v[2])
+            if ($v[0] -eq 0 -and $v[1] -eq 11 -and $v[2] -eq 25) { exit 0 } else { exit 1 }
+          }
+          default { Write-Error "unknown probe kind $env:MFP_KIND"; exit 2 }
         }
-        "miniaudio" {
-          $fn = [Probe.Native]::GetProcAddress($module, "ma_version")
-          if ($fn -eq [System.IntPtr]::Zero) { Write-Error "no ma_version export"; exit 1 }
-          $del = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($fn, [System.Action[System.IntPtr,System.IntPtr,System.IntPtr]])
-          $buf = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(12)
-          $del.Invoke($buf, [System.IntPtr]::Add($buf, 4), [System.IntPtr]::Add($buf, 8))
-          $maj = [System.Runtime.InteropServices.Marshal]::ReadInt32($buf, 0)
-          $min = [System.Runtime.InteropServices.Marshal]::ReadInt32($buf, 4)
-          $rev = [System.Runtime.InteropServices.Marshal]::ReadInt32($buf, 8)
-          [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buf)
-          Write-Host "miniaudio runtime version: $maj.$min.$rev"
-          if ($maj -eq 0 -and $min -eq 11 -and $rev -eq 25) { exit 0 } else { exit 1 }
-        }
-        default { Write-Error "unknown probe kind $env:MFP_KIND"; exit 2 }
+      } catch {
+        Write-Error $_.Exception.Message
+        exit 2
       }
     '
 }
