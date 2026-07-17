@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Entry/meta package (review P2-5): dependency-only. No assembly ships (IncludeBuildOutput=false;
+         NU5128 is the expected "no lib/ assets" pack warning for that) - consumers get the composed leaf
+         packages. Composition mirrors Doc/Packages.md. -->
+    <PropertyGroup>
+        <IncludeBuildOutput>false</IncludeBuildOutput>
+        <NoWarn>$(NoWarn);NU5128</NoWarn>
+        <Description>Cue/show/session and composition runtime for MFPlayer: the S.Media playback runtime plus show sessions/documents, the layered video compositor, libass subtitles and text sources.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media/S.Media.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Subtitles/S.Media.Subtitles.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Source.Text/S.Media.Source.Text.csproj" />
+    </ItemGroup>
+</Project>

@@ -205,6 +205,14 @@ PublishScripts/
 **/[Pp]ackages/*
 # except build/, which is used as an MSBuild target.
 !**/[Pp]ackages/build/
+# MediaFramework/Packages/ holds the SOURCE of the NuGet entry/meta packages (review P2-5), not a
+# NuGet restore cache - without these negations `git add` silently skips it and every fresh clone
+# fails with MSB3202. Re-include the project dirs plus exactly their source files (csproj + README);
+# a broad `**` negation would also override the bin//obj/ ignores for build artifacts underneath.
+!MediaFramework/Packages/
+!MediaFramework/Packages/*/
+!MediaFramework/Packages/*/*.csproj
+!MediaFramework/Packages/*/README.md
 # Uncomment if necessary however generally it will be regenerated when needed
 #!**/[Pp]ackages/repositories.config
 # NuGet v3's project.json files produces more ignorable files

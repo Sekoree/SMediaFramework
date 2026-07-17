@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Entry/meta package (review P2-5): dependency-only. No assembly ships (IncludeBuildOutput=false;
+         NU5128 is the expected "no lib/ assets" pack warning for that) - consumers get the composed leaf
+         packages. Composition mirrors Doc/Packages.md: the full FRAMEWORK feature set a HaPlay-class
+         application uses - never the HaPlay executable or its view models. -->
+    <PropertyGroup>
+        <IncludeBuildOutput>false</IncludeBuildOutput>
+        <NoWarn>$(NoWarn);NU5128</NoWarn>
+        <Description>Batteries-included MFPlayer framework feature set: playback, show/composition, encoding/streaming, SDL3 + Avalonia presentation, show control, NDI, projectM visualization, MMD/YouTube sources and the native plugin/C-ABI surfaces. Framework only - no executable.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Show/S.Media.Show.csproj" />
+        <ProjectReference Include="../S.Media.Encoding/S.Media.Encoding.csproj" />
+        <ProjectReference Include="../S.Media.Presentation.SDL3/S.Media.Presentation.SDL3.csproj" />
+        <ProjectReference Include="../S.Media.Control/S.Media.Control.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.Avalonia/S.Media.Present.Avalonia.csproj" />
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Visualizer.ProjectM/S.Media.Visualizer.ProjectM.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Source.MMD/S.Media.Source.MMD.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Source.YouTube/S.Media.Source.YouTube.csproj" />
+        <ProjectReference Include="../../Interop/S.Abi/S.Abi.csproj" />
+        <ProjectReference Include="../../Interop/S.Media.Interop/S.Media.Interop.csproj" />
+    </ItemGroup>
+</Project>

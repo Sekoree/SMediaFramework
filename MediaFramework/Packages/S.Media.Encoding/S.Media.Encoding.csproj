@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Entry/meta package (review P2-5): dependency-only. No assembly ships (IncludeBuildOutput=false;
+         NU5128 is the expected "no lib/ assets" pack warning for that) - consumers get the composed leaf
+         packages. Composition mirrors Doc/Packages.md. -->
+    <PropertyGroup>
+        <IncludeBuildOutput>false</IncludeBuildOutput>
+        <NoWarn>$(NoWarn);NU5128</NoWarn>
+        <Description>Recording, muxing and network-stream output for MFPlayer: FFmpeg encode/mux sessions plus the HTTP/HLS media server.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Encode.FFmpeg/S.Media.Encode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Stream.Http/S.Media.Stream.Http.csproj" />
+    </ItemGroup>
+</Project>

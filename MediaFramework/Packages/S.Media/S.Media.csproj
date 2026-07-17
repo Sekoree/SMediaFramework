@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Entry/meta package (review P2-5): dependency-only. No assembly ships (IncludeBuildOutput=false;
+         NU5128 is the expected "no lib/ assets" pack warning for that) - consumers get the composed leaf
+         packages. Composition mirrors Doc/Packages.md. -->
+    <PropertyGroup>
+        <IncludeBuildOutput>false</IncludeBuildOutput>
+        <NoWarn>$(NoWarn);NU5128</NoWarn>
+        <Description>Default playback runtime for MFPlayer applications: core contracts, timing/sync, audio routing, players, FFmpeg decode and the PortAudio + miniaudio device backends. Start here for plain media playback.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Routing/S.Media.Routing.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.FFmpeg.Common/S.Media.FFmpeg.Common.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.MiniAudio/S.Media.Audio.MiniAudio.csproj" />
+    </ItemGroup>
+</Project>

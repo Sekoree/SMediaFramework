@@ -187,28 +187,66 @@ public sealed class ArchitectureTests
             include!.Replace('\\', '/').EndsWith("Shared/SystemFirstNativeLibraryResolver.cs", StringComparison.Ordinal));
     }
 
+    private static string[] SolutionProjectPaths(string root) =>
+        File.ReadLines(Path.Combine(root, "MFPlayer.sln"))
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, "= \"[^\"]+\", \"([^\"]+\\.csproj)\""))
+            .Where(m => m.Success)
+            .Select(m => m.Groups[1].Value.Replace('\\', '/'))
+            .ToArray();
+
     [Fact]
     public void EverySolutionProjectExistsOnDisk()
     {
         // A fresh clone must build: an sln entry whose csproj was never committed (the review P2-5
-        // meta packages were once added to the sln without `git add`ing the new Packages/ directory)
+        // meta packages were once added to the sln without the new Packages/ directory reaching git)
         // fails every `dotnet build MFPlayer.sln` with MSB3202. Packages/ is outside FrameworkDirs,
         // so only this check covers it.
         var root = RepoRoot();
-        var missing = new List<string>();
-        foreach (var line in File.ReadLines(Path.Combine(root, "MFPlayer.sln")))
-        {
-            var match = System.Text.RegularExpressions.Regex.Match(line, "= \"[^\"]+\", \"([^\"]+\\.csproj)\"");
-            if (!match.Success)
-                continue;
-            var path = Path.Combine(root, match.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar));
-            if (!File.Exists(path))
-                missing.Add(match.Groups[1].Value);
-        }
+        var missing = SolutionProjectPaths(root)
+            .Where(p => !File.Exists(Path.Combine(root, p)))
+            .ToList();
 
         Assert.True(missing.Count == 0,
             "MFPlayer.sln references project files that do not exist on disk (forgotten `git add`?):\n  "
             + string.Join("\n  ", missing));
+    }
+
+    [Fact]
+    public void NoSolutionProjectIsGitignored()
+    {
+        // The trap that lost MediaFramework/Packages/ TWICE: the stock VS .gitignore's
+        // `**/[Pp]ackages/*` rule (meant for the legacy NuGet restore cache) silently made
+        // `git add` skip the meta-package sources, so the local tree built and tested green while
+        // every fresh clone failed. On-disk existence can't see that - ask git itself.
+        var root = RepoRoot();
+        if (!Directory.Exists(Path.Combine(root, ".git")))
+            return; // source tarball / exported tree - nothing to check
+
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = root,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("check-ignore");
+        psi.ArgumentList.Add("--stdin");
+
+        using var git = System.Diagnostics.Process.Start(psi);
+        Assert.NotNull(git);
+        foreach (var path in SolutionProjectPaths(root))
+            git.StandardInput.WriteLine(path);
+        git.StandardInput.Close();
+        var ignored = git.StandardOutput.ReadToEnd();
+        git.WaitForExit();
+
+        // Exit 1 = nothing ignored (good); 0 = at least one ignored; anything else (128 = not a
+        // repo, missing git) means the environment cannot answer - do not fail the build for that.
+        Assert.True(git.ExitCode != 0,
+            "MFPlayer.sln references project files that are GITIGNORED - `git add` will silently "
+            + "skip them and a fresh clone cannot build. Fix .gitignore (see the "
+            + "MediaFramework/Packages/ negation) for:\n  "
+            + ignored.Trim().Replace("\n", "\n  "));
     }
 
     [Fact]
