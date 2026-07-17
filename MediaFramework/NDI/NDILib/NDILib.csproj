@@ -14,4 +14,8 @@
         <InternalsVisibleTo Include="NDILib.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for the NDI v6 SDK. Most applications should reference S.Media.NDI instead.</Description>
+    </PropertyGroup>
 </Project>

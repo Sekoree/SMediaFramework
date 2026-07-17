@@ -21,6 +21,10 @@ public static class AppIcons
     // ---- workspaces ----
     public static StreamGeometry Menu => _menu ??= G("M3,5 H21 V7 H3 Z M3,11 H21 V13 H3 Z M3,17 H21 V19 H3 Z");
     public static StreamGeometry Cue => _cue ??= G("M12,5 A7,7 0 1 0 12,19 A7,7 0 1 0 12,5 Z");
+    /// <summary>Stacked cue rows with a GO arrow - the cue-LIST glyph (review P3-7: the plain
+    /// circular Cue dot read as an unrendered placeholder at empty-state size).</summary>
+    public static StreamGeometry CueList => _cueList ??= G(
+        "M4,5 H13 V7.5 H4 Z M4,10.5 H13 V13 H4 Z M4,16 H13 V18.5 H4 Z M15.5,9 L21,12 L15.5,15 Z");
     public static StreamGeometry Grid => _grid ??= G("M3,3 H10.5 V10.5 H3 Z M13.5,3 H21 V10.5 H13.5 Z M3,13.5 H10.5 V21 H3 Z M13.5,13.5 H21 V21 H13.5 Z");
     public static StreamGeometry Sliders => _sliders ??= G(
         "M3,5.2 H21 V6.8 H3 Z M6.5,3.2 H10 V8.8 H6.5 Z " +
@@ -101,6 +105,7 @@ public static class AppIcons
     private static StreamGeometry? _blocked;
     private static StreamGeometry? _close;
     private static StreamGeometry? _cue;
+    private static StreamGeometry? _cueList;
     private static StreamGeometry? _duplicate;
     private static StreamGeometry? _edit;
     private static StreamGeometry? _eject;

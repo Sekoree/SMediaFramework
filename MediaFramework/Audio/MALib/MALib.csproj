@@ -22,4 +22,8 @@
         <InternalsVisibleTo Include="MALib.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for miniaudio 0.11.25 (hand-mirrored ABI; the resolver accepts only that exact version). Most applications should reference S.Media.Audio.MiniAudio instead.</Description>
+    </PropertyGroup>
 </Project>

@@ -22,4 +22,8 @@
         <InternalsVisibleTo Include="PALib.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for PortAudio. Most applications should reference S.Media.Audio.PortAudio (or the S.Media meta-package) instead.</Description>
+    </PropertyGroup>
 </Project>

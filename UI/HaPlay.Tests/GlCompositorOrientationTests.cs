@@ -100,14 +100,10 @@ public class GlCompositorOrientationTests
         return (pixels[o], pixels[o + 1], pixels[o + 2]);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Bgra32_layer_full_frame_is_not_vertically_flipped()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         int w = 64, h = 64;
         var canvas = new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(30, 1));
@@ -130,14 +126,10 @@ public class GlCompositorOrientationTests
         Assert.True(topA > botA, $"Top-marked BGRA layer should stay at TOP after GL composite (topA={topA}, botA={botA})");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Placement_destination_y_zero_is_bottom_of_gl_canvas()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         var canvas = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
         var source = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(24, 1));
@@ -156,14 +148,10 @@ public class GlCompositorOrientationTests
         Assert.True(bottom.B > 200, $"expected content at bottom, got {bottom}");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mesh_warp_pass_preserves_source_crop()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         int w = 64, h = 32;
         var canvas = new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(30, 1));
@@ -193,14 +181,10 @@ public class GlCompositorOrientationTests
         Assert.True(red > 200 && blue < 50, $"Mesh warp should sample the right-half crop, not the full canvas (red={red}, blue={blue}).");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Affine_warp_scales_full_composition_to_smaller_output_without_offset_or_crop()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         var canvas = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
         var output = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(60, 1));
@@ -225,14 +209,10 @@ public class GlCompositorOrientationTests
         Assert.Equal(((byte)255, (byte)255, (byte)255), Sample(outFrame, 0.75, 0.75));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Affine_warp_scales_top_left_composition_slice_to_full_output()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         var canvas = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
         var output = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(60, 1));
@@ -266,14 +246,10 @@ public class GlCompositorOrientationTests
         Assert.InRange(farEdge.B, (byte)145, (byte)180);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Affine_warp_scales_bottom_right_composition_slice_to_full_output()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         var canvas = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
         var output = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(60, 1));
@@ -301,14 +277,10 @@ public class GlCompositorOrientationTests
         Assert.Equal(((byte)255, (byte)255, (byte)255), Sample(outFrame, 0.9, 0.9));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Top_left_native_size_layer_and_top_left_output_slice_fill_output_without_black_or_crop()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         // Exact reduced-ratio analogue of a 1280x720 layer at UI (0,0) on a 1920x1080 composition,
         // with a 1280x720 output covering that top-left composition slice. The UI placement's Y=0 is
@@ -338,14 +310,10 @@ public class GlCompositorOrientationTests
         Assert.Equal(((byte)255, (byte)255, (byte)255), Sample(outFrame, 0.8, 0.8));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Live_output_layout_change_replaces_crop_and_scale_after_compositor_initialized()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         var canvas = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
         var output = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(60, 1));

@@ -277,35 +277,46 @@ public sealed class CueShowSessionCoordinator
             {
                 if (_cueShowSession is not { } session)
                     return "cue session unavailable";
-                // v3: composition + geometry come from the cue's Video-tab placement (media-cue parity);
-                // legacy single-rect files were migrated to one placement at load.
-                var place = viz.VideoPlacements.FirstOrDefault();
-                var compGuid = place?.CompositionId ?? viz.CompositionId;
-                var compId = compGuid.ToString();
+                // v3: composition + geometry come from the cue's Video-tab placements (media-cue parity);
+                // legacy single-rect files were migrated to one placement at load. Placements group by
+                // composition: ONE projectM source per composition (its audio tap must not double-feed),
+                // one surface layer per placement, so several sections of a canvas show the same render.
+                var groups = new List<(Guid Comp, IReadOnlyList<CueVideoPlacement?> Places)>();
+                foreach (var byComp in viz.VideoPlacements.GroupBy(p => p.CompositionId))
+                    if (byComp.Key != Guid.Empty)
+                        groups.Add((byComp.Key, byComp.Cast<CueVideoPlacement?>().ToList()));
+                if (groups.Count == 0 && viz.CompositionId != Guid.Empty)
+                    groups.Add((viz.CompositionId, new CueVideoPlacement?[] { null })); // legacy: full-canvas
+                if (groups.Count == 0)
+                    return "the visualizer cue has no composition placement - add one on its Video tab";
+
                 if (!viz.StartVisualizer)
                 {
-                    _cueVisualizerSources.TryGetValue(compGuid, out var sourceAtStop);
-                    await session.FadeOutCompositionVisualizerAsync(compId).ConfigureAwait(false);
-                    // A new Start cue may replace this composition's source while the old one fades.
-                    // Never let the completing Stop remove that replacement from the operator controls.
-                    if (_cueVisualizerSources.TryGetValue(compGuid, out var current)
-                        && ReferenceEquals(current, sourceAtStop))
-                        _cueVisualizerSources.TryRemove(compGuid, out var _removedSource);
+                    foreach (var (stopComp, _) in groups)
+                    {
+                        _cueVisualizerSources.TryGetValue(stopComp, out var sourceAtStop);
+                        await session.FadeOutCompositionVisualizerAsync(stopComp.ToString()).ConfigureAwait(false);
+                        // A new Start cue may replace this composition's source while the old one fades.
+                        // Never let the completing Stop remove that replacement from the operator controls.
+                        if (_cueVisualizerSources.TryGetValue(stopComp, out var current)
+                            && ReferenceEquals(current, sourceAtStop))
+                            _cueVisualizerSources.TryRemove(stopComp, out var _removedSource);
+                    }
                     return null;
                 }
 
                 // Audio-feed routing (#26): FeedAll = every clip; else the cue's selected sources plus
                 // media cues flagged "send to visualizer". The set is snapshotted HERE (UI thread) and
                 // read lock-free by the session-dispatcher filter; refire the viz cue after changing it.
+                var listModel = CuePlayer.SelectedCueList?.ToModel();
                 Func<string, bool>? feedFilter = null;
                 if (!viz.FeedAll)
                 {
                     var allowed = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var id in viz.FeedCueIds)
                         allowed.Add(id.ToString());
-                    var model = CuePlayer.SelectedCueList?.ToModel();
-                    if (model is not null)
-                        foreach (var node in FlattenCueNodes(model.Nodes))
+                    if (listModel is not null)
+                        foreach (var node in FlattenCueNodes(listModel.Nodes))
                             if (node is MediaCueNode { SendToVisualizer: true } m)
                                 allowed.Add(m.Id.ToString());
                     feedFilter = cueId => allowed.Contains(cueId);
@@ -313,53 +324,61 @@ public sealed class CueShowSessionCoordinator
 
                 if (!RuntimeModules.IsProjectMAvailable)
                     return "projectM is not available on this machine";
-                var comp = CuePlayer.SelectedCueList?.ToModel().Compositions
-                    .FirstOrDefault(c => c.Id == compGuid);
-                if (comp is null)
-                    return "the visualizer cue has no composition placement - add one on its Video tab";
 
-                var renderW = viz.RenderWidth > 0 ? viz.RenderWidth : comp.Width > 0 ? comp.Width : 1920;
-                var renderH = viz.RenderHeight > 0 ? viz.RenderHeight : comp.Height > 0 ? comp.Height : 1080;
-                var fps = viz.RenderFps > 0
-                    ? viz.RenderFps
-                    : comp.FrameRateDen > 0 && comp.FrameRateNum > 0 ? comp.FrameRateNum / comp.FrameRateDen : 60;
-                var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
-                    renderW, renderH, new Rational(fps > 0 ? fps : 60, 1),
-                    new S.Media.Visualizer.ProjectM.ProjectMOptions
-                    {
-                        PresetDirectory = string.IsNullOrWhiteSpace(viz.PresetDirectory) ? null : viz.PresetDirectory,
-                        RenderWidth = renderW,
-                        RenderHeight = renderH,
-                        Fps = fps,
-                        // Older visualizer cues may contain an explicit zero from before these controls
-                        // had model defaults. Zero now consistently means the projectM default (30 s),
-                        // while positive values retain the five-second safety minimum.
-                        PresetDurationSeconds = viz.PresetDurationSeconds > 0
-                            ? Math.Max(5, viz.PresetDurationSeconds)
-                            : 30,
-                        Shuffle = viz.ShufflePresets,
-                        BeatSensitivity = Math.Clamp(viz.BeatSensitivity, 0, 5),
-                        TransitionSeconds = Math.Clamp(viz.TransitionSeconds, 0, 30),
-                    });
-                var placement = ToVisualizerPlacement(compId, place);
-                if (!await session.SetCompositionVisualizerAsync(
-                            compId, source, placement: placement, audioFeedFilter: feedFilter,
-                            preserveAcrossDocumentReload: true)
-                        .ConfigureAwait(false))
+                string? firstError = null;
+                foreach (var (compGuid, places) in groups)
                 {
-                    source.Dispose();
-                    Trace.LogWarning("visualizer cue: attach REFUSED (comp={Comp} - no GL surface host?)", compId);
-                    return "visualizer not attached (composition has no GL surface host)";
+                    var compId = compGuid.ToString();
+                    var comp = listModel?.Compositions.FirstOrDefault(c => c.Id == compGuid);
+                    if (comp is null)
+                    {
+                        firstError ??= "the visualizer cue's placement points at a composition that no longer exists";
+                        continue;
+                    }
+
+                    var renderW = viz.RenderWidth > 0 ? viz.RenderWidth : comp.Width > 0 ? comp.Width : 1920;
+                    var renderH = viz.RenderHeight > 0 ? viz.RenderHeight : comp.Height > 0 ? comp.Height : 1080;
+                    var fps = viz.RenderFps > 0
+                        ? viz.RenderFps
+                        : comp.FrameRateDen > 0 && comp.FrameRateNum > 0 ? comp.FrameRateNum / comp.FrameRateDen : 60;
+                    var source = new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
+                        renderW, renderH, new Rational(fps > 0 ? fps : 60, 1),
+                        new S.Media.Visualizer.ProjectM.ProjectMOptions
+                        {
+                            PresetDirectory = string.IsNullOrWhiteSpace(viz.PresetDirectory) ? null : viz.PresetDirectory,
+                            RenderWidth = renderW,
+                            RenderHeight = renderH,
+                            Fps = fps,
+                            // Older visualizer cues may contain an explicit zero from before these controls
+                            // had model defaults. Zero now consistently means the projectM default (30 s),
+                            // while positive values retain the five-second safety minimum.
+                            PresetDurationSeconds = viz.PresetDurationSeconds > 0
+                                ? Math.Max(5, viz.PresetDurationSeconds)
+                                : 30,
+                            Shuffle = viz.ShufflePresets,
+                            BeatSensitivity = Math.Clamp(viz.BeatSensitivity, 0, 5),
+                            TransitionSeconds = Math.Clamp(viz.TransitionSeconds, 0, 30),
+                        });
+                    var specs = places.Select(p => ToVisualizerPlacement(compId, p)).ToArray();
+                    if (!await session.SetCompositionVisualizerAsync(
+                                compId, source, placements: specs, audioFeedFilter: feedFilter,
+                                preserveAcrossDocumentReload: true)
+                            .ConfigureAwait(false))
+                    {
+                        source.Dispose();
+                        Trace.LogWarning("visualizer cue: attach REFUSED (comp={Comp} - no GL surface host?)", compId);
+                        firstError ??= "visualizer not attached (composition has no GL surface host)";
+                        continue;
+                    }
+
+                    _cueVisualizerSources[compGuid] = source;
+
+                    Trace.LogInformation(
+                        "visualizer cue ATTACHED: comp={Comp} render={W}x{H}@{Fps} placements={Count} feed={Feed} presets='{Presets}'",
+                        compId, renderW, renderH, fps, specs.Length,
+                        viz.FeedAll ? "all" : "selective", viz.PresetDirectory ?? "(builtin)");
                 }
-
-                _cueVisualizerSources[compGuid] = source;
-
-                Trace.LogInformation(
-                    "visualizer cue ATTACHED: comp={Comp} render={W}x{H}@{Fps} dest=({X:0.##},{Y:0.##},{DW:0.##},{DH:0.##}) opacity={Op:0.##} feed={Feed} presets='{Presets}'",
-                    compId, renderW, renderH, fps,
-                    place?.DestX ?? 0, place?.DestY ?? 0, place?.DestWidth ?? 1, place?.DestHeight ?? 1,
-                    place?.Opacity ?? 1, viz.FeedAll ? "all" : "selective", viz.PresetDirectory ?? "(builtin)");
-                return null;
+                return firstError;
             };
             // Pause must hit EVERY active group, not just the default one - a multi-group cue show would otherwise
             // keep the other groups running on pause (parity with StopAllAsync).
@@ -523,11 +542,13 @@ public sealed class CueShowSessionCoordinator
                     Trace.LogWarning("HaPlay: live placement update missed cue {Cue} / composition {Composition}",
                         cueId, placement.CompositionId);
             };
+            // placementIndex is the placement's index AMONG THE CUE'S PLACEMENTS ON THIS COMPOSITION
+            // (the VM computes it), matching the per-composition layer order the executor attached.
             CuePlayer.UpdateActiveVisualizerPlacementCallback = async (cueId, placementIndex, placement) =>
             {
                 var compId = placement.CompositionId.ToString();
                 var updated = await _cueShowSession!.UpdateCompositionVisualizerPlacementAsync(
-                    compId, ToVisualizerPlacement(compId, placement)).ConfigureAwait(false);
+                    compId, ToVisualizerPlacement(compId, placement), placementIndex).ConfigureAwait(false);
                 if (!updated)
                     Trace.LogWarning(
                         "HaPlay: live visualizer placement update missed cue {Cue} placement {Index} / composition {Composition}",
@@ -1650,7 +1671,7 @@ public sealed class CueShowSessionCoordinator
     private static VideoPlacementSpec ToVisualizerPlacement(string compositionId, CueVideoPlacement? placement)
     {
         if (placement is null)
-            return new VideoPlacementSpec(compositionId, 100, Placement: "stretch");
+            return new VideoPlacementSpec(compositionId, 0, Placement: "stretch");
 
         var mapped = HaPlayShowMapper.ToShowVideoPlacement(placement);
         return new VideoPlacementSpec(

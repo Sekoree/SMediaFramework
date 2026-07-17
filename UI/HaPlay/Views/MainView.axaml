@@ -22,10 +22,18 @@
       <Setter Property="Margin" Value="4,2" />
       <Setter Property="Background" Value="Transparent" />
     </Style>
-    <!-- Active workspace = the classic pressed-toggle look (sunken bevel + dither), so the sidebar
-         clearly shows which view is selected. -->
+    <!-- Active workspace: a BASE-THEME-INDEPENDENT left accent bar + subtle selection wash (review
+         P3-5 - semibold text alone was nearly invisible under Simple/Fluent), plus the classic
+         pressed-toggle look (sunken bevel + dither) as a Classic-only enhancement below. -->
     <Style Selector="Button.sidebar.selected">
       <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Background" Value="{DynamicResource StateSelected}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentSelectedNav}" />
+      <Setter Property="BorderThickness" Value="3,0,0,0" />
+      <Setter Property="Padding" Value="7,8,10,8" />
+    </Style>
+    <Style Selector="Button.sidebar.collapsed.selected">
+      <Setter Property="Padding" Value="0,8" />
     </Style>
     <Style Selector="Button.sidebar.selected /template/ theme|ClassicBorderDecorator#ContentContainer">
       <Setter Property="BorderStyle" Value="RaiseReversed" />
@@ -124,7 +132,7 @@
                                 Text="{Binding ProjectStatus}" />
 
     <Border DockPanel.Dock="Left"
-            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="0,0,1,0"
+            BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="0,0,1,0"
             Width="{Binding SidebarWidth}">
       <DockPanel>
         <Button DockPanel.Dock="Top"
@@ -330,7 +338,7 @@
           <TextBlock Text="{Binding AutoSaveStatusText}" Opacity="0.7" FontSize="12"
                      TextWrapping="Wrap" Margin="24,2,0,0"
                      IsVisible="{Binding !AutoSaveStatusIsError}" />
-          <TextBlock Text="{Binding AutoSaveStatusText}" Foreground="{StaticResource StatusErrorFg}"
+          <TextBlock Text="{Binding AutoSaveStatusText}" Foreground="{DynamicResource StatusErrorFg}"
                      FontSize="12" TextWrapping="Wrap" Margin="24,2,0,0"
                      IsVisible="{Binding AutoSaveStatusIsError}" />
           <StackPanel Orientation="Horizontal" Spacing="6" Margin="24,2,0,0">
@@ -341,7 +349,7 @@
           </StackPanel>
         </StackPanel>
         <Grid ColumnDefinitions="1.05*,1.8*" ColumnSpacing="10">
-          <Border Grid.Column="0" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
+          <Border Grid.Column="0" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
             <DockPanel>
               <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
               <TextBlock DockPanel.Dock="Top"
@@ -368,7 +376,7 @@
                  Style = base control theme (Classic / Simple / Fluent). The Theme (light/dark) and Density
                  controls disable for base themes that don't support them: Classic is light-only, and only
                  Fluent has a density axis. -->
-            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
+            <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
                     IsVisible="{Binding ShowAppearanceSettings}">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
@@ -419,10 +427,10 @@
                      in Avalonia), so when a setting differs from what's running, ask whether to restart now
                      or later (Later keeps the current look; the choice applies on the next launch). -->
                 <Border IsVisible="{Binding ShowAppearanceRestartPrompt}" Margin="0,4,0,0"
-                        Background="{StaticResource ChipNeutral}" CornerRadius="0" Padding="8,6">
+                        Background="{DynamicResource ChipNeutral}" CornerRadius="0" Padding="8,6">
                   <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
                     <PathIcon Grid.Column="0" Data="{x:Static views:AppIcons.Info}" Width="13" Height="13"
-                              VerticalAlignment="Center" Foreground="{StaticResource AccentWarn}" />
+                              VerticalAlignment="Center" Foreground="{DynamicResource AccentWarn}" />
                     <TextBlock Grid.Column="1" Text="{x:Static res:Strings.AppearanceRestartHint}" FontSize="12"
                                TextWrapping="Wrap" VerticalAlignment="Center" />
                     <Button Grid.Column="2" Classes="Std Go" Content="{x:Static res:Strings.RestartNowButton}"
@@ -435,7 +443,7 @@
             </Border>
 
             <!-- Remote API - per-machine HTTP control surface for show controllers. -->
-            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
+            <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.RemoteApiSectionHeader}" FontWeight="SemiBold" />
                 <StackPanel Orientation="Horizontal" Spacing="12">
@@ -470,6 +478,20 @@
                 </Grid>
                 <TextBlock Text="{Binding RestApiSecurityStatus}" Opacity="0.75" FontSize="12"
                            TextWrapping="Wrap" />
+                <!-- Review P2-7: LAN binding with no token is a supported zero-friction mode, but it
+                     must be UNMISTAKABLE - a warning-colored banner, not a hint line. -->
+                <Border Background="{DynamicResource SurfaceRaised}"
+                        BorderBrush="{DynamicResource AccentWarn}" BorderThickness="1"
+                        Padding="8,6" IsVisible="{Binding RestApiOpenLanActive}">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="{x:Static views:AppIcons.Warning}" Width="14" Height="14"
+                              Foreground="{DynamicResource StatusWarnFg}" VerticalAlignment="Top"
+                              Margin="0,2,0,0" />
+                    <TextBlock Text="{x:Static res:Strings.RemoteApiOpenLanWarning}"
+                               Foreground="{DynamicResource StatusWarnFg}" FontSize="12"
+                               FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="560" />
+                  </StackPanel>
+                </Border>
                 <TextBlock Text="{Binding RestApiStatusNote}" Foreground="#DAAA3A" FontSize="12"
                            TextWrapping="Wrap"
                            IsVisible="{Binding RestApiStatusNote, Converter={x:Static ObjectConverters.IsNotNull}}" />
@@ -498,7 +520,7 @@
             </Border>
 
             <!-- Media caches - per-machine prepared media (YouTube downloads, MMD bakes): size, open, clear. -->
-            <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
+            <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8">
               <StackPanel Spacing="6">
                 <TextBlock Text="{x:Static res:Strings.CacheSectionHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
@@ -557,11 +579,11 @@
           <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
             <Panel Grid.Column="0" VerticalAlignment="Top">
               <PathIcon Data="{x:Static views:AppIcons.Info}" Width="13" Height="13"
-                        Foreground="{StaticResource StatusInfoFg}" IsVisible="{Binding IsInfo}" />
+                        Foreground="{DynamicResource StatusInfoFg}" IsVisible="{Binding IsInfo}" />
               <PathIcon Data="{x:Static views:AppIcons.Warning}" Width="13" Height="13"
-                        Foreground="{StaticResource StatusWarnFg}" IsVisible="{Binding IsWarning}" />
+                        Foreground="{DynamicResource StatusWarnFg}" IsVisible="{Binding IsWarning}" />
               <PathIcon Data="{x:Static views:AppIcons.Blocked}" Width="13" Height="13"
-                        Foreground="{StaticResource StatusErrorFg}" IsVisible="{Binding IsError}" />
+                        Foreground="{DynamicResource StatusErrorFg}" IsVisible="{Binding IsError}" />
             </Panel>
             <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="Wrap"
                        Foreground="{DynamicResource {x:Static common:SystemColors.InfoTextBrushKey}}"

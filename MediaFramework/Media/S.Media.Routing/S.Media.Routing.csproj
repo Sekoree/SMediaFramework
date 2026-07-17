@@ -29,4 +29,8 @@
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Audio routing for MFPlayer: multi-route mixing, shared device outputs, channel mapping, mix groups and backend failover.</Description>
+    </PropertyGroup>
 </Project>

@@ -24,6 +24,35 @@ public sealed class SharedAudioOutputTests
     }
 
     [Fact]
+    public async Task LeaseChurn_WithWaitersAndFlushes_DisposesCleanly()
+    {
+        // Review P3-1: every client lease owns a wait event that can inflate to a kernel handle.
+        // Churn leases hard - including waits that BLOCK (full queue) and are released by disposal -
+        // so a leaked/undrained event would surface as hangs or ObjectDisposedExceptions here.
+        using var terminal = new GatedOutput(Stereo48k);
+        using var shared = new SharedAudioOutput(terminal, chunkSamples: 64, pumpCapacityChunks: 2);
+
+        var chunk = new float[64 * 2];
+        for (var round = 0; round < 50; round++)
+        {
+            var lease = shared.Acquire();
+            var clocked = Assert.IsAssignableFrom<IClockedOutput>(lease.Output);
+
+            // Saturate the client queue (Submit drops on overflow, never blocks) so the waiter
+            // below genuinely parks on the event instead of returning immediately.
+            for (var i = 0; i < 400; i++)
+                lease.Output.Submit(chunk);
+
+            var blocked = Task.Run(() => clocked.WaitForCapacity(64, CancellationToken.None));
+            lease.Dispose();
+            var hadCapacity = await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(hadCapacity, "a waiter on a disposed lease must report no capacity");
+        }
+
+        Assert.Equal(0, shared.ActiveLeaseCount);
+    }
+
+    [Fact]
     public void TwoClientInputs_AreMixedIntoOneTerminalSubmission()
     {
         using var terminal = new GatedOutput(Stereo48k);

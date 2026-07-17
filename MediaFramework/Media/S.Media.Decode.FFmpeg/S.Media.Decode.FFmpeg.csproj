@@ -37,4 +37,8 @@
         <InternalsVisibleTo Include="S.Media.Decode.FFmpeg.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>FFmpeg-backed decoding for MFPlayer: shared demux, audio/video decode queues and non-file sources. Requires FFmpeg 8.x (avcodec-62) native libraries at runtime.</Description>
+    </PropertyGroup>
 </Project>

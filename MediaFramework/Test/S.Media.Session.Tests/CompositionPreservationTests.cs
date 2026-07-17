@@ -251,6 +251,73 @@ public sealed class CompositionPreservationTests
     }
 
     [Fact]
+    public async Task MultiPlacement_AttachesOneLayerPerPlacement_AndUpdatesByIndex()
+    {
+        // #26 multi-placement: a visualizer cue can place the same source into several sections of ONE
+        // canvas. Every placement must stay live, and a live-move must address exactly one of them.
+        var opacities = new ConcurrentQueue<float>();
+        await using var session = NewSurfaceSession(opacities);
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz,
+            placements:
+            [
+                new VideoPlacementSpec("screen", 0, Opacity: 0.9, DestX: 0, DestY: 0, DestWidth: 0.5, DestHeight: 1),
+                new VideoPlacementSpec("screen", 1, Opacity: 0.3, DestX: 0.5, DestY: 0, DestWidth: 0.5, DestHeight: 1),
+            ]));
+        Assert.True(await session.HasCompositionVisualizerAsync("screen"));
+
+        // The compositor must receive BOTH surface layers each tick, not just the last-attached one.
+        await WaitUntilAsync(
+            () => opacities.Any(v => Math.Abs(v - 0.9f) < 0.01f) && opacities.Any(v => Math.Abs(v - 0.3f) < 0.01f),
+            TimeSpan.FromSeconds(2));
+
+        // A live-move of the SECOND placement must leave the first one untouched.
+        Assert.True(await session.UpdateCompositionVisualizerPlacementAsync(
+            "screen",
+            new VideoPlacementSpec("screen", 1, Opacity: 0.5, DestX: 0.25, DestY: 0.25, DestWidth: 0.5, DestHeight: 0.5),
+            placementIndex: 1));
+        opacities.Clear();
+        await WaitUntilAsync(
+            () => opacities.Any(v => Math.Abs(v - 0.5f) < 0.01f) && opacities.Any(v => Math.Abs(v - 0.9f) < 0.01f),
+            TimeSpan.FromSeconds(2));
+
+        // Out-of-range placement indexes are refused rather than silently retargeting another layer.
+        Assert.False(await session.UpdateCompositionVisualizerPlacementAsync(
+            "screen", new VideoPlacementSpec("screen", 2), placementIndex: 2));
+        Assert.False(viz.Disposed);
+    }
+
+    [Fact]
+    public async Task MultiPlacement_PersistentReattach_RecreatesEveryLayer()
+    {
+        var opacities = new ConcurrentQueue<float>();
+        await using var session = NewSurfaceSession(opacities);
+        await session.LoadDocumentAsync(CanvasDoc());
+        var viz = new FakeVisualizer();
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz, preserveAcrossDocumentReload: true,
+            placements:
+            [
+                new VideoPlacementSpec("screen", 0, Opacity: 0.8, DestWidth: 0.5, DestHeight: 1),
+                new VideoPlacementSpec("screen", 1, Opacity: 0.4, DestX: 0.5, DestWidth: 0.5, DestHeight: 1),
+            ]));
+
+        // Full rebuild (output-topology change): the persistent slot recreates its surfaces on the
+        // replacement composition - ALL of them, not just the first placement.
+        await session.LoadDocumentAsync(CanvasDoc(), preserveMatchingCompositions: false);
+
+        Assert.False(viz.Disposed);
+        Assert.True(await session.HasCompositionVisualizerAsync("screen"));
+        opacities.Clear();
+        await WaitUntilAsync(
+            () => opacities.Any(v => Math.Abs(v - 0.8f) < 0.01f) && opacities.Any(v => Math.Abs(v - 0.4f) < 0.01f),
+            TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task CallerOwnedSource_SurvivesReload_AndReattaches()
     {
         // The continuous-visualizer contract: with disposeSourceOnRemove:false the session unhooks the

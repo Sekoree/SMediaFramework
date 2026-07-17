@@ -27,4 +27,8 @@
         <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Show-control runtime for MFPlayer/HaPlay: device profiles, layered bindings, Mond scripting, command dispatch and monitoring.</Description>
+    </PropertyGroup>
 </Project>

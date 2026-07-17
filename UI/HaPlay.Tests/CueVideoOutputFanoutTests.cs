@@ -58,7 +58,20 @@ public sealed class CueVideoOutputFanoutTests
         session.LoadDocument(HaPlayShowMapper.ToShowDocument(cueList));
 
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync(cue.Id.ToString()));
-        Assert.True(await WaitUntilAsync(() => screen.Count > 0, TimeSpan.FromSeconds(3)));
+        // Wait for the EXPECTED CONTENT, not merely a frame count: the composition may legitimately
+        // submit an initial black canvas before the synthetic source becomes visible, so a count-only
+        // wait raced the first real frame under load (review P2-1).
+        Assert.True(
+            await WaitUntilAsync(
+                () =>
+                {
+                    var farEdge = screen.BottomRight;
+                    return screen.Count > 0
+                           && farEdge.R is >= 130 and <= 210
+                           && farEdge.B is >= 130 and <= 210;
+                },
+                TimeSpan.FromSeconds(3)),
+            $"synthetic source never became visible; last far edge: {screen.BottomRight}");
         Assert.Equal((16, 16), (screen.Format.Width, screen.Format.Height));
         var initialFarEdge = screen.BottomRight;
         Assert.InRange(initialFarEdge.R, (byte)130, (byte)210);
@@ -71,10 +84,20 @@ public sealed class CueVideoOutputFanoutTests
                 initialMapping.Sections[0] with { SrcX = 1d / 3, SrcY = 1d / 3 },
             ],
         };
-        var before = screen.Count;
         Assert.True(await session.ApplyOutputMappingAsync(
             compId.ToString(), lineId.ToString("N"), HaPlayShowMapper.ToClipOutputMapping(moved)));
-        Assert.True(await WaitUntilAsync(() => screen.Count > before, TimeSpan.FromSeconds(3)));
+        // Same content-based wait: a frame submitted before the move committed must not satisfy it.
+        Assert.True(
+            await WaitUntilAsync(
+                () =>
+                {
+                    var nearEdge = screen.TopLeft;
+                    var farEdge = screen.BottomRight;
+                    return nearEdge.R is >= 45 and <= 125 && nearEdge.B is >= 45 and <= 125
+                           && farEdge.R >= 220 && farEdge.B >= 220;
+                },
+                TimeSpan.FromSeconds(3)),
+            $"moved mapping never became visible; last near/far edges: {screen.TopLeft} / {screen.BottomRight}");
         Assert.Equal((16, 16), (screen.Format.Width, screen.Format.Height));
         var movedNearEdge = screen.TopLeft;
         var movedFarEdge = screen.BottomRight;

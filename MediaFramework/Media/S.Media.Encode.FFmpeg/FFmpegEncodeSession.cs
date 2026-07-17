@@ -69,7 +69,13 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
 
     // Audio intake per leg (router pump thread → worker). The absolute input-frame position survives
     // queue overflow, so the encoder can represent dropped time instead of compressing the timeline.
-    private sealed record QueuedAudioChunk(float[] Samples, long StartFrame);
+    // Samples is RENTED from ArrayPool (review P2-3: 100 exact-size arrays/second/leg was constant
+    // Gen0 churn on long recordings) - Length is the valid float count; return via ReturnChunk on
+    // every exit path (encoded, dropped, or disposed).
+    private sealed record QueuedAudioChunk(float[] Samples, int Length, long StartFrame);
+
+    private static void ReturnChunk(QueuedAudioChunk chunk) =>
+        System.Buffers.ArrayPool<float>.Shared.Return(chunk.Samples);
     private readonly Queue<QueuedAudioChunk>[] _audioQueues;
     private readonly long[] _audioQueuedFloats;
     private readonly long[] _audioFloatCap;
@@ -83,6 +89,12 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
     private bool _sourceTimelineNeedsReanchor;
     private long _lastVideoPts90k = -1;
     private long _videoFrameDuration90k;
+    // Exact rational stepping for generated/re-anchored frames (review P3-2): 60000/1001 needs
+    // 1501.5 ticks per frame, so repeatedly adding the truncated integer duration loses half a tick
+    // per generated frame. The remainder accumulator carries the fraction across steps.
+    private int _videoFrameRateNum;
+    private int _videoFrameRateDen;
+    private long _videoStepRemainder;
     // Review H7 - target-rate scheduler: when options declare a fixed FPS, frames are selected/dropped
     // per target tick (fast input) and the last frame is re-encoded into gaps (slow input), so the
     // output really carries the configured cadence instead of just advertising it in metadata.
@@ -329,7 +341,7 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
                 {
                     _videoInputFormat = format;
                     if (format.FrameRate.Numerator > 0)
-                        _videoFrameDuration90k = 90_000L * format.FrameRate.Denominator / format.FrameRate.Numerator;
+                        SetVideoFrameDuration(format.FrameRate.Numerator, format.FrameRate.Denominator);
                     Trace.LogInformation(
                         "encode session: input format changed to {Format} - output stays locked at {Locked}",
                         format, _videoCore.EncodedFormat);
@@ -343,9 +355,10 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
                 format,
                 enableConstantBitrateFiller: _options.Container is EncodeContainer.MpegTs or EncodeContainer.Flv);
             _videoInputFormat = format;
-            _videoFrameDuration90k = format.FrameRate.Numerator > 0
-                ? 90_000L * format.FrameRate.Denominator / format.FrameRate.Numerator
-                : 3_000; // 30 fps fallback
+            if (format.FrameRate.Numerator > 0)
+                SetVideoFrameDuration(format.FrameRate.Numerator, format.FrameRate.Denominator);
+            else
+                SetVideoFrameDuration(30, 1); // 30 fps fallback
             _videoConfigured = true;
             _work.Set();
         }
@@ -360,22 +373,28 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             throw new ArgumentException(
                 $"packedSamples length {packedSamples.Length} is not a multiple of channel count {channels}.",
                 nameof(packedSamples));
-        var chunk = packedSamples.ToArray();
+        var rented = System.Buffers.ArrayPool<float>.Shared.Rent(packedSamples.Length);
+        packedSamples.CopyTo(rented);
+        var chunk = new QueuedAudioChunk(rented, packedSamples.Length, StartFrame: 0);
         var dropped = false;
         lock (_gate)
         {
             if (_disposed || _finishRequested)
+            {
+                ReturnChunk(chunk);
                 return;
+            }
 
             var queue = _audioQueues[legIndex];
             var startFrame = _audioSubmittedFrames[legIndex];
             _audioSubmittedFrames[legIndex] += chunk.Length / channels;
-            queue.Enqueue(new QueuedAudioChunk(chunk, startFrame));
+            queue.Enqueue(chunk with { StartFrame = startFrame });
             _audioQueuedFloats[legIndex] += chunk.Length;
             while (_audioQueuedFloats[legIndex] > _audioFloatCap[legIndex] && queue.Count > 1)
             {
                 var victim = queue.Dequeue();
-                _audioQueuedFloats[legIndex] -= victim.Samples.Length;
+                _audioQueuedFloats[legIndex] -= victim.Length;
+                ReturnChunk(victim);
                 Interlocked.Increment(ref _audioChunksDropped);
                 dropped = true;
             }
@@ -534,7 +553,7 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
                 if (_audioQueues[legIndex].Count > 0)
                 {
                     chunk = _audioQueues[legIndex].Dequeue();
-                    _audioQueuedFloats[legIndex] -= chunk.Samples.Length;
+                    _audioQueuedFloats[legIndex] -= chunk.Length;
                 }
             }
 
@@ -546,12 +565,17 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             {
                 var started = Stopwatch.GetTimestamp();
                 _audioCores[legIndex].Submit(
-                    chunk.Samples, chunk.StartFrame, pkt => FanOut((AVPacket*)pkt, legStream));
+                    chunk.Samples.AsSpan(0, chunk.Length), chunk.StartFrame,
+                    pkt => FanOut((AVPacket*)pkt, legStream));
                 _encodeTiming.RecordSince(started);
             }
             catch (Exception ex)
             {
                 Trace.LogError(ex, "encode session: audio leg {Leg} encode failed - chunk skipped", legIndex);
+            }
+            finally
+            {
+                ReturnChunk(chunk);
             }
 
             processed++;
@@ -560,23 +584,49 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         return processed;
     }
 
+    private void SetVideoFrameDuration(int rateNum, int rateDen)
+    {
+        _videoFrameRateNum = rateNum;
+        _videoFrameRateDen = rateDen;
+        _videoFrameDuration90k = 90_000L * rateDen / rateNum;
+        _videoStepRemainder = 0;
+    }
+
+    /// <summary>One exact frame step in 90 kHz ticks: the integer part now, the fractional part
+    /// accumulated so it lands as a whole tick every few frames (no drift at 60000/1001-style rates).</summary>
+    private long NextVideoStep90k()
+    {
+        if (_videoFrameRateNum <= 0)
+            return Math.Max(1, _videoFrameDuration90k);
+        return AccumulateStep90k(_videoFrameRateNum, _videoFrameRateDen, ref _videoStepRemainder);
+    }
+
+    /// <summary>Pure step accumulator (unit-tested): emits integer 90 kHz steps whose SUM over N calls
+    /// is exactly floor(N × 90000 × den / num) - zero long-run drift for any rational rate.</summary>
+    internal static long AccumulateStep90k(int rateNum, int rateDen, ref long remainder)
+    {
+        var totalNumerator = 90_000L * rateDen + remainder;
+        var step = totalNumerator / rateNum;
+        remainder = totalNumerator % rateNum;
+        return Math.Max(1, step);
+    }
+
     /// <summary>First frame anchors the baseline; afterwards PTS is relative with a monotonic clamp so
     /// a backwards seek mid-recording continues one frame ahead instead of rewriting the timeline.</summary>
     private long NextVideoPts(TimeSpan presentationTime, bool continueTimeline)
     {
-        var step = Math.Max(1, _videoFrameDuration90k);
         if (continueTimeline)
         {
             _sourceTimelineNeedsReanchor = true;
-            _lastVideoPts90k = _lastVideoPts90k < 0 ? 0 : _lastVideoPts90k + step;
+            _lastVideoPts90k = _lastVideoPts90k < 0 ? 0 : _lastVideoPts90k + NextVideoStep90k();
             return _lastVideoPts90k;
         }
 
         var sourceTicks = presentationTime.Ticks;
-        if (ShouldReanchorSource(sourceTicks, step))
+        if (ShouldReanchorSource(sourceTicks, Math.Max(1, _videoFrameDuration90k)))
         {
             _videoBaseTicks = sourceTicks;
-            _videoBasePts90k = _lastVideoPts90k < 0 ? 0 : _lastVideoPts90k + step;
+            _videoBasePts90k = _lastVideoPts90k < 0 ? 0 : _lastVideoPts90k + NextVideoStep90k();
             _sourceTimelineNeedsReanchor = false;
         }
 
@@ -584,7 +634,7 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
         var relTicks = sourceTicks - _videoBaseTicks;
         var pts = _videoBasePts90k + relTicks * 9 / 1000; // 100 ns ticks → 90 kHz
         if (pts <= _lastVideoPts90k)
-            pts = _lastVideoPts90k + step;
+            pts = _lastVideoPts90k + NextVideoStep90k();
         _lastVideoPts90k = pts;
         return pts;
     }
@@ -783,7 +833,10 @@ public sealed unsafe class FFmpegEncodeSession : IDisposable
             while (_videoQueue.Count > 0)
                 _videoQueue.Dequeue().Frame.Dispose();
             foreach (var q in _audioQueues)
-                q.Clear();
+            {
+                while (q.Count > 0)
+                    ReturnChunk(q.Dequeue());
+            }
         }
 
         _cts.Dispose();

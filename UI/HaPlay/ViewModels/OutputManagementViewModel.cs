@@ -338,12 +338,14 @@ public partial class OutputManagementViewModel : ViewModelBase
     public bool HasOutputs => Outputs.Count > 0;
     public bool HasNoOutputs => Outputs.Count == 0;
 
-    /// <summary>AUDIO-02: one-line media-backend availability (e.g. "FFmpeg ✓  PortAudio ✓  NDI ✗ (native
-    /// library not installed)") so a missing optional backend is visible on the I/O workspace, not just in
-    /// the log. Sourced from <see cref="MediaRuntime.ModuleDiagnostics"/>.</summary>
-    public string MediaBackendsSummary =>
-        string.Join("    ", MediaRuntime.ModuleDiagnostics.Select(
-            d => d.Available ? $"{d.Name} ✓" : $"{d.Name} ✗ ({d.Detail})"));
+    /// <summary>AUDIO-02: media-backend availability so a missing optional backend is visible on the
+    /// I/O workspace, not just in the log. One chip per module (review P3-6: the previous single
+    /// wrapping string could break BETWEEN a module name and its checkmark). Sourced from
+    /// <see cref="MediaRuntime.ModuleDiagnostics"/>.</summary>
+    public IReadOnlyList<MediaBackendStatus> MediaBackendStatuses =>
+        MediaRuntime.ModuleDiagnostics
+            .Select(d => new MediaBackendStatus(d.Name, d.Available, d.Available ? null : d.Detail))
+            .ToArray();
 
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" - bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
@@ -1860,3 +1862,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             _ => $"audio {m.AudioDropped:N0}/s dropped",
         };
 }
+
+/// <summary>One media module's availability for the I/O header chips (review P3-6). The name and
+/// checkmark render as ONE unbreakable unit; the skip reason lives in the tooltip of an unavailable
+/// module instead of inflating the header line.</summary>
+public sealed record MediaBackendStatus(string Name, bool Available, string? Detail);

@@ -12,12 +12,9 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
     private readonly AudioFormat _format;
     private readonly string? _deviceId;
     private readonly uint _periodSizeFrames;
-    private readonly float[] _ringBuffer;
-    private readonly int _ringMask;
+    private readonly FrameAlignedFloatRing _ring;
     private readonly Lock _deviceLifecycleGate = new();
 
-    private long _writeIndex;
-    private long _readIndex;
     private long _samplesEmitted;
     private long _overflowSamples;
     private int _callbackFaulted;
@@ -41,11 +38,7 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
         _deviceId = string.IsNullOrWhiteSpace(deviceId) ? null : deviceId;
         _periodSizeFrames = (uint)framesPerBuffer;
 
-        var capacityFloats = ringCapacityFrames * format.Channels;
-        var rounded = 1;
-        while (rounded < capacityFloats) rounded <<= 1;
-        _ringBuffer = new float[rounded];
-        _ringMask = rounded - 1;
+        _ring = new FrameAlignedFloatRing(format.Channels, (long)ringCapacityFrames * format.Channels);
     }
 
     public AudioFormat Format => _format;
@@ -54,9 +47,9 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
 
     public bool IsExhausted => _disposed;
 
-    public int AvailableSamples => (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _format.Channels);
+    public int AvailableSamples => _ring.BufferedFrames;
 
-    public int CapacitySamples => _ringBuffer.Length / _format.Channels;
+    public int CapacitySamples => _ring.CapacityFrames;
 
     public long OverflowSamples => Volatile.Read(ref _overflowSamples);
 
@@ -163,18 +156,9 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
                 $"destination length {destination.Length} is not a multiple of channel count {_format.Channels}",
                 nameof(destination));
 
-        var read = Volatile.Read(ref _readIndex);
-        var write = Volatile.Read(ref _writeIndex);
-        var available = (int)(write - read);
-        var toRead = Math.Min(destination.Length, available);
+        var toRead = _ring.Read(destination);
         if (toRead == 0) return 0;
 
-        var startIdx = (int)(read & _ringMask);
-        var firstChunk = Math.Min(toRead, _ringBuffer.Length - startIdx);
-        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(destination);
-        if (firstChunk < toRead)
-            _ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(destination[firstChunk..]);
-        Volatile.Write(ref _readIndex, read + toRead);
         Interlocked.Add(ref _samplesEmitted, toRead / _format.Channels);
         return toRead;
     }
@@ -187,13 +171,7 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
 
         var keepFrames = Math.Max(0, (int)(keepBuffered.TotalSeconds * _format.SampleRate));
         var keepFloats = checked(keepFrames * _format.Channels);
-
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var buffered = (int)(write - read);
-        if (buffered <= keepFloats) return;
-
-        Volatile.Write(ref _readIndex, read + buffered - keepFloats);
+        _ring.DropOldestKeepingFloats(keepFloats);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -221,21 +199,7 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
             var totalFloats = checked((int)frameCount * self._format.Channels);
             var input = new ReadOnlySpan<float>(inputBuffer, totalFloats);
 
-            var write = Volatile.Read(ref self._writeIndex);
-            var read = Volatile.Read(ref self._readIndex);
-            var freeFloats = self._ringBuffer.Length - (int)(write - read);
-            var toWrite = Math.Min(totalFloats, freeFloats);
-
-            if (toWrite > 0)
-            {
-                var startIdx = (int)(write & self._ringMask);
-                var firstChunk = Math.Min(toWrite, self._ringBuffer.Length - startIdx);
-                input[..firstChunk].CopyTo(self._ringBuffer.AsSpan(startIdx));
-                if (firstChunk < toWrite)
-                    input.Slice(firstChunk, toWrite - firstChunk).CopyTo(self._ringBuffer.AsSpan(0));
-                Volatile.Write(ref self._writeIndex, write + toWrite);
-            }
-
+            var toWrite = self._ring.Write(input);
             if (toWrite < totalFloats)
                 Interlocked.Add(ref self._overflowSamples, totalFloats - toWrite);
         }

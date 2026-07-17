@@ -19,4 +19,8 @@
         <InternalsVisibleTo Include="S.Media.Present.SDL3.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>SDL3 window/fullscreen presentation for MFPlayer video. Requires the SDL3 native library (shipped by the SDL3-CS NuGet).</Description>
+    </PropertyGroup>
 </Project>

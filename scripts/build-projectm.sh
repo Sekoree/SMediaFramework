@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Builds libprojectM-4 from a disposable copy of the vendored source (Reference/projectm-4.1.6) for
-# dev machines whose distro has no projectM 4.x package, installs it under External/projectm/<rid>/,
-# and copies the pinned preset and texture packs next to it. Print-and-done: export the
+# Builds libprojectM-4 from a disposable copy of the pinned source, installs it under
+# External/projectm/<rid>/, and copies the pinned preset and texture packs next to it. The source
+# comes from the local vendored snapshot (Reference/projectm-4.1.6) when present; otherwise - a
+# fresh clone, CI - the pinned upstream release archive is downloaded and its SHA-256 verified, so
+# the build is reproducible from any checkout (review P1-3). Print-and-done: export the
 # MFP_PROJECTM_LIB line it
 # prints (the ProjectMLib resolver probes that variable first, then the system library names).
 #
-# projectM is LGPL-2.1 (Reference/projectm-4.1.6/LICENSE.txt). HaPlay links it DYNAMICALLY via
+# projectM is LGPL-2.1 (LICENSE.txt in the source tree). HaPlay links it DYNAMICALLY via
 # dlopen/P-Invoke and never statically embeds it - keep it that way when packaging.
 #
 # Requirements: cmake >= 3.21, a C++17 compiler, OpenGL headers (mesa), and glm (the vendored tree
@@ -19,6 +21,11 @@ build_dir="$repo_root/External/projectm/build"
 projectm_eval_revision="da885dcdf33620ef26aa04cac9e215378b80252e"
 presets_revision="e03b83e3338d8f1ed6cbcf908c719f249ef24288"
 textures_revision="ff8edf2a8fa07e55ad562f1af97076526c484f7d"
+# Immutable source fallback (used when Reference/ is absent). 4.1.7 exists upstream but deliberately
+# resets output to framebuffer 0, which conflicts with the render-to-bound-fbo patch below - retest
+# that patch against 4.1.7 before bumping this pin.
+projectm_archive_url="https://github.com/projectM-visualizer/projectm/releases/download/v4.1.6/libprojectM-4.1.6.tar.gz"
+projectm_archive_sha256="1b9e6d56c59fe24e5416da4d42e941a34c982811003e43ac88b5aca8afa52c87"
 
 case "$(uname -m)" in
     x86_64|amd64) arch="x64" ;;
@@ -40,8 +47,21 @@ esac
 install_dir="$repo_root/External/projectm/$rid"
 
 if [[ ! -f "$vendor_src_dir/CMakeLists.txt" ]]; then
-    echo "error: projectM source not found at $vendor_src_dir" >&2
-    exit 1
+    # No local vendored snapshot (fresh clone / CI): fetch the pinned upstream release archive and
+    # verify its hash before trusting a single byte of it.
+    download_dir="$repo_root/External/projectm/download"
+    archive="$download_dir/libprojectM-4.1.6.tar.gz"
+    extracted="$download_dir/libprojectM-4.1.6"
+    if [[ ! -f "$extracted/CMakeLists.txt" ]]; then
+        echo "== downloading pinned projectM source archive =="
+        mkdir -p "$download_dir"
+        curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
+            -o "$archive" "$projectm_archive_url"
+        echo "$projectm_archive_sha256  $archive" | sha256sum -c -
+        tar xzf "$archive" -C "$download_dir"
+        [[ -f "$extracted/CMakeLists.txt" ]] || { echo "error: unexpected archive layout" >&2; exit 1; }
+    fi
+    vendor_src_dir="$extracted"
 fi
 
 # Always build from a fresh generated work tree. The patch and downloaded submodule must never alter

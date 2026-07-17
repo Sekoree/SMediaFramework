@@ -14,4 +14,8 @@
         <Compile Include="../../Shared/SystemFirstNativeLibraryResolver.cs" Link="Runtime/SystemFirstNativeLibraryResolver.cs" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for PortMidi 2.x. Most applications should reference S.Media.Control instead.</Description>
+    </PropertyGroup>
 </Project>

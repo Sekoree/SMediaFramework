@@ -17,6 +17,29 @@ internal static class PlaybackVideoPipeline
 
     /// <summary>Set from <c>--media-live-uyvy-passthrough</c> so startup does not overwrite CLI intent.</summary>
     internal static bool CliRequestedUyvyPassthrough { get; set; }
+
+    /// <summary>The switch <see cref="ApplyCliStartupOptions"/> recognizes (documented in HaPlay.Desktop's
+    /// startup help): skip live UYVY→BGRA conversion and hand native UYVY to the SDL GL path.</summary>
+    internal const string UyvyPassthroughSwitch = "--media-live-uyvy-passthrough";
+
+    /// <summary>
+    /// Applies playback-related command-line switches. MUST run before <c>MainViewModel</c> is
+    /// constructed (it consults <see cref="CliRequestedUyvyPassthrough"/> when applying the persisted
+    /// preference) and independently of logging configuration - <c>--media-log off</c> previously
+    /// short-circuited the parse so the switch logged success without doing anything (review P2-8).
+    /// Returns true when the passthrough override was applied so the caller can log AFTER the
+    /// logging pipeline exists.
+    /// </summary>
+    internal static bool ApplyCliStartupOptions(string[] args)
+    {
+        if (!args.Any(a => string.Equals(a, UyvyPassthroughSwitch, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        CliRequestedUyvyPassthrough = true;
+        PreferNativePixelFormatForLiveVideo = true;
+        return true;
+    }
+
     /// <summary>
     /// Builds the fixed-raster program source for file or live paths.
     /// </summary>

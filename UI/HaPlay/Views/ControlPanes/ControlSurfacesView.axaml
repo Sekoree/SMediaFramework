@@ -110,7 +110,7 @@
             <Button Content="Export built-ins" Classes="Dense" Command="{Binding ExportBuiltInProfilesCommand}" />
             <Button Content="Remove project" Classes="Dense" Command="{Binding RemoveSelectedProjectProfileCommand}" />
           </StackPanel>
-          <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
+          <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="8"
                   IsVisible="{Binding IsMIDIAvailable}">
             <StackPanel Spacing="6">
               <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />

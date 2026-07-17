@@ -8,21 +8,28 @@ namespace HaPlay.Tests;
 
 // Compiles the Mond scripts embedded in Doc/HaPlay-Control-X32-BCF2000-Layers.md so the guide
 // can't ship code that fails to compile. Reads the live doc (no copy drift) and asserts the
-// runtime reports no Compile-stage diagnostics. Skips if the repo layout isn't reachable.
+// runtime reports no Compile-stage diagnostics. The guide is a TRACKED PRODUCT CONTRACT: a missing
+// document FAILS the test rather than silently passing (review P2-9 - the doc's deletion previously
+// turned all of these into green no-ops).
 public sealed class Bcf2000GuideScriptsTests
 {
     private readonly ITestOutputHelper _o;
     public Bcf2000GuideScriptsTests(ITestOutputHelper o) => _o = o;
 
+    private static string RequireGuideDoc()
+    {
+        var docPath = FindRepoFile("Doc/HaPlay-Control-X32-BCF2000-Layers.md");
+        Assert.True(
+            docPath is not null,
+            "Doc/HaPlay-Control-X32-BCF2000-Layers.md is a tracked product contract this test compiles. "
+            + "If it was intentionally removed, delete/replace this test in the same change.");
+        return docPath!;
+    }
+
     [Fact]
     public void GuideScripts_Compile()
     {
-        var docPath = FindRepoFile("Doc/HaPlay-Control-X32-BCF2000-Layers.md");
-        if (docPath is null)
-        {
-            _o.WriteLine("Guide doc not found from test base dir; skipping.");
-            return;
-        }
+        var docPath = RequireGuideDoc();
 
         var markdown = File.ReadAllText(docPath);
         var blocks = Regex.Matches(markdown, "```js\\r?\\n(.*?)```", RegexOptions.Singleline)
@@ -97,12 +104,7 @@ public sealed class Bcf2000GuideScriptsTests
     [Fact]
     public void GuideLayerNav_PressingNextLayerRunsWithoutRuntimeError()
     {
-        var docPath = FindRepoFile("Doc/HaPlay-Control-X32-BCF2000-Layers.md");
-        if (docPath is null)
-        {
-            _o.WriteLine("Guide doc not found from test base dir; skipping.");
-            return;
-        }
+        var docPath = RequireGuideDoc();
 
         var blocks = Regex.Matches(File.ReadAllText(docPath), "```js\\r?\\n(.*?)```", RegexOptions.Singleline)
             .Select(m => m.Groups[1].Value)

@@ -53,4 +53,8 @@
         <Using Include="System.Numerics" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>MikuMikuDance (PMX/VMD) scene source for MFPlayer with Bullet-physics-backed animation. Requires the mmd_bullet native shim built by this repo.</Description>
+    </PropertyGroup>
 </Project>

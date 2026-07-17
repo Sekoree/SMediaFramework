@@ -20,4 +20,8 @@
         <InternalsVisibleTo Include="HaPlay.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>NDI send/receive for MFPlayer: sources, outputs, audio receivers and fusion pacing hints. Requires the proprietary NDI v6 runtime installed on the host.</Description>
+    </PropertyGroup>
 </Project>

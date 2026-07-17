@@ -65,8 +65,11 @@ public sealed class AppSettings
     /// <summary>Visualizer target FPS (default 60; 0 in an older file resolves to 60).</summary>
     public int VisualizerFps { get; set; } = 60;
 
-    /// <summary>HTTP remote API listener (per-machine, off by default). Requests require
-    /// <see cref="RestApiAccessToken"/>; LAN binding is opt-in via <see cref="RestApiAllowLan"/>.</summary>
+    /// <summary>HTTP remote API listener (per-machine, off by default). The
+    /// <see cref="RestApiAccessToken"/> is OPTIONAL: with no token configured every request is
+    /// authorized - the intended contract for closed-LAN show-control automation (e.g. Bitfocus
+    /// Companion). LAN binding is opt-in via <see cref="RestApiAllowLan"/>; that combination assumes
+    /// an isolated/trusted show network and the UI warns about it prominently (review P2-7).</summary>
     public bool RestApiEnabled { get; set; }
 
     public int RestApiPort { get; set; } = 8990;

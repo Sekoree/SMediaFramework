@@ -118,15 +118,29 @@ jobs:
         env:
           VSTEST_CONNECTION_TIMEOUT: '300'   # raise the testhost-connection handshake for slow startups (seconds)
         run: |
+          # -m:1 is what ACTUALLY serializes test-project execution: RunConfiguration.MaxCpuCount only
+          # affects one VSTest invocation, while `dotnet test <sln>` launches one testhost per project
+          # through MSBuild - measured locally, projects still ran concurrently without -m:1 (review P2-1).
+          # The VSTest setting stays for any multi-target project's inner parallelism.
+          # --logger trx: results are always on disk, so a failed first attempt uploads real evidence.
           run_tests() {
-            dotnet test MFPlayer.sln -c Release --no-build \
+            dotnet test MFPlayer.sln -c Release --no-build -m:1 \
+              --logger "trx;LogFilePrefix=results" \
               --blame-hang --blame-hang-timeout 4m --blame-hang-dump-type full \
               -- RunConfiguration.MaxCpuCount=1
           }
           attempts=2
           for i in $(seq 1 "$attempts"); do
             echo "::group::dotnet test (attempt $i/$attempts)"
-            if run_tests; then echo "::endgroup::"; exit 0; fi
+            if run_tests; then
+              echo "::endgroup::"
+              if [ "$i" -gt 1 ]; then
+                # Loud flake signal (review P2-1): a retry-only green must not read as a clean pass.
+                echo "::warning title=Tests passed only on retry::dotnet test failed on attempt(s) before $i - inspect the uploaded TRX/blame output for the flaky test."
+                echo "flaky=true" >> "$GITHUB_OUTPUT"
+              fi
+              exit 0
+            fi
             echo "::endgroup::"
             echo "dotnet test attempt $i failed"
             if [ "$i" -lt "$attempts" ]; then echo "retrying after transient/load failure…"; sleep 20; fi
@@ -134,10 +148,10 @@ jobs:
           echo "dotnet test failed after $attempts attempts"
           exit 1
 
-      # Preserve the blame Sequence_*.xml + hang dump when the test step fails, so the hanging test and its
-      # stacks survive the runner being torn down. Scoped to a tests failure so unrelated failures don't upload.
+      # Preserve the blame Sequence_*.xml + hang dump + TRX when the test step fails OR passed only on a
+      # retry, so the flaky/hanging test's evidence survives the runner being torn down.
       - name: Upload test hang diagnostics
-        if: ${{ failure() && steps.tests.outcome == 'failure' }}
+        if: ${{ (failure() && steps.tests.outcome == 'failure') || steps.tests.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: test-diagnostics-${{ matrix.rid }}
@@ -291,20 +305,28 @@ jobs:
           # and --retry-all-errors extends it to connection-level hiccups. Downloads that feed `tar` go to a FILE
           # first (not a pipe), so a retried attempt can't concatenate a partial body into the archive.
           RETRY="--retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30"
-          # PortAudio + libass come from apt (ABI-stable at these sonames). PortMidi does NOT: Ubuntu's
+          # PortAudio comes from apt (ABI-stable at its soname). PortMidi does NOT: Ubuntu's
           # libportmidi0 is the legacy "release 217" (libportmidi.so.0), which predates the modern PortMidi 2.x
           # ABI the binding targets (Pm_CreateVirtual* etc.) and the resolver only probes .so.2/.so — so it is
           # built from source below instead. libasound2-dev is PortMidi's Linux (ALSA) build dep.
-          sudo apt-get install -y cmake libasound2-dev libportaudio2 libass9
-          # PortAudio ships under its SONAME (libportaudio.so.2). libass is different: LibAssLib P/Invokes the
-          # BARE name "ass" (LibAssNative.cs), which .NET resolves to an unversioned libass.so — so stage the
-          # system libass.so.9 under THAT single name only. Previously we shipped BOTH libass.so and libass.so.9
-          # (identical 227 KB files) — an exact-content duplicate. Nothing in the bundle DT_NEEDEDs the .so.9
-          # soname (libass is a leaf loaded by managed P/Invoke), so ship just libass.so and drop the twin.
+          sudo apt-get install -y cmake libasound2-dev libportaudio2
           pa="$(find /usr/lib /lib -name 'libportaudio.so.2' 2>/dev/null | head -1)"
           if [ -n "$pa" ]; then cp -vL "$pa" natives-stage/; else echo "WARN: libportaudio.so.2 not found"; fi
-          la="$(find /usr/lib /lib -name 'libass.so.9' 2>/dev/null | head -1)"
-          if [ -n "$la" ]; then cp -vL "$la" natives-stage/libass.so; else echo "WARN: libass.so.9 not found"; fi
+
+          # libass 0.17.5 FROM PINNED SOURCE (review P0-1): Ubuntu's libass9 is 0.17.1, which predates the
+          # 0.17.5 out-of-bounds-write fixes (CVE-2026-61626/61627) while the binding/workflow claimed 0.17.5.
+          # The tarball is immutable and hash-verified; check-native-versions.sh later PROVES the shipped
+          # binary reports >= 0.17.5 via ass_library_version(). Runtime deps (freetype/fribidi/harfbuzz/
+          # fontconfig) stay host-provided, exactly as with the previous apt binary. LibAssLib P/Invokes the
+          # BARE name "ass", so the library is staged as unversioned libass.so only.
+          sudo apt-get install -y nasm libfreetype-dev libfribidi-dev libharfbuzz-dev libfontconfig-dev libunibreak-dev
+          LIBASS_SHA256="2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc"
+          curl -fsSL $RETRY -o libass.tar.xz https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz
+          echo "$LIBASS_SHA256  libass.tar.xz" | sha256sum -c -
+          tar xJf libass.tar.xz
+          (cd libass-0.17.5 && ./configure --enable-shared --disable-static >/dev/null && make -j"$(nproc)" >/dev/null)
+          la="$(find libass-0.17.5/libass/.libs -name 'libass.so.*.*' -type f | head -1)"
+          if [ -n "$la" ]; then cp -vL "$la" natives-stage/libass.so; else echo "ERROR: libass build produced no shared library"; exit 1; fi
 
           # PortMidi 2.0.7 from source -> libportmidi.so.2 (matches the resolver's first candidate + the 2.x ABI).
           curl -fsSL $RETRY -o portmidi.tar.gz https://github.com/PortMidi/portmidi/archive/refs/tags/v2.0.7.tar.gz
@@ -357,6 +379,24 @@ jobs:
           # MMD physics: real Bullet 3.25 via the mmd_bullet shim (vendored in External/bullet3).
           MediaFramework/Native/mmd_bullet/build.sh natives-stage
           ls -la natives-stage
+
+          # projectM 4.1.6 + presets/textures (review P1-3): the full tier PROMISES the visualizer, so
+          # build the pinned, patched libprojectM from source (scripts/build-projectm.sh downloads the
+          # hash-verified release archive when Reference/ is absent - always the case on CI) and stage
+          # the whole install tree (lib + presets + textures). It lands under External/projectm/<rid>
+          # inside the publish dir because ProjectMLibraryResolver.TryFindDevBuildRoot probes exactly
+          # that layout next to the executable, and the UI derives its default preset directory from it.
+          # check-native-versions.sh later proves the staged library reports 4.1.6.
+          sudo apt-get install -y libgl1-mesa-dev libglm-dev
+          scripts/build-projectm.sh
+          mkdir -p projectm-stage/External/projectm
+          cp -a External/projectm/linux-x64 projectm-stage/External/projectm/linux-x64
+          # Headers/cmake/pkgconfig are build-time only - keep the shipped tree lean.
+          rm -rf projectm-stage/External/projectm/linux-x64/include \
+                 projectm-stage/External/projectm/linux-x64/lib/cmake \
+                 projectm-stage/External/projectm/linux-x64/lib/pkgconfig \
+                 projectm-stage/External/projectm/linux-x64/share
+          du -sh projectm-stage
 
       # ─── Windows natives (from source; iterate on CI — no Windows runner to pre-validate against) ───
       - name: Stage Windows natives — miniaudio + portmidi (CMake/MSVC)
@@ -427,16 +467,20 @@ jobs:
           dll="$(find pa-build -name 'portaudio*.dll' | head -1)"
           if [ -n "$dll" ]; then cp -v "$dll" natives-stage/portaudio.dll; else echo "ERROR: no portaudio dll produced"; exit 1; fi
 
+      # GATING (review P0-1): the full tier claims subtitles, so a failed libass staging must fail the
+      # release, not silently ship without it — REL-01's manifest/load/version gates below back this up
+      # (the version gate requires ass_library_version() >= 0.17.5 from the exact staged DLL).
       - name: Stage Windows natives — libass (vcpkg; pulls freetype/fribidi/harfbuzz)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           # Building libass from source on Windows needs the whole freetype/fribidi/harfbuzz tree; the meson
           # forcefallback route failed (no wraps ship with libass, and Strawberry-Perl's MinGW gcc hijacked the
-          # toolchain). vcpkg (preinstalled on the runner) resolves that reliably with MSVC. vcpkg tracks
-          # libass 0.17.x — ABI-compatible with the ass_* binding (LibAssLib pins no exact version).
+          # toolchain). vcpkg (preinstalled on the runner) resolves that reliably with MSVC. The runner's vcpkg
+          # checkout is MUTABLE — the version gate below is what pins the OUTCOME (>= 0.17.5); print the
+          # baseline commit here so a given build's input is at least reconstructable from the log.
+          git -C "${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}" rev-parse HEAD || true
           VCPKG="${VCPKG_INSTALLATION_ROOT:-/c/vcpkg}"; VCPKG="${VCPKG//\\//}"
           "$VCPKG/vcpkg.exe" install libass:x64-windows
           BIN="$VCPKG/installed/x64-windows/bin"
@@ -503,6 +547,8 @@ jobs:
         shell: bash
         run: |
           if [ -d natives-stage ]; then cp -v natives-stage/* haplay-publish/ 2>/dev/null || true; fi
+          # projectM ships as its whole install tree (lib + presets + textures) under External/projectm/.
+          if [ -d projectm-stage ]; then cp -a projectm-stage/. haplay-publish/; fi
           echo "--- native libs in the artifact ---"
           ls haplay-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
 
@@ -538,6 +584,8 @@ jobs:
           keep_only bundle-core libSkiaSharp.so libHarfBuzzSharp.so libmmd_bullet.so
           cp -a haplay-publish bundle-minimal
           keep_only bundle-minimal libmmd_bullet.so
+          # projectM (+ presets/textures) is a full-tier promise only; reduced tiers rely on the host.
+          rm -rf bundle-core/External bundle-minimal/External
 
           # A note for the reduced tiers spelling out exactly which natives the host must supply.
           # (printf, not a heredoc: inside a YAML `run:` block every line is indented, and a heredoc terminator
@@ -598,6 +646,13 @@ jobs:
       - name: Load-probe required natives (REL-01)
         shell: bash
         run: bash scripts/load-probe-native-manifest.sh ${{ matrix.rid }} haplay-publish
+
+      # Version claims become executable assertions (review P0-1/P1-2/P1-3): query the ACTUAL shipped
+      # binaries — libass must report >= 0.17.5, miniaudio exactly 0.11.25 (hand-mirrored ABI), and the
+      # Linux full tier's staged projectM exactly 4.1.6. A lying or missing native fails before upload.
+      - name: Verify native runtime versions (REL-01)
+        shell: bash
+        run: bash scripts/check-native-versions.sh ${{ matrix.rid }} haplay-publish
 
       # Run the exact directory uploaded below, after native staging + load probes. The app reports backend
       # enumeration during startup and HAPLAY_SMOKE exits only after the first rendered frame and normal teardown.

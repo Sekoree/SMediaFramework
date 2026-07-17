@@ -870,6 +870,19 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.VideoFx)
             or nameof(CueVideoPlacementViewModel.VideoFxEnabled);
 
+    /// <summary>Maps a cue-wide placement index to the placement's index AMONG THE CUE'S PLACEMENTS ON
+    /// THE SAME COMPOSITION - the order the visualizer executor attached that composition's surface
+    /// layers in, and therefore the index the live hot-update API addresses (#26 multi-placement).</summary>
+    private static int VisualizerPlacementIndexOnComposition(CueNodeViewModel cue, int placementIndex)
+    {
+        var compositionId = cue.VideoPlacements[placementIndex].CompositionId;
+        var indexOnComposition = 0;
+        for (var i = 0; i < placementIndex; i++)
+            if (cue.VideoPlacements[i].CompositionId == compositionId)
+                indexOnComposition++;
+        return indexOnComposition;
+    }
+
     private void PushActiveVideoPlacementUpdate(CueVideoPlacementViewModel placement)
     {
         if (_preRollWatchedCue is not { } cue)
@@ -885,7 +898,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             if (_runningVisualizers.ContainsKey(cue.Id)
                 && UpdateActiveVisualizerPlacementCallback is { } visualizerCallback)
-                _ = visualizerCallback(cue.Id, index, placement.ToModel());
+                _ = visualizerCallback(cue.Id, VisualizerPlacementIndexOnComposition(cue, index), placement.ToModel());
             return;
         }
 

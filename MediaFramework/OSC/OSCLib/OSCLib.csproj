@@ -12,4 +12,8 @@
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>OSC (Open Sound Control) client/server library: codecs, routing, bundles and address matching. Usable standalone; also part of S.Media.Control.</Description>
+    </PropertyGroup>
 </Project>

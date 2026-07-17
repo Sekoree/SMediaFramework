@@ -20,4 +20,8 @@
         <InternalsVisibleTo Include="S.Media.Visualizer.ProjectM.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for libprojectM-4 (with GLES-build rejection and env/dev-path resolution). Most applications should reference S.Media.Visualizer.ProjectM instead.</Description>
+    </PropertyGroup>
 </Project>

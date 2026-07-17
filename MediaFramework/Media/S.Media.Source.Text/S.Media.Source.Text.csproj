@@ -20,4 +20,8 @@
     <ProjectReference Include="../S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
   </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Text/title video source for MFPlayer: renders styled text frames for lower-thirds, messages and cue text.</Description>
+    </PropertyGroup>
 </Project>

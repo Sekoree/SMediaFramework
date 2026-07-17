@@ -255,6 +255,12 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Degradation note (e.g. Windows loopback fallback) or bind error; null when clean.</summary>
     public string? RestApiStatusNote => _remoteApi.StatusNote;
 
+    /// <summary>True when the API is reachable from the network with NO token - the deliberate
+    /// zero-friction Companion mode. It stays supported, but the state must be unmistakable in the
+    /// UI (review P2-7): this drives the prominent trusted-network warning in the Project card.</summary>
+    public bool RestApiOpenLanActive =>
+        RestApiEnabled && RestApiAllowLan && string.IsNullOrEmpty(RestApiAccessToken);
+
     public string RestApiSecurityStatus =>
         (RestApiAllowLan ? Strings.RemoteApiSecurityLan : Strings.RemoteApiSecurityLoopback)
         + " "
@@ -330,7 +336,11 @@ public partial class MainViewModel : ViewModelBase
     {
         _remoteApi.Restart(
             RestApiEnabled, RestApiPort, RestApiAccessToken, RestApiAllowLan,
-            () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control));
+            () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control)
+            {
+                LanBindingEnabled = RestApiAllowLan,
+                TokenConfigured = !string.IsNullOrEmpty(RestApiAccessToken),
+            });
 
         // Copy-API-URL menus keep working while the listener is off - the copied URL targets the
         // configured port and becomes live the moment the API is enabled. The token is never embedded in
@@ -339,6 +349,7 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
         OnPropertyChanged(nameof(RestApiStatusNote));
         OnPropertyChanged(nameof(RestApiSecurityStatus));
+        OnPropertyChanged(nameof(RestApiOpenLanActive));
     }
 
     partial void OnRestApiAccessTokenChanged(string value)

@@ -22,4 +22,25 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- Review P2-5: every published package carries its README (shown on nuget.org) and the XML
+       documentation already written on the public types (IntelliSense). CS1591 (member missing an XML
+       comment) stays a non-error: the docs requirement is per-package README + existing type docs, not
+       a hard comment-on-everything rule. -->
+  <PropertyGroup Condition="'$(IsFrameworkLibrary)' == 'true'">
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IsFrameworkLibrary)' == 'true' and Exists('$(MSBuildProjectDirectory)/README.md')">
+    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <!-- Pack gate (review P2-5): a packable project without a README fails `dotnet pack` instead of
+       emitting an undocumented package with a warning. -->
+  <Target Name="RequirePackageReadme" BeforeTargets="GenerateNuspec"
+          Condition="'$(IsPackable)' != 'false'">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)/README.md')"
+           Text="Packable project $(MSBuildProjectName) has no README.md next to its csproj - per-package documentation is required (review P2-5)." />
+  </Target>
+
 </Project>

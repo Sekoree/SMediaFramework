@@ -23,7 +23,14 @@ sealed class Program
         {
             _safeSoftwareUi = HasArg(args, "--safe-ui")
                               || IsTruthy(Environment.GetEnvironmentVariable("HAPLAY_SAFE_UI"));
+            // Playback switches are parsed OUTSIDE logging configuration so `--media-log off` cannot
+            // short-circuit them, and BEFORE MainViewModel exists so the CLI override wins over the
+            // persisted preference (review P2-8). The success log follows once logging is configured.
+            var uyvyPassthroughApplied = PlaybackVideoPipeline.ApplyCliStartupOptions(args);
             ConfigureLogging(args);
+            if (uyvyPassthroughApplied)
+                MediaDiagnostics.LogInformation(
+                    "HaPlay: live video using native pixel format (UYVY passthrough when source delivers UYVY)");
 
             var app = BuildAvaloniaApp();
 
@@ -54,7 +61,7 @@ sealed class Program
             // OverlayPopups: render tooltips/menus INSIDE the window instead of as separate native X11
             // popup windows. Two captured UI-hang dumps show the freeze surface exactly there: closing a
             // tooltip's popup disposes a dedicated GLX render target, and that dispose synchronously waits
-            // on a glXSwapBuffers-stalled render thread (Review/CODE-REVIEW-2026-07-12.md, incident
+            // on a glXSwapBuffers-stalled render thread (2026-07-12 review, incident
             // remediation 1). Overlay popups never create that native render target, removing the wait.
             // HAPLAY_OVERLAY_POPUPS=0 opts back into native popups (A/B for chrome/layout side effects -
             // e.g. a caption-button glitch - at the cost of re-exposing the tooltip-close freeze).
@@ -134,13 +141,6 @@ sealed class Program
 
         MediaDiagnostics.LoggerFactory = factory;
         DesktopCrashDiagnostics.Install(dir, fileProvider.FilePath, args);
-
-        if (HasArg(args, "--media-live-uyvy-passthrough"))
-        {
-            //PlaybackVideoPipeline.CliRequestedUyvyPassthrough = true;
-            //PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = true;
-            MediaDiagnostics.LogInformation("HaPlay: live video using native pixel format (UYVY passthrough when source delivers UYVY)");
-        }
 
         MediaDiagnostics.LogInformation(
             "HaPlay.Desktop logging configured: minLevel={Level} fileSink={FilePath} crashSink={CrashPath} queueCapacity={QueueCapacity} retainCount={RetainCount} safeSoftwareUi={SafeSoftwareUi}",

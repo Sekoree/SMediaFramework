@@ -91,7 +91,7 @@
       <TextBlock Grid.Column="8"
                  Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
-                 Foreground="{StaticResource TextSecondary}"
+                 Foreground="{DynamicResource TextSecondary}"
                  TextTrimming="CharacterEllipsis"
                  ToolTip.Tip="{Binding DisplayedCueFilePath}"
                  IsVisible="{Binding DisplayedCueFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -422,7 +422,7 @@
                             ItemsSource="{Binding SelectedAudioCue.AudioTrackChoices}"
                             SelectedItem="{Binding SelectedAudioCue.SelectedAudioTrackChoice, Mode=TwoWay}" />
                 </StackPanel>
-                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{DynamicResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -513,7 +513,7 @@
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding VideoFrameRateMismatchWarning}" />
                 </Border>
-                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{DynamicResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -603,7 +603,7 @@
                 </WrapPanel>
 
                 <!-- Visual placement canvas: drag to move, bottom-right handle to resize, click to select -->
-                <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" MinHeight="220">
+                <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" MinHeight="220">
                   <controls:CompositionPlacementCanvas
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
@@ -943,7 +943,7 @@
                workspace's empty state instead of a bare grid. -->
           <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360"
                       IsVisible="{Binding HasNoCues}">
-            <PathIcon Data="{x:Static views:AppIcons.Cue}" Width="34" Height="34" Opacity="0.3"
+            <PathIcon Data="{x:Static views:AppIcons.CueList}" Width="34" Height="34" Opacity="0.3"
                       HorizontalAlignment="Center" />
             <TextBlock Text="{x:Static res:Strings.CueEmptyHint}" Opacity="0.65"
                        TextWrapping="Wrap" TextAlignment="Center" />
@@ -951,7 +951,7 @@
                     Command="{Binding AddMediaCueCommand}" HorizontalAlignment="Center" />
           </StackPanel>
         </Panel>
-        <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
+        <GridSplitter Grid.Column="1" Width="3" Background="{DynamicResource BorderSubtle}" ResizeDirection="Columns" />
 
         <!-- Phase 5.3 - Now Playing panel: active cues (with progress + per-cue ✕); expanded groups
              list the rest of their automatic chain with time-until-start countdowns (#29 - replaced
@@ -987,7 +987,7 @@
             <ItemsControl ItemsSource="{Binding NowPlayingRows}">
               <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
-                  <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
+                  <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4">
                     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">

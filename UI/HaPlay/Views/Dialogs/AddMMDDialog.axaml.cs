@@ -13,6 +13,9 @@ public partial class AddMMDDialog : Window
         DialogTopmostPin.Attach(this); // modal: keep above the owner (see helper docs)
         DialogStatePersister.Attach(this, nameof(AddMMDDialog), MinWidth, MinHeight);
         Closing += (_, _) => (DataContext as AddMMDDialogViewModel)?.CancelPending();
+        // Full lifetime boundary AFTER the window closed: the preview Image no longer references the
+        // bitmap, so the VM can dispose it (and the render CTS) deterministically (review P3-4).
+        Closed += (_, _) => (DataContext as AddMMDDialogViewModel)?.Dispose();
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

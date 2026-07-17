@@ -22,4 +22,8 @@
         <InternalsVisibleTo Include="S.Media.Present.SDL3.Compositor.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>SDL3 presentation of composited MFPlayer output (compositor-to-window/display bridge).</Description>
+    </PropertyGroup>
 </Project>

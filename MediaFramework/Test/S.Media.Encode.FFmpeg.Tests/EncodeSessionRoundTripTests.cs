@@ -855,3 +855,33 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         public void Dispose() => Disposed = true;
     }
 }
+
+/// <summary>Review P3-2: repeated generated-frame stepping must not lose fractional 90 kHz ticks.</summary>
+public sealed class FixedRateStepAccumulationTests
+{
+    [Theory]
+    [InlineData(30_000, 1001)]  // 29.97: exact 3003-tick steps
+    [InlineData(60_000, 1001)]  // 59.94: 1501.5 ticks - the truncation-drift case
+    [InlineData(24_000, 1001)]  // 23.976
+    [InlineData(48, 1)]         // exact divisor control
+    [InlineData(17, 3)]         // no exact 90 kHz divisor at all
+    public void StepSum_MatchesExactRationalTimeline(int rateNum, int rateDen)
+    {
+        long remainder = 0, total = 0;
+        const int frames = 600_000; // hours of stepping - integer-truncation drift would be huge here
+        for (var i = 0; i < frames; i++)
+            total += FFmpegEncodeSession.AccumulateStep90k(rateNum, rateDen, ref remainder);
+
+        var exact = 90_000L * rateDen * frames / rateNum;
+        Assert.InRange(total, exact - 1, exact + 1);
+    }
+
+    [Fact]
+    public void Fps5994_DoesNotDriftHalfATickPerFrame()
+    {
+        long remainder = 0, total = 0;
+        for (var i = 0; i < 2; i++)
+            total += FFmpegEncodeSession.AccumulateStep90k(60_000, 1001, ref remainder);
+        Assert.Equal(3003, total); // 1501 + 1502, not 1501 + 1501
+    }
+}

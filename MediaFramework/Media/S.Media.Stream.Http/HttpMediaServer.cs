@@ -314,14 +314,24 @@ internal sealed class HttpMediaServer : IDisposable
             return;
         }
 
+        // Stream from disk through one small pooled buffer instead of materializing the whole file:
+        // a .ts segment is a multi-MB LOH array per request, and 64 concurrent viewers previously
+        // retained ~64× the segment size in managed memory (review P2-2). HEAD sends the headers
+        // (with the real length) without reading the body at all.
         var fullPath = Path.Combine(mount.HlsDirectory!, fileName);
-        byte[] content;
+        FileStream? file = null;
+        long length;
         try
         {
-            content = await File.ReadAllBytesAsync(fullPath, _cts.Token).ConfigureAwait(false);
+            file = new FileStream(
+                fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 1, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            length = file.Length;
         }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException)
         {
+            if (file is not null)
+                await file.DisposeAsync().ConfigureAwait(false);
             await WriteSimpleResponseAsync(stream, "404 Not Found", "text/plain", "not found"u8.ToArray()).ConfigureAwait(false);
             return;
         }
@@ -329,9 +339,34 @@ internal sealed class HttpMediaServer : IDisposable
         var mime = fileName.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)
             ? "application/vnd.apple.mpegurl"
             : "video/mp2t";
-        await WriteSimpleResponseAsync(stream, "200 OK", mime, headOnly ? [] : content, content.Length).ConfigureAwait(false);
-        if (!headOnly)
-            Interlocked.Add(ref mount.BytesServed, content.Length);
+        await using (file)
+        {
+            await WriteSimpleResponseAsync(stream, "200 OK", mime, [], contentLength: length).ConfigureAwait(false);
+            if (headOnly)
+                return;
+
+            var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(64 * 1024);
+            try
+            {
+                // Serve at most the advertised Content-Length even if a live playlist/segment grows
+                // mid-response - over-writing would corrupt the client's framing.
+                var remaining = length;
+                while (remaining > 0)
+                {
+                    var read = await file.ReadAsync(
+                        buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), _cts.Token).ConfigureAwait(false);
+                    if (read <= 0)
+                        break;
+                    await stream.WriteAsync(buffer.AsMemory(0, read), _cts.Token).ConfigureAwait(false);
+                    Interlocked.Add(ref mount.BytesServed, read);
+                    remaining -= read;
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
     }
 
     private async Task ServeStatusAsync(NetworkStream stream, bool headOnly)
@@ -351,7 +386,7 @@ internal sealed class HttpMediaServer : IDisposable
     }
 
     private async Task WriteSimpleResponseAsync(
-        NetworkStream stream, string status, string contentType, byte[] body, int? contentLength = null,
+        NetworkStream stream, string status, string contentType, byte[] body, long? contentLength = null,
         string extraHeaders = "")
     {
         var headers =

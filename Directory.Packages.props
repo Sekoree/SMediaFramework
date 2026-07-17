@@ -54,6 +54,9 @@
     <!-- Test -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
+    <!-- Dynamic skips for environment-gated tests (no GL / no hardware): a skipped optional path must
+         REPORT as skipped, not silently pass (review P2-1 test-result fidelity). -->
+    <PackageVersion Include="Xunit.SkippableFact" Version="1.5.61" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="YoutubeExplode" Version="6.6.0" />
   </ItemGroup>

@@ -17,4 +17,8 @@
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Core contracts of the MFPlayer media framework: frames, formats, clocks, buses, diagnostics and ownership rules. Dependency-light SDK for writing custom sources, outputs and backends.</Description>
+    </PropertyGroup>
 </Project>

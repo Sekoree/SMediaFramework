@@ -24,7 +24,7 @@ provenance() {
     libminiaudio*|miniaudio*)
       echo "miniaudio|0.11.25|https://github.com/mackron/miniaudio|MIT-0/Unlicense" ;;
     libass*|ass.dll)
-      echo "libass|distro/vcpkg|https://github.com/libass/libass|ISC" ;;
+      echo "libass|0.17.5 (Linux: pinned source build; Windows: vcpkg, version-gated >= 0.17.5)|https://github.com/libass/libass|ISC" ;;
     libndi*|Processing.NDI*)
       echo "NDI SDK Runtime|v6|https://ndi.video|NDI-SDK-EULA (proprietary redist)" ;;
     libprojectM*|projectM-4*)

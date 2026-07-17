@@ -177,6 +177,10 @@ public sealed class SharedAudioOutput : IDisposable
         private readonly int _targetQueueSamples;
         private readonly ManualResetEventSlim _spaceAvailable = new(false);
         private int _disposed;
+        // A timed Wait can inflate the event to a kernel-backed handle, so it IS disposed - but only
+        // once the last waiter drained (review P3-1); disposing under a live Wait would race it.
+        private int _activeWaiters;
+        private int _eventDisposed;
 
         public ClientInput(AudioFormat format, TimeSpan bufferDuration, int targetQueueSamples)
         {
@@ -201,7 +205,7 @@ public sealed class SharedAudioOutput : IDisposable
                 return 0;
             var read = _bus.ReadInto(destination);
             if (read > 0)
-                _spaceAvailable.Set();
+                SignalSpaceAvailable();
             return read;
         }
 
@@ -210,36 +214,49 @@ public sealed class SharedAudioOutput : IDisposable
             if (chunkSamples <= 0)
                 return Volatile.Read(ref _disposed) == 0 && !token.IsCancellationRequested;
 
-            while (Volatile.Read(ref _disposed) == 0 && !token.IsCancellationRequested)
+            Interlocked.Increment(ref _activeWaiters);
+            try
             {
-                var queued = _bus.BufferedSamples;
-                if (queued + chunkSamples <= _targetQueueSamples)
-                    return true;
-
-                // Reset then re-check to close the race where the mixer consumes between the
-                // occupancy read and the reset. Unlike a duration estimate, this wakes on the
-                // exact consumption event and does not alternately oversleep/catch up.
-                _spaceAvailable.Reset();
-                if (_bus.BufferedSamples + chunkSamples <= _targetQueueSamples)
-                    continue;
-                try
+                while (Volatile.Read(ref _disposed) == 0 && !token.IsCancellationRequested)
                 {
-                    if (!_spaceAvailable.Wait(TimeSpan.FromSeconds(5), token))
+                    var queued = _bus.BufferedSamples;
+                    if (queued + chunkSamples <= _targetQueueSamples)
+                        return true;
+
+                    // Reset then re-check to close the race where the mixer consumes between the
+                    // occupancy read and the reset. Unlike a duration estimate, this wakes on the
+                    // exact consumption event and does not alternately oversleep/catch up.
+                    _spaceAvailable.Reset();
+                    // Dispose sets _disposed BEFORE its wake-up Set: if this Reset erased that Set,
+                    // this re-check must observe _disposed and exit instead of sleeping out the wait.
+                    if (Volatile.Read(ref _disposed) != 0)
                         return false;
+                    if (_bus.BufferedSamples + chunkSamples <= _targetQueueSamples)
+                        continue;
+                    try
+                    {
+                        if (!_spaceAvailable.Wait(TimeSpan.FromSeconds(5), token))
+                            return false;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return false;
+                    }
                 }
-                catch (OperationCanceledException)
-                {
-                    return false;
-                }
-            }
 
-            return false;
+                return false;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeWaiters);
+                DisposeEventOnceDrained();
+            }
         }
 
         public void Flush()
         {
             _bus.Flush();
-            _spaceAvailable.Set();
+            SignalSpaceAvailable();
         }
 
         public void Dispose()
@@ -247,8 +264,33 @@ public sealed class SharedAudioOutput : IDisposable
             if (Interlocked.Exchange(ref _disposed, 1) == 0)
             {
                 _bus.Flush();
+                SignalSpaceAvailable();
+                DisposeEventOnceDrained();
+            }
+        }
+
+        /// <summary>Wakes waiters; a lost race against the final event disposal is a harmless no-op
+        /// (nobody can be waiting once the drain completed).</summary>
+        private void SignalSpaceAvailable()
+        {
+            if (Volatile.Read(ref _eventDisposed) != 0)
+                return;
+            try
+            {
                 _spaceAvailable.Set();
             }
+            catch (ObjectDisposedException)
+            {
+                // Raced DisposeEventOnceDrained - by then no waiter exists to wake.
+            }
+        }
+
+        private void DisposeEventOnceDrained()
+        {
+            if (Volatile.Read(ref _disposed) != 0
+                && Volatile.Read(ref _activeWaiters) == 0
+                && Interlocked.Exchange(ref _eventDisposed, 1) == 0)
+                _spaceAvailable.Dispose();
         }
     }
 

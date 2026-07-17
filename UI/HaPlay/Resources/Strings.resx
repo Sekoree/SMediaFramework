@@ -3139,6 +3139,9 @@
   <data name="RemoteApiTokenRequired" xml:space="preserve">
     <value>A token is set: every request must include it via the "X-HaPlay-Api-Key" header (or "Authorization: Bearer"). Copied URLs no longer embed the token - use Copy to grab it for your controller.</value>
   </data>
+  <data name="RemoteApiOpenLanWarning" xml:space="preserve">
+    <value>Open LAN control: any device on this network can fire cues and change playback (LAN access enabled, no token). Use this only on an isolated, trusted show-control network - or set a token.</value>
+  </data>
   <data name="RemoteApiTokenOptional" xml:space="preserve">
     <value>No token: any client that can reach the port can control HaPlay. Set a token to require authentication.</value>
   </data>

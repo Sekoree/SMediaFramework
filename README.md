@@ -1,5 +1,19 @@
 # Basic (C#) Media Framework & Demo Player App
 
+## Documentation
+
+| Doc | What it covers |
+|---|---|
+| [Quickstart](Doc/MediaFramework-Quickstart.md) | Registry → `MediaPlayer` → audio/video output in a few lines |
+| [Architecture](Doc/MediaFramework-Architecture.md) | Layering, core ideas, ownership/threading rules |
+| [Packages](Doc/Packages.md) | The NuGet surface: entry packages vs feature modules vs low-level bindings |
+| [Native dependencies](Doc/Native-Dependencies.md) | Which natives each feature needs, pins, and acceptance policies |
+| [Release tiers](Doc/Release-Tiers.md) | What full/core/minimal artifacts promise and the gates that enforce it |
+| [NativeAOT](Doc/NativeAOT.md) | AOT rules, what CI enforces, publishing the C ABI |
+| [Control guides](Doc/HaPlay-Control-Getting-Started.md) | HaPlay show control setup, scripting reference, X32/BCF2000/X-Touch layouts |
+
+Platform policy: **Linux first, Windows supported, macOS currently unsupported** (best-effort code paths only).
+
 ## Testing
 There is currently a basic test build on the Releases page for Windows and Linux to find bugs:<br>
 https://github.com/Sekoree/MFPlayer/releases/tag/v1.0.0<br>

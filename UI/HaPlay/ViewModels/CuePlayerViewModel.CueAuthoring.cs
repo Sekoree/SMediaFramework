@@ -586,7 +586,9 @@ public partial class CuePlayerViewModel
             row.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement
             {
                 CompositionId = compId,
-                LayerIndex = 100,
+                // Layer 0 like any other first video placement: surface layers always render above
+                // frame-backed media anyway, and LayerIndex only orders surface layers among themselves.
+                LayerIndex = 0,
             }));
         parent.Add(row);
         FinalizeAddedCue(row);

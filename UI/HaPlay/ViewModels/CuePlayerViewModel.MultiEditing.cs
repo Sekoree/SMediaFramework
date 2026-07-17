@@ -518,7 +518,7 @@ public partial class CuePlayerViewModel
         {
             if (_runningVisualizers.ContainsKey(cue.Id)
                 && UpdateActiveVisualizerPlacementCallback is { } visualizerCallback)
-                _ = visualizerCallback(cue.Id, placementIndex, placement);
+                _ = visualizerCallback(cue.Id, VisualizerPlacementIndexOnComposition(cue, placementIndex), placement);
             return;
         }
 

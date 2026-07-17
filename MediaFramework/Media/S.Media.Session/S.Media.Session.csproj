@@ -12,4 +12,8 @@
         <ProjectReference Include="../S.Media.Compositor/S.Media.Compositor.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Show/session runtime for MFPlayer: a document-like show topology (cues, clips, compositions, routes) reconciled against live playback resources.</Description>
+    </PropertyGroup>
 </Project>

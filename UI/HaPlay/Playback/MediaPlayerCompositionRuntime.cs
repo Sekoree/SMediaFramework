@@ -15,7 +15,7 @@ namespace HaPlay.Playback;
 /// hold/logo image is <strong>layer 1</strong> (on top), fanned to the deck's output lines by a
 /// <see cref="ClipCompositionRuntime"/>. Unlike the per-output logo wrapper, the composition pump keeps every
 /// output live on its own cadence, so "hold" is just raising the logo layer rather than a per-output template
-/// pump. See <c>Doc/HaPlay-MediaPlayer-Compositions-Plan.md</c>.
+/// pump. See the 2026-06 MediaPlayer-compositions plan (archived).
 /// </summary>
 internal sealed class MediaPlayerCompositionRuntime : IDisposable
 {

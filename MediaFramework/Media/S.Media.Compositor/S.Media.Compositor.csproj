@@ -23,4 +23,8 @@
         <InternalsVisibleTo Include="S.Media.Session" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Layered video composition for MFPlayer: CPU/GPU compositors, placements, output mapping/warping and GL layer surfaces.</Description>
+    </PropertyGroup>
 </Project>

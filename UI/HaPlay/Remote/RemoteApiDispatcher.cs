@@ -38,6 +38,14 @@ public readonly record struct RemoteApiResult(int Status, string Body, string? A
 /// </summary>
 public sealed class RemoteApiDispatcher
 {
+    /// <summary>Bind/auth posture surfaced by /api/v1/status (review P2-7): controllers and
+    /// operators can verify whether the API is network-reachable and whether it requires a token
+    /// without inspecting the app's settings.</summary>
+    public bool LanBindingEnabled { get; init; }
+
+    /// <summary>True when a token is configured (auth "token"); false = open access.</summary>
+    public bool TokenConfigured { get; init; }
+
     private readonly CuePlayerViewModel _cuePlayer;
     private readonly Func<IReadOnlyList<MediaPlayerViewModel>> _players;
     private readonly SoundboardWorkspaceViewModel _soundboard;
@@ -120,8 +128,10 @@ public sealed class RemoteApiDispatcher
     {
         var boards = _soundboard.Boards.Count;
         var players = _players().Count;
+        var lan = LanBindingEnabled ? "true" : "false";
+        var auth = TokenConfigured ? "token" : "open";
         return new RemoteApiResult(200,
-            $"{{\"ok\":true,\"app\":\"HaPlay\",\"players\":{players},\"soundboards\":{boards}}}");
+            $"{{\"ok\":true,\"app\":\"HaPlay\",\"players\":{players},\"soundboards\":{boards},\"lan\":{lan},\"auth\":\"{auth}\"}}");
     }
 
     private RemoteApiResult HandleCues(string[] rest)

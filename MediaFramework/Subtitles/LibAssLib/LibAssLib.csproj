@@ -16,4 +16,8 @@
         <Compile Include="../../Shared/SystemFirstNativeLibraryResolver.cs" Link="Runtime/SystemFirstNativeLibraryResolver.cs" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for libass. Most applications should reference S.Media.Subtitles instead.</Description>
+    </PropertyGroup>
 </Project>

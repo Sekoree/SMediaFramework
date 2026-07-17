@@ -26,4 +26,8 @@
         <InternalsVisibleTo Include="S.Media.Present.Avalonia" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>GPU helpers for MFPlayer's video pipeline: color-space matrices, GL uploaders and hardware-surface descriptors. Low-level; usually pulled in transitively.</Description>
+    </PropertyGroup>
 </Project>

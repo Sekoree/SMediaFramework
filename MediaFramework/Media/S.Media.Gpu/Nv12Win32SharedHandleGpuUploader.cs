@@ -31,7 +31,7 @@ namespace S.Media.Gpu;
 /// <see cref="Dispose"/> releases the COM wrapper reference acquired in <see cref="TryCreate"/> (it does not tear down libav’s device while other references exist).
 /// Decode frames may omit libav device/texture COM on the backing (DXGI shared-handle export); this uploader’s device
 /// is still required for <c>OpenSharedResource</c> on those handles. Product backlog **PO-01** tracks removing that
-/// consumer-device requirement from the end-to-end “zero COM on <see cref="S.Media.Core.Video.HardwareVideoSurfaceDescriptor"/>” story (<c>Doc/Todo.md</c>).
+/// consumer-device requirement from the end-to-end “zero COM on <see cref="S.Media.Core.Video.HardwareVideoSurfaceDescriptor"/>” story.
 /// </remarks>
 public sealed unsafe class Nv12Win32SharedHandleGpuUploader : IDisposable
 {

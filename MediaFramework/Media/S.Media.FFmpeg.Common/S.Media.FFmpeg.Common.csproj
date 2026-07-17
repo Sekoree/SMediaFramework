@@ -29,4 +29,8 @@
         <InternalsVisibleTo Include="S.Media.Encode.FFmpeg.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Shared FFmpeg runtime plumbing for MFPlayer's decode and encode packages: native library resolution and FFmpeg.AutoGen initialization. Low-level; most applications should reference S.Media or S.Media.Encoding instead.</Description>
+    </PropertyGroup>
 </Project>
