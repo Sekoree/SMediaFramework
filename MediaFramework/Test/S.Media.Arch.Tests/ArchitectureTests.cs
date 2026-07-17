@@ -188,6 +188,30 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
+    public void EverySolutionProjectExistsOnDisk()
+    {
+        // A fresh clone must build: an sln entry whose csproj was never committed (the review P2-5
+        // meta packages were once added to the sln without `git add`ing the new Packages/ directory)
+        // fails every `dotnet build MFPlayer.sln` with MSB3202. Packages/ is outside FrameworkDirs,
+        // so only this check covers it.
+        var root = RepoRoot();
+        var missing = new List<string>();
+        foreach (var line in File.ReadLines(Path.Combine(root, "MFPlayer.sln")))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(line, "= \"[^\"]+\", \"([^\"]+\\.csproj)\"");
+            if (!match.Success)
+                continue;
+            var path = Path.Combine(root, match.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
+                missing.Add(match.Groups[1].Value);
+        }
+
+        Assert.True(missing.Count == 0,
+            "MFPlayer.sln references project files that do not exist on disk (forgotten `git add`?):\n  "
+            + string.Join("\n  ", missing));
+    }
+
+    [Fact]
     public void EveryProjectReferencePathResolves()
     {
         var missing = new List<string>();
