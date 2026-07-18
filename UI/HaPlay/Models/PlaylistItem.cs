@@ -231,6 +231,11 @@ public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
     /// <summary>True = the video leg was deliberately not selected (audio-only cue/deck item).</summary>
     public bool AudioOnly { get; init; }
 
+    /// <summary>True = the video's thumbnail is embedded in the prepared asset as an extra
+    /// attached-picture video stream (selectable in stream pickers; shown automatically for
+    /// audio-only items, exactly like MP3 cover art). Part of the cache identity.</summary>
+    public bool IncludeThumbnail { get; init; }
+
     /// <summary>Subtitle overlays for playback - filled with the prepared caption sidecar by the dialog;
     /// same shape as <see cref="FilePlaylistItem.Subtitles"/> so the overlay path is shared.</summary>
     public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];

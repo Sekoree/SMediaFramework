@@ -410,6 +410,9 @@ public static class Strings
     public static string AudioTrackLabel => Get(nameof(AudioTrackLabel));
     public static string AudioTrackAutomaticLabel => Get(nameof(AudioTrackAutomaticLabel));
     public static string AudioTrackTooltip => Get(nameof(AudioTrackTooltip));
+    public static string VideoTrackLabel => Get(nameof(VideoTrackLabel));
+    public static string VideoTrackAutomaticLabel => Get(nameof(VideoTrackAutomaticLabel));
+    public static string VideoTrackTooltip => Get(nameof(VideoTrackTooltip));
     public static string PlaylistContextAudioTrack => Get(nameof(PlaylistContextAudioTrack));
     public static string MediaPropertiesNoSelectableTracks => Get(nameof(MediaPropertiesNoSelectableTracks));
     public static string AudioTrackChangedStatusFormat => Get(nameof(AudioTrackChangedStatusFormat));
@@ -842,6 +845,8 @@ public static class Strings
     public static string YouTubePhaseResolving => Get(nameof(YouTubePhaseResolving));
     public static string YouTubePhaseDownloadingVideo => Get(nameof(YouTubePhaseDownloadingVideo));
     public static string YouTubePhaseDownloadingAudio => Get(nameof(YouTubePhaseDownloadingAudio));
+    public static string YouTubePhaseDownloadingThumbnail => Get(nameof(YouTubePhaseDownloadingThumbnail));
+    public static string YouTubeIncludeThumbnailCheckbox => Get(nameof(YouTubeIncludeThumbnailCheckbox));
     public static string YouTubePhaseRemuxing => Get(nameof(YouTubePhaseRemuxing));
     public static string YouTubePhaseReady => Get(nameof(YouTubePhaseReady));
     public static string YouTubeAlreadyCachedStatus => Get(nameof(YouTubeAlreadyCachedStatus));

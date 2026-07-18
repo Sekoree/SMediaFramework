@@ -109,6 +109,11 @@ public sealed record ShowClipBinding(
     string? SubtitlePath = null,
     IReadOnlyList<ShowSubtitleSelection>? Subtitles = null)
 {
+    /// <summary>Video track selection: <c>null</c> = automatic election (which skips attached
+    /// pictures), <c>-1</c> = no video, otherwise the chosen container stream index. An explicit index
+    /// CAN select an attached-picture stream (embedded thumbnail / cover art).</summary>
+    public int? VideoStreamIndex { get; init; }
+
     public IReadOnlyList<ShowSubtitleSelection> GetSubtitleSelections()
     {
         if (Subtitles is { Count: > 0 })

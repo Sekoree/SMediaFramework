@@ -4,7 +4,8 @@ namespace S.Media.FFmpeg.Common;
 
 /// <summary>
 /// Narrowly scoped libavformat stream-copy remuxer (no transcode): combines a video-only and an
-/// audio-only input file into one local container, or passes a single input through. Built for the
+/// audio-only input file into one local container, or passes a single input through, optionally with a
+/// still image (e.g. a YouTube thumbnail) embedded as an attached-picture video stream. Built for the
 /// YouTube prepare path (separate best-quality A/V streams → one asset the normal FFmpeg open path
 /// plays), deliberately NOT a general encoder - see the old tree's <c>S.Media.FFmpeg.Encode</c> for
 /// raw-frame encoding. In-process libavformat, no shelled <c>ffmpeg</c> binary (review: cue logic must
@@ -12,6 +13,7 @@ namespace S.Media.FFmpeg.Common;
 /// </summary>
 public static class FFmpegStreamCopyRemuxer
 {
+
     /// <summary>
     /// Remuxes the first video stream of <paramref name="videoPath"/> and/or the first audio stream of
     /// <paramref name="audioPath"/> into <paramref name="outputPath"/> (container chosen by the output
@@ -23,20 +25,24 @@ public static class FFmpegStreamCopyRemuxer
     /// <param name="progress">Coarse 0..1 progress from packet timestamps against the longest input duration.</param>
     /// <param name="containerFormat">Explicit libav muxer name (e.g. <c>"matroska"</c>). Required when the
     /// output path's extension doesn't name the container - e.g. atomic-commit <c>.partial</c> temp paths.</param>
+    /// <param name="stillImagePath">Optional still image (JPEG) embedded as an ADDITIONAL video stream
+    /// with the attached-picture disposition - automatic stream election skips it exactly like MP3
+    /// cover art, while explicit stream selection (or an otherwise video-less asset) can present it.</param>
     public static unsafe void Remux(
         string? videoPath,
         string? audioPath,
         string outputPath,
         CancellationToken cancellationToken = default,
         IProgress<double>? progress = null,
-        string? containerFormat = null)
+        string? containerFormat = null,
+        string? stillImagePath = null)
     {
         if (videoPath is null && audioPath is null)
             throw new ArgumentException("at least one of videoPath/audioPath is required");
         ArgumentException.ThrowIfNullOrEmpty(outputPath);
         FFmpegRuntime.EnsureInitialized();
 
-        var inputs = new List<InputLeg>(2);
+        var inputs = new List<InputLeg>(3);
         AVFormatContext* output = null;
         try
         {
@@ -62,6 +68,14 @@ public static class FFmpegStreamCopyRemuxer
                 outStream->codecpar->codec_tag = 0; // container-specific tags must not leak across formats
                 leg.OutStreamIndex = outStream->index;
             }
+
+            // The still image is muxed as a Matroska ATTACHMENT (the container's cover-art mechanism):
+            // a plain extra video track silently loses the attached-picture disposition on the mkv
+            // round-trip, while an image attachment is re-exposed by the demuxer as an attached-picture
+            // video stream - selectable by explicit index, skipped by automatic election (MP3-cover
+            // semantics). Attachment data travels in extradata; the stream carries no packets.
+            if (stillImagePath is not null)
+                AddAttachedPictureStream(output, stillImagePath);
 
             if ((output->oformat->flags & AVFMT_NOFILE) == 0)
             {
@@ -130,6 +144,31 @@ public static class FFmpegStreamCopyRemuxer
                 avformat_free_context(output);
             }
         }
+    }
+
+    private const int AvMediaTypeAttachment = 4;      // AVMEDIA_TYPE_ATTACHMENT
+    private const int AvInputBufferPaddingSize = 64;  // AV_INPUT_BUFFER_PADDING_SIZE
+
+    private static unsafe void AddAttachedPictureStream(AVFormatContext* output, string imagePath)
+    {
+        var bytes = File.ReadAllBytes(imagePath);
+        if (bytes.Length == 0)
+            throw new FFmpegException($"attached picture '{imagePath}' is empty");
+
+        var stream = avformat_new_stream(output, null);
+        if (stream is null)
+            throw new FFmpegException("avformat_new_stream returned null for the attached picture");
+
+        stream->codecpar->codec_type = (AVMediaType)AvMediaTypeAttachment;
+        stream->codecpar->codec_id = AVCodecID.AV_CODEC_ID_MJPEG;
+        var extradata = (byte*)av_mallocz((ulong)(bytes.Length + AvInputBufferPaddingSize));
+        if (extradata is null)
+            throw new OutOfMemoryException("av_mallocz(attached picture)");
+        Marshal.Copy(bytes, 0, (nint)extradata, bytes.Length);
+        stream->codecpar->extradata = extradata;
+        stream->codecpar->extradata_size = bytes.Length;
+        av_dict_set(&stream->metadata, "filename", "cover.jpg", 0);
+        av_dict_set(&stream->metadata, "mimetype", "image/jpeg", 0);
     }
 
     /// <summary>One input file contributing its first stream of a given media type.</summary>

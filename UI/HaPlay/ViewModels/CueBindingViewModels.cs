@@ -437,6 +437,15 @@ public sealed record CueAudioTrackChoice(int? Index, string? Signature, string L
     public override string ToString() => Label;
 }
 
+/// <summary>One video-track picker entry. <see cref="Index"/> null = automatic election (which skips
+/// attached pictures; pick one explicitly to show an embedded thumbnail/cover).</summary>
+public sealed record CueVideoTrackChoice(int? Index, string? Signature, string Label)
+{
+    public static readonly CueVideoTrackChoice Automatic = new(null, null, Strings.VideoTrackAutomaticLabel);
+
+    public override string ToString() => Label;
+}
+
 /// <summary>One embedded subtitle-track entry in the cue subtitle picker. Subtitles are none/one/many, so each
 /// entry carries its own <see cref="IsSelected"/> toggle rather than a single shared selection.</summary>
 public sealed partial class CueSubtitleTrackChoice : ObservableObject

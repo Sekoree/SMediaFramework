@@ -16,6 +16,7 @@ internal readonly record struct CueMediaProbeResult(
     int SourceVideoWidth,
     int SourceVideoHeight,
     IReadOnlyList<MediaStreamInfo> AudioTracks,
+    IReadOnlyList<MediaStreamInfo> VideoTracks,
     IReadOnlyList<MediaStreamInfo> SubtitleTracks);
 
 internal static class CueMediaProbe
@@ -71,6 +72,7 @@ internal static class CueMediaProbe
                     SourceVideoWidth: videoWidth,
                     SourceVideoHeight: videoHeight,
                     AudioTracks: ListDecodableAudioTracks(decoder.Streams),
+                    VideoTracks: ListVideoTracks(decoder.Streams),
                     SubtitleTracks: ListSubtitleTracks(decoder.Streams));
             }
             finally
@@ -86,6 +88,11 @@ internal static class CueMediaProbe
 
     private static IReadOnlyList<MediaStreamInfo> ListDecodableAudioTracks(IReadOnlyList<MediaStreamInfo> streams) =>
         streams.Where(s => s.Kind == MediaStreamKind.Audio && s.IsDecodable).ToArray();
+
+    // Attached pictures stay in the list ON PURPOSE: the whole point of the picker is that an
+    // embedded cover/thumbnail can be selected explicitly (automatic election skips it).
+    private static IReadOnlyList<MediaStreamInfo> ListVideoTracks(IReadOnlyList<MediaStreamInfo> streams) =>
+        streams.Where(s => s.Kind == MediaStreamKind.Video && s.IsDecodable).ToArray();
 
     private static IReadOnlyList<MediaStreamInfo> ListSubtitleTracks(IReadOnlyList<MediaStreamInfo> streams) =>
         streams.Where(s => s.Kind == MediaStreamKind.Subtitle).ToArray();
@@ -119,6 +126,23 @@ internal static class CueMediaProbe
         {
             var streams = await Task.Run(() => MediaContainerDecoder.ProbeStreams(path)).ConfigureAwait(false);
             return ListDecodableAudioTracks(streams);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>Video-side sibling of <see cref="TryProbeAudioTracksAsync"/> (fills the video-track
+    /// picker for cues loaded from disk). Returns an empty list on failure.</summary>
+    public static async Task<IReadOnlyList<MediaStreamInfo>> TryProbeVideoTracksAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return [];
+        try
+        {
+            var streams = await Task.Run(() => MediaContainerDecoder.ProbeStreams(path)).ConfigureAwait(false);
+            return ListVideoTracks(streams);
         }
         catch
         {

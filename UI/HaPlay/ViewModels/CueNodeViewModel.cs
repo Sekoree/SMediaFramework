@@ -399,6 +399,50 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(HasMultipleAudioTracks));
     }
 
+    /// <summary>Persisted explicit video track (container stream index); null = automatic.</summary>
+    [ObservableProperty]
+    private int? _videoTrackIndex;
+
+    /// <summary>Content signature of the chosen video track at pick time - re-mux guard.</summary>
+    [ObservableProperty]
+    private string? _videoTrackSignature;
+
+    /// <summary>Video track picker entries: an "Automatic" row followed by the probed video streams
+    /// (attached pictures included, labelled "(cover art)" - explicitly selectable, e.g. an embedded
+    /// YouTube thumbnail on an otherwise audio-only asset).</summary>
+    public ObservableCollection<CueVideoTrackChoice> VideoTrackChoices { get; } = new();
+
+    [ObservableProperty]
+    private CueVideoTrackChoice? _selectedVideoTrackChoice;
+
+    /// <summary>The picker only shows when there is an actual choice (2+ video streams).</summary>
+    public bool HasMultipleVideoTracks => VideoTrackChoices.Count >= 3;
+
+    partial void OnSelectedVideoTrackChoiceChanged(CueVideoTrackChoice? value)
+    {
+        VideoTrackIndex = value?.Index;
+        VideoTrackSignature = value?.Signature;
+    }
+
+    /// <summary>Video-side sibling of <see cref="SetAudioTrackChoices"/>: same persisted-choice
+    /// re-resolution (index+signature, then signature alone, else automatic).</summary>
+    public void SetVideoTrackChoices(IReadOnlyList<S.Media.Decode.FFmpeg.MediaStreamInfo> tracks)
+    {
+        var persistedIndex = VideoTrackIndex;
+        var persistedSignature = VideoTrackSignature;
+
+        VideoTrackChoices.Clear();
+        VideoTrackChoices.Add(CueVideoTrackChoice.Automatic);
+        foreach (var track in tracks)
+            VideoTrackChoices.Add(new CueVideoTrackChoice(track.Index, track.ContentSignature, track.ToDisplayString()));
+
+        SelectedVideoTrackChoice =
+            VideoTrackChoices.FirstOrDefault(c => c.Index == persistedIndex && c.Signature == persistedSignature)
+            ?? VideoTrackChoices.FirstOrDefault(c => c.Signature is not null && c.Signature == persistedSignature)
+            ?? VideoTrackChoices[0];
+        OnPropertyChanged(nameof(HasMultipleVideoTracks));
+    }
+
     /// <summary>Persisted subtitle selections from the loaded cue. Used to restore the picker's checked state
     /// and to preserve sidecar selections / style overrides not editable in the embedded-track picker.</summary>
     public IReadOnlyList<HaPlay.Models.CueSubtitleSelection> PersistedSubtitles { get; init; } = [];
@@ -1051,6 +1095,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceAudioChannels = m.AudioChannels,
                     AudioTrackIndex = m.AudioTrackIndex,
                     AudioTrackSignature = m.AudioTrackSignature,
+                    VideoTrackIndex = m.VideoTrackIndex,
+                    VideoTrackSignature = m.VideoTrackSignature,
                     PersistedSubtitles = m.Subtitles,
                     SourceVideoIsAttachedPicture = m.VideoIsAttachedPicture,
                     SourceFrameRateNum = m.SourceFrameRateNum,
@@ -1206,6 +1252,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 AudioChannels = Math.Max(0, SourceAudioChannels),
                 AudioTrackIndex = AudioTrackIndex,
                 AudioTrackSignature = AudioTrackSignature,
+                VideoTrackIndex = VideoTrackIndex,
+                VideoTrackSignature = VideoTrackSignature,
                 Subtitles = BuildSubtitleSelections(),
                 VideoIsAttachedPicture = SourceVideoIsAttachedPicture,
                 SourceFrameRateNum = Math.Max(0, SourceFrameRateNum),

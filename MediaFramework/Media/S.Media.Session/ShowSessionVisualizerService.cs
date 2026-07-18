@@ -1,5 +1,6 @@
 using S.Media.Core.Buses;
 using S.Media.Core.Diagnostics;
+using S.Media.Compositor;
 
 namespace S.Media.Session;
 
@@ -15,6 +16,12 @@ namespace S.Media.Session;
 /// <para>One slot owns a LIST of surface layers because a visualizer cue can place the same source
 /// into several sections of one canvas (#26 multi-placement); they attach, fade and detach
 /// together, sharing one audio tap and one metadata registration.</para>
+/// <para><strong>ONE surface, N layers.</strong> <see cref="ILayerSurfaceVideoSource.CreateLayerSurface"/>
+/// is called AT MOST ONCE per source (its contract; calling it per placement created several GL
+/// surfaces bound to one native renderer and crashed projectM). The single surface is added to the
+/// composition once per placement - the compositor keys ConfigureGl by surface instance and renders it
+/// once per layer - so every placement shows the same render. Exactly ONE layer owns the surface's
+/// disposal; the rest are non-owning (see <see cref="ClipCompositionRuntime.AddSurfaceLayer"/>).</para>
 /// </remarks>
 internal sealed class ShowSessionVisualizerService
 {
@@ -82,17 +89,19 @@ internal sealed class ShowSessionVisualizerService
         Func<string, bool>? audioFeedFilter,
         bool preserveAcrossDocumentReload)
     {
+        // ONE surface for the whole slot (contract + projectM crash fix); the FIRST layer owns its
+        // disposal, every additional placement reuses the same instance non-owningly.
+        var surface = surfaceSource.CreateLayerSurface();
         var stagedLayers = new List<Layer>(placements.Count);
         try
         {
-            foreach (var spec in placements)
+            for (var i = 0; i < placements.Count; i++)
                 stagedLayers.Add(new Layer(
-                    composition.AddSurfaceLayer(surfaceSource.CreateLayerSurface(), spec), spec));
+                    composition.AddSurfaceLayer(surface, placements[i], ownsSurface: i == 0), placements[i]));
         }
         catch
         {
-            foreach (var staged in stagedLayers)
-                staged.Slot.Dispose();
+            DisposeStagedLayers(stagedLayers, surface);
             throw;
         }
         composition.EnsurePumpStarted();
@@ -211,20 +220,24 @@ internal sealed class ShowSessionVisualizerService
         foreach (var pending in reattachments)
         {
             var recreated = new List<Layer>(pending.Captured.Layers.Count);
+            IVideoCompositorLayerSurface? surface = null;
             try
             {
+                // One surface for every placement, exactly like Attach - the first layer owns it.
                 var surfaceSource = (Compositor.ILayerSurfaceVideoSource)pending.Captured.Source;
-                foreach (var old in pending.Captured.Layers)
+                surface = surfaceSource.CreateLayerSurface();
+                for (var i = 0; i < pending.Captured.Layers.Count; i++)
+                {
+                    var placement = pending.Captured.Layers[i].Placement;
                     recreated.Add(new Layer(
-                        pending.Replacement.AddSurfaceLayer(surfaceSource.CreateLayerSurface(), old.Placement),
-                        old.Placement));
+                        pending.Replacement.AddSurfaceLayer(surface, placement, ownsSurface: i == 0), placement));
+                }
                 pending.Replacement.EnsurePumpStarted();
                 _slots[pending.CompositionId] = pending.Captured with { Layers = recreated };
             }
             catch (Exception ex)
             {
-                foreach (var layer in recreated)
-                    MediaDiagnostics.SwallowDisposeErrors(layer.Slot.Dispose, "ShowSession: staged visualizer layer");
+                DisposeStagedLayers(recreated, surface);
                 _slots.Remove(pending.CompositionId);
                 DisposeAuxiliaries(pending.Captured);
                 MediaDiagnostics.LogWarning(
@@ -239,10 +252,29 @@ internal sealed class ShowSessionVisualizerService
     /// replacement/fade identity checks cannot tear down a newer source on the same composition.</summary>
     private void DisposeSlot(Slot slot)
     {
-        foreach (var layer in slot.Layers)
-            layer.Slot.Dispose();
+        DisposeLayers(slot.Layers);
         _detachTapFromActiveClips(slot.TapId);
         DisposeAuxiliaries(slot);
+    }
+
+    /// <summary>Disposes the shared-surface layers NON-OWNERS FIRST so the compositor never renders a
+    /// still-referenced layer whose surface was already torn down by the owning layer.</summary>
+    private static void DisposeLayers(IReadOnlyList<Layer> layers)
+    {
+        for (var i = layers.Count - 1; i >= 1; i--)
+            MediaDiagnostics.SwallowDisposeErrors(layers[i].Slot.Dispose, "ShowSession: visualizer layer");
+        if (layers.Count > 0)
+            MediaDiagnostics.SwallowDisposeErrors(layers[0].Slot.Dispose, "ShowSession: visualizer layer");
+    }
+
+    /// <summary>Rollback for a partially-staged attach/reattach: dispose whatever layers were added
+    /// (owner last), then the surface if no owning layer took responsibility for it yet.</summary>
+    private static void DisposeStagedLayers(IReadOnlyList<Layer> staged, IVideoCompositorLayerSurface? surface)
+    {
+        DisposeLayers(staged);
+        // The owning layer (index 0) disposes the surface; if it was never added, dispose it here.
+        if (staged.Count == 0 && surface is not null)
+            MediaDiagnostics.SwallowDisposeErrors(surface.Dispose, "ShowSession: staged visualizer surface");
     }
 
     private void DisposeAuxiliaries(Slot slot)

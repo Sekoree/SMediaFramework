@@ -171,6 +171,7 @@ public static class HaPlayShowMapper
             LayerIndex: primary?.LayerIndex ?? 0,
             AudioStreamIndex: media.AudioTrackIndex)
         {
+            VideoStreamIndex = media.VideoTrackIndex,
             StartOffset = TimeSpan.FromMilliseconds(media.StartOffsetMs),
             EndOffset = TimeSpan.FromMilliseconds(media.EndOffsetMs),
             FadeIn = TimeSpan.FromMilliseconds(media.FadeInMs),

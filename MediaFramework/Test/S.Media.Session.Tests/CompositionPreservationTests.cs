@@ -24,9 +24,10 @@ public sealed class CompositionPreservationTests
 {
     private sealed class MinimalSurface : IVideoCompositorLayerSurface
     {
+        public int DisposeCount;
         public void ConfigureGl(GL gl, VideoFormat canvas) { }
         public void Render(GL gl, uint targetFbo, TimeSpan masterTime, LayerTransform2D transform, float opacity) { }
-        public void Dispose() { }
+        public void Dispose() => Interlocked.Increment(ref DisposeCount);
     }
 
     /// <summary>Surface-hosting CPU compositor (no GL) so SetCompositionVisualizerAsync can attach.</summary>
@@ -70,7 +71,17 @@ public sealed class CompositionPreservationTests
         AudioFormat IAudioOutput.Format => new(48_000, 2);
         public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref SubmitCount);
 
-        public IVideoCompositorLayerSurface CreateLayerSurface() => new MinimalSurface();
+        // Track every surface handed out: the multi-placement contract is CreateLayerSurface called at
+        // most ONCE per attach (#26 crash fix - N calls created N GL surfaces on one native source).
+        public readonly System.Collections.Concurrent.ConcurrentQueue<MinimalSurface> Surfaces = new();
+        public int SurfaceCreations;
+        public IVideoCompositorLayerSurface CreateLayerSurface()
+        {
+            Interlocked.Increment(ref SurfaceCreations);
+            var s = new MinimalSurface();
+            Surfaces.Enqueue(s);
+            return s;
+        }
         public void Dispose() => Disposed = true;
     }
 
@@ -269,6 +280,11 @@ public sealed class CompositionPreservationTests
             ]));
         Assert.True(await session.HasCompositionVisualizerAsync("screen"));
 
+        // CRASH FIX (#26): CreateLayerSurface is the "at most once per playback" contract - two
+        // placements must still yield exactly ONE surface (N calls bound N GL surfaces to one native
+        // projectM source and segfaulted). The single surface backs both compositor layers.
+        Assert.Equal(1, viz.SurfaceCreations);
+
         // The compositor must receive BOTH surface layers each tick, not just the last-attached one.
         await WaitUntilAsync(
             () => opacities.Any(v => Math.Abs(v - 0.9f) < 0.01f) && opacities.Any(v => Math.Abs(v - 0.3f) < 0.01f),
@@ -288,6 +304,11 @@ public sealed class CompositionPreservationTests
         Assert.False(await session.UpdateCompositionVisualizerPlacementAsync(
             "screen", new VideoPlacementSpec("screen", 2), placementIndex: 2));
         Assert.False(viz.Disposed);
+
+        // Stop it: the ONE shared surface is disposed exactly once (not once per placement, not never).
+        Assert.True(await session.SetCompositionVisualizerAsync("screen", null));
+        var surface = Assert.Single(viz.Surfaces.ToArray());
+        Assert.Equal(1, surface.DisposeCount);
     }
 
     [Fact]
@@ -311,6 +332,9 @@ public sealed class CompositionPreservationTests
 
         Assert.False(viz.Disposed);
         Assert.True(await session.HasCompositionVisualizerAsync("screen"));
+        // Reattach also honors the one-surface contract: the original attach + the rebuild each create
+        // exactly one surface (two total), never one-per-placement.
+        Assert.Equal(2, viz.SurfaceCreations);
         opacities.Clear();
         await WaitUntilAsync(
             () => opacities.Any(v => Math.Abs(v - 0.8f) < 0.01f) && opacities.Any(v => Math.Abs(v - 0.4f) < 0.01f),

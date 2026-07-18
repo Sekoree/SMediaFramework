@@ -46,6 +46,11 @@ public interface IYouTubeGateway
     /// positioning survive - or returns false when the language isn't offered.</summary>
     Task<bool> TryDownloadCaptionsAssAsync(
         string videoId, string languageCode, string filePath, CancellationToken cancellationToken);
+
+    /// <summary>Downloads the video's best available JPEG thumbnail to <paramref name="filePath"/>, or
+    /// returns false when no JPEG variant is offered. JPEG only: the thumbnail is stream-copied into the
+    /// prepared asset as an MJPEG video stream, and WebP variants cannot be stream-copied that way.</summary>
+    Task<bool> TryDownloadThumbnailJpegAsync(string videoId, string filePath, CancellationToken cancellationToken);
 }
 
 /// <summary>YoutubeExplode-backed gateway. Descriptors are produced and re-matched here so the format
@@ -205,8 +210,68 @@ public sealed class YoutubeExplodeGateway : IYouTubeGateway
         return split[0] + "?" + string.Join("&", query);
     }
 
-    // Shared client for the raw timedtext GET. A browser-ish User-Agent keeps YouTube from short-changing the
-    // response; the URL itself is pre-authorized via the player response, so no cookies/keys are needed.
+    // Standard i.ytimg.com JPEG thumbnails, HIGHEST resolution first. YoutubeExplode's Video.Thumbnails
+    // frequently omits the high-res variants (it often tops out at hqdefault 480x360) even when maxres
+    // exists, so probe these known names directly - maxresdefault is 1280x720 (or higher). A name that
+    // the uploader never supplied 404s, so we fall through to the next.
+    private static readonly string[] ThumbnailQualityLadder =
+        ["maxresdefault", "sddefault", "hqdefault", "mqdefault", "default"];
+
+    // A "video unavailable" gray placeholder that i.ytimg occasionally returns instead of 404 is tiny;
+    // a genuine thumbnail is always larger. Reject anything below this to avoid embedding the placeholder.
+    private const int MinRealThumbnailBytes = 2 * 1024;
+
+    public async Task<bool> TryDownloadThumbnailJpegAsync(
+        string videoId, string filePath, CancellationToken cancellationToken)
+    {
+        var id = VideoId.Parse(videoId);
+
+        // Build the candidate list highest-resolution first: the known i.ytimg ladder, then any extra
+        // JPEG URLs YoutubeExplode surfaced (deduped) as a fallback if the ladder names ever change.
+        var candidates = new List<string>(ThumbnailQualityLadder.Length + 4);
+        foreach (var name in ThumbnailQualityLadder)
+            candidates.Add($"https://i.ytimg.com/vi/{id.Value}/{name}.jpg");
+        try
+        {
+            var video = await _client.Videos.GetAsync(id, cancellationToken).ConfigureAwait(false);
+            foreach (var extra in video.Thumbnails
+                         .Where(t => t.Url.Contains(".jpg", StringComparison.OrdinalIgnoreCase))
+                         .OrderByDescending(t => (long)t.Resolution.Width * t.Resolution.Height)
+                         .Select(t => t.Url))
+            {
+                if (!candidates.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    candidates.Add(extra);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The metadata lookup is only for extra fallback URLs - the ladder above is enough on its own.
+        }
+
+        foreach (var url in candidates)
+        {
+            using var response = await Http.GetAsync(
+                url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                continue; // e.g. maxresdefault absent -> 404 -> try the next size down
+            // Skip the placeholder up front when the server declares the length.
+            if (response.Content.Headers.ContentLength is { } len && len < MinRealThumbnailBytes)
+                continue;
+
+            var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+            if (bytes.Length < MinRealThumbnailBytes)
+                continue;
+
+            await File.WriteAllBytesAsync(filePath, bytes, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
+    }
+
+    // Shared client for the raw timedtext GET (and thumbnail fetches). A browser-ish User-Agent keeps
+    // YouTube from short-changing the response; the URL itself is pre-authorized via the player
+    // response, so no cookies/keys are needed.
     private static readonly HttpClient Http = CreateCaptionHttpClient();
 
     private static HttpClient CreateCaptionHttpClient()

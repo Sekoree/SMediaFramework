@@ -5,7 +5,7 @@ using S.Media.FFmpeg.Common;
 namespace S.Media.Source.YouTube;
 
 /// <summary>Progress phases of a prepare (download-then-remux) run, for the readiness UI.</summary>
-public enum YouTubePreparePhase { Resolving, DownloadingVideo, DownloadingAudio, Remuxing, Ready }
+public enum YouTubePreparePhase { Resolving, DownloadingVideo, DownloadingAudio, DownloadingThumbnail, Remuxing, Ready }
 
 public readonly record struct YouTubePrepareProgress(YouTubePreparePhase Phase, double Fraction);
 
@@ -26,7 +26,7 @@ public sealed class YouTubePreparer
 {
     private readonly IYouTubeGateway _gateway;
     private readonly string _cacheRoot;
-    private readonly Action<string?, string?, string, CancellationToken> _remux;
+    private readonly Action<string?, string?, string?, string, CancellationToken> _remux;
     private readonly long? _maxCacheBytes;
     private readonly TimeSpan? _maxCacheAge;
 
@@ -50,10 +50,12 @@ public sealed class YouTubePreparer
     /// (LRU by last-write) beyond the cap are evicted after a successful prepare. Null = unbounded.</param>
     /// <param name="maxCacheAge">YT-03: optional max age for committed assets; older ones are evicted after a
     /// successful prepare. Null = never age out.</param>
+    /// <param name="remux">Injectable remux step (video, audio, thumbnail, output, token) so
+    /// cache/coalescing behavior tests offline without FFmpeg natives.</param>
     public YouTubePreparer(
         IYouTubeGateway gateway,
         string? cacheRoot = null,
-        Action<string?, string?, string, CancellationToken>? remux = null,
+        Action<string?, string?, string?, string, CancellationToken>? remux = null,
         long? maxCacheBytes = null,
         TimeSpan? maxCacheAge = null)
     {
@@ -61,30 +63,33 @@ public sealed class YouTubePreparer
         _cacheRoot = cacheRoot ?? DefaultCacheRoot;
         _maxCacheBytes = maxCacheBytes is > 0 ? maxCacheBytes : null;
         _maxCacheAge = maxCacheAge is { } a && a > TimeSpan.Zero ? a : null;
-        // The remux step is injectable so cache/coalescing behavior tests offline without FFmpeg natives.
-        _remux = remux ?? new Action<string?, string?, string, CancellationToken>(
+        _remux = remux ?? new Action<string?, string?, string?, string, CancellationToken>(
             // Explicit container: the atomic-commit temp path ends in ".partial", so libavformat
             // cannot infer the muxer from the extension.
-            static (v, a, output, ct) => FFmpegStreamCopyRemuxer.Remux(v, a, output, ct, containerFormat: "matroska"));
+            static (v, a, thumb, output, ct) =>
+                FFmpegStreamCopyRemuxer.Remux(v, a, output, ct, containerFormat: "matroska", stillImagePath: thumb));
     }
 
     public string CacheRoot => _cacheRoot;
 
-    /// <summary>Deterministic cache key for a video + RESOLVED stream descriptors.</summary>
-    internal static string CacheKey(string videoId, string? videoDescriptor, string? audioDescriptor)
+    /// <summary>Deterministic cache key for a video + RESOLVED stream descriptors. An embedded
+    /// thumbnail is part of the identity (appended only when set, so pre-thumbnail keys are stable).</summary>
+    internal static string CacheKey(string videoId, string? videoDescriptor, string? audioDescriptor, bool includeThumbnail = false)
     {
         var material = $"1|{videoId}|{videoDescriptor}|{audioDescriptor}"; // leading component = key format version
+        if (includeThumbnail)
+            material += "|thumb";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..16];
         return $"{videoId}-{hash}";
     }
 
     /// <summary>The final asset path a selection WOULD occupy - exists ⇒ prepared (used by the provider's
     /// no-network open path and by readiness queries). Requires descriptors already resolved (not "best").</summary>
-    public string AssetPathFor(string videoId, string? videoDescriptor, string? audioDescriptor) =>
-        Path.Combine(_cacheRoot, CacheKey(videoId, videoDescriptor, audioDescriptor) + ".mkv");
+    public string AssetPathFor(string videoId, string? videoDescriptor, string? audioDescriptor, bool includeThumbnail = false) =>
+        Path.Combine(_cacheRoot, CacheKey(videoId, videoDescriptor, audioDescriptor, includeThumbnail) + ".mkv");
 
-    public bool IsPrepared(string videoId, string? videoDescriptor, string? audioDescriptor) =>
-        File.Exists(AssetPathFor(videoId, videoDescriptor, audioDescriptor));
+    public bool IsPrepared(string videoId, string? videoDescriptor, string? audioDescriptor, bool includeThumbnail = false) =>
+        File.Exists(AssetPathFor(videoId, videoDescriptor, audioDescriptor, includeThumbnail));
 
     /// <summary>Content-addressed cache path for ONE downloaded stream, keyed by its OWN descriptor so it is
     /// reused across selection changes - swapping the audio stream keeps the already-downloaded video and
@@ -115,7 +120,7 @@ public sealed class YouTubePreparer
         ArgumentNullException.ThrowIfNull(selection);
 
         // Coalesce by request identity (pre-resolution): two "best" prepares of the same video share one run.
-        var coalesceKey = $"{videoId}|{selection.Video}|{selection.Audio}|{selection.SubtitleLanguage}|{selection.IncludeVideo}";
+        var coalesceKey = $"{videoId}|{selection.Video}|{selection.Audio}|{selection.SubtitleLanguage}|{selection.IncludeVideo}|{selection.IncludeThumbnail}";
         PrepareEntry entry;
         lock (_inFlightGate)
         {
@@ -322,7 +327,7 @@ public sealed class YouTubePreparer
                 $"Selected audio stream '{selection.Audio}' is no longer offered for '{videoId}' - reselect streams.");
 
         Directory.CreateDirectory(_cacheRoot);
-        var key = CacheKey(videoId, videoDescriptor, audioDescriptor);
+        var key = CacheKey(videoId, videoDescriptor, audioDescriptor, selection.IncludeThumbnail);
         var assetPath = Path.Combine(_cacheRoot, key + ".mkv");
         var subtitlePath = selection.SubtitleLanguage is { Length: > 0 } lang
             ? Path.Combine(_cacheRoot, $"{key}.{lang}.ass")
@@ -338,6 +343,11 @@ public sealed class YouTubePreparer
                 // re-downloading both. They persist for that reuse (like the .mkv assets); only the remux is temp.
                 var videoCache = videoDescriptor is null ? null : StreamCachePath(videoId, videoDescriptor, ".v");
                 var audioCache = audioDescriptor is null ? null : StreamCachePath(videoId, audioDescriptor, ".a");
+                // Thumbnails are per-video (not per-selection): one .jpg is reused by every
+                // selection of the same video that wants it embedded.
+                var thumbnailCache = selection.IncludeThumbnail
+                    ? Path.Combine(_cacheRoot, $"{videoId}-thumb.jpg")
+                    : null;
                 var assetTemp = $"{assetPath}.{Guid.NewGuid():N}.partial";
                 try
                 {
@@ -357,9 +367,30 @@ public sealed class YouTubePreparer
                             Wrap(progress, YouTubePreparePhase.DownloadingAudio)).ConfigureAwait(false);
                     }
 
+                    if (thumbnailCache is not null && !File.Exists(thumbnailCache))
+                    {
+                        progress?.Report(new(YouTubePreparePhase.DownloadingThumbnail, 0));
+                        var thumbTemp = $"{thumbnailCache}.{Guid.NewGuid():N}.partial";
+                        try
+                        {
+                            // The asset's cache identity PROMISES an embedded thumbnail, so a missing/
+                            // failed thumbnail fails the prepare instead of committing a lying asset.
+                            if (!await _gateway.TryDownloadThumbnailJpegAsync(
+                                    videoId, thumbTemp, cancellationToken).ConfigureAwait(false))
+                                throw new InvalidOperationException(
+                                    $"YouTube video '{videoId}' offers no JPEG thumbnail - disable the "
+                                    + "embedded-thumbnail option for this item.");
+                            File.Move(thumbTemp, thumbnailCache, overwrite: true);
+                        }
+                        finally
+                        {
+                            TryDelete(thumbTemp);
+                        }
+                    }
+
                     progress?.Report(new(YouTubePreparePhase.Remuxing, 0));
                     await Task.Run(
-                        () => _remux(videoCache, audioCache, assetTemp, cancellationToken),
+                        () => _remux(videoCache, audioCache, thumbnailCache, assetTemp, cancellationToken),
                         cancellationToken).ConfigureAwait(false);
 
                     File.Move(assetTemp, assetPath, overwrite: true); // atomic commit - readers only ever see complete assets
@@ -393,6 +424,7 @@ public sealed class YouTubePreparer
             var resolved = new YouTubeStreamSelection(videoDescriptor, audioDescriptor, selection.SubtitleLanguage)
             {
                 IncludeVideo = selection.IncludeVideo,
+                IncludeThumbnail = selection.IncludeThumbnail,
             };
             return new YouTubePreparedMedia(assetPath, subtitlePath, manifest, resolved);
         }

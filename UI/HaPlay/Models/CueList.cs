@@ -311,6 +311,18 @@ public sealed record MediaCueNode : CueNode
     /// on mismatch the engine re-resolves by signature or falls back to automatic.</summary>
     public string? AudioTrackSignature { get; init; }
 
+    /// <summary>
+    /// Explicit video track for multi-stream sources (container stream index). <c>null</c> =
+    /// automatic election (which skips attached pictures). An explicit index CAN select an
+    /// attached-picture stream - e.g. a YouTube asset's embedded thumbnail or MP3 cover art.
+    /// The demuxer falls back to automatic when the index is stale.
+    /// </summary>
+    public int? VideoTrackIndex { get; init; }
+
+    /// <summary>Content signature of the chosen video track at pick time (codec/resolution) -
+    /// same re-mux guard as <see cref="AudioTrackSignature"/>.</summary>
+    public string? VideoTrackSignature { get; init; }
+
     /// <summary>True when the source's only video is an attached picture (e.g. MP3 with cover art).
     /// The Video tab still shows so the cover art can be placed into a composition, but with a
     /// hint that it's a still image.</summary>

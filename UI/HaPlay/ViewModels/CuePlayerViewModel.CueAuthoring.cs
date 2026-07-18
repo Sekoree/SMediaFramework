@@ -196,7 +196,7 @@ public partial class CuePlayerViewModel
         // like any file so the drawer gets exact duration/channels/fps/resolution (and audio-only
         // items correctly drop the Video tab). The item-metadata duration is the fallback.
         var assetPath = YouTubeRuntime.Preparer.AssetPathFor(
-            result.VideoId, result.VideoStreamDescriptor, result.AudioStreamDescriptor);
+            result.VideoId, result.VideoStreamDescriptor, result.AudioStreamDescriptor, result.IncludeThumbnail);
         if (File.Exists(assetPath))
             await ProbeAndAssignDurationAsync(row, assetPath);
         else if (result.DurationSeconds is { } seconds and > 0)
@@ -415,6 +415,7 @@ public partial class CuePlayerViewModel
                 row.SourceVideoWidth = 0;
                 row.SourceVideoHeight = 0;
                 row.SetAudioTrackChoices([]);
+                row.SetVideoTrackChoices([]);
                 row.SetSubtitleTrackChoices([]);
                 return;
             }
@@ -430,6 +431,7 @@ public partial class CuePlayerViewModel
             row.SourceVideoWidth = probe.Value.SourceVideoWidth;
             row.SourceVideoHeight = probe.Value.SourceVideoHeight;
             row.SetAudioTrackChoices(probe.Value.AudioTracks);
+            row.SetVideoTrackChoices(probe.Value.VideoTracks);
             row.SetSubtitleTrackChoices(probe.Value.SubtitleTracks);
         });
     }
@@ -451,6 +453,16 @@ public partial class CuePlayerViewModel
                 // A Browse-media probe may have filled the list while we were probing; keep its result.
                 if (node.AudioTrackChoices.Count == 0)
                     node.SetAudioTrackChoices(tracks);
+            });
+        }
+
+        if (node.VideoTrackChoices.Count == 0)
+        {
+            var tracks = await CueMediaProbe.TryProbeVideoTracksAsync(file.Path).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (node.VideoTrackChoices.Count == 0)
+                    node.SetVideoTrackChoices(tracks);
             });
         }
 

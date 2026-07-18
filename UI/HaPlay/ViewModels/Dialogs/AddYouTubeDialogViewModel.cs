@@ -65,6 +65,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
     [ObservableProperty] private string? _videoDurationText;
     [ObservableProperty] private bool _hasManifest;
     [ObservableProperty] private bool _audioOnly;
+    [ObservableProperty] private bool _includeThumbnail;
     [ObservableProperty] private double _prepareProgress;
     [ObservableProperty] private string? _prepareStatus;
     [ObservableProperty] private string? _prepareDetail;
@@ -91,6 +92,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
     partial void OnSelectedVideoStreamChanged(YouTubeVideoOption? value) => RefreshCacheStatus();
     partial void OnSelectedAudioStreamChanged(YouTubeAudioOption? value) => RefreshCacheStatus();
     partial void OnAudioOnlyChanged(bool value) => RefreshCacheStatus();
+    partial void OnIncludeThumbnailChanged(bool value) => RefreshCacheStatus();
 
     /// <summary>Pre-populates edit mode: the item's canonical URL, then a resolve re-selects its streams.</summary>
     public void LoadFromExisting(YouTubePlaylistItem item)
@@ -98,6 +100,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
         _existing = item;
         Url = Playback.HaPlayPlaybackHelpers.BuildYouTubeUri(item);
         AudioOnly = item.AudioOnly;
+        IncludeThumbnail = item.IncludeThumbnail;
         OnPropertyChanged(nameof(DialogTitle));
     }
 
@@ -145,6 +148,8 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
             SelectedSubtitleTrack =
                 SubtitleTracks.FirstOrDefault(o => o.Info is not null && o.Info.LanguageCode == wantSub)
                 ?? SubtitleTracks[0];
+            if (_existing is null && uriSelection.IncludeThumbnail)
+                IncludeThumbnail = true; // a pasted thumb=1 URI carries the intent
             HasManifest = true;
             RefreshCacheStatus();
         }
@@ -186,6 +191,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
             SelectedSubtitleTrack?.Info?.LanguageCode)
         {
             IncludeVideo = !AudioOnly,
+            IncludeThumbnail = IncludeThumbnail,
         };
 
         _cts?.Cancel();
@@ -207,6 +213,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
                         YouTubePreparePhase.Resolving => Strings.YouTubePhaseResolving,
                         YouTubePreparePhase.DownloadingVideo => Strings.YouTubePhaseDownloadingVideo,
                         YouTubePreparePhase.DownloadingAudio => Strings.YouTubePhaseDownloadingAudio,
+                        YouTubePreparePhase.DownloadingThumbnail => Strings.YouTubePhaseDownloadingThumbnail,
                         YouTubePreparePhase.Remuxing => Strings.YouTubePhaseRemuxing,
                         _ => Strings.YouTubePhaseReady,
                     };
@@ -224,6 +231,7 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
                 AudioStreamDescriptor = prepared.ResolvedSelection.Audio,
                 SubtitleLanguage = prepared.SubtitlePath is null ? null : prepared.ResolvedSelection.SubtitleLanguage,
                 AudioOnly = AudioOnly,
+                IncludeThumbnail = prepared.ResolvedSelection.IncludeThumbnail,
                 Subtitles = prepared.SubtitlePath is null
                     ? []
                     : [new CueSubtitleSelection
@@ -303,7 +311,8 @@ public sealed partial class AddYouTubeDialogViewModel : ObservableObject
         var cached = _preparer.IsPrepared(
             _manifest.VideoId,
             AudioOnly ? null : SelectedVideoStream?.Info.Descriptor,
-            SelectedAudioStream?.Info.Descriptor);
+            SelectedAudioStream?.Info.Descriptor,
+            IncludeThumbnail);
         CacheStatus = cached ? Strings.YouTubeAlreadyCachedStatus : Strings.YouTubeNotCachedStatus;
     }
 }

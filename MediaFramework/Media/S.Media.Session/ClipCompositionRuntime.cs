@@ -542,7 +542,13 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// the layer AND disposes the surface (the runtime owns it - mirrors <see cref="LayerSlot"/> handing
     /// its slot back). Throws when <see cref="SupportsSurfaceLayers"/> is false.
     /// </summary>
-    public SurfaceLayerSlot AddSurfaceLayer(IVideoCompositorLayerSurface surface, VideoPlacementSpec placement)
+    /// <param name="ownsSurface">When true (default) the returned slot disposes <paramref name="surface"/>
+    /// on removal. Pass false to add the SAME surface into an ADDITIONAL placement (one visualizer render
+    /// shown in several sections of the canvas): the compositor keys ConfigureGl by surface instance and
+    /// renders it once per layer, so a single surface must be owned by exactly one slot to avoid a
+    /// double dispose. See <c>ShowSessionVisualizerService</c> (#26 multi-placement).</param>
+    public SurfaceLayerSlot AddSurfaceLayer(
+        IVideoCompositorLayerSurface surface, VideoPlacementSpec placement, bool ownsSurface = true)
     {
         ArgumentNullException.ThrowIfNull(surface);
         ArgumentNullException.ThrowIfNull(placement);
@@ -551,7 +557,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var rawSlot = _mixer.AddSurfaceSlot(surface);
-            layer = new SurfaceLayerSlot(this, rawSlot, placement);
+            layer = new SurfaceLayerSlot(this, rawSlot, placement, ownsSurface);
             try
             {
                 layer.ApplyPlacement();
@@ -1508,6 +1514,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     public sealed class SurfaceLayerSlot : IPlacedClipLayer
     {
         private readonly ClipCompositionRuntime _owner;
+        private readonly bool _ownsSurface;
         internal VideoCompositorSource.SurfaceSlot RawSlot { get; }
         private VideoPlacementSpec _placement;
         private int _disposed;
@@ -1515,11 +1522,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         internal SurfaceLayerSlot(
             ClipCompositionRuntime owner,
             VideoCompositorSource.SurfaceSlot slot,
-            VideoPlacementSpec placement)
+            VideoPlacementSpec placement,
+            bool ownsSurface = true)
         {
             _owner = owner;
             RawSlot = slot;
             _placement = placement;
+            _ownsSurface = ownsSurface;
             Sequence = Interlocked.Increment(ref owner._nextLayerSequence);
         }
 
@@ -1588,7 +1597,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             _owner.RemoveSurfaceLayer(this);
-            Surface.Dispose();
+            // A non-owning slot shares its surface with the owning slot (one surface, several placements);
+            // only the owner disposes it, so the shared surface is not torn down while still rendered.
+            if (_ownsSurface)
+                Surface.Dispose();
         }
     }
 

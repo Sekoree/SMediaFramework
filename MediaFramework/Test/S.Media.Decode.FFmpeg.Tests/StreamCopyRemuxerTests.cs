@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using S.Media.Core.Audio;
 using S.Media.Core.Registry;
+using S.Media.Core.Video;
 using S.Media.Decode.FFmpeg;
 using S.Media.FFmpeg.Common;
 using Xunit;
@@ -140,4 +141,76 @@ public sealed class StreamCopyRemuxerTests : IDisposable
     public void Remux_NoInputs_Throws() =>
         Assert.Throws<ArgumentException>(() =>
             FFmpegStreamCopyRemuxer.Remux(null, null, Path.Combine(_dir, "x.mkv")));
+
+    // ---- embedded still image / thumbnail (Ideas.txt) --------------------------------------------
+
+    [RemuxFact]
+    public void Remux_WithThumbnail_AutomaticElectionStillPlaysTheRealVideo()
+    {
+        var video = Generate("-f lavfi -i testsrc2=duration=2:size=192x108:rate=30 -c:v libx264 -pix_fmt yuv420p -an", "v.mp4");
+        var audio = Generate("-f lavfi -i sine=frequency=440:duration=2 -c:a aac -vn", "a.m4a");
+        var thumb = Generate("-f lavfi -i color=c=red:size=64x36 -frames:v 1", "thumb.jpg");
+        var output = Path.Combine(_dir, "with-thumb.mkv");
+
+        FFmpegStreamCopyRemuxer.Remux(video, audio, output, stillImagePath: thumb);
+
+        // The container carries BOTH video streams; the thumbnail is the attached-picture one.
+        var streams = MediaContainerDecoder.ProbeStreams(output);
+        var videoStreams = streams.Where(s => s.Kind == MediaStreamKind.Video).ToList();
+        Assert.Equal(2, videoStreams.Count);
+        Assert.Single(videoStreams, s => s.IsAttachedPicture);
+
+        // Automatic election must keep playing the REAL video, exactly like MP3 cover art is skipped.
+        var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
+        Assert.True(registry.TryOpenVideo(output, options: null, out var v));
+        try
+        {
+            Assert.True(v.Format.Width == 192 && v.Format.Height == 108,
+                $"automatic election picked the thumbnail ({v.Format.Width}x{v.Format.Height})");
+        }
+        finally
+        {
+            (v as IDisposable)?.Dispose();
+        }
+
+        // Explicit selection of the attached-picture stream shows the thumbnail (cue video-tab picker).
+        var thumbIndex = videoStreams.Single(s => s.IsAttachedPicture).Index;
+        Assert.True(registry.TryOpenVideo(
+            output, new VideoSourceOpenOptions { VideoStreamIndex = thumbIndex }, out var cover));
+        try
+        {
+            Assert.True(cover.Format.Width == 64 && cover.Format.Height == 36,
+                $"explicit stream selection did not open the thumbnail ({cover.Format.Width}x{cover.Format.Height})");
+        }
+        finally
+        {
+            (cover as IDisposable)?.Dispose();
+        }
+    }
+
+    [RemuxFact]
+    public void Remux_AudioOnlyWithThumbnail_ShowsTheCoverByDefault()
+    {
+        // The audio-only YouTube item with an embedded thumbnail: the cover is the ONLY video stream,
+        // so automatic election falls through to it - the cue can place it like MP3 cover art.
+        var audio = Generate("-f lavfi -i sine=frequency=220:duration=1 -c:a aac -vn", "a2.m4a");
+        var thumb = Generate("-f lavfi -i color=c=blue:size=64x36 -frames:v 1", "thumb2.jpg");
+        var output = Path.Combine(_dir, "audio-thumb.mkv");
+
+        FFmpegStreamCopyRemuxer.Remux(videoPath: null, audioPath: audio, output, stillImagePath: thumb);
+
+        var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
+        Assert.True(registry.TryOpenAudio(output, options: null, out var a), "audio track lost");
+        (a as IDisposable)?.Dispose();
+
+        Assert.True(registry.TryOpenVideo(output, options: null, out var cover), "cover stream not openable");
+        try
+        {
+            Assert.True(cover.Format.Width == 64 && cover.Format.Height == 36);
+        }
+        finally
+        {
+            (cover as IDisposable)?.Dispose();
+        }
+    }
 }

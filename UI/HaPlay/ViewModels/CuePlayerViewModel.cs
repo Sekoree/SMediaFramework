@@ -759,7 +759,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.EndBehavior)
             or nameof(CueNodeViewModel.DurationMs)        // image/text duration drives the hold window
             or nameof(CueNodeViewModel.MediaSourceItem)   // text restyle replaces the source -> re-render
-            or nameof(CueNodeViewModel.AudioTrackIndex))  // track change is part of the prepared-cue key
+            or nameof(CueNodeViewModel.AudioTrackIndex)   // track change is part of the prepared-cue key
+            or nameof(CueNodeViewModel.VideoTrackIndex))  // ditto for the video stream selection
             OnWatchedCueEdited();
 
         // A text/style edit replaces the TextPlaylistItem source; if that cue is playing, re-render its frame in

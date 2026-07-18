@@ -58,10 +58,16 @@ public sealed class YouTubeIntegrationTests : IDisposable
                 filePath, "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,hi\n", ct);
             return true;
         }
+
+        public async Task<bool> TryDownloadThumbnailJpegAsync(string videoId, string filePath, CancellationToken ct)
+        {
+            await File.WriteAllTextAsync(filePath, "thumb-bytes", ct);
+            return true;
+        }
     }
 
-    private static void FakeRemux(string? video, string? audio, string output, CancellationToken ct) =>
-        File.WriteAllText(output, "muxed");
+    private static void FakeRemux(string? video, string? audio, string? thumbnail, string output, CancellationToken ct) =>
+        File.WriteAllText(output, thumbnail is null ? "muxed" : "muxed+thumb");
 
     private (AddYouTubeDialogViewModel Vm, YouTubePreparer Preparer) NewDialog()
     {

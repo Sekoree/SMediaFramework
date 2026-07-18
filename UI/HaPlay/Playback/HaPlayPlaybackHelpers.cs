@@ -130,6 +130,7 @@ internal static class HaPlayPlaybackHelpers
                 item.SubtitleLanguage)
             {
                 IncludeVideo = !item.AudioOnly,
+                IncludeThumbnail = item.IncludeThumbnail,
             });
     }
 

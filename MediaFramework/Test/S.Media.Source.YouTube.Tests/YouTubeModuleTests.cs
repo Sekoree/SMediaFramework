@@ -95,6 +95,18 @@ public sealed class YouTubeModuleTests : IDisposable
             await File.WriteAllTextAsync(filePath, $"stream:{descriptor}", ct);
         }
 
+        public int ThumbnailCalls;
+        public bool ThumbnailAvailable = true;
+
+        public async Task<bool> TryDownloadThumbnailJpegAsync(string videoId, string filePath, CancellationToken ct)
+        {
+            Interlocked.Increment(ref ThumbnailCalls);
+            if (!ThumbnailAvailable)
+                return false;
+            await File.WriteAllTextAsync(filePath, "thumb-bytes", ct);
+            return true;
+        }
+
         public async Task<bool> TryDownloadCaptionsAssAsync(
             string videoId, string languageCode, string filePath, CancellationToken ct)
         {
@@ -113,11 +125,12 @@ public sealed class YouTubeModuleTests : IDisposable
     }
 
     /// <summary>Fake remux: concatenates the leg files so the test can verify which streams went in.</summary>
-    private static void FakeRemux(string? video, string? audio, string output, CancellationToken ct)
+    private static void FakeRemux(string? video, string? audio, string? thumbnail, string output, CancellationToken ct)
     {
         var parts = new List<string>();
         if (video is not null) parts.Add(File.ReadAllText(video));
         if (audio is not null) parts.Add(File.ReadAllText(audio));
+        if (thumbnail is not null) parts.Add(File.ReadAllText(thumbnail));
         File.WriteAllText(output, string.Join('+', parts));
     }
 
@@ -173,11 +186,11 @@ public sealed class YouTubeModuleTests : IDisposable
         // coalescing keys. They must share the asset-path lease rather than write the same .partial concurrently.
         var gateway = new FakeGateway { DownloadDelay = TimeSpan.FromMilliseconds(100) };
         var remuxCalls = 0;
-        var preparer = new YouTubePreparer(gateway, _dir, (v, a, output, ct) =>
+        var preparer = new YouTubePreparer(gateway, _dir, (v, a, t, output, ct) =>
         {
             Interlocked.Increment(ref remuxCalls);
             Thread.Sleep(100);
-            FakeRemux(v, a, output, ct);
+            FakeRemux(v, a, t, output, ct);
         });
 
         var best = preparer.PrepareAsync("dQw4w9WgXcQ", YouTubeStreamSelection.Best);
@@ -291,6 +304,89 @@ public sealed class YouTubeModuleTests : IDisposable
         var audioOnly = YouTubeSourceUri.Build("dQw4w9WgXcQ", new YouTubeStreamSelection { IncludeVideo = false });
         Assert.Equal(0.0, provider.Probe(audioOnly, MediaKind.Video));
         Assert.Equal(1.0, provider.Probe(audioOnly, MediaKind.Audio));
+    }
+
+    // ---- embedded thumbnail (Ideas.txt) ----------------------------------------------------------
+
+    [Fact]
+    public void Uri_RoundTripsThumbnailFlag()
+    {
+        var uri = YouTubeSourceUri.Build(
+            "dQw4w9WgXcQ",
+            new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en") { IncludeThumbnail = true });
+        Assert.Contains("thumb=1", uri);
+
+        Assert.True(YouTubeSourceUri.TryParse(uri, out _, out var selection));
+        Assert.True(selection!.IncludeThumbnail);
+
+        var without = YouTubeSourceUri.Build(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en"));
+        Assert.DoesNotContain("thumb", without);
+        Assert.True(YouTubeSourceUri.TryParse(without, out _, out var plain));
+        Assert.False(plain!.IncludeThumbnail);
+    }
+
+    [Fact]
+    public async Task Prepare_WithThumbnail_EmbedsIt_AndIsADistinctCacheIdentity()
+    {
+        var gateway = new FakeGateway();
+        var preparer = NewPreparer(gateway);
+        var selection = new YouTubeStreamSelection("720p|avc1|mp4", "opus|webm|en");
+
+        var plain = await preparer.PrepareAsync("dQw4w9WgXcQ", selection);
+        var withThumb = await preparer.PrepareAsync(
+            "dQw4w9WgXcQ", selection with { IncludeThumbnail = true });
+
+        // Same A/V pair with and without the thumbnail must be DIFFERENT assets: the no-network open
+        // path maps a thumb=1 URI to the thumb-inclusive identity and must never get a lying asset.
+        Assert.NotEqual(plain.AssetPath, withThumb.AssetPath);
+        Assert.Equal("stream:720p|avc1|mp4+stream:opus|webm|en", File.ReadAllText(plain.AssetPath));
+        Assert.Equal(
+            "stream:720p|avc1|mp4+stream:opus|webm|en+thumb-bytes", File.ReadAllText(withThumb.AssetPath));
+        Assert.True(withThumb.ResolvedSelection.IncludeThumbnail);
+        Assert.True(preparer.IsPrepared("dQw4w9WgXcQ", "720p|avc1|mp4", "opus|webm|en", includeThumbnail: true));
+    }
+
+    [Fact]
+    public async Task Prepare_ThumbnailJpeg_IsDownloadedOncePerVideo_AcrossSelections()
+    {
+        var gateway = new FakeGateway();
+        var preparer = NewPreparer(gateway);
+
+        await preparer.PrepareAsync(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en") { IncludeThumbnail = true });
+        await preparer.PrepareAsync(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("720p|avc1|mp4", "opus|webm|en") { IncludeThumbnail = true });
+
+        Assert.Equal(1, gateway.ThumbnailCalls); // per-video .jpg cache reused by the second selection
+    }
+
+    [Fact]
+    public async Task Prepare_ThumbnailUnavailable_FailsInsteadOfCommittingALyingAsset()
+    {
+        var gateway = new FakeGateway { ThumbnailAvailable = false };
+        var preparer = NewPreparer(gateway);
+        var selection = new YouTubeStreamSelection("720p|avc1|mp4", "opus|webm|en") { IncludeThumbnail = true };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => preparer.PrepareAsync("dQw4w9WgXcQ", selection));
+        Assert.Contains("thumbnail", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(preparer.IsPrepared("dQw4w9WgXcQ", "720p|avc1|mp4", "opus|webm|en", includeThumbnail: true));
+    }
+
+    [Fact]
+    public void Open_ThumbUri_MapsToTheThumbInclusiveAsset()
+    {
+        var preparer = NewPreparer(new FakeGateway());
+        var provider = new YouTubeDecoderProvider(preparer);
+        var uri = YouTubeSourceUri.Build(
+            "dQw4w9WgXcQ",
+            new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en") { IncludeThumbnail = true });
+
+        // Unprepared: proves the OPEN path resolves the thumb-inclusive identity (reliable-mode error,
+        // not a silent fallback onto the thumbnail-less asset).
+        var ex = Assert.Throws<InvalidOperationException>(() => provider.OpenAudio(uri, options: null));
+        Assert.Contains("not prepared", ex.Message);
     }
 
     [Fact]

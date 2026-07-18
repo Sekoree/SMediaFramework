@@ -223,6 +223,12 @@ public partial class CuePlayerViewModel
         {
             targets = SelectedAudioTargets();
         }
+        else if (ReferenceEquals(source, SelectedVideoCue)
+                 && propertyName is nameof(CueNodeViewModel.VideoTrackIndex)
+                     or nameof(CueNodeViewModel.VideoTrackSignature))
+        {
+            targets = SelectedVideoTargets();
+        }
         else if (ReferenceEquals(source, SelectedSubtitleCue)
                  && propertyName is nameof(CueNodeViewModel.SubtitleFontFamily)
                      or nameof(CueNodeViewModel.SubtitleFontScale)
@@ -303,6 +309,15 @@ public partial class CuePlayerViewModel
                     ?? target.AudioTrackChoices.FirstOrDefault(choice =>
                         choice.Signature is not null && choice.Signature == source.AudioTrackSignature)
                     ?? target.AudioTrackChoices.FirstOrDefault();
+                break;
+            case nameof(CueNodeViewModel.VideoTrackIndex): target.VideoTrackIndex = source.VideoTrackIndex; break;
+            case nameof(CueNodeViewModel.VideoTrackSignature):
+                target.VideoTrackSignature = source.VideoTrackSignature;
+                target.SelectedVideoTrackChoice = target.VideoTrackChoices.FirstOrDefault(choice =>
+                    choice.Index == source.VideoTrackIndex && choice.Signature == source.VideoTrackSignature)
+                    ?? target.VideoTrackChoices.FirstOrDefault(choice =>
+                        choice.Signature is not null && choice.Signature == source.VideoTrackSignature)
+                    ?? target.VideoTrackChoices.FirstOrDefault();
                 break;
             case nameof(CueNodeViewModel.SubtitleFontFamily): target.SubtitleFontFamily = source.SubtitleFontFamily; break;
             case nameof(CueNodeViewModel.SubtitleFontScale): target.SubtitleFontScale = source.SubtitleFontScale; break;

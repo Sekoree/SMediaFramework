@@ -94,6 +94,7 @@ public class ShowDocumentMapperTests
             FadeInMs = 300,
             FadeOutMs = 750,
             AudioTrackIndex = 2,
+            VideoTrackIndex = 1,
             EndBehavior = CueEndBehavior.FreezeLastFrame,
             VideoPlacements = { new CueVideoPlacement { CompositionId = compId, LayerIndex = 1 } },
         };
@@ -157,6 +158,7 @@ public class ShowDocumentMapperTests
         Assert.Equal(compId.ToString(), introClip.CompositionId);
         Assert.Equal(1, introClip.LayerIndex);
         Assert.Equal(2, introClip.AudioStreamIndex);
+        Assert.Equal(1, introClip.VideoStreamIndex);
         Assert.Equal(TimeSpan.FromMilliseconds(500), introClip.StartOffset);
         Assert.Equal(TimeSpan.FromMilliseconds(1000), introClip.EndOffset);
         Assert.Equal(TimeSpan.FromMilliseconds(300), introClip.FadeIn);

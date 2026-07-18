@@ -85,6 +85,8 @@ public static class ShowDocumentValidator
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative fade-out.");
             if (clip.LayerIndex < 0)
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative layer index {clip.LayerIndex}.");
+            if (clip.VideoStreamIndex is { } vsi && vsi < -1)
+                errors.Add($"clip '{clip.CueId}': VideoStreamIndex {vsi} is invalid (null = automatic, -1 = disabled, >= 0 = stream index).");
             if (clip.AudioStreamIndex is { } asi && asi < -1)
                 errors.Add($"the clip for cue '{clip.CueId}' has an audio stream index {asi} below -1 (use -1 for none, null for auto).");
             foreach (var sub in clip.GetSubtitleSelections())

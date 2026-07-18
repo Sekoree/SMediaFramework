@@ -1025,18 +1025,14 @@ public sealed class ShowSession : IAsyncDisposable
                           ?? ResolveBackendSampleRate(routes.FirstOrDefault()?.DeviceId ?? _outputDeviceId),
             null => ResolveBackendSampleRate(_outputDeviceId), // standalone/group-routing compatibility
         };
-        var options = binding.AudioStreamIndex is { } audioTrack
-            ? S.Media.Players.MediaPlayerOpenOptions.Default with
-            {
-                AudioStreamIndex = audioTrack,
-                TargetAudioSampleRate = targetAudioRate,
-                FileVideoDecodeQueueCapacity = 16,
-            } // multi-track select (03 §6)
-            : S.Media.Players.MediaPlayerOpenOptions.Default with
-            {
-                TargetAudioSampleRate = targetAudioRate,
-                FileVideoDecodeQueueCapacity = 16,
-            };
+        // Multi-track select (03 §6): null indices are the automatic default, so one shape covers both.
+        var options = S.Media.Players.MediaPlayerOpenOptions.Default with
+        {
+            AudioStreamIndex = binding.AudioStreamIndex,
+            VideoStreamIndex = binding.VideoStreamIndex,
+            TargetAudioSampleRate = targetAudioRate,
+            FileVideoDecodeQueueCapacity = 16,
+        };
         var window = binding.StartOffset > TimeSpan.Zero
             ? new S.Media.Core.ClipWindow(binding.StartOffset, TimeSpan.Zero, TimeSpan.Zero, HasKnownEnd: false)
             : S.Media.Core.ClipWindow.Unbounded;
@@ -1047,6 +1043,7 @@ public sealed class ShowSession : IAsyncDisposable
             ClipMediaSource.File(_registry, binding.MediaPath, options),
             window,
             cacheKey: $"{binding.MediaPath}|audio:{binding.AudioStreamIndex?.ToString() ?? "auto"}" +
+                      $"|video:{binding.VideoStreamIndex?.ToString() ?? "auto"}" +
                       $"|rate:{targetAudioRate?.ToString() ?? "source"}" +
                       (variant is null ? string.Empty : $"#{variant}"));
     }

@@ -49,6 +49,10 @@
 
         <StackPanel Spacing="10" IsVisible="{Binding HasManifest}">
           <CheckBox Content="{x:Static res:Strings.YouTubeAudioOnlyCheckbox}" IsChecked="{Binding AudioOnly}" />
+          <!-- Ideas.txt: the thumbnail rides along as an attached-picture video stream - selectable in
+               stream pickers, and shown automatically for audio-only items (like MP3 cover art). -->
+          <CheckBox Content="{x:Static res:Strings.YouTubeIncludeThumbnailCheckbox}"
+                    IsChecked="{Binding IncludeThumbnail}" />
 
           <StackPanel Spacing="6" IsVisible="{Binding !AudioOnly}">
             <TextBlock Text="{x:Static res:Strings.YouTubeVideoStreamLabel}" FontWeight="SemiBold" />

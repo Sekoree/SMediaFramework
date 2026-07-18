@@ -101,6 +101,18 @@ else
     patch -p1 -d "$src_dir" < "$repo_root/scripts/patches/projectm-null-safe-texture-descriptor.patch"
 fi
 
+# The vendored HLSL shader tokenizer's iss_strtod() strlen()s the whole remaining shader buffer to
+# read one number; the buffer is length-bounded but not NUL-terminated at the scan point, so it
+# over-reads into an unmapped page - an intermittent SIGSEGV in HLSLTokenizer::ScanNumber while
+# loading otherwise-valid Milkdrop presets. Bound the parse to the numeric literal.
+if grep -Fq "Bound the parse to the numeric literal" \
+    "$src_dir/vendor/hlslparser/src/Engine.cpp"; then
+    echo "== hlsl strtod bounds patch already present in source snapshot =="
+else
+    echo "== applying hlsl strtod bounds patch =="
+    patch -p1 -d "$src_dir" < "$repo_root/scripts/patches/projectm-hlsl-strtod-bounds.patch"
+fi
+
 echo "== configuring projectM 4.1.6 ($rid) =="
 cmake -S "$src_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \

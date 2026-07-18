@@ -571,6 +571,15 @@
   <data name="AudioTrackTooltip" xml:space="preserve">
     <value>Multi-track source (e.g. MKV with several languages). Picks which audio track this cue plays; Automatic uses the container's default.</value>
   </data>
+  <data name="VideoTrackLabel" xml:space="preserve">
+    <value>Video stream</value>
+  </data>
+  <data name="VideoTrackAutomaticLabel" xml:space="preserve">
+    <value>Automatic (main video)</value>
+  </data>
+  <data name="VideoTrackTooltip" xml:space="preserve">
+    <value>Multi-stream sources: pick which video stream this cue shows. Automatic plays the main video; an embedded thumbnail/cover-art stream can be selected explicitly (e.g. to show a YouTube thumbnail for an audio-only cue).</value>
+  </data>
   <data name="PlaylistContextAudioTrack" xml:space="preserve">
     <value>Audio track</value>
   </data>
@@ -1749,6 +1758,12 @@
   </data>
   <data name="YouTubePhaseDownloadingAudio" xml:space="preserve">
     <value>Downloading audio stream…</value>
+  </data>
+  <data name="YouTubePhaseDownloadingThumbnail" xml:space="preserve">
+    <value>Downloading thumbnail…</value>
+  </data>
+  <data name="YouTubeIncludeThumbnailCheckbox" xml:space="preserve">
+    <value>Also download the thumbnail (embedded as a cover video stream)</value>
   </data>
   <data name="YouTubePhaseRemuxing" xml:space="preserve">
     <value>Combining into local asset…</value>

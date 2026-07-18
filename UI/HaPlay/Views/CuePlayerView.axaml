@@ -519,6 +519,18 @@
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectVideoBannerFormat}}" />
                 </Border>
+                <!-- Multi-stream sources: pick which video stream the cue shows (mirrors the Audio
+                     tab's track picker). Hidden for single-stream files; an embedded thumbnail /
+                     cover-art stream is explicitly selectable here. -->
+                <StackPanel Orientation="Horizontal" Spacing="6"
+                            IsVisible="{Binding SelectedVideoCue.HasMultipleVideoTracks, FallbackValue=False}"
+                            ToolTip.Tip="{x:Static res:Strings.VideoTrackTooltip}">
+                  <TextBlock Text="{x:Static res:Strings.VideoTrackLabel}" FontWeight="SemiBold"
+                             VerticalAlignment="Center" />
+                  <ComboBox MinWidth="260"
+                            ItemsSource="{Binding SelectedVideoCue.VideoTrackChoices}"
+                            SelectedItem="{Binding SelectedVideoCue.SelectedVideoTrackChoice, Mode=TwoWay}" />
+                </StackPanel>
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddVideoPlacementButton}" Command="{Binding AddVideoPlacementCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoPlacementCommand}" />

@@ -18,10 +18,16 @@ public sealed record YouTubeStreamSelection(
 
     /// <summary>True when this selection carries a video leg (video may be disabled for audio-only cues).</summary>
     public bool IncludeVideo { get; init; } = true;
+
+    /// <summary>True to also download the video's thumbnail and embed it into the prepared asset as an
+    /// EXTRA still-image video stream (selectable in stream pickers - e.g. an audio-only cue can show
+    /// the cover). Part of the cache identity: the same A/V pair with and without the thumbnail are
+    /// different assets.</summary>
+    public bool IncludeThumbnail { get; init; }
 }
 
 /// <summary>
-/// Canonical URI codec for YouTube sources: <c>youtube://&lt;videoId&gt;?v=…&amp;a=…&amp;sub=…&amp;novideo=1</c>.
+/// Canonical URI codec for YouTube sources: <c>youtube://&lt;videoId&gt;?v=…&amp;a=…&amp;sub=…&amp;novideo=1&amp;thumb=1</c>.
 /// Watch/short URLs (`youtube.com/watch?v=`, `youtu.be/…`, `/shorts/…`) normalize to the same form via
 /// <see cref="VideoId.TryParse"/>, so link variations never change cache identity (review Gate-5 design).
 /// </summary>
@@ -43,6 +49,8 @@ public static class YouTubeSourceUri
             query.Add("sub=" + Uri.EscapeDataString(s));
         if (!selection.IncludeVideo)
             query.Add("novideo=1");
+        if (selection.IncludeThumbnail)
+            query.Add("thumb=1");
         return query.Count == 0
             ? $"{Scheme}://{videoId}"
             : $"{Scheme}://{videoId}?{string.Join('&', query)}";
@@ -80,6 +88,7 @@ public static class YouTubeSourceUri
 
             string? video = null, audio = null, sub = null;
             var includeVideo = true;
+            var includeThumbnail = false;
             if (query is not null)
             {
                 foreach (var pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
@@ -95,11 +104,16 @@ public static class YouTubeSourceUri
                         case "a": audio = value; break;
                         case "sub": sub = value; break;
                         case "novideo": includeVideo = value is not ("1" or "true"); break;
+                        case "thumb": includeThumbnail = value is "1" or "true"; break;
                     }
                 }
             }
 
-            selection = new YouTubeStreamSelection(video, audio, sub) { IncludeVideo = includeVideo };
+            selection = new YouTubeStreamSelection(video, audio, sub)
+            {
+                IncludeVideo = includeVideo,
+                IncludeThumbnail = includeThumbnail,
+            };
             return true;
         }
 
