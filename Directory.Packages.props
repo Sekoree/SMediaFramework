@@ -58,6 +58,10 @@
          REPORT as skipped, not silently pass (review P2-1 test-result fidelity). -->
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.61" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <!-- YoutubeExplode 6.6.0 currently requests AngleSharp 1.4.0. Pin the patched compatible
+         transitive version: versions before 1.5.0 are affected by CVE-2026-54570
+         (GHSA-pgww-w46g-26qg), and repo-wide warnings-as-errors otherwise blocks every build. -->
+    <PackageVersion Include="AngleSharp" Version="1.5.0" />
     <PackageVersion Include="YoutubeExplode" Version="6.6.0" />
   </ItemGroup>
 </Project>

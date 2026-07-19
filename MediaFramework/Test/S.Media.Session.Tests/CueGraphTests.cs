@@ -125,14 +125,31 @@ public sealed class CueGraphTests
     }
 
     [Fact]
-    public async Task FireAsync_FaultPolicySkipCue_ReturnsFailedWithoutThrowing()
+    public void AddCue_UnsupportedFaultPolicy_IsRejected()
     {
         var graph = new CueGraph();
-        graph.AddCue(
+        var error = Assert.Throws<NotSupportedException>(() => graph.AddCue(
             new CueDefinition("c", 1, "C", FaultPolicy: CueFaultPolicy.SkipCue),
-            _ => throw new InvalidOperationException("boom"));
+            _ => ValueTask.CompletedTask));
 
-        Assert.Equal(CueExecutionStatus.Failed, await graph.FireAsync("c"));
+        Assert.Contains(nameof(CueFaultPolicy.SkipCue), error.Message);
+        Assert.Empty(graph.Cues);
+    }
+
+    [Fact]
+    public void DeserializeShowFile_UnsupportedAndUnknownFaultPolicies_AreRejected()
+    {
+        var graph = new CueGraph();
+        var json = graph.SerializeShowFile(new CueShowFile(
+            1,
+            [new CueDefinition("c", 1, "C")],
+            [], [], []));
+
+        Assert.Throws<NotSupportedException>(() =>
+            CueGraph.DeserializeShowFile(json.Replace("\"FaultPolicy\": 0", "\"FaultPolicy\": 1")));
+        var unknown = Assert.Throws<NotSupportedException>(() =>
+            CueGraph.DeserializeShowFile(json.Replace("\"FaultPolicy\": 0", "\"FaultPolicy\": 999")));
+        Assert.Contains("numeric value 999", unknown.Message);
     }
 
     [Fact]

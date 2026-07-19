@@ -185,7 +185,8 @@ public partial class ControlWorkspaceViewModel
             _session = session;
             pendingSession = null;
             pendingOSC = null;
-            _lastRenderedCount = -1;
+            _lastRenderedVersion = -1;
+            _lastX32CacheVersion = -1;
             StatusMessage = $"Armed - {ListenerCount} listener(s), {DeviceCount} device(s), {ScriptCount} script(s).";
         }
         catch (Exception ex)
@@ -275,7 +276,7 @@ public partial class ControlWorkspaceViewModel
     {
         _monitorBuffer?.Clear();
         MonitorEntries.Clear();
-        _lastRenderedCount = -1;
+        _lastRenderedVersion = -1;
     }
 
     [RelayCommand]

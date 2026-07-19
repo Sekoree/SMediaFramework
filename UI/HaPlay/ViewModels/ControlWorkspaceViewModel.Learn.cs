@@ -309,9 +309,18 @@ public partial class ControlWorkspaceViewModel
         if (buffer is null || IsPaused)
             return;
 
-        RebuildX32CommandRows(_session?.ScriptSession.OSCCache);
+        var cache = _session?.ScriptSession.OSCCache;
+        if ((cache?.Version ?? -1) != _lastX32CacheVersion)
+            RefreshX32CommandCacheValues(cache);
 
+        var version = buffer.Version;
+        if (version == _lastRenderedVersion && !_filterDirty)
+            return;
+
+        // Remember the version observed before taking the snapshot. If a producer writes between the two,
+        // the next timer tick sees the newer version and reconciles once more; no update can be missed.
         var records = buffer.Records;
+        _lastRenderedVersion = version;
 
         if (IsLearning)
         {
@@ -320,10 +329,7 @@ public partial class ControlWorkspaceViewModel
                 ApplyLearnCapture(capture);
         }
 
-        if (records.Count == _lastRenderedCount && !_filterDirty)
-            return;
-
-        _lastRenderedCount = records.Count;
+        var rebuild = _filterDirty;
         _filterDirty = false;
 
         var query = ApplyMonitorFilters(
@@ -335,11 +341,79 @@ public partial class ControlWorkspaceViewModel
                 SelectedMonitorProtocol,
                 DeviceFilterText));
 
-        var filtered = query.TakeLast(MaxRenderedEntries).Select(r => new ControlMonitorEntryViewModel(r)).ToList();
+        var filtered = query.TakeLast(MaxRenderedEntries).ToArray();
+        ReconcileMonitorEntries(MonitorEntries, filtered, rebuild);
+    }
 
-        MonitorEntries.Clear();
-        foreach (var entry in filtered)
-            MonitorEntries.Add(entry);
+    /// <summary>
+    /// Applies the usual append/drop-oldest monitor update without rebuilding every row. A full rebuild is
+    /// retained for filter changes and unusual discontinuities. Internal so the saturated-ring behaviour can
+    /// be regression tested without running an Avalonia dispatcher.
+    /// </summary>
+    internal static void ReconcileMonitorEntries(
+        ObservableCollection<ControlMonitorEntryViewModel> entries,
+        IReadOnlyList<ControlMonitorRecord> records,
+        bool rebuild)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(records);
+
+        if (!rebuild && TryReconcileMonitorTail(entries, records))
+            return;
+
+        entries.Clear();
+        foreach (var record in records)
+            entries.Add(new ControlMonitorEntryViewModel(record));
+    }
+
+    private static bool TryReconcileMonitorTail(
+        ObservableCollection<ControlMonitorEntryViewModel> entries,
+        IReadOnlyList<ControlMonitorRecord> records)
+    {
+        if (records.Count == 0)
+        {
+            entries.Clear();
+            return true;
+        }
+
+        if (entries.Count == 0)
+        {
+            foreach (var record in records)
+                entries.Add(new ControlMonitorEntryViewModel(record));
+            return true;
+        }
+
+        // A monitor snapshot evolves by removing a prefix and appending a suffix. Locate the new first row
+        // in the existing view, then verify the overlap before mutating the observable collection.
+        var existingStart = -1;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Id == records[0].Id)
+            {
+                existingStart = i;
+                break;
+            }
+        }
+
+        if (existingStart < 0)
+            return false;
+
+        var overlap = Math.Min(entries.Count - existingStart, records.Count);
+        for (var i = 0; i < overlap; i++)
+        {
+            if (entries[existingStart + i].Id != records[i].Id)
+                return false;
+        }
+
+        // If old rows remain after the overlap, the sequences diverged rather than forming a tail update.
+        if (existingStart + overlap != entries.Count)
+            return false;
+
+        for (var i = 0; i < existingStart; i++)
+            entries.RemoveAt(0);
+        for (var i = overlap; i < records.Count; i++)
+            entries.Add(new ControlMonitorEntryViewModel(records[i]));
+        return true;
     }
 
     internal static IEnumerable<ControlMonitorRecord> ApplyMonitorFilters(

@@ -39,6 +39,62 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new BlockingOpenProvider()));
 }
 
+/// <summary>Opens one URI immediately and another after a delay, then records whether the fast source was allowed
+/// to start producing before the slow sibling finished opening. Used to verify the simultaneous-fire arm barrier.</summary>
+internal sealed class StaggeredOpenProvider(TimeSpan slowOpenDelay) : IMediaDecoderProvider
+{
+    private int _slowOpenCompleted;
+    private int _fastReadBeforeSlowOpen;
+
+    public string Name => "staggered";
+    public bool FastReadBeforeSlowOpen => Volatile.Read(ref _fastReadBeforeSlowOpen) != 0;
+    public double Probe(string uri, MediaKind kind) =>
+        uri.StartsWith("staggered://", StringComparison.Ordinal) && kind == MediaKind.Audio ? 1.0 : 0.0;
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => throw new NotSupportedException();
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => throw new NotSupportedException();
+
+    public async ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request,
+        IProgress<MediaPrepareProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var slow = request.Uri.EndsWith("/slow", StringComparison.Ordinal);
+        if (slow)
+        {
+            await Task.Delay(slowOpenDelay, cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _slowOpenCompleted, 1);
+        }
+
+        var source = new StartObservedAudioSource(() =>
+        {
+            if (!slow && Volatile.Read(ref _slowOpenCompleted) == 0)
+                Volatile.Write(ref _fastReadBeforeSlowOpen, 1);
+        });
+        return new MediaOpenResult(
+            Name, video: null, audio: source, duration: source.Duration, isLive: false, canSeek: true);
+    }
+
+    private sealed class StartObservedAudioSource(Action onFirstRead) : IAudioSource, ISeekableSource
+    {
+        private readonly SyntheticSilentSource _inner = new(chunks: 100_000);
+        private int _observed;
+
+        public AudioFormat Format => _inner.Format;
+        public bool IsExhausted => _inner.IsExhausted;
+        public TimeSpan Duration => _inner.Duration;
+        public TimeSpan Position => _inner.Position;
+
+        public int ReadInto(Span<float> destination)
+        {
+            if (Interlocked.Exchange(ref _observed, 1) == 0)
+                onFirstRead();
+            return _inner.ReadInto(destination);
+        }
+
+        public void Seek(TimeSpan position) => _inner.Seek(position);
+    }
+}
+
 /// <summary>A finite stereo source that yields a few chunks of silence then exhausts - enough for a clip
 /// to open and Play() without a real decoder or device.</summary>
 internal sealed class SyntheticSilentSource(int chunks = 8, int sampleRate = 48_000) : IAudioSource, ISeekableSource

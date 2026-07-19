@@ -73,7 +73,7 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly Dictionary<string, ClipCompositionRuntime.LayerSlot> _testPatternSlots = new(StringComparer.Ordinal);
     private IReadOnlyList<OutputPatchRoute> _routes = [];
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
-    private readonly SessionDispatcher _dispatcher = new("show-session");
+    private readonly SessionDispatcher _dispatcher;
     private readonly Func<string, int, int, int, IVideoOverlaySource?>? _subtitleFactory;
     // Host video-output factory (compositionId, name, width, height) → the leases a composition renders to
     // (NDI/SDL/local). The HOST owns each returned output's lifetime and declares it on the lease - a borrowed
@@ -107,7 +107,12 @@ public sealed class ShowSession : IAsyncDisposable
     // seam (review Part-5 #2). Owns the voice/preview registries and monitors; this session's public
     // voice/preview API delegates to it.
     private readonly VoicePlayer _voicePlayer;
+    private readonly ShowSessionMetadataPublisher _metadataPublisher;
+    private readonly SessionCompletionMonitor _completionMonitor;
     private volatile bool _disposed;
+
+    /// <summary>Current bounded command-queue health for host monitoring and overload diagnostics.</summary>
+    public SessionDispatcherDiagnostics DispatcherDiagnostics => _dispatcher.Diagnostics;
 
     // Lock-free query view (NXT-16): a volatile snapshot of each group's clock + active player, republished on
     // the dispatcher whenever the group set or active clip changes. Snapshot() reads THIS and pulls live
@@ -238,16 +243,18 @@ public sealed class ShowSession : IAsyncDisposable
         Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? videoOutputFactory = null,
         Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null,
         Func<string, AudioFormat, ClipAudioOutputLease?>? audioOutputFactory = null,
-        Func<string, S.Media.Core.Buses.MediaItemMetadata?>? metadataProbe = null)
+        Func<string, S.Media.Core.Buses.MediaItemMetadata?>? metadataProbe = null,
+        int dispatcherCapacity = SessionDispatcher.DefaultCapacity)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _dispatcher = new SessionDispatcher("show-session", dispatcherCapacity);
         _audioBackend = audioBackend;
         _deviceCache = new AudioOutputDeviceCache(audioBackend);
         _subtitleFactory = subtitleFactory;
         _videoOutputFactory = videoOutputFactory;
         _compositorFactory = compositorFactory;
         _audioOutputFactory = audioOutputFactory;
-        _metadataProbe = metadataProbe;
+        _metadataPublisher = new ShowSessionMetadataPublisher(MetadataHub, metadataProbe);
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
         if (audioBackend is not null)
         {
@@ -261,11 +268,12 @@ public sealed class ShowSession : IAsyncDisposable
         _voicePlayer = new VoicePlayer(this, _standby, audioBackend, _outputDeviceId, BuildPreviewSpec, BuildVoiceSpec);
         _voicePlayer.VoiceEnded += id => VoiceEnded?.Invoke(id);
         _voicePlayer.PreviewEnded += id => PreviewEnded?.Invoke(id);
+        _completionMonitor = new SessionCompletionMonitor(
+            EndMonitorPollInterval, PollCompletionWorkFromBackgroundAsync);
     }
 
     // --- effect buses & metadata (Phase 4) -----------------------------------
 
-    private readonly Func<string, S.Media.Core.Buses.MediaItemMetadata?>? _metadataProbe;
     // Session-registered audio taps (visualizers, meters): attached as an extra router output+route on
     // every clip that fires while registered. Dispatcher-confined list; the tap objects themselves are
     // thread-safe outputs (their Submit runs on the router pump thread).
@@ -500,43 +508,8 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>Publishes what's playing to <see cref="MetadataHub"/>: an immediate filename-derived
     /// entry, refined by the host's metadata probe (tags + cover art) off the dispatcher when set.</summary>
-    private void PublishItemMetadata(ShowClipBinding binding)
-    {
-        var fallbackTitle = TryGetFileTitle(binding.MediaPath) ?? binding.CueId;
-        MetadataHub.Publish(new S.Media.Core.Buses.MediaItemMetadata(fallbackTitle, SourceUri: binding.MediaPath));
-
-        if (_metadataProbe is not { } probe)
-            return;
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                if (probe(binding.MediaPath) is { } rich)
-                    MetadataHub.Publish(rich with
-                    {
-                        Title = rich.Title ?? fallbackTitle,
-                        SourceUri = rich.SourceUri ?? binding.MediaPath,
-                    });
-            }
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogWarning("ShowSession: metadata probe failed for '{0}' ({1})", binding.MediaPath, ex.Message);
-            }
-        });
-    }
-
-    private static string? TryGetFileTitle(string mediaPath)
-    {
-        try
-        {
-            var name = Path.GetFileNameWithoutExtension(mediaPath);
-            return string.IsNullOrWhiteSpace(name) ? null : name;
-        }
-        catch
-        {
-            return null; // exotic URI - the cue id fallback covers it
-        }
-    }
+    private void PublishItemMetadata(ShowClipBinding binding) =>
+        _metadataPublisher.Publish(binding.MediaPath, binding.CueId);
 
     /// <summary>The preview instance's spec for a loaded cue (a variant key distinct from the GO-prepared
     /// clip so an audition never consumes it), or null when the cue has no clip binding. Dispatcher-read.</summary>
@@ -602,7 +575,11 @@ public sealed class ShowSession : IAsyncDisposable
         }
 
         if (!_dispatcher.Post(action))
-            throw new ObjectDisposedException(nameof(ShowSession));
+        {
+            if (_dispatcher.IsDisposed)
+                throw new ObjectDisposedException(nameof(ShowSession));
+            throw new SessionDispatcherOverloadedException(_dispatcher.Name, _dispatcher.Capacity);
+        }
     }
 
     /// <summary>Marshals <paramref name="func"/> onto the session thread and awaits its result. A reentrant
@@ -792,7 +769,11 @@ public sealed class ShowSession : IAsyncDisposable
             _ = Task.Run(() => WarmUpcomingAsync());
     }
 
-    private async ValueTask PlayClipAsync(string groupId, ShowClipBinding? binding, CancellationToken cancellationToken)
+    private async ValueTask PlayClipAsync(
+        string groupId,
+        ShowClipBinding? binding,
+        CancellationToken cancellationToken,
+        Func<Task>? waitForStartBarrier = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (binding is null)
@@ -814,6 +795,22 @@ public sealed class ShowSession : IAsyncDisposable
         // (auto-wiring adaptive-rate drift correction) and seeks to the trim-in (Window.Start), reusing a warm
         // prepared clip when present. The long part; the dispatcher loop stays free throughout (NXT-03).
         var armed = await _standby.ArmAsync(BuildClipSpec(binding), cancellationToken).ConfigureAwait(false);
+
+        if (waitForStartBarrier is not null)
+        {
+            try
+            {
+                // Group fire: do not let a fast-opening sibling commit/start while a slower decoder is still
+                // arming. Once every sibling is ready, their short commits queue together on the dispatcher.
+                await waitForStartBarrier().ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch
+            {
+                await armed.ReleaseAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
 
         // --- COMMIT (on the dispatcher): swap the armed clip in, or discard it if the show was reloaded / the
         // fire was cancelled (STOP) during the open (NXT-03).
@@ -840,6 +837,7 @@ public sealed class ShowSession : IAsyncDisposable
         var group = setup.group;
         var player = armed.Player;
         var layers = new List<PlacedLayer>();
+        var timelineClaims = new List<IDisposable>();
         var outputs = new List<ClipAudioOutput>();
         var subtitleAttachments = new List<IDisposable>();
         var fadeIn = binding.FadeIn > TimeSpan.Zero;
@@ -883,8 +881,8 @@ public sealed class ShowSession : IAsyncDisposable
                     var surfaceSlot = surfaceComp.AddSurfaceLayer(
                         surfaceSource.CreateLayerSurface(),
                         BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
-                    surfaceComp.SetTransportTimeline(group.Timeline);
                     layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
+                    timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
                     MediaDiagnostics.LogInformation(
                         "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
                         binding.CueId, placement.CompositionId);
@@ -898,10 +896,10 @@ public sealed class ShowSession : IAsyncDisposable
                         var slot = comp.AddLayer(
                             videoSource.Format,
                             BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
+                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
                         player.AttachVideoOutput(slot.Output, id: $"comp{fanoutIndex++}"); // unique id ⇒ router fans out
                         if (mastered.Add(placement.CompositionId))
-                            comp.SetTransportTimeline(group.Timeline);
-                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
+                            timelineClaims.Add(comp.AcquireTransportTimeline(group.Timeline));
                     }
                 }
             }
@@ -975,7 +973,8 @@ public sealed class ShowSession : IAsyncDisposable
             PublishItemMetadata(binding);
 
             armed.Start();
-            await ReplaceActiveAsync(group, armed, outputs, layers, subtitleAttachments, binding).ConfigureAwait(false);
+            await ReplaceActiveAsync(
+                group, armed, outputs, layers, timelineClaims, subtitleAttachments, binding).ConfigureAwait(false);
             group.SetActiveFadeMetadata(binding, routeTargets, fadeIn ? 0f : 1f);
             // Publish the device-tagged audio outputs for the line-health poll (ReplaceActiveAsync republished
             // the group views before these were set, so refresh once more now they're known).
@@ -1010,6 +1009,8 @@ public sealed class ShowSession : IAsyncDisposable
             await armed.ReleaseAsync().ConfigureAwait(false);
             foreach (var placed in layers)
                 placed.Slot.Dispose();
+            foreach (var claim in timelineClaims)
+                claim.Dispose();
             throw;
         }
     }
@@ -1354,7 +1355,14 @@ public sealed class ShowSession : IAsyncDisposable
     public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return _voicePlayer.GetVoiceProgressAsync();
+        return Task.FromResult(GetVoiceProgress());
+    }
+
+    /// <summary>Synchronous lock-free form for UI polling; avoids allocating a completed task per tick.</summary>
+    public IReadOnlyList<VoiceProgress> GetVoiceProgress()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _voicePlayer.GetVoiceProgress();
     }
 
     /// <summary>The clip specs for the next <paramref name="count"/> clip-bound cues after the last fired in
@@ -1432,133 +1440,154 @@ public sealed class ShowSession : IAsyncDisposable
     /// coordinated seek's transient clock pause (~100–300 ms) while still snappy for cue auto-follow.</summary>
     private const int EndMonitorStallTicks = 5;
 
-    /// <summary>Watches the active clip's position and applies its end-of-clip behaviour at <paramref name="end"/>
-    /// (the trimmed out-point, or the natural duration): <see cref="ClipEndBehavior.Loop"/> → seek back to the
-    /// in-point; <see cref="ClipEndBehavior.FreezeLastFrame"/> → pause on the last frame; otherwise stop. A
-    /// background poll that marshals each check onto the dispatcher (cancelled when the clip is replaced).
-    /// Position-based, not <c>IsRunning</c> - a paused clip's position is frozen below <paramref name="end"/>,
-    /// so pause is never mistaken for end.</summary>
-    private void StartEndMonitor(string groupId, ShowClipBinding binding, S.Media.Players.MediaPlayer player, TimeSpan end, CancellationToken ct)
+    /// <summary>Registers one active clip with the session's consolidated completion loop. Position checks run
+    /// on the dispatcher, so pause/seek/replace state stays serialized with transport commands.</summary>
+    private void StartEndMonitor(
+        string groupId,
+        ShowClipBinding binding,
+        S.Media.Players.MediaPlayer player,
+        TimeSpan end,
+        CancellationToken ct)
     {
+        if (_groups.GetValueOrDefault(groupId) is not { } group || group.Active?.Player != player)
+            return;
+        group.EndMonitor = new ClipEndMonitorState(binding, player, end, ct);
+        NotifyCompletionWorkAvailable();
+    }
+
+    internal void NotifyCompletionWorkAvailable() => _completionMonitor.NotifyWorkAvailable();
+
+    private async Task<bool> PollCompletionWorkFromBackgroundAsync()
+    {
+        if (_disposed)
+            return false;
+        try
+        {
+            return await _dispatcher.InvokeAsync(PollCompletionWorkAsync).ConfigureAwait(false);
+        }
+        catch (SessionDispatcherOverloadedException)
+        {
+            return true; // bounded overload is transient; retry on the next shared tick
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>One dispatcher command checks every transport clip, preview, and soundboard voice.</summary>
+    private async Task<bool> PollCompletionWorkAsync()
+    {
+        if (_disposed)
+            return false;
+
+        foreach (var (groupId, group) in _groups)
+        {
+            if (group.EndMonitor is not { } monitor)
+                continue;
+            if (await PollClipEndAsync(groupId, group, monitor).ConfigureAwait(false))
+                group.ClearEndMonitor(monitor);
+        }
+
+        var voicesRemain = await _voicePlayer.PollCompletionsAsync().ConfigureAwait(false);
+        return voicesRemain || _groups.Values.Any(g => g.EndMonitor is not null);
+    }
+
+    /// <summary>Applies one tick of loop/trim-out/freeze/natural-end behavior. Returns true when this monitor is done.</summary>
+    private async Task<bool> PollClipEndAsync(
+        string groupId,
+        TransportGroup group,
+        ClipEndMonitorState monitor)
+    {
+        var binding = monitor.Binding;
+        var player = monitor.Player;
+        if (monitor.CancellationToken.IsCancellationRequested || group.Active?.Player != player)
+            return true;
+
         var loops = binding.Loop || binding.EndBehavior == ClipEndBehavior.Loop;
         var freezes = binding.EndBehavior == ClipEndBehavior.FreezeLastFrame;
-        var start = binding.StartOffset;
-        var stalledTicks = 0;
-        var lastTimelineGeneration = -1;
+        var position = player.Position;
+        var remaining = monitor.End - position;
 
-        // Suppress ExecutionContext flow so the dispatcher's AsyncLocal identity does NOT leak into the monitor
-        // thread; otherwise InvokeAsync would run the checks inline (off-dispatcher) and race transport commands.
-        using (ExecutionContext.SuppressFlow())
+        // A timeline discontinuity (seek/pause/resume) restarts the EOF-stall persistence window.
+        var generation = group.Timeline.Generation;
+        if (generation != monitor.LastTimelineGeneration)
         {
-            _ = Task.Run(
-                async () =>
-                {
-                    try
-                    {
-                        while (!ct.IsCancellationRequested)
-                        {
-                            await Task.Delay(EndMonitorPollInterval, ct).ConfigureAwait(false);
-                            var done = await InvokeAsync<bool>(async () =>
-                            {
-                                if (ct.IsCancellationRequested
-                                    || _groups.GetValueOrDefault(groupId) is not { } group
-                                    || group.Active?.Player != player)
-                                    return true; // clip replaced/gone → stop monitoring
-                                var position = player.Position;
-                                var remaining = end - position;
-
-                                // A timeline discontinuity (seek/pause/resume - NXT-04 generation) restarts the
-                                // stall persistence window: its transient clock pause must never accumulate
-                                // toward the stall-at-EOF verdict, however long the pipeline takes to settle.
-                                var generation = group.Timeline.Generation;
-                                if (generation != lastTimelineGeneration)
-                                {
-                                    lastTimelineGeneration = generation;
-                                    stalledTicks = 0;
-                                }
-
-                                // Stall-at-EOF (NotifyNaturalEnd only): a real file can end short of its metadata
-                                // duration (VBR/imprecise headers), so position never reaches the out-point and the
-                                // position check below would idle forever. An audio-clocked player whose clock has
-                                // stopped mid-clip without a host pause has hit source EOF (or an unrecoverable
-                                // stall - either way the clip is over for the operator). Requires the stop to
-                                // PERSIST so a coordinated seek's transient clock pause can't be mistaken for it.
-                                // Audio-clocked only: a video-only held clip's clock legitimately idles while up.
-                                if (binding.NotifyNaturalEnd && !loops && !freezes
-                                    && player.SampleRate > 0
-                                    && !group.PausedByHost
-                                    && !player.IsRunning
-                                    && position > TimeSpan.Zero)
-                                {
-                                    if (++stalledTicks >= EndMonitorStallTicks)
-                                    {
-                                        await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
-                                        ClipNaturallyEnded?.Invoke(binding.CueId); // EOF stall = natural end
-                                        return true;
-                                    }
-                                }
-                                else
-                                {
-                                    stalledTicks = 0;
-                                }
-                                var naturalFade = binding.FadeOut > TimeSpan.Zero
-                                    ? binding.FadeOut
-                                    : binding.EndBehavior == ClipEndBehavior.FadeOutAndStop
-                                        ? SoftStopFadeDuration
-                                        : TimeSpan.Zero;
-
-                                // Old HaPlay starts the configured fade before the out-point, fading audio and
-                                // video together. Once started, the fade task owns the final release so this
-                                // monitor exits and cannot race it with an immediate hard stop.
-                                if (!loops && !freezes && naturalFade > TimeSpan.Zero
-                                    && remaining > TimeSpan.Zero && remaining <= naturalFade
-                                    && group.TryBeginFadeOut(player))
-                                {
-                                    StartNaturalFadeOut(
-                                        groupId,
-                                        group.Active!,
-                                        group.ActiveRouteTargets,
-                                        group.ActiveAudioScale,
-                                        group.CaptureLayerOpacities(),
-                                        remaining,
-                                        ct);
-                                    return true;
-                                }
-
-                                if (position < end - EndMonitorGuard)
-                                    return false; // not at the out-point yet (frozen here if paused)
-                                if (loops)
-                                {
-                                    var masterBeforeLoop = group.Timeline.GetSnapshot().MasterTime;
-                                    // Restores play state even when the wrap-seek faults (same contract as
-                                    // SeekAsync) - a failed loop restart must not freeze the clip at the
-                                    // out-point with the monitor still believing it loops.
-                                    SeekCoordinatedRestoringPlayState(player, start, group, masterBeforeLoop, resume: true);
-                                    return false; // keep looping
-                                }
-                                if (freezes)
-                                {
-                                    player.Pause();
-                                    group.Timeline.MarkDiscontinuity();
-                                    return true; // held on the last frame
-                                }
-                                // Plain Stop: release the clip at the out-point. FadeOutAndStop is handled above.
-                                await ReplaceActiveAsync(GetOrAddGroup(groupId), null, [], []).ConfigureAwait(false);
-                                ClipNaturallyEnded?.Invoke(binding.CueId); // natural end → host cue auto-follow
-                                return true;
-                            }).ConfigureAwait(false);
-                            if (done)
-                                return;
-                        }
-                    }
-                    catch (OperationCanceledException) { }
-                    catch
-                    {
-                        // best-effort - an end-monitor hiccup must never crash the session
-                    }
-                },
-                ct);
+            monitor.LastTimelineGeneration = generation;
+            monitor.StalledTicks = 0;
         }
+
+        if (binding.NotifyNaturalEnd && !loops && !freezes
+            && player.SampleRate > 0
+            && !group.PausedByHost
+            && !player.IsRunning
+            && position > TimeSpan.Zero)
+        {
+            if (++monitor.StalledTicks >= EndMonitorStallTicks)
+            {
+                await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
+                ClipNaturallyEnded?.Invoke(binding.CueId);
+                return true;
+            }
+        }
+        else
+        {
+            monitor.StalledTicks = 0;
+        }
+
+        var naturalFade = binding.FadeOut > TimeSpan.Zero
+            ? binding.FadeOut
+            : binding.EndBehavior == ClipEndBehavior.FadeOutAndStop
+                ? SoftStopFadeDuration
+                : TimeSpan.Zero;
+        if (!loops && !freezes && naturalFade > TimeSpan.Zero
+            && remaining > TimeSpan.Zero && remaining <= naturalFade
+            && group.TryBeginFadeOut(player))
+        {
+            StartNaturalFadeOut(
+                groupId,
+                group.Active!,
+                group.ActiveRouteTargets,
+                group.ActiveAudioScale,
+                group.CaptureLayerOpacities(),
+                remaining,
+                monitor.CancellationToken);
+            return true;
+        }
+
+        if (position < monitor.End - EndMonitorGuard)
+            return false;
+        if (loops)
+        {
+            var masterBeforeLoop = group.Timeline.GetSnapshot().MasterTime;
+            SeekCoordinatedRestoringPlayState(
+                player, binding.StartOffset, group, masterBeforeLoop, resume: true);
+            return false;
+        }
+        if (freezes)
+        {
+            player.Pause();
+            group.Timeline.MarkDiscontinuity();
+            return true;
+        }
+
+        await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
+        ClipNaturallyEnded?.Invoke(binding.CueId);
+        return true;
+    }
+
+    private sealed class ClipEndMonitorState(
+        ShowClipBinding binding,
+        S.Media.Players.MediaPlayer player,
+        TimeSpan end,
+        CancellationToken cancellationToken)
+    {
+        public ShowClipBinding Binding { get; } = binding;
+        public S.Media.Players.MediaPlayer Player { get; } = player;
+        public TimeSpan End { get; } = end;
+        public CancellationToken CancellationToken { get; } = cancellationToken;
+        public int StalledTicks { get; set; }
+        public int LastTimelineGeneration { get; set; } = -1;
     }
 
     /// <summary>Runs a natural-end audio/video fade without occupying the session dispatcher between steps
@@ -1635,6 +1664,28 @@ public sealed class ShowSession : IAsyncDisposable
         string cueId,
         string independentGroupId,
         CancellationToken cancellationToken = default)
+        => await FireCueIndependentCoreAsync(
+                cueId, independentGroupId, waitForStartBarrier: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>The coordinated-batch form: identical independent-group semantics, but the armed clip waits at the
+    /// caller's barrier before it commits. Kept internal so the public batch API remains the only owner of barrier
+    /// participant accounting.</summary>
+    internal Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(
+        string cueId,
+        string independentGroupId,
+        Func<Task> waitForStartBarrier,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(waitForStartBarrier);
+        return FireCueIndependentCoreAsync(cueId, independentGroupId, waitForStartBarrier, cancellationToken);
+    }
+
+    private async Task<CueExecutionStatus> FireCueIndependentCoreAsync(
+        string cueId,
+        string independentGroupId,
+        Func<Task>? waitForStartBarrier,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cueId);
         ArgumentException.ThrowIfNullOrWhiteSpace(independentGroupId);
@@ -1653,7 +1704,7 @@ public sealed class ShowSession : IAsyncDisposable
         {
             if (cue.PreWait > TimeSpan.Zero)
                 await Task.Delay(cue.PreWait, cancellationToken).ConfigureAwait(false);
-            await PlayClipAsync(independentGroupId, binding, cancellationToken).ConfigureAwait(false);
+            await PlayClipAsync(independentGroupId, binding, cancellationToken, waitForStartBarrier).ConfigureAwait(false);
             if (cue.PostWait > TimeSpan.Zero)
                 await Task.Delay(cue.PostWait, cancellationToken).ConfigureAwait(false);
             return CueExecutionStatus.Fired;
@@ -1687,6 +1738,25 @@ public sealed class ShowSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(cueIds);
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _fires.FireCuesAsync(cueIds);
+    }
+
+    /// <summary>Fires several clip-bound cues concurrently on distinct caller-owned runtime groups. Unlike
+    /// <see cref="FireCuesAsync"/>, this deliberately does not use each cue's authored <see cref="CueDefinition.GroupId"/>:
+    /// callers use it for simultaneously-fired siblings that share one authored group but must each retain an active
+    /// clip. The batch holds the normal fire lock, shares cancellation, and returns statuses in input order.</summary>
+    public Task<IReadOnlyList<CueExecutionStatus>> FireCuesIndependentAsync(
+        IReadOnlyList<(string CueId, string RuntimeGroupId)> targets,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var (cueId, runtimeGroupId) in targets)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(cueId, nameof(targets));
+            ArgumentException.ThrowIfNullOrWhiteSpace(runtimeGroupId, nameof(targets));
+        }
+
+        return _fires.FireCuesIndependentAsync(targets, cancellationToken);
     }
 
     /// <summary>GO - fires the next armed and enabled cue in <paramref name="groupId"/> after the cursor. A
@@ -2402,10 +2472,12 @@ public sealed class ShowSession : IAsyncDisposable
     /// the new run-state without waiting behind the dispatcher.</summary>
     private async ValueTask ReplaceActiveAsync(
         TransportGroup group, IArmedClip? clip, IReadOnlyList<ClipAudioOutput> outputs,
-        IReadOnlyList<PlacedLayer> layers, IReadOnlyList<IDisposable>? subtitleAttachments = null,
+        IReadOnlyList<PlacedLayer> layers, IReadOnlyList<IDisposable>? timelineClaims = null,
+        IReadOnlyList<IDisposable>? subtitleAttachments = null,
         ShowClipBinding? binding = null)
     {
-        await group.ReplaceAsync(clip, outputs, layers, subtitleAttachments, binding).ConfigureAwait(false);
+        await group.ReplaceAsync(
+            clip, outputs, layers, timelineClaims, subtitleAttachments, binding).ConfigureAwait(false);
         PublishGroupViews();
     }
 
@@ -2415,6 +2487,7 @@ public sealed class ShowSession : IAsyncDisposable
             return;
         _disposed = true;
         _fires.CancelActiveFire(); // unblock the dispatcher so disposal isn't stuck behind a long in-flight fire (NXT-03)
+        _completionMonitor.Stop();
 
         if (_dispatcher.IsOnDispatcherThread)
         {
@@ -2422,6 +2495,8 @@ public sealed class ShowSession : IAsyncDisposable
             _dispatcher.Dispose();
             return;
         }
+
+        await _completionMonitor.Completion.ConfigureAwait(false);
 
         try
         {
@@ -2435,6 +2510,7 @@ public sealed class ShowSession : IAsyncDisposable
 
     private async Task DisposeStateAsync()
     {
+        _metadataPublisher.Dispose();
         await _voicePlayer.ReleaseAllAsync().ConfigureAwait(false);
         foreach (var group in _groups.Values)
             await group.DisposeAsync().ConfigureAwait(false);
@@ -2489,6 +2565,7 @@ public sealed class ShowSession : IAsyncDisposable
         private IReadOnlyList<ClipAudioOutput> _outputs = [];
         private IReadOnlyList<IDisposable> _subtitleAttachments = [];
         private IReadOnlyList<PlacedLayer> _layers = [];
+        private IReadOnlyList<IDisposable> _timelineClaims = [];
         private CancellationTokenSource? _clipWorkCts;
         private ShowClipBinding? _activeBinding;
         private IReadOnlyList<AudioRouteTarget> _activeRouteTargets = [];
@@ -2509,7 +2586,14 @@ public sealed class ShowSession : IAsyncDisposable
         public bool PausedByHost { get; set; }
 
         public ShowClipBinding? ActiveBinding => _activeBinding;
+        public ClipEndMonitorState? EndMonitor { get; set; }
         public IReadOnlyList<(string OutputId, string DeviceId)> ActiveAudioPumps => _activeAudioPumps;
+
+        public void ClearEndMonitor(ClipEndMonitorState expected)
+        {
+            if (ReferenceEquals(EndMonitor, expected))
+                EndMonitor = null;
+        }
 
         /// <summary>Records the active clip's device-tagged routed audio outputs (for the line-health poll). Call
         /// on the dispatcher after the clip's outputs are attached.</summary>
@@ -2618,6 +2702,7 @@ public sealed class ShowSession : IAsyncDisposable
             IArmedClip? clip,
             IReadOnlyList<ClipAudioOutput> outputs,
             IReadOnlyList<PlacedLayer> layers,
+            IReadOnlyList<IDisposable>? timelineClaims = null,
             IReadOnlyList<IDisposable>? subtitleAttachments = null,
             ShowClipBinding? binding = null)
         {
@@ -2625,6 +2710,7 @@ public sealed class ShowSession : IAsyncDisposable
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
             _clipWorkCts = null;
+            EndMonitor = null;
             _activeBinding = null;
             _activeRouteTargets = [];
             _activeAudioPumps = [];
@@ -2658,11 +2744,13 @@ public sealed class ShowSession : IAsyncDisposable
             var oldActive = Active;
             var oldOutputs = _outputs;
             var oldLayers = _layers;
+            var oldTimelineClaims = _timelineClaims;
             var oldSubtitles = _subtitleAttachments;
 
             Active = clip;
             _outputs = outputs;
             _layers = layers;
+            _timelineClaims = timelineClaims ?? [];
             _subtitleAttachments = subtitleAttachments ?? [];
 
             // Release the displaced clip BEFORE its outputs (the player feeds them). Runs on the serial
@@ -2671,6 +2759,10 @@ public sealed class ShowSession : IAsyncDisposable
                 attachment.Dispose();
             foreach (var placed in oldLayers)
                 placed.Slot.Dispose();
+            // Release clock ownership only after every layer using that timeline is gone. If another group
+            // already placed a layer on the same composition, its waiting claim takes over here.
+            foreach (var timelineClaim in oldTimelineClaims)
+                timelineClaim.Dispose();
             if (oldActive is not null)
                 await oldActive.ReleaseAsync().ConfigureAwait(false);
             foreach (var output in oldOutputs)

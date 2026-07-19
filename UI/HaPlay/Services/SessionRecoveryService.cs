@@ -237,7 +237,7 @@ public sealed class SessionRecoveryService : IDisposable
         }
 
         ProjectPersistenceResult? persistence = null;
-        var projectHash = ProjectHash.Of(snapshot);
+        var projectHash = ProjectHash.OfSerializedJson(json);
         if (autoSaveEnabled && !string.IsNullOrEmpty(projectPath))
         {
             if (!_isProjectPersisted(projectPath, projectHash))
@@ -619,8 +619,8 @@ public sealed class SessionRecoveryService : IDisposable
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         void Add(string value)
         {
-            hash.AppendData(Encoding.UTF8.GetBytes(value));
-            hash.AppendData([0]);
+            ProjectHash.AppendUtf8(hash, value);
+            hash.AppendData(stackalloc byte[] { 0 });
         }
 
         Add(json);

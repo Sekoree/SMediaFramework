@@ -23,6 +23,20 @@ public sealed class ControlMonitorTests
     }
 
     [Fact]
+    public void ControlMonitorBuffer_VersionTracksWritesOverwritesAndClear()
+    {
+        var buffer = new ControlMonitorBuffer(maxRecords: 1);
+
+        Assert.Equal(0, buffer.Version);
+        buffer.Record(Record("/one"));
+        Assert.Equal(1, buffer.Version);
+        buffer.Record(Record("/two"));
+        Assert.Equal(2, buffer.Version);
+        buffer.Clear();
+        Assert.Equal(3, buffer.Version);
+    }
+
+    [Fact]
     public void JsonLines_RoundTripsMonitorRecords()
     {
         var id = Guid.NewGuid();

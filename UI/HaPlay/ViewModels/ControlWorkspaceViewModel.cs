@@ -43,7 +43,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private ControlSystemRuntimeSession? _session;
     private UdpControlOSCSender? _oscSender;
     private IControlMIDISender? _midiSender;
-    private int _lastRenderedCount = -1;
+    private long _lastRenderedVersion = -1;
+    private long _lastX32CacheVersion = -1;
+    private readonly Dictionary<Guid, string[]> _x32DeviceCacheKeys = new();
     private bool _filterDirty;
     private bool _busy;
     private DateTimeOffset _learnSinceUtc;
@@ -353,7 +355,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildProfileWarnings();
         RebuildProfileRows();
         RebuildX32CommandRows(cache: null);
-        _lastRenderedCount = -1;
+        _lastRenderedVersion = -1;
         StatusMessage = "Disarmed.";
         NotifySummary();
         NotifyArmState();

@@ -4,6 +4,17 @@ namespace S.Media.Session.Tests;
 
 public sealed class ShowSessionTests
 {
+    [Fact]
+    public async Task DispatcherCapacity_IsOverrideableAndReported()
+    {
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            dispatcherCapacity: 7);
+
+        Assert.Equal(7, session.DispatcherDiagnostics.Capacity);
+        Assert.Equal("show-session", session.DispatcherDiagnostics.Name);
+    }
+
     private static ShowDocument TwoAudioCues() => new(
         Version: 1,
         Cues: [new CueDefinition("cue1", 1, "One"), new CueDefinition("cue2", 2, "Two")],
@@ -262,6 +273,11 @@ public sealed class ShowSessionTests
                 [new CueDefinition("a", 1, "A")],
                 [new ShowClipBinding("a", "x", CompositionId: "ghost")], [], [])),
             e => e.Contains("unknown composition"));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A", FaultPolicy: CueFaultPolicy.HoldLastFrame)], [], [], [])),
+            e => e.Contains("unsupported fault policy") && e.Contains(nameof(CueFaultPolicy.HoldLastFrame)));
 
         // An extra fan-out placement pointing at a non-existent composition is caught at load, not dropped silently.
         Assert.Contains(
@@ -1203,6 +1219,99 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task CompositionClock_NaturalEndReleasesOwner_AndNextGroupRenders()
+    {
+        // Two independently-clocked cue groups reuse one output composition, as a cue list does for successive
+        // video groups. The first group's natural end must release its timeline; otherwise the second decoder
+        // fills its VideoOutputPump behind a composition still slaved to the stopped first-group clock.
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("first", 1, "First", GroupId: "group-1"),
+                new CueDefinition("second", 2, "Second", GroupId: "group-2"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("first", "fake://first", CompositionId: "screen")
+                    { AudioRoutes = [], NotifyNaturalEnd = true },
+                new ShowClipBinding("second", "fake://second", CompositionId: "screen")
+                    { AudioRoutes = [], NotifyNaturalEnd = true },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Routes: []);
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(frameCount: 12),
+            videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("out", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("first"));
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var endDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while ((await session.SnapshotAsync()).Single(s => s.GroupId == "group-1").IsActive
+               && DateTime.UtcNow < endDeadline)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.False((await session.SnapshotAsync()).Single(s => s.GroupId == "group-1").IsActive);
+        var afterFirst = (await session.GetCompositionStatsAsync("screen"))!.Value;
+        Assert.Equal(0, afterFirst.LayerCount);
+        Assert.False(afterFirst.ClockMastered);
+
+        output.ClearAlphas();
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("second"));
+        var secondFrameDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (!output.Alphas.Contains(255) && DateTime.UtcNow < secondFrameDeadline)
+            await Task.Delay(20);
+
+        Assert.Contains(255, output.Alphas);
+        Assert.True((await session.GetCompositionStatsAsync("screen"))!.Value.ClockMastered);
+    }
+
+    [Fact]
+    public async Task CompositionClock_HandsOffWithoutClearingAnotherActiveGroupsClaim()
+    {
+        // Concurrent layers may share one composition. Releasing its current owner must hand the clock to the
+        // waiting group, not free-run the composition out from under that still-active layer.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("a", 1, "A", GroupId: "A"),
+                new CueDefinition("b", 2, "B", GroupId: "B"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("a", "fake://a", CompositionId: "screen") { AudioRoutes = [] },
+                new ShowClipBinding("b", "fake://b", CompositionId: "screen") { AudioRoutes = [] },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Routes: []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry(frameCount: 900));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("a"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("b"));
+        Assert.Equal(2, (await session.GetCompositionStatsAsync("screen"))!.Value.LayerCount);
+
+        await session.StopAsync("A", fade: false);
+        var afterA = (await session.GetCompositionStatsAsync("screen"))!.Value;
+        Assert.Equal(1, afterA.LayerCount);
+        Assert.True(afterA.ClockMastered);
+        Assert.True((await session.SnapshotAsync()).Single(s => s.GroupId == "B").IsRunning);
+
+        await session.StopAsync("B", fade: false);
+        var afterB = (await session.GetCompositionStatsAsync("screen"))!.Value;
+        Assert.Equal(0, afterB.LayerCount);
+        Assert.False(afterB.ClockMastered);
+    }
+
+    [Fact]
     public async Task ClipWithMultiplePlacements_FansVideoToEveryComposition()
     {
         // A cue may place its ONE decoded source onto several compositions at once (PiP, or mirrored to a second
@@ -1723,6 +1832,108 @@ public sealed class ShowSessionTests
         var snap = await session.SnapshotAsync();
         Assert.True(Running(snap, "A"));
         Assert.True(Running(snap, "B"));
+    }
+
+    [Fact]
+    public async Task FireCuesIndependentAsync_KeepsSameAuthoredGroupSiblingsActiveTogether()
+    {
+        var document = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("video", 1, "Video", GroupId: "authored"),
+                new CueDefinition("vocal", 2, "Vocal", GroupId: "authored"),
+                new CueDefinition("bgm", 3, "BGM", GroupId: "authored"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("video", "fake://video"),
+                new ShowClipBinding("vocal", "fake://vocal"),
+                new ShowClipBinding("bgm", "fake://bgm"),
+            ],
+            Compositions: [], Routes: []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(document);
+
+        var targets = new (string CueId, string RuntimeGroupId)[]
+        {
+            ("video", "simultaneous:video"),
+            ("vocal", "simultaneous:vocal"),
+            ("bgm", "simultaneous:bgm"),
+        };
+        var statuses = await session.FireCuesIndependentAsync(targets);
+
+        Assert.All(statuses, status => Assert.Equal(CueExecutionStatus.Fired, status));
+        var snapshot = session.Snapshot();
+        Assert.All(targets, target =>
+            Assert.True(snapshot.Single(group => group.GroupId == target.RuntimeGroupId).IsActive));
+
+        await session.StopCueAsync("vocal");
+        snapshot = session.Snapshot();
+        Assert.True(snapshot.Single(group => group.GroupId == "simultaneous:video").IsActive);
+        Assert.False(snapshot.Single(group => group.GroupId == "simultaneous:vocal").IsActive);
+        Assert.True(snapshot.Single(group => group.GroupId == "simultaneous:bgm").IsActive);
+    }
+
+    [Fact]
+    public async Task FireCuesIndependentAsync_WaitsForEveryDecoderToArmBeforeStarting()
+    {
+        var provider = new StaggeredOpenProvider(TimeSpan.FromMilliseconds(250));
+        var registry = MediaRegistry.Build(builder => builder.AddDecoder(provider));
+        var document = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("fast", 1, "Fast", GroupId: "authored"),
+                new CueDefinition("slow", 2, "Slow", GroupId: "authored"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("fast", "staggered://clip/fast"),
+                new ShowClipBinding("slow", "staggered://clip/slow"),
+            ],
+            Compositions: [], Routes: []);
+        await using var session = new ShowSession(registry);
+        await session.LoadDocumentAsync(document);
+
+        var statuses = await session.FireCuesIndependentAsync(
+        [
+            ("fast", "simultaneous:fast"),
+            ("slow", "simultaneous:slow"),
+        ]);
+
+        Assert.All(statuses, status => Assert.Equal(CueExecutionStatus.Fired, status));
+        Assert.False(provider.FastReadBeforeSlowOpen);
+    }
+
+    [Fact]
+    public async Task FireCuesIndependentAsync_CancellationReleasesSiblingsWaitingAtTheBarrier()
+    {
+        var provider = new StaggeredOpenProvider(TimeSpan.FromSeconds(30));
+        var registry = MediaRegistry.Build(builder => builder.AddDecoder(provider));
+        var document = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("fast", 1, "Fast", GroupId: "authored"),
+                new CueDefinition("slow", 2, "Slow", GroupId: "authored"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("fast", "staggered://clip/fast"),
+                new ShowClipBinding("slow", "staggered://clip/slow"),
+            ],
+            Compositions: [], Routes: []);
+        await using var session = new ShowSession(registry);
+        await session.LoadDocumentAsync(document);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var statuses = await session.FireCuesIndependentAsync(
+            [("fast", "simultaneous:fast"), ("slow", "simultaneous:slow")], cts.Token)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.All(statuses, status => Assert.Equal(CueExecutionStatus.Failed, status));
+        Assert.DoesNotContain(session.Snapshot(), group => group.IsActive);
     }
 
     [Fact]

@@ -1012,6 +1012,7 @@ public static class Strings
     public static string CueAutoFollowStatusFormat => Get(nameof(CueAutoFollowStatusFormat));
     public static string CueBrokenEndpointCountStatusFormat => Get(nameof(CueBrokenEndpointCountStatusFormat));
     public static string CueAddedFromDropStatusFormat => Get(nameof(CueAddedFromDropStatusFormat));
+    public static string CueFoldersAddedFromDropStatusFormat => Get(nameof(CueFoldersAddedFromDropStatusFormat));
     public static string CueTriggeredStatusFormat => Get(nameof(CueTriggeredStatusFormat));
     public static string CueTriggeredWithDetailStatusFormat => Get(nameof(CueTriggeredWithDetailStatusFormat));
     public static string CueExecutionFailedStatusFormat => Get(nameof(CueExecutionFailedStatusFormat));

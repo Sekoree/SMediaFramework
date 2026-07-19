@@ -601,6 +601,65 @@ public sealed class LiveStreamSessionTests
     }
 
     [Fact]
+    public void TsFanOutBuffer_LongGopCannotGrowRollingHistoryWithoutBound()
+    {
+        var buffer = new TsFanOutBuffer(rollingCapacityBytes: 8);
+
+        buffer.OnBytes(new byte[] { 0, 0 });
+        buffer.OnPacketBoundary(videoKeyframe: false);
+        buffer.OnBytes(new byte[] { 1, 1 });
+        buffer.OnPacketBoundary(videoKeyframe: true);
+
+        // No later keyframe: the old implementation stopped evicting when it reached the keyframe
+        // chunk, retaining every subsequent byte for the rest of the stream.
+        for (var i = 0; i < 20; i++)
+            buffer.OnBytes(new byte[] { 2, 2 });
+
+        Assert.InRange(buffer.BufferedBytes, 1, 8);
+        var reader = buffer.Register(out var registration);
+        Assert.False(reader.TryRead(out _)); // wait for a fresh keyframe rather than serve a broken GOP
+        buffer.Unregister(registration);
+    }
+
+    [Fact]
+    public async Task TsFanOutBuffer_PrimesHistoryOutsideProducerLock_AndPreservesLiveOrder()
+    {
+        var snapshotCaptured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMaterialization = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var buffer = new TsFanOutBuffer(
+            historySnapshotCaptured: () =>
+            {
+                snapshotCaptured.TrySetResult();
+                releaseMaterialization.Task.GetAwaiter().GetResult();
+            });
+        for (var i = 0; i < 300; i++)
+            buffer.OnBytes(new[] { (byte)(i & 0xff) });
+
+        object? registration = null;
+        var registerTask = Task.Run(() => buffer.Register(out registration));
+        try
+        {
+            await snapshotCaptured.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // The registration hook is blocked after taking its history snapshot. A producer write must still
+            // complete and later appear after the history rather than blocking on the history coalescing work.
+            var liveWrite = Task.Run(() => buffer.OnBytes(new byte[] { 0xfe }));
+            await liveWrite.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseMaterialization.TrySetResult();
+        }
+
+        var reader = await registerTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(reader.TryRead(out var history));
+        Assert.Equal(300, history.Length);
+        Assert.True(reader.TryRead(out var live));
+        Assert.Equal(new byte[] { 0xfe }, live);
+        buffer.Unregister(registration!);
+    }
+
+    [Fact]
     public async Task Http_UsesCanonicalMount_AndImplementsHeadAndMethodSemantics()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(

@@ -2260,6 +2260,9 @@
   <data name="CueAddedFromDropStatusFormat" xml:space="preserve">
     <value>Added {0} media cue(s) from drop.</value>
   </data>
+  <data name="CueFoldersAddedFromDropStatusFormat" xml:space="preserve">
+    <value>Added {0} folder group(s) with {1} media cue(s) from drop.</value>
+  </data>
   <data name="CueTriggeredStatusFormat" xml:space="preserve">
     <value>Triggered {0}</value>
   </data>

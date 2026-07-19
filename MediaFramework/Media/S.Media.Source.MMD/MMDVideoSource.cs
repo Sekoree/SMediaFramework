@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using S.Media.Core.Audio;
 
@@ -246,9 +247,25 @@ public sealed class MMDVideoSource : IVideoSource, ISeekableSource, IDisposable,
         _frameIndex++;
 
         // Copy out: the renderer's buffer is reused per frame, the emitted frame must own its pixels.
-        var copy = new byte[_pixels.Length];
-        Buffer.BlockCopy(_pixels, 0, copy, 0, _pixels.Length);
-        frame = new VideoFrame(time, Format, copy, _request.Width * 4);
+        // This is a video hot path, so rent the large backing instead of allocating an LOH array every
+        // frame (1280x720 BGRA at 30 fps would otherwise allocate about 105 MiB/s).
+        var copy = ArrayPool<byte>.Shared.Rent(_pixels.Length);
+        try
+        {
+            Buffer.BlockCopy(_pixels, 0, copy, 0, _pixels.Length);
+            var owned = copy;
+            frame = new VideoFrame(
+                time,
+                Format,
+                copy.AsMemory(0, _pixels.Length),
+                _request.Width * 4,
+                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned)));
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(copy);
+            throw;
+        }
         return true;
     }
 

@@ -72,6 +72,40 @@ internal sealed class CueFireOrchestrator
         }
     }
 
+    /// <summary>Fires several clip-bound cues concurrently, each on the caller-provided runtime transport group.
+    /// This is used when authored siblings must remain active together: assigning a distinct runtime group prevents
+    /// one sibling's commit from replacing another while the shared fire lock still keeps an unrelated GO/fire from
+    /// interleaving with the batch.</summary>
+    public async Task<IReadOnlyList<CueExecutionStatus>> FireCuesIndependentAsync(
+        IReadOnlyList<(string CueId, string RuntimeGroupId)> targets,
+        CancellationToken cancellationToken)
+    {
+        if (targets.Count == 0)
+            return [];
+
+        await _fireLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _activeFireCts = cts;
+        try
+        {
+            var startBarrier = new CoordinatedFireBarrier(targets.Count);
+            var fires = new Task<CueExecutionStatus>[targets.Count];
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                fires[i] = FireIndependentForGroupAsync(
+                    target.CueId, target.RuntimeGroupId, startBarrier, cts.Token);
+            }
+
+            return await Task.WhenAll(fires).ConfigureAwait(false);
+        }
+        finally
+        {
+            _activeFireCts = null;
+            _fireLock.Release();
+        }
+    }
+
     /// <summary>One cue's fire within a <see cref="FireCuesAsync"/> group: maps cancellation to a non-throwing
     /// <see cref="CueExecutionStatus.Failed"/> (so one cancelled cue doesn't fault the whole <c>WhenAll</c>); a
     /// <see cref="CueFaultPolicy.StopShow"/> fault still propagates, matching single-cue fire.</summary>
@@ -79,6 +113,58 @@ internal sealed class CueFireOrchestrator
     {
         try { return await _session.FireOnGraphAsync(cueId, token).ConfigureAwait(false); }
         catch (OperationCanceledException) { return CueExecutionStatus.Failed; }
+    }
+
+    private async Task<CueExecutionStatus> FireIndependentForGroupAsync(
+        string cueId,
+        string runtimeGroupId,
+        CoordinatedFireBarrier startBarrier,
+        CancellationToken token)
+    {
+        var reachedBarrier = false;
+        try
+        {
+            return await _session.FireCueIndependentAtBarrierAsync(
+                    cueId,
+                    runtimeGroupId,
+                    async () =>
+                    {
+                        reachedBarrier = true;
+                        await startBarrier.SignalAndWaitAsync(token).ConfigureAwait(false);
+                    },
+                    token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return CueExecutionStatus.Failed;
+        }
+        finally
+        {
+            // Invalid/unbound/failed-to-open cues never reach the arm barrier. Count them as arrived so one bad
+            // sibling cannot strand every successfully armed clip waiting forever.
+            if (!reachedBarrier)
+                startBarrier.Signal();
+        }
+    }
+
+    private sealed class CoordinatedFireBarrier(int participantCount)
+    {
+        private int _remaining = participantCount;
+        private readonly TaskCompletionSource _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Signal()
+        {
+            if (Interlocked.Decrement(ref _remaining) == 0)
+                _released.TrySetResult();
+        }
+
+        public async Task SignalAndWaitAsync(CancellationToken cancellationToken)
+        {
+            Signal();
+            await _released.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Cancels the in-flight cue fire, if any, WITHOUT marshaling onto the dispatcher - so a stop/load/

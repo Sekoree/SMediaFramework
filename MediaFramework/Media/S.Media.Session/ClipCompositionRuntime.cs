@@ -81,6 +81,12 @@ public sealed class ClipCompositionRuntime : IDisposable
     private IPlaybackClock? _master;
     private IPlayhead? _timeline;
     private ITransportTimeline? _transportTimeline;
+    // Active transport-bound clips claim the composition clock for the lifetime of their placed layers.
+    // A composition is still one clock domain: claims for another timeline wait behind the current owner,
+    // then take over when its final claim is released. This lets sequential transport groups reuse one
+    // composition without leaving it permanently slaved to the first group's stopped timeline.
+    private readonly List<TransportTimelineClaim> _transportTimelineClaims = [];
+    private bool _masterOwnedByTransportClaim;
     private MediaClock? _slaveClock;
     private int _driverDisposeState;
     private bool _disposed;
@@ -415,6 +421,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _master = master;
             _timeline = timeline;
             _transportTimeline = null;
+            _masterOwnedByTransportClaim = false;
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
             clockToRetarget = _slaveClock;
@@ -447,6 +454,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _transportTimeline = timeline;
             _timeline = null;
             _master = timeline;
+            _masterOwnedByTransportClaim = false;
             clockToRetarget = _slaveClock;
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
@@ -459,12 +467,98 @@ public sealed class ClipCompositionRuntime : IDisposable
     }
 
     /// <summary>
-    /// Releases the current clock master so the NEXT clip can re-master this composition. The pump keeps
-    /// running, free-running on its own clock in the meantime (surface layers - e.g. a persistent
-    /// visualizer - keep rendering). This is the escape hatch for the "one clock domain until rebuilt"
+    /// Claims this composition's single transport clock domain for an active clip. The first timeline owns the
+    /// domain while any of its claims remain; claims from other groups wait in acquisition order. Disposing the
+    /// returned lease releases this clip's ownership and atomically hands the clock to the next active timeline,
+    /// or returns the composition to free-running mode when no transport-bound layers remain.
+    /// </summary>
+    public IDisposable AcquireTransportTimeline(ITransportTimeline timeline)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        MediaClock? clockToRetarget = null;
+        var becameMaster = false;
+        TransportTimelineClaim claim;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            claim = new TransportTimelineClaim(this, timeline);
+            _transportTimelineClaims.Add(claim);
+
+            if (_master is null)
+            {
+                _transportTimeline = timeline;
+                _timeline = null;
+                _master = timeline;
+                _masterOwnedByTransportClaim = true;
+                clockToRetarget = _slaveClock;
+                becameMaster = true;
+                foreach (var layer in _slots)
+                    layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+            }
+        }
+
+        clockToRetarget?.SetMaster(timeline);
+        if (becameMaster)
+        {
+            Trace.LogInformation(
+                "ClipCompositionRuntime: composition {Composition} now follows an active transport timeline",
+                CompositionName);
+        }
+        return claim;
+    }
+
+    private void ReleaseTransportTimeline(TransportTimelineClaim claim)
+    {
+        MediaClock? clockToRetarget = null;
+        ITransportTimeline? nextTimeline = null;
+        var released = false;
+        var handedOff = false;
+        lock (_gate)
+        {
+            if (!_transportTimelineClaims.Remove(claim) || _disposed)
+                return;
+            if (!_masterOwnedByTransportClaim
+                || !ReferenceEquals(_transportTimeline, claim.Timeline)
+                || _transportTimelineClaims.Any(c => ReferenceEquals(c.Timeline, claim.Timeline)))
+            {
+                return;
+            }
+
+            nextTimeline = _transportTimelineClaims.Count > 0
+                ? _transportTimelineClaims[0].Timeline
+                : null;
+            _transportTimeline = nextTimeline;
+            _timeline = null;
+            _master = nextTimeline;
+            _masterOwnedByTransportClaim = nextTimeline is not null;
+            clockToRetarget = _slaveClock;
+            released = nextTimeline is null;
+            handedOff = nextTimeline is not null;
+        }
+
+        clockToRetarget?.SetMaster(nextTimeline);
+        if (handedOff)
+        {
+            Trace.LogInformation(
+                "ClipCompositionRuntime: composition {Composition} handed its clock to the next active transport timeline",
+                CompositionName);
+        }
+        else if (released)
+        {
+            Trace.LogInformation(
+                "ClipCompositionRuntime: composition {Composition} clock master released (no active transport layers)",
+                CompositionName);
+        }
+    }
+
+    /// <summary>
+    /// Releases the current clock master and any outstanding transport claims so the NEXT clip can re-master
+    /// this composition. The pump keeps running, free-running on its own clock in the meantime, so persistent
+    /// surface layers such as visualizers keep rendering. This is the escape hatch for the
+    /// "one clock domain until rebuilt"
     /// contract: a PRESERVED composition (kept alive across a document reload) calls this once the outgoing
-    /// clip's group is torn down, so the incoming clip's <see cref="SetTransportTimeline"/> takes effect
-    /// instead of being ignored. Normal (non-preserved) compositions never call this - they are rebuilt.
+    /// clip's group is torn down, so the incoming clip's <see cref="AcquireTransportTimeline"/> takes effect
+    /// instead of being ignored. Active clips normally release their individual claim leases instead.
     /// </summary>
     public void ResetClockMaster()
     {
@@ -475,6 +569,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             _master = null;
             _transportTimeline = null;
             _timeline = null;
+            _masterOwnedByTransportClaim = false;
+            _transportTimelineClaims.Clear();
             clockToClear = _slaveClock;
         }
 
@@ -482,6 +578,17 @@ public sealed class ClipCompositionRuntime : IDisposable
         Trace.LogInformation(
             "ClipCompositionRuntime: composition {Composition} clock master released (preserved across reload)",
             CompositionName);
+    }
+
+    private sealed class TransportTimelineClaim(
+        ClipCompositionRuntime owner,
+        ITransportTimeline timeline) : IDisposable
+    {
+        private ClipCompositionRuntime? _owner = owner;
+        public ITransportTimeline Timeline { get; } = timeline;
+
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.ReleaseTransportTimeline(this);
     }
 
     public LayerSlot AddLayer(

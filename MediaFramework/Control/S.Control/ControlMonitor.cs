@@ -34,11 +34,18 @@ public sealed class ControlMonitorBuffer : IControlMonitorSink
     private readonly ControlMonitorRecord[] _ring;
     private int _start; // index of the oldest record
     private int _count;
+    private long _version;
 
     public ControlMonitorBuffer(int maxRecords)
     {
         _ring = new ControlMonitorRecord[Math.Max(1, maxRecords)];
     }
+
+    /// <summary>
+    /// Monotonically increasing mutation version. Consumers can poll this without allocating a
+    /// <see cref="Records"/> snapshot, and take a snapshot only after the value changes.
+    /// </summary>
+    public long Version => Interlocked.Read(ref _version);
 
     /// <summary>Snapshot of buffered records, oldest first.</summary>
     public IReadOnlyList<ControlMonitorRecord> Records
@@ -72,6 +79,8 @@ public sealed class ControlMonitorBuffer : IControlMonitorSink
                 _ring[_start] = record;
                 _start = (_start + 1) % _ring.Length;
             }
+
+            Interlocked.Increment(ref _version);
         }
     }
 
@@ -82,6 +91,7 @@ public sealed class ControlMonitorBuffer : IControlMonitorSink
             Array.Clear(_ring, 0, _ring.Length);
             _start = 0;
             _count = 0;
+            Interlocked.Increment(ref _version);
         }
     }
 }

@@ -1297,7 +1297,7 @@ public partial class MediaPlayerViewModel
     /// ShowSession: the image renders letterboxed at the composition canvas size and is held in the top-most
     /// full-canvas layer (<see cref="ShowSession.SetCompositionTestPatternAsync"/> - the same held-top-layer
     /// mechanism the calibration grid uses), so every fanned-out output shows it while audio keeps playing.
-    /// This is the ShowSession replacement for the engine's <c>LogoFallbackVideoOutput</c> hold: under the
+    /// This is the ShowSession replacement for the removed legacy per-frame logo-output hold: under the
     /// flipped default the engine session is null, so the old wiring made the HOLD button a silent no-op
     /// during playback. Audio-only media has no composition (returns false harmlessly) - the idle slate
     /// covers that case (see <c>SyncIdleSlate</c>). UI thread (reads deck observable state).</summary>
@@ -1415,7 +1415,7 @@ public partial class MediaPlayerViewModel
         try
         {
             PollAudioMeters();
-            var snap = (await _playerShowSession.SnapshotAsync().ConfigureAwait(true))
+            var snap = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
             if (snap is null)
                 return;

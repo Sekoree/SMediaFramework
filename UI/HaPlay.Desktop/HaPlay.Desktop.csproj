@@ -37,7 +37,9 @@
              rare. A plain `dotnet run` build defaults to background GC; the AOT publish did not. Server GC
              spreads collection across cores; drop it if you suspect GC-thread contention with JACK. -->
         <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
-        <ServerGarbageCollection>true</ServerGarbageCollection>
+        <!-- Override with -p:HaPlayUseServerGC=false for workstation-GC comparison builds. -->
+        <HaPlayUseServerGC Condition="'$(HaPlayUseServerGC)' == ''">true</HaPlayUseServerGC>
+        <ServerGarbageCollection>$(HaPlayUseServerGC)</ServerGarbageCollection>
     </PropertyGroup>
 
     <PropertyGroup>

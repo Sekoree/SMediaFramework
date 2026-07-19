@@ -191,8 +191,8 @@ public partial class MainViewModel
     /// <summary>One Save / Discard / Cancel gate for Close, New, Open, Open Recent, and recovery replacement.</summary>
     public async Task<bool> ConfirmCanReplaceProjectAsync(bool closing = false)
     {
-        NotifyDirtyStateChanged();
-        if (!HasUnsavedChanges)
+        var projectDirty = NotifyDirtyStateChanged();
+        if (!HasUnsavedChangesFor(projectDirty))
             return true;
 
         // Auto-save is trusted only after this exact content hash has been verified on disk. Dirty editor text
@@ -200,8 +200,8 @@ public partial class MainViewModel
         if (AutoSaveEnabled && HasOpenProject && !_autoSaveSuspendedForRecovery && !Control.IsSelectedScriptDirty)
         {
             await _recovery.FlushAutoSaveAsync().ConfigureAwait(true);
-            NotifyDirtyStateChanged();
-            if (!HasUnsavedChanges)
+            projectDirty = NotifyDirtyStateChanged();
+            if (!HasUnsavedChangesFor(projectDirty))
                 return true;
         }
 
@@ -222,8 +222,8 @@ public partial class MainViewModel
         {
             case Views.Dialogs.UnsavedChangesChoice.Save:
                 await SaveProjectCommand.ExecuteAsync(null);
-                NotifyDirtyStateChanged();
-                return !HasUnsavedChanges;
+                projectDirty = NotifyDirtyStateChanged();
+                return !HasUnsavedChangesFor(projectDirty);
             case Views.Dialogs.UnsavedChangesChoice.Discard:
                 if (closing)
                     _discardUnsavedOnShutdown = true;

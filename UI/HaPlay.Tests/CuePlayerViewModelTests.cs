@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Headless;
 using HaPlay.Playback;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
@@ -161,6 +162,115 @@ public sealed class CuePlayerViewModelTests
         var group = Assert.IsType<CueGroupNode>(Assert.Single(list.Nodes));
         Assert.Single(group.Children);
         Assert.IsType<MediaCueNode>(group.Children[0]);
+    }
+
+    [Fact]
+    public async Task AddMediaFilesFromDrop_DirectoryCreatesNamedGroupWithOrderedMediaChildren()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"Act One {Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var audio = Path.Combine(directory, "01 Intro.WAV");
+        var video = Path.Combine(directory, "02 Finale.mp4");
+        File.WriteAllBytes(audio, []);
+        File.WriteAllBytes(video, []);
+        File.WriteAllText(Path.Combine(directory, "running-order.txt"), "not a media cue");
+
+        try
+        {
+            var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(CuePlayerViewModelTests).Assembly);
+            await session.DispatchAsync(async () =>
+            {
+                var vm = new CuePlayerViewModel();
+
+                await vm.AddMediaFilesFromDrop([directory]);
+
+                var group = Assert.Single(vm.VisibleNodes);
+                Assert.Equal(CueNodeKind.Group, group.Kind);
+                Assert.Equal(Path.GetFileName(directory), group.Label);
+                Assert.Equal(CueGroupFireMode.FirstCueOnly, group.GroupFireMode);
+                Assert.Equal(["01 Intro", "02 Finale"], group.Children.Select(c => c.Label));
+                Assert.Equal([audio, video], group.Children.Select(c => c.SourceOrAction));
+                Assert.All(group.Children, child => Assert.IsType<FilePlaylistItem>(child.MediaSourceItem));
+                Assert.Contains("1 folder group", vm.StatusMessage, StringComparison.Ordinal);
+                Assert.Contains("2 media cue", vm.StatusMessage, StringComparison.Ordinal);
+
+                var snapshotGroup = Assert.IsType<CueGroupNode>(Assert.Single(vm.BuildCueListsSnapshot()[0].Nodes));
+                Assert.Equal(2, snapshotGroup.Children.Count);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AddMediaFilesFromDrop_MixedDropKeepsDirectFilesAndNestsFolderGroupAtSelection()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"HaPlay folder drop {Guid.NewGuid():N}");
+        var directory = Path.Combine(root, "Stems");
+        Directory.CreateDirectory(directory);
+        var directFile = Path.Combine(root, "decoder-specific.custom");
+        var stem = Path.Combine(directory, "Vocal.flac");
+        File.WriteAllBytes(directFile, []);
+        File.WriteAllBytes(stem, []);
+
+        try
+        {
+            var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(CuePlayerViewModelTests).Assembly);
+            await session.DispatchAsync(async () =>
+            {
+                var vm = new CuePlayerViewModel();
+                vm.AddGroupCommand.Execute(null);
+                var outer = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+                await vm.AddMediaFilesFromDrop([directFile, directory]);
+
+                Assert.Collection(
+                    outer.Children,
+                    direct =>
+                    {
+                        Assert.Equal(CueNodeKind.Media, direct.Kind);
+                        Assert.Equal(directFile, direct.SourceOrAction);
+                    },
+                    nested =>
+                    {
+                        Assert.Equal(CueNodeKind.Group, nested.Kind);
+                        Assert.Equal("Stems", nested.Label);
+                        Assert.Equal(stem, Assert.Single(nested.Children).SourceOrAction);
+                    });
+            });
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AddMediaFilesFromDrop_EmptyDirectoryStillCreatesItsGroup()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"Empty Act {Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(CuePlayerViewModelTests).Assembly);
+            await session.DispatchAsync(async () =>
+            {
+                var vm = new CuePlayerViewModel();
+
+                await vm.AddMediaFilesFromDrop([directory]);
+
+                var group = Assert.Single(vm.VisibleNodes);
+                Assert.Equal(CueNodeKind.Group, group.Kind);
+                Assert.Equal(Path.GetFileName(directory), group.Label);
+                Assert.Empty(group.Children);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory);
+        }
     }
 
     private static OutputLineViewModel Line(OutputDefinition definition) => new(definition, _ => { });

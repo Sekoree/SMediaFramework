@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
-using Avalonia.Threading;
 using HaPlay.ViewModels;
 using S.Media.Core.Video;
 
@@ -11,7 +10,7 @@ namespace HaPlay.Playback;
 /// is open. For NDI outputs, the image is installed on the persistent <c>NDIOutputPreviewRuntime</c> carrier
 /// (via <see cref="OutputManagementViewModel.SetNDICarrierLogo"/>) so receivers see the slate over the same
 /// sender they were already locked onto - no NDI re-discovery. For local video outputs, the line's PERSISTENT
-/// window/sink is acquired (single-holder, same seam playback uses) and the image is pumped into it - previews
+/// window/sink is acquired (single-holder, same seam playback uses) and the image is submitted once - previews
 /// stay alive across playback in the current output model (<c>StopPreviewsForPlayback</c> is a no-op), so the
 /// old approach of creating a dedicated slate window put a SECOND window next to the real output instead of
 /// showing the image on it. A line currently held by a playback session is skipped; the periodic
@@ -19,48 +18,22 @@ namespace HaPlay.Playback;
 /// </summary>
 internal sealed class IdleLogoSlateSession : IDisposable
 {
-    private readonly List<LogoFallbackVideoOutput> _localLogos = new();
+    private readonly List<StaticSlateVideoOutput> _localLogos = new();
     private readonly List<OutputLineViewModel> _localLines = new();
     private readonly List<OutputLineViewModel> _ndiLines = new();
     private readonly OutputManagementViewModel _outputs;
-    private readonly DispatcherTimer _timer;
-    private readonly TimeSpan _frameDuration;
-    private long _frameIndex;
     private bool _disposed;
 
     private IdleLogoSlateSession(
-        IReadOnlyList<LogoFallbackVideoOutput> localLogos,
+        IReadOnlyList<StaticSlateVideoOutput> localLogos,
         IReadOnlyList<OutputLineViewModel> localLines,
         IReadOnlyList<OutputLineViewModel> ndiLines,
-        OutputManagementViewModel outputs, TimeSpan frameDuration)
+        OutputManagementViewModel outputs)
     {
         _localLogos.AddRange(localLogos);
         _localLines.AddRange(localLines);
         _ndiLines.AddRange(ndiLines);
         _outputs = outputs;
-        _frameDuration = frameDuration;
-        _timer = new DispatcherTimer { Interval = frameDuration };
-        _timer.Tick += OnTick;
-        _timer.Start();
-    }
-
-    private void OnTick(object? sender, EventArgs e)
-    {
-        if (_disposed)
-            return;
-        _frameIndex++;
-        var pt = TimeSpan.FromTicks(checked(_frameIndex * _frameDuration.Ticks));
-        foreach (var logo in _localLogos)
-        {
-            try
-            {
-                logo.SubmitTemplateFrame(pt);
-            }
-            catch
-            {
-                /* best effort */
-            }
-        }
     }
 
     public static bool TryStart(
@@ -102,7 +75,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
             }
         }
 
-        var localLogos = new List<LogoFallbackVideoOutput>();
+        var localLogos = new List<StaticSlateVideoOutput>();
         var localAcquired = new List<OutputLineViewModel>();
         var ndiInstalled = new List<OutputLineViewModel>();
         try
@@ -120,7 +93,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
                         if (sink is null)
                             break;
 
-                        var logo = new LogoFallbackVideoOutput(sink, disposeInnerOnDispose: false);
+                        var logo = new StaticSlateVideoOutput(sink);
                         try
                         {
                             var (sw, sh) = InitialLocalSize(lv);
@@ -131,12 +104,17 @@ internal sealed class IdleLogoSlateSession : IDisposable
                                     "Slate image conversion failed for the output size.");
                             try
                             {
-                                logo.TrySetHoldTemplate(FallbackImageLoader.CloneHoldTemplate(proto));
+                                logo.SetTemplate(FallbackImageLoader.CloneHoldTemplate(proto));
                             }
                             finally
                             {
                                 proto.Dispose();
                             }
+
+                            // Local outputs retain the uploaded texture and redraw it when exposed. Re-submitting
+                            // the same pixels at 30 fps only repeats the CPU-to-GPU upload (about
+                            // 249 MB/s for a 1080p BGRA frame).
+                            logo.Submit();
                         }
                         catch
                         {
@@ -167,7 +145,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
 
             ndiProto?.Dispose();
             session = new IdleLogoSlateSession(
-                localLogos, localAcquired, ndiInstalled, repository, TimeSpan.FromSeconds(1.0 / 30.0));
+                localLogos, localAcquired, ndiInstalled, repository);
             return true;
         }
         catch (Exception ex)
@@ -226,15 +204,6 @@ internal sealed class IdleLogoSlateSession : IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        try
-        {
-            _timer.Stop();
-            _timer.Tick -= OnTick;
-        }
-        catch
-        {
-            /* best effort */
-        }
 
         foreach (var logo in _localLogos)
         {

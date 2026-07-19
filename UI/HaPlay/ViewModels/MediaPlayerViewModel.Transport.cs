@@ -637,6 +637,14 @@ public partial class MediaPlayerViewModel
             return;
         }
 
+        // This timer runs for every deck. Keep the normal HOLD-off path allocation-free: selecting routes
+        // and building a signature are only useful while there is a valid slate to acquire/retry.
+        if (!HoldFallbackVideo || string.IsNullOrWhiteSpace(FallbackImagePath) || !File.Exists(FallbackImagePath!))
+        {
+            StopIdleSlate();
+            return;
+        }
+
         var selected = SelectedOutputLines();
         var sig = IdleLogoSlateSession.BuildSignature(HoldFallbackVideo, FallbackImagePath, selected);
         if (_idleSlate is not null && _idleSlateSig == sig)
@@ -644,8 +652,7 @@ public partial class MediaPlayerViewModel
 
         StopIdleSlate();
 
-        if (!HoldFallbackVideo || string.IsNullOrWhiteSpace(FallbackImagePath) ||
-            !File.Exists(FallbackImagePath!) || selected.Count == 0)
+        if (selected.Count == 0)
             return;
 
         if (!IdleLogoSlateSession.TryStart(selected, _outputs, FallbackImagePath!, out var slate, out var err))

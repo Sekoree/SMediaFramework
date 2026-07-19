@@ -1,5 +1,7 @@
 using System.Net;
+using System.Collections.ObjectModel;
 using S.Control;
+using HaPlay.ViewModels;
 using OSCLib;
 using Xunit;
 
@@ -20,6 +22,24 @@ public sealed class ControlMonitorTests
             buffer.Records,
             record => Assert.Equal("/two", record.Address),
             record => Assert.Equal("/three", record.Address));
+    }
+
+    [Fact]
+    public void ReconcileMonitorEntries_UpdatesAFullDropOldestRingIncrementally()
+    {
+        var first = Record("/one");
+        var second = Record("/two");
+        var third = Record("/three");
+        var entries = new ObservableCollection<ControlMonitorEntryViewModel>();
+
+        ControlWorkspaceViewModel.ReconcileMonitorEntries(entries, [first, second], rebuild: false);
+        var retainedEntry = entries[1];
+        ControlWorkspaceViewModel.ReconcileMonitorEntries(entries, [second, third], rebuild: false);
+
+        Assert.Collection(
+            entries,
+            entry => Assert.Same(retainedEntry, entry),
+            entry => Assert.Equal(third.Id, entry.Id));
     }
 
     [Fact]

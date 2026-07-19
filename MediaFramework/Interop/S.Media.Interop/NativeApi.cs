@@ -380,7 +380,7 @@ internal static unsafe class NativeApi
         try
         {
             var g = Utf8(groupId);
-            var snaps = box.Session.SnapshotAsync().GetAwaiter().GetResult();
+            var snaps = box.Session.Snapshot();
             TransportSnapshot? snap;
             if (string.IsNullOrEmpty(g))
             {

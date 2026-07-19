@@ -12,7 +12,7 @@ namespace S.Media.NDI.Audio;
 /// <see cref="IAudioSource"/> backed by an NDI receiver. Captures the audio
 /// stream from a discovered NDI source on a background thread, converts the
 /// native planar float (FLTP) frames to packed float32 via NDIlib's
-/// interleaving utility, and queues into a lock-free SPSC ring buffer that
+/// interleaving utility, and queues into a frame-aligned SPSC ring buffer that
 /// <see cref="ReadInto"/> drains.
 /// </summary>
 /// <remarks>
@@ -23,8 +23,8 @@ namespace S.Media.NDI.Audio;
 /// or for a successful read before binding routes.
 /// </para>
 /// <para>
-/// Read path is lock-free: producer and consumer share an immutable
-/// <see cref="FormatSnapshot"/> record holding the ring + format. A
+/// Read path is lock-free: producer and consumer share an immutable-shape
+/// <see cref="NDIAudioJitterBuffer"/> holding the ring + format. A
 /// mid-stream format change publishes a fresh snapshot via
 /// <see cref="Volatile.Write{T}"/>; the in-flight chunk on the abandoned
 /// snapshot is discarded (acceptable for the rare format-change event).
@@ -50,8 +50,8 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     /// <summary>Default jitter-buffer prime threshold. Covers the worst-case inter-NDI-frame gap (33 ms at 30p) plus a margin so router pulls can ride over burst timing.</summary>
     public static readonly TimeSpan DefaultMinBufferedDuration = TimeSpan.FromMilliseconds(50);
 
-    private FormatSnapshot? _state;
-    private long _overflowSamples;
+    private NDIAudioJitterBuffer? _state;
+    private long _overflowFloats;
     private long _conversionDrops;
     private bool _disposed;
     private int _captureThreadStuck;
@@ -95,11 +95,12 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         {
             var snap = Volatile.Read(ref _state);
             if (snap is null) return 0;
-            return (int)((Volatile.Read(ref snap.WriteIndex) - Volatile.Read(ref snap.ReadIndex)) / snap.Channels);
+            return snap.AvailableFrames;
         }
     }
 
-    public long OverflowSamples => Volatile.Read(ref _overflowSamples);
+    /// <summary>Interleaved floating-point channel values dropped on ring-buffer overflow.</summary>
+    public long OverflowFloats => Volatile.Read(ref _overflowFloats);
 
     /// <summary>
     /// Skips ahead to the most recent samples by advancing the consumer's read pointer so the ring
@@ -126,13 +127,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         var keepFrames = Math.Max(0, (int)(keep.TotalSeconds * snap.Format.SampleRate));
         var keepFloats = checked(keepFrames * snap.Channels);
 
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var buffered = (int)(write - read);
-        if (buffered <= keepFloats) return;
-
-        var skip = buffered - keepFloats;
-        Volatile.Write(ref snap.ReadIndex, read + skip);
+        snap.RebaseToLatest(keepFloats);
     }
 
     /// <summary>
@@ -229,26 +224,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         var snap = Volatile.Read(ref _state);
         if (snap is null) return 0;
 
-        var channels = snap.Channels;
-        if (dst.Length % channels != 0)
-            throw new ArgumentException(
-                $"dst length {dst.Length} is not a multiple of channel count {channels}", nameof(dst));
-
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var available = (int)(write - read);
-        var primed = Volatile.Read(ref snap.Primed) != 0;
-        var toRead = ComputeReadCount(dst.Length, available, snap.MinBufferedFloats, ref primed);
-        Volatile.Write(ref snap.Primed, primed ? 1 : 0);
-        if (toRead == 0) return 0;
-
-        var startIdx = (int)(read & snap.RingMask);
-        var firstChunk = Math.Min(toRead, snap.RingBuffer.Length - startIdx);
-        snap.RingBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
-        if (firstChunk < toRead)
-            snap.RingBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
-        Volatile.Write(ref snap.ReadIndex, read + toRead);
-        return toRead;
+        return snap.ReadInto(dst);
     }
 
     private void CaptureLoop(CancellationToken token)
@@ -348,13 +324,13 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         {
             if (pin.IsAllocated) pin.Free();
             Trace.LogDebug(
-                "CaptureLoop: exiting (overflowSamples={Overflow}, conversionDrops={Drops})",
-                Volatile.Read(ref _overflowSamples),
+                "CaptureLoop: exiting (overflowFloats={Overflow}, conversionDrops={Drops})",
+                Volatile.Read(ref _overflowFloats),
                 Volatile.Read(ref _conversionDrops));
         }
     }
 
-    private FormatSnapshot EnsureFormat(int sampleRate, int channels)
+    private NDIAudioJitterBuffer EnsureFormat(int sampleRate, int channels)
     {
         var existing = Volatile.Read(ref _state);
         if (existing is not null
@@ -369,7 +345,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         // boundary is preferable to copying state across.
         var capacityFrames = Math.Max(MinCapacityFrames, (int)(_capacityDuration.TotalSeconds * sampleRate));
         var minBufferedFrames = ComputeMinBufferedFrames(_minBufferedDuration, sampleRate, capacityFrames);
-        var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
+        var snap = new NDIAudioJitterBuffer(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
         Volatile.Write(ref _state, snap);
         Trace.LogInformation(
             "NDIAudioReceiver: audio format {Format} capacity={CapacityFrames}f minBuffered={MinBufferedFrames}f",
@@ -423,42 +399,11 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         return toRead;
     }
 
-    private void EnqueueSamples(FormatSnapshot snap, ReadOnlySpan<float> src)
+    private void EnqueueSamples(NDIAudioJitterBuffer snap, ReadOnlySpan<float> src)
     {
-        var capacity = snap.UsableFloats;
-        if (capacity <= 0) return;
-
-        var dropped = 0;
-        if (src.Length > capacity)
-        {
-            dropped += src.Length - capacity;
-            src = src[^capacity..];
-        }
-
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var buffered = (int)(write - read);
-        var freeFloats = capacity - buffered;
-        if (src.Length > freeFloats)
-        {
-            // Live receivers should keep the newest audio, especially when pre-connected before Play.
-            // Drop oldest buffered samples rather than rejecting fresh network samples.
-            var dropOld = src.Length - freeFloats;
-            read += dropOld;
-            dropped += dropOld;
-            Volatile.Write(ref snap.ReadIndex, read);
-            Volatile.Write(ref snap.Primed, 0);
-        }
-
-        var startIdx = (int)(write & snap.RingMask);
-        var firstChunk = Math.Min(src.Length, snap.RingBuffer.Length - startIdx);
-        src[..firstChunk].CopyTo(snap.RingBuffer.AsSpan(startIdx));
-        if (firstChunk < src.Length)
-            src[firstChunk..].CopyTo(snap.RingBuffer.AsSpan(0));
-        Volatile.Write(ref snap.WriteIndex, write + src.Length);
-
+        var dropped = snap.Enqueue(src);
         if (dropped > 0)
-            Interlocked.Add(ref _overflowSamples, dropped);
+                Interlocked.Add(ref _overflowFloats, dropped);
     }
 
     private void LogConversionDrop(in NDIAudioFrameV3 audio)
@@ -500,39 +445,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                 _faultEx ??= ex;
             },
             Trace);
-        timing?.SetOutcome($"stuck={IsCaptureStuck} overflow={OverflowSamples}");
+        timing?.SetOutcome($"stuck={IsCaptureStuck} overflowFloats={OverflowFloats}");
     }
 
-    /// <summary>
-    /// Immutable-shape snapshot of (format, ring, indices). The ring and
-    /// format never change after construction; the long indices are mutated
-    /// volatilely by exactly one producer (capture thread) and one consumer
-    /// (router thread).
-    /// </summary>
-    private sealed class FormatSnapshot
-    {
-        public readonly AudioFormat Format;
-        public readonly int Channels;
-        public readonly float[] RingBuffer;
-        public readonly int RingMask;
-        public readonly int UsableFloats;
-        /// <summary>Jitter-buffer holdback in floats (channel-aligned). See <see cref="ReadInto"/>.</summary>
-        public readonly int MinBufferedFloats;
-        public int Primed;
-        public long WriteIndex;
-        public long ReadIndex;
-
-        public FormatSnapshot(AudioFormat format, int capacityFrames, int minBufferedFrames)
-        {
-            Format = format;
-            Channels = format.Channels;
-            var capFloats = capacityFrames * format.Channels;
-            var rounded = 1;
-            while (rounded < capFloats) rounded <<= 1;
-            RingBuffer = new float[rounded];
-            RingMask = rounded - 1;
-            UsableFloats = rounded - (rounded % Channels);
-            MinBufferedFloats = checked(minBufferedFrames * format.Channels);
-        }
-    }
 }

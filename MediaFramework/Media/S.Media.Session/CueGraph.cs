@@ -4,36 +4,34 @@ using System.Text.Json.Serialization;
 namespace S.Media.Session;
 
 /// <summary>
-/// What the cue runtime does when a cue's action faults. <strong>Only <see cref="StopShow"/> and
-/// <see cref="Continue"/> have implemented behaviour today</strong>; every other value currently degrades to
-/// "log and continue" (NXT-07). The unimplemented values are retained for forward-compatible persistence and
-/// the GUI mapping - do not rely on their named behaviour until <see cref="CueGraph"/> implements it, and do
-/// not add a value without implementing it in <c>FireEntryAsync</c>.
+/// What the cue runtime does when a cue's action faults. Only <see cref="StopShow"/> and
+/// <see cref="Continue"/> are currently supported. Documents and direct registrations using any other value
+/// are rejected rather than silently receiving different fault behaviour (NXT-07).
 /// </summary>
 public enum CueFaultPolicy
 {
     /// <summary>Implemented: rethrow the fault so the show stops.</summary>
     StopShow,
 
-    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Reserved for future implementation; rejected by the current runtime.</summary>
     SkipCue,
 
-    /// <summary>Implemented: log the fault and continue (the fall-through for every non-StopShow value).</summary>
+    /// <summary>Implemented: log the fault and continue.</summary>
     Continue,
 
-    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Reserved for future implementation; rejected by the current runtime.</summary>
     HoldLastFrame,
 
-    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Reserved for future implementation; rejected by the current runtime.</summary>
     FadeToBlackOrSilence,
 
-    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Reserved for future implementation; rejected by the current runtime.</summary>
     ContinueAudioOnly,
 
-    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Reserved for future implementation; rejected by the current runtime.</summary>
     ContinueVideoOnly,
 
-    /// <summary>Not yet implemented - currently behaves as <see cref="Continue"/>.</summary>
+    /// <summary>Reserved for future implementation; rejected by the current runtime.</summary>
     RouteToFallbackOutput,
 }
 
@@ -61,6 +59,23 @@ public sealed record CueDefinition(
     string? PreloadKey = null,
     string? FallbackOutputId = null,
     CueFaultPolicy FaultPolicy = CueFaultPolicy.StopShow);
+
+internal static class CueFaultPolicySupport
+{
+    public static bool IsSupported(CueFaultPolicy policy) =>
+        policy is CueFaultPolicy.StopShow or CueFaultPolicy.Continue;
+
+    public static string Display(CueFaultPolicy policy) =>
+        Enum.IsDefined(policy) ? $"'{policy}'" : $"numeric value {(int)policy}";
+
+    public static void ThrowIfUnsupported(CueDefinition cue)
+    {
+        if (!IsSupported(cue.FaultPolicy))
+            throw new NotSupportedException(
+                $"cue '{cue.Id}' uses unsupported fault policy {Display(cue.FaultPolicy)}; "
+                + $"this runtime supports only {CueFaultPolicy.StopShow} and {CueFaultPolicy.Continue}.");
+    }
+}
 
 public sealed record CueShowFile(
     int Version,
@@ -139,9 +154,11 @@ public sealed class CueGraph
         Func<CancellationToken, ValueTask> action,
         Func<bool>? isReady = null)
     {
+        ArgumentNullException.ThrowIfNull(definition);
         ArgumentException.ThrowIfNullOrEmpty(definition.Id);
         ArgumentException.ThrowIfNullOrEmpty(definition.Label);
         ArgumentNullException.ThrowIfNull(action);
+        CueFaultPolicySupport.ThrowIfUnsupported(definition);
 
         lock (_gate)
         {
@@ -224,12 +241,22 @@ public sealed class CueGraph
         IEnumerable<string>? devices = null) =>
         new(1, Cues, (outputs ?? []).ToArray(), (routes ?? []).ToArray(), (devices ?? []).ToArray());
 
-    public string SerializeShowFile(CueShowFile? showFile = null) =>
-        JsonSerializer.Serialize(showFile ?? ToShowFile(), CueShowFileJsonContext.Default.CueShowFile);
+    public string SerializeShowFile(CueShowFile? showFile = null)
+    {
+        var value = showFile ?? ToShowFile();
+        foreach (var cue in value.Cues ?? [])
+            CueFaultPolicySupport.ThrowIfUnsupported(cue);
+        return JsonSerializer.Serialize(value, CueShowFileJsonContext.Default.CueShowFile);
+    }
 
-    public static CueShowFile DeserializeShowFile(string json) =>
-        JsonSerializer.Deserialize(json, CueShowFileJsonContext.Default.CueShowFile)
-        ?? throw new InvalidOperationException("show file JSON did not contain a valid cue show.");
+    public static CueShowFile DeserializeShowFile(string json)
+    {
+        var showFile = JsonSerializer.Deserialize(json, CueShowFileJsonContext.Default.CueShowFile)
+            ?? throw new InvalidOperationException("show file JSON did not contain a valid cue show.");
+        foreach (var cue in showFile.Cues ?? [])
+            CueFaultPolicySupport.ThrowIfUnsupported(cue);
+        return showFile;
+    }
 
     private async ValueTask<CueExecutionStatus> FireEntryAsync(
         CueEntry entry, CancellationToken cancellationToken, HashSet<string>? autoContinueChain = null)
@@ -274,12 +301,15 @@ public sealed class CueGraph
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log(cue, CueExecutionStatus.Failed, ex.Message);
-            // Only StopShow is implemented as a distinct fault policy; every other CueFaultPolicy value currently
-            // degrades to "log the failure and continue the show" (see the enum's doc). Do not add a policy value
-            // without implementing its behaviour here, or it silently becomes Continue (NXT-07).
             if (cue.FaultPolicy == CueFaultPolicy.StopShow)
                 throw;
-            return CueExecutionStatus.Failed;
+            if (cue.FaultPolicy == CueFaultPolicy.Continue)
+                return CueExecutionStatus.Failed;
+
+            // Registration and document validation prevent this path; retain a defence in depth so a future
+            // mutation path cannot accidentally turn a newly-added policy into Continue.
+            throw new NotSupportedException(
+                $"cue '{cue.Id}' uses unsupported fault policy {CueFaultPolicySupport.Display(cue.FaultPolicy)}.");
         }
     }
 

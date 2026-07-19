@@ -383,12 +383,13 @@ public sealed class CueShowSessionCoordinator
             // Pause must hit EVERY active group, not just the default one - a multi-group cue show would otherwise
             // keep the other groups running on pause (parity with StopAllAsync).
             CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetAllPausedAsync(paused));
-            CuePlayer.SeekCueCallback = (_, pos) => GuardedCueShowOp("seek", () => _cueShowSession!.SeekAsync(pos));
+            CuePlayer.SeekCueCallback = (cueId, pos) => GuardedCueShowOp(
+                "seek", () => _cueShowSession!.SeekAsync(pos, ResolveCueShowRuntimeGroup(cueId)));
             // Multi-cue seek goes through the group-seek barrier so every targeted group lands atomically behind one
             // shared epoch (a group runs one active clip, so a cue's seek lands on whatever is active in its group).
             CuePlayer.SeekCuesCallback = positions => GuardedCueShowOp("seek-cues", () =>
                 _cueShowSession!.SeekManyAsync(
-                    positions.Select(p => (_cueGroupByCueId.GetValueOrDefault(p.CueId, ShowSession.DefaultGroup), p.Position)).ToList()));
+                    positions.Select(p => (ResolveCueShowRuntimeGroup(p.CueId), p.Position)).ToList()));
             CuePlayer.CancelCueCallback = id => GuardedCueShowOp("cancel", () => _cueShowSession!.StopCueAsync(id.ToString()));
             // Cue preview (audition on the preview/headphone device) goes through ShowSession too - otherwise it was
             // the last cue callback still driving the now-inactive engine under the gate. The PortAudio backend takes
@@ -492,11 +493,12 @@ public sealed class CueShowSessionCoordinator
                     return ex.Message;
                 }
             };
-            CuePlayer.MediaCueGroupExecutor = async (cues, _) =>
+            CuePlayer.MediaCueGroupExecutor = async (cues, ct) =>
             {
-                // Flush any pending graph edits ONCE, then fire the whole group through the start barrier so a
-                // simultaneous cue group opens its decoders in parallel and starts in sync (parity with the engine's
-                // ExecuteGroupAsync) instead of staggered by each cue's open in turn.
+                // Flush pending edits once, then give every simultaneous child its own runtime transport group.
+                // Authored siblings intentionally share a group for sequential GO/replacement, but one ShowSession
+                // transport group owns only one active clip; using it for this batch made the concurrent commits
+                // replace one another. The batch API still opens concurrently under one fire lock/cancellation scope.
                 await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
                 var bound = cues.Where(c => _cueShowBoundCueIds.Contains(c.Id)).ToList();
                 foreach (var unbound in cues.Where(c => !_cueShowBoundCueIds.Contains(c.Id)))
@@ -506,9 +508,12 @@ public sealed class CueShowSessionCoordinator
                     return null;
 
                 IReadOnlyList<CueExecutionStatus> statuses;
+                var targets = bound
+                    .Select(c => (CueId: c.Id.ToString(), RuntimeGroupId: BuildSimultaneousRuntimeGroup(c.Id)))
+                    .ToArray();
                 try
                 {
-                    statuses = await _cueShowSession!.FireCuesAsync(bound.Select(c => c.Id.ToString()).ToList())
+                    statuses = await _cueShowSession!.FireCuesIndependentAsync(targets, ct)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -521,7 +526,10 @@ public sealed class CueShowSessionCoordinator
                 {
                     var cue = bound[i];
                     if (statuses[i] == CueExecutionStatus.Fired)
-                        await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
+                    {
+                        var runtimeGroup = targets[i].RuntimeGroupId;
+                        await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id, runtimeGroup));
+                    }
                     else
                         Trace.LogWarning(
                             "HaPlay: group cue '{Label}' ({Id}) did not fire - status {Status}: {Detail}",
@@ -1297,11 +1305,25 @@ public sealed class CueShowSessionCoordinator
         _cueShowProgressPoll.Start();
     }
 
+    /// <summary>A stable per-cue runtime group for a simultaneously-fired authored group. Stability means re-firing
+    /// the same cue replaces its own prior run, while distinct siblings never displace each other.</summary>
+    internal static string BuildSimultaneousRuntimeGroup(Guid cueId) => $"simultaneous:{cueId:N}";
+
+    /// <summary>Returns the group the cue is active on, falling back to its authored group while idle. Runtime group
+    /// resolution keeps per-cue and aggregate seeks targeting independently-fired simultaneous children.</summary>
+    private string ResolveCueShowRuntimeGroup(Guid cueId)
+    {
+        foreach (var (group, state) in _cueShowActiveByGroup)
+            if (state.CueId == cueId)
+                return group;
+        return _cueGroupByCueId.GetValueOrDefault(cueId, ShowSession.DefaultGroup);
+    }
+
     /// <summary>Polls the per-group session snapshot to drive <see cref="CuePlayerViewModel.OnCueProgress"/> (the
     /// now-playing countdown/scrubber) while a group runs, and <see cref="CuePlayerViewModel.OnCueEnded"/> when it
     /// goes idle (natural end / Stop / Cancel). Per group, so concurrent cues on different groups track
     /// independently; a looping/freeze cue keeps its group "running" and so stays correctly active.</summary>
-    private async void OnCueShowProgressPollTick(object? sender, EventArgs e)
+    private void OnCueShowProgressPollTick(object? sender, EventArgs e)
     {
         try
         {
@@ -1310,7 +1332,7 @@ public sealed class CueShowSessionCoordinator
                 _cueShowProgressPoll?.Stop();
                 return;
             }
-            var snapshot = await _cueShowSession.SnapshotAsync().ConfigureAwait(true);
+            var snapshot = _cueShowSession.Snapshot();
             var byGroup = snapshot.ToDictionary(s => s.GroupId, StringComparer.Ordinal);
             foreach (var (group, st) in _cueShowActiveByGroup.ToArray())
             {
@@ -1359,7 +1381,7 @@ public sealed class CueShowSessionCoordinator
         _soundboardProgressPoll.Start();
     }
 
-    private async void OnSoundboardProgressPollTick(object? sender, EventArgs e)
+    private void OnSoundboardProgressPollTick(object? sender, EventArgs e)
     {
         try
         {
@@ -1368,7 +1390,7 @@ public sealed class CueShowSessionCoordinator
                 _soundboardProgressPoll?.Stop();
                 return;
             }
-            var voices = await _cueShowSession.GetVoiceProgressAsync().ConfigureAwait(true);
+            var voices = _cueShowSession.GetVoiceProgress();
 
             // Reconcile: any tile we started whose voice is gone ended WITHOUT a VoiceEnded event -
             // that's how fade-outs finish (the ramp releases the voice silently). Reset those tiles

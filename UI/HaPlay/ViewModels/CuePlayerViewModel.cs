@@ -2458,32 +2458,130 @@ public partial class CuePlayerViewModel : ViewModelBase
         return targets;
     }
 
-    public void AddMediaFilesFromDrop(IEnumerable<string> paths)
+    // Folder drops intentionally cover audio/video containers only. Still images and subtitle documents have
+    // distinct cue types with different hold/render semantics, so silently wrapping those in FilePlaylistItem
+    // would create a cue that behaves differently from the corresponding + Image / + Subtitle command.
+    private static readonly HashSet<string> FolderDropMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Video / A-V containers
+        ".3g2", ".3gp", ".asf", ".avi", ".flv", ".m2ts", ".m2v", ".m4v", ".mkv", ".mov",
+        ".mp4", ".mpe", ".mpeg", ".mpg", ".mts", ".ogv", ".ts", ".vob", ".webm", ".wmv",
+        // Audio containers
+        ".aac", ".ac3", ".aif", ".aiff", ".ape", ".caf", ".dts", ".flac", ".m4a", ".mka",
+        ".mp2", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".wma",
+    };
+
+    public Task AddMediaFilesFromDrop(IEnumerable<string> paths)
     {
         if (SelectedCueList is null)
-            return;
+            return Task.CompletedTask;
 
         var parent = SelectedParentCollection() ?? SelectedCueList.Nodes;
-        var added = 0;
+        var mediaAdded = 0;
+        var groupsAdded = 0;
+        var probes = new List<(CueNodeViewModel Row, string Path)>();
         foreach (var path in paths)
         {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            if (string.IsNullOrWhiteSpace(path))
                 continue;
-            var row = new CueNodeViewModel(CueNodeKind.Media)
+
+            if (File.Exists(path))
+            {
+                AddDroppedMediaCue(parent, path, probes);
+                mediaAdded++;
+                continue;
+            }
+
+            if (!Directory.Exists(path))
+                continue;
+
+            var group = new CueNodeViewModel(CueNodeKind.Group)
             {
                 Number = NextNumber(parent),
-                Label = Path.GetFileNameWithoutExtension(path),
-                MediaSourceItem = new FilePlaylistItem(path),
-                SourceOrAction = path,
+                Label = DroppedDirectoryLabel(path),
+                Extra = CueGroupFireMode.FirstCueOnly.ToString(),
             };
-            parent.Add(row);
-            FinalizeAddedCue(row);
-            _ = ProbeAndAssignDurationAsync(row, path);
-            added++;
+            parent.Add(group);
+            FinalizeAddedCue(group);
+            groupsAdded++;
+
+            foreach (var mediaPath in EnumerateDroppedDirectoryMedia(path))
+            {
+                AddDroppedMediaCue(group.Children, mediaPath, probes);
+                mediaAdded++;
+            }
         }
 
-        if (added > 0)
-            StatusMessage = Strings.Format(nameof(Strings.CueAddedFromDropStatusFormat), added);
+        if (groupsAdded > 0)
+        {
+            StatusMessage = Strings.Format(
+                nameof(Strings.CueFoldersAddedFromDropStatusFormat), groupsAdded, mediaAdded);
+        }
+        else if (mediaAdded > 0)
+        {
+            StatusMessage = Strings.Format(nameof(Strings.CueAddedFromDropStatusFormat), mediaAdded);
+        }
+
+        // A large folder must not open every decoder at once. Probe sequentially in one detached async flow;
+        // cue creation is immediate, while duration/stream metadata fills in progressively.
+        return probes.Count > 0
+            ? ProbeDroppedMediaAsync(probes)
+            : Task.CompletedTask;
+    }
+
+    private void AddDroppedMediaCue(
+        ICollection<CueNodeViewModel> parent,
+        string path,
+        ICollection<(CueNodeViewModel Row, string Path)> probes)
+    {
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = Path.GetFileNameWithoutExtension(path),
+            MediaSourceItem = new FilePlaylistItem(path),
+            SourceOrAction = path,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        probes.Add((row, path));
+    }
+
+    private static IReadOnlyList<string> EnumerateDroppedDirectoryMedia(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                .Where(path => FolderDropMediaExtensions.Contains(Path.GetExtension(path)))
+                .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private static string DroppedDirectoryLabel(string directory)
+    {
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
+        return string.IsNullOrWhiteSpace(name) ? directory : name;
+    }
+
+    private static async Task ProbeDroppedMediaAsync(
+        IReadOnlyList<(CueNodeViewModel Row, string Path)> probes)
+    {
+        foreach (var (row, path) in probes)
+        {
+            try
+            {
+                await ProbeAndAssignDurationAsync(row, path).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Metadata probing is best-effort. The cue remains usable and reports the open error on fire.
+            }
+        }
     }
 
     private IEnumerable<CueNodeViewModel> EnumerateAllCueNodes()

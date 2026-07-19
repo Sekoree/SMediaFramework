@@ -330,7 +330,7 @@ public partial class CuePlayerView : UserControl
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .ToList();
         if (paths.Count > 0)
-            vm.AddMediaFilesFromDrop(paths);
+            _ = vm.AddMediaFilesFromDrop(paths);
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)

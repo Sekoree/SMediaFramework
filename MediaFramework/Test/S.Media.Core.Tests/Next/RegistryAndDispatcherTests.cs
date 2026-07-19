@@ -312,4 +312,59 @@ public class SessionDispatcherTests
         d.Dispose();
         Assert.False(d.Post(() => { }));
     }
+
+    [Fact]
+    public async Task Capacity_is_overrideable_and_overload_is_reported_without_blocking()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var d = new SessionDispatcher("bounded-test", capacity: 2);
+        try
+        {
+            Assert.True(d.Post(() =>
+            {
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            }));
+            await entered.Task;
+
+            Assert.True(d.Post(() => { }));
+            Assert.True(d.Post(() => { }));
+            Assert.False(d.Post(() => { }));
+            var ex = await Assert.ThrowsAsync<SessionDispatcherOverloadedException>(
+                () => d.InvokeAsync(() => 42));
+
+            Assert.Equal("bounded-test", ex.DispatcherName);
+            Assert.Equal(2, ex.Capacity);
+            Assert.Equal(2, d.HighWaterMark);
+            Assert.Equal(2, d.RejectedWorkCount);
+            Assert.Equal(
+                new SessionDispatcherDiagnostics("bounded-test", 2, 2, 2, 2, IsDisposed: false),
+                d.Diagnostics);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await d.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public void Synchronous_dispose_drains_accepted_work()
+    {
+        var d = new SessionDispatcher(capacity: 2);
+        var ran = 0;
+        Assert.True(d.Post(() => Interlocked.Increment(ref ran)));
+
+        d.Dispose();
+
+        Assert.Equal(1, ran);
+        Assert.True(d.IsDisposed);
+    }
+
+    [Fact]
+    public void Capacity_must_be_positive()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SessionDispatcher(capacity: 0));
+    }
 }

@@ -97,8 +97,9 @@ public static class HaPlayShowMapper
                 switch (node)
                 {
                     case CueGroupNode group:
-                        // A top-level group is one transport/clock unit: its cues share a SessionClock
-                        // (so they seek/pause together and, when fired simultaneously, stay phase-locked).
+                        // A top-level group is the authored transport/replacement unit for normal single-cue GO.
+                        // Fire-all batches temporarily override it with stable per-cue runtime groups so siblings
+                        // can remain active together; HaPlay coordinates pause/seek across those runtime groups.
                         // Nested subgroups collapse into their OUTERMOST ancestor (first non-null wins) so
                         // the whole tree moves as one unit rather than splitting across per-subgroup clocks.
                         // WHICH cues fire on GO - including per-subgroup fire modes (FirstCueOnly / …) - is

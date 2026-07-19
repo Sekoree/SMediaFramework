@@ -5,6 +5,9 @@ namespace S.Control;
 
 public sealed class ControlScriptRuntime
 {
+    private const int MaxRetainedDiagnostics = 4096;
+    private const int DiagnosticTrimBatch = 512;
+
     private readonly ControlSystemConfig _config;
     private readonly IControlDeviceProfileRepository _profiles;
     private readonly ControlScriptFileHost _host;
@@ -12,6 +15,8 @@ public sealed class ControlScriptRuntime
     private readonly Dictionary<Guid, ControlLayerConfig> _layers;
     private readonly Dictionary<Guid, ScriptRuntimeState> _scripts;
     private readonly List<ControlScriptRuntimeDiagnostic> _diagnostics = new();
+    private long _diagnosticSequence;
+    private long _droppedDiagnostics;
     private Guid? _activeLayerId;
     private bool _faulted;
 
@@ -45,7 +50,10 @@ public sealed class ControlScriptRuntime
     /// <summary>The currently active layer (mutually exclusive), or null when none is active.</summary>
     public Guid? ActiveLayerId => _activeLayerId;
 
+    /// <summary>Recent diagnostics, bounded so a failing keep-running script cannot grow for the session lifetime.</summary>
     public IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics => _diagnostics;
+
+    public long DroppedDiagnostics => _droppedDiagnostics;
 
     public IReadOnlyList<ControlScriptRuntimeScriptStatus> ScriptStatuses =>
         _scripts.Values.Select(s => s.ToStatus()).ToArray();
@@ -139,11 +147,11 @@ public sealed class ControlScriptRuntime
     public ControlScriptDispatchResult SetActiveLayer(Guid? layerId)
     {
         if (layerId is { } requested && !_layers.ContainsKey(requested))
-            return CreateResult([], _diagnostics.Count);
+            return CreateResult([], _diagnosticSequence);
         if (_activeLayerId == layerId)
-            return CreateResult([], _diagnostics.Count);
+            return CreateResult([], _diagnosticSequence);
 
-        var diagnosticsStart = _diagnostics.Count;
+        var diagnosticsStart = _diagnosticSequence;
         var previous = _activeLayerId;
         _activeLayerId = layerId;
 
@@ -164,7 +172,7 @@ public sealed class ControlScriptRuntime
             cacheChanges.AddRange(enabled.CacheChanges);
         }
 
-        return new ControlScriptDispatchResult(invocations, _diagnostics.Skip(diagnosticsStart).ToArray())
+        return new ControlScriptDispatchResult(invocations, DiagnosticsSince(diagnosticsStart))
         {
             CacheChanges = cacheChanges,
         };
@@ -191,7 +199,7 @@ public sealed class ControlScriptRuntime
         Guid? scriptId = null,
         Guid? triggerId = null)
     {
-        var diagnosticsStart = _diagnostics.Count;
+        var diagnosticsStart = _diagnosticSequence;
         var invocations = new List<ControlScriptInvocationRecord>();
 
         if (!_config.IsArmed || _faulted)
@@ -216,8 +224,19 @@ public sealed class ControlScriptRuntime
 
     private ControlScriptDispatchResult CreateResult(
         IReadOnlyList<ControlScriptInvocationRecord> invocations,
-        int diagnosticsStart) =>
-        new(invocations, _diagnostics.Skip(diagnosticsStart).ToArray());
+        long diagnosticsStart) =>
+        new(invocations, DiagnosticsSince(diagnosticsStart));
+
+    private IReadOnlyList<ControlScriptRuntimeDiagnostic> DiagnosticsSince(long diagnosticsStart)
+    {
+        var added = Math.Min(Math.Max(0, _diagnosticSequence - diagnosticsStart), _diagnostics.Count);
+        if (added == 0)
+            return [];
+
+        var result = new ControlScriptRuntimeDiagnostic[(int)added];
+        _diagnostics.CopyTo(_diagnostics.Count - result.Length, result, 0, result.Length);
+        return result;
+    }
 
     private void LoadEnabledScripts()
     {
@@ -762,8 +781,18 @@ public sealed class ControlScriptRuntime
     private bool IsLayerEnabled(Guid layerId) =>
         _activeLayerId == layerId;
 
-    private void AddDiagnostic(Guid scriptId, Guid? triggerId, ControlScriptDiagnosticStage stage, string message) =>
+    private void AddDiagnostic(Guid scriptId, Guid? triggerId, ControlScriptDiagnosticStage stage, string message)
+    {
+        if (_diagnostics.Count >= MaxRetainedDiagnostics)
+        {
+            var remove = Math.Min(DiagnosticTrimBatch, _diagnostics.Count);
+            _diagnostics.RemoveRange(0, remove);
+            _droppedDiagnostics += remove;
+        }
+
         _diagnostics.Add(new ControlScriptRuntimeDiagnostic(scriptId, triggerId, stage, message));
+        _diagnosticSequence++;
+    }
 
     private static MondValue ToMondLifecycleEvent(MondState state, ControlScriptTriggerKind kind, Guid? deviceInstanceId, Guid? layerId)
     {

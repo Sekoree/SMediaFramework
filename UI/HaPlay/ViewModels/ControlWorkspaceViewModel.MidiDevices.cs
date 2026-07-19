@@ -408,6 +408,12 @@ public partial class ControlWorkspaceViewModel
 
     private void RebuildX32CommandRows(ControlValueCache? cache)
     {
+        // Capture before reading entries. A concurrent writer that advances the version during this rebuild
+        // is then observed on the next timer tick rather than being accidentally marked as rendered.
+        var observedCacheVersion = cache?.Version ?? -1;
+        _x32DeviceCacheKeys.Clear();
+        foreach (var device in _config.Devices)
+            _x32DeviceCacheKeys.TryAdd(device.Id, GetDeviceCacheKeys(device).ToArray());
         var selected = SelectedX32CommandRow;
         X32CommandRows.Clear();
         foreach (var row in BuildX32CommandRows(_config, CompositeControlDeviceProfileRepository.ForProject(_config), cache, X32CommandFilterText))
@@ -417,6 +423,52 @@ public partial class ControlWorkspaceViewModel
                 row.DeviceInstanceId == selected.DeviceInstanceId
                 && string.Equals(row.Address, selected.Address, StringComparison.OrdinalIgnoreCase))
             : null;
+        _lastX32CacheVersion = observedCacheVersion;
+    }
+
+    /// <summary>
+    /// Refreshes only cache text in the common unfiltered view. Configuration/profile/filter changes still
+    /// use <see cref="RebuildX32CommandRows"/>, while a high-rate OSC cache update no longer clears and
+    /// recreates every command row (190 for the built-in X32 profile) four times per second.
+    /// </summary>
+    internal void RefreshX32CommandCacheValues(ControlValueCache? cache)
+    {
+        var observedCacheVersion = cache?.Version ?? -1;
+        if (cache is null || !string.IsNullOrWhiteSpace(X32CommandFilterText))
+        {
+            RebuildX32CommandRows(cache);
+            return;
+        }
+
+        var selected = SelectedX32CommandRow;
+        ControlX32CommandRowViewModel? selectedReplacement = null;
+        for (var i = 0; i < X32CommandRows.Count; i++)
+        {
+            var row = X32CommandRows[i];
+            if (!_x32DeviceCacheKeys.TryGetValue(row.DeviceInstanceId, out var cacheKeys))
+            {
+                // A structural change should normally have rebuilt already. Fall back safely if a caller
+                // refreshes between config replacement and that rebuild.
+                RebuildX32CommandRows(cache);
+                return;
+            }
+
+            var cacheText = TryGetCommandCacheText(
+                cacheKeys, row.Address, cache) ?? "(uncached)";
+            if (string.Equals(cacheText, row.CacheValue, StringComparison.Ordinal))
+                continue;
+
+            var replacement = row with { CacheValue = cacheText };
+            X32CommandRows[i] = replacement;
+            if (selected is not null
+                && row.DeviceInstanceId == selected.DeviceInstanceId
+                && string.Equals(row.Address, selected.Address, StringComparison.OrdinalIgnoreCase))
+                selectedReplacement = replacement;
+        }
+
+        if (selectedReplacement is not null)
+            SelectedX32CommandRow = selectedReplacement;
+        _lastX32CacheVersion = observedCacheVersion;
     }
 
     internal static IReadOnlyList<ControlX32CommandRowViewModel> BuildX32CommandRows(
@@ -769,16 +821,40 @@ public partial class ControlWorkspaceViewModel
     private static string? TryGetCommandCacheText(
         ControlDeviceInstanceConfig device,
         ControlCommandProfile command,
+        ControlValueCache? cache) =>
+        TryGetCommandCacheText(device, command.Address, cache);
+
+    private static string? TryGetCommandCacheText(
+        ControlDeviceInstanceConfig device,
+        string address,
         ControlValueCache? cache)
     {
-        if (cache is null || string.IsNullOrWhiteSpace(command.Address))
+        if (cache is null || string.IsNullOrWhiteSpace(address))
             return null;
 
         foreach (var key in GetDeviceCacheKeys(device))
         {
-            if (!cache.TryGet(new ControlValueCacheKey(key, command.Address), out var entry) || entry.IsStale)
+            if (!cache.TryGet(key, address, out var entry) || entry.IsStale)
                 continue;
 
+            return FormatCachedValue(entry);
+        }
+
+        return null;
+    }
+
+    private static string? TryGetCommandCacheText(
+        IReadOnlyList<string> deviceKeys,
+        string address,
+        ControlValueCache cache)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return null;
+
+        foreach (var key in deviceKeys)
+        {
+            if (!cache.TryGet(key, address, out var entry) || entry.IsStale)
+                continue;
             return FormatCachedValue(entry);
         }
 

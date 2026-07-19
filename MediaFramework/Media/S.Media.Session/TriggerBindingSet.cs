@@ -73,6 +73,9 @@ public sealed record TriggerDispatch(
 
 public sealed class TriggerBindingSet
 {
+    private const int MaxDispatchHistory = 512;
+    private const int DispatchTrimBatch = 64;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<string, TriggerBinding> _bindings = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _lastDispatch = new(StringComparer.Ordinal);
@@ -170,6 +173,8 @@ public sealed class TriggerBindingSet
                 var dispatch = new TriggerDispatch(binding.Id, binding.Action, payload, now);
                 _lastDispatch[binding.Id] = now;
                 _dispatches.Add(dispatch);
+                if (_dispatches.Count >= MaxDispatchHistory + DispatchTrimBatch)
+                    _dispatches.RemoveRange(0, _dispatches.Count - MaxDispatchHistory);
                 dispatched.Add(dispatch);
             }
 

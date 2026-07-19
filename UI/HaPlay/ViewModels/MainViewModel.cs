@@ -1553,12 +1553,14 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Content hash of the project as of the last New / Open / Save - the "clean" baseline the
     /// unsaved-changes check compares against. There's no central dirty flag, so this hash IS the flag.</summary>
     private string _savedProjectHash = string.Empty;
+    private bool _isRaisingDirtyState;
+    private bool _notifiedProjectDirty;
 
     /// <summary>Records the current project state as the clean baseline (call after New / Open / Save).</summary>
     private void MarkProjectClean()
     {
         _savedProjectHash = ProjectHash.Of(BuildProjectSnapshot());
-        NotifyDirtyStateChanged();
+        NotifyDirtyStateChanged(knownProjectDirty: false);
     }
 
     private void MarkProjectDirty()
@@ -1567,16 +1569,16 @@ public partial class MainViewModel : ViewModelBase
         NotifyDirtyStateChanged();
     }
 
-    /// <summary>True when the live project differs from the last-saved baseline. Recomputed on demand (it builds
-    /// a snapshot), so evaluate it at decision points like close - do not bind it in a hot UI path.</summary>
-    public bool IsProjectDirty
+    /// <summary>True when the live project differs from the saved/persisted baseline. During a dirty-state
+    /// notification all dependent bindings share the one precomputed value instead of serializing the entire
+    /// project independently for IsProjectDirty, HasUnsavedChanges, and ProjectTitle.</summary>
+    public bool IsProjectDirty => _isRaisingDirtyState ? _notifiedProjectDirty : EvaluateProjectDirty();
+
+    private bool EvaluateProjectDirty()
     {
-        get
-        {
-            var currentHash = ProjectHash.Of(BuildProjectSnapshot());
-            return !string.Equals(_savedProjectHash, currentHash, StringComparison.Ordinal)
-                   && !_projectPersistence.IsPersisted(CurrentProjectPath, currentHash);
-        }
+        var currentHash = ProjectHash.Of(BuildProjectSnapshot());
+        return !string.Equals(_savedProjectHash, currentHash, StringComparison.Ordinal)
+               && !_projectPersistence.IsPersisted(CurrentProjectPath, currentHash);
     }
 
     /// <summary>Whether closing now would lose work: the document is dirty (or control scripts live only in the
@@ -1585,11 +1587,30 @@ public partial class MainViewModel : ViewModelBase
     public bool HasUnsavedChanges =>
         IsProjectDirty || HasUnsavedScratchScripts || Control.IsSelectedScriptDirty;
 
-    private void NotifyDirtyStateChanged()
+    private bool HasUnsavedChangesFor(bool projectDirty) =>
+        projectDirty || HasUnsavedScratchScripts || Control.IsSelectedScriptDirty;
+
+    /// <summary>Recomputes the project hash once and shares it across all synchronous binding evaluations.
+    /// Returns that project-only dirty value so decision points can avoid immediately hashing a second time.</summary>
+    private bool NotifyDirtyStateChanged(bool? knownProjectDirty = null)
     {
-        OnPropertyChanged(nameof(IsProjectDirty));
-        OnPropertyChanged(nameof(HasUnsavedChanges));
-        OnPropertyChanged(nameof(ProjectTitle));
+        var previousRaising = _isRaisingDirtyState;
+        var previousValue = _notifiedProjectDirty;
+        _notifiedProjectDirty = knownProjectDirty ?? EvaluateProjectDirty();
+        _isRaisingDirtyState = true;
+        try
+        {
+            OnPropertyChanged(nameof(IsProjectDirty));
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            OnPropertyChanged(nameof(ProjectTitle));
+            return _notifiedProjectDirty;
+        }
+        finally
+        {
+            _isRaisingDirtyState = previousRaising;
+            if (previousRaising)
+                _notifiedProjectDirty = previousValue;
+        }
     }
 
     public string ProjectTitle =>

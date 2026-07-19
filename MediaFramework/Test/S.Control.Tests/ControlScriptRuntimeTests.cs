@@ -1556,6 +1556,49 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchManual_BoundsKeepRunningDiagnosticHistory()
+    {
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Always failing script",
+            ScriptPath = "Scripts/main.mnd",
+            FailurePolicy = new ControlScriptFailurePolicy
+            {
+                Mode = ControlScriptFailureMode.KeepRunning,
+                MaxConsecutiveFailures = 1,
+            },
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.Manual,
+                    FunctionName = "fail",
+                },
+            ],
+        };
+        var runtime = CreateRuntime(
+            new ControlSystemConfig { IsArmed = true, Scripts = [script] },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun fail(event, context) {
+                        error("boom");
+                    }
+                    """,
+            });
+
+        ControlScriptDispatchResult last = null!;
+        for (var i = 0; i < 4_200; i++)
+            last = runtime.DispatchManual(script.Id);
+
+        Assert.InRange(runtime.Diagnostics.Count, 1, 4_096);
+        Assert.True(runtime.DroppedDiagnostics > 0);
+        Assert.Single(last.Diagnostics); // trimming the retained history must not hide this dispatch's error
+    }
+
+    [Fact]
     public void DispatchManual_QueuesExtendedMIDIHelpers()
     {
         var script = new ControlScriptConfig

@@ -22,7 +22,7 @@ internal static class MediaRuntime
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.MediaRuntime");
     private static readonly object Gate = new();
     private static readonly List<ModuleDiagnostic> _moduleDiagnostics = [];
-    private static MediaHost? _host;
+    private static volatile MediaHost? _host;
     private static S.Abi.MediaPluginDirectory? _plugins;
     private static S.Media.Compositor.ICompositorRegistry _compositorSurfaces =
         new S.Media.Compositor.CompositorRegistryBuilder().Build();
@@ -61,12 +61,12 @@ internal static class MediaRuntime
                 if (_host is null && _shutdown)
                 {
                     // A late poll/timer touched the registry AFTER Shutdown() released the native runtimes -
-                    // rebuilding resurrects PortAudio/NDI holds that will now leak (nothing disposes the fresh
-                    // host). Rebuild anyway so a straggling teardown path can't crash the exit, but make the
-                    // ordering bug loud: fix the caller to stop before MediaRuntime.Shutdown().
-                    Trace.LogError("MediaRuntime: Registry accessed AFTER Shutdown() - rebuilding a fresh host "
-                                   + "(native runtime holds will leak). Stop the caller before shutdown.");
-                    System.Diagnostics.Debug.Assert(false, "MediaRuntime.Registry accessed after Shutdown()");
+                    // never resurrect PortAudio/NDI holds that no later owner would dispose. This is an ordering
+                    // bug: stop the caller before MediaRuntime.Shutdown().
+                    Trace.LogError("MediaRuntime: Registry accessed after Shutdown(). Stop the caller before shutdown.");
+                    throw new ObjectDisposedException(
+                        nameof(MediaRuntime),
+                        "The media registry has been shut down and cannot be initialized again in this process.");
                 }
 
                 return _host ??= Build();
@@ -157,8 +157,7 @@ internal static class MediaRuntime
     /// Disposes the owning host at app shutdown, releasing the modules' native runtime holds deterministically
     /// (NXT-05 - without this the process-wide registry was never disposed and <c>Pa_Terminate</c>/NDI release
     /// never ran). Idempotent and thread-safe; call <em>after</em> sessions/engines that borrow the registry have
-    /// been torn down. A subsequent <see cref="Registry"/> access would rebuild a fresh host, so only call this on
-    /// the way out.
+    /// been torn down. A subsequent <see cref="Registry"/> access throws, so only call this on the way out.
     /// </summary>
     public static void Shutdown()
     {
@@ -167,7 +166,7 @@ internal static class MediaRuntime
         {
             host = _host;
             _host = null;
-            _shutdown = true; // a later Registry access is an ordering bug - the getter asserts + logs it
+            _shutdown = true; // a later Registry access is an ordering bug - the getter logs + throws
         }
 
         if (host is null)
@@ -213,7 +212,7 @@ internal static class MediaRuntime
         }
 
         lock (Gate)
-            _moduleDiagnostics.Clear(); // fresh per build (a post-shutdown rebuild re-probes)
+            _moduleDiagnostics.Clear();
 
         var surfaceBuilder = new S.Media.Compositor.CompositorRegistryBuilder();
         var host = MediaHost.Build(b =>

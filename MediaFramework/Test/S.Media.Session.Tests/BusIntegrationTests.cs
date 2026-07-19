@@ -146,4 +146,60 @@ public sealed class BusIntegrationTests
         Assert.Equal("Real Title", session.MetadataHub.CurrentItem?.Title);
         Assert.Equal("Real Artist", session.MetadataHub.CurrentItem?.Artist);
     }
+
+    [Fact]
+    public async Task SlowOldMetadataProbe_CannotOverwriteNewerItem()
+    {
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondProbed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(chunks: 2048),
+            metadataProbe: path =>
+            {
+                if (path.EndsWith("first.flac", StringComparison.Ordinal))
+                {
+                    firstEntered.TrySetResult();
+                    releaseFirst.Task.GetAwaiter().GetResult();
+                    return new MediaItemMetadata("Stale First", "Old Artist");
+                }
+
+                secondProbed.TrySetResult();
+                return new MediaItemMetadata("Current Second", "New Artist");
+            });
+        session.LoadDocument(new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("first", 1, "First"),
+                new CueDefinition("second", 2, "Second"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("first", "fake://tracks/first.flac"),
+                new ShowClipBinding("second", "fake://tracks/second.flac"),
+            ],
+            Compositions: [],
+            Routes: []));
+
+        try
+        {
+            await session.FireCueAsync("first");
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await session.FireCueAsync("second");
+            Assert.Equal("second", session.MetadataHub.CurrentItem?.Title);
+
+            releaseFirst.TrySetResult();
+            await secondProbed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var i = 0; i < 100 && session.MetadataHub.CurrentItem?.Artist != "New Artist"; i++)
+                await Task.Delay(10);
+
+            Assert.Equal("Current Second", session.MetadataHub.CurrentItem?.Title);
+            Assert.Equal("New Artist", session.MetadataHub.CurrentItem?.Artist);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
+    }
 }
