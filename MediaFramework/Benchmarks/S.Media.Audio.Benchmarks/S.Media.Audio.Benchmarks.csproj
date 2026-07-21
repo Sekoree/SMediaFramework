@@ -13,6 +13,7 @@
     <ItemGroup>
         <PackageReference Include="BenchmarkDotNet" />
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Routing/S.Media.Routing.csproj" />
     </ItemGroup>
 
 </Project>

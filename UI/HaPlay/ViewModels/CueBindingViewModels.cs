@@ -334,6 +334,16 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     [ObservableProperty]
     private double _chromaKeySpill = 0.1;
 
+    // Brightness/contrast (same retained-while-disabled pattern as chroma key).
+    [ObservableProperty]
+    private bool _colorAdjustEnabled;
+
+    [ObservableProperty]
+    private double _colorAdjustBrightness;
+
+    [ObservableProperty]
+    private double _colorAdjustContrast = 1.0;
+
     /// <summary>Parses <see cref="ChromaKeyColorHex"/> ("#RGB"/"#RRGGBB", leading '#' optional)
     /// into [0,1] RGB; falls back to pure green on malformed input so a half-typed hex never
     /// produces a surprise key color.</summary>
@@ -454,7 +464,21 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         VideoFxEnabled = VideoFxEnabled,
         ChromaKey = BuildChromaKeyModel(),
         ChromaKeyEnabled = ChromaKeyEnabled,
+        ColorAdjust = BuildColorAdjustModel(),
+        ColorAdjustEnabled = ColorAdjustEnabled,
     };
+
+    private CueColorAdjust? BuildColorAdjustModel()
+    {
+        // Same untouched-stays-null contract as BuildChromaKeyModel.
+        if (!ColorAdjustEnabled && ColorAdjustBrightness == 0.0 && ColorAdjustContrast == 1.0)
+            return null;
+        return new CueColorAdjust
+        {
+            Brightness = Math.Clamp(ColorAdjustBrightness, -1.0, 1.0),
+            Contrast = Math.Clamp(ColorAdjustContrast, 0.0, 4.0),
+        };
+    }
 
     private CueChromaKey? BuildChromaKeyModel()
     {
@@ -502,6 +526,7 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
             VideoFx = model.VideoFx,
             VideoFxEnabled = model.VideoFxEnabled,
             ChromaKeyEnabled = model.ChromaKeyEnabled,
+            ColorAdjustEnabled = model.ColorAdjustEnabled,
         };
         if (model.ChromaKey is { } chroma)
         {
@@ -509,6 +534,11 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
             vm.ChromaKeySimilarity = chroma.Similarity;
             vm.ChromaKeySmoothness = chroma.Smoothness;
             vm.ChromaKeySpill = chroma.SpillSuppression;
+        }
+        if (model.ColorAdjust is { } adjust)
+        {
+            vm.ColorAdjustBrightness = adjust.Brightness;
+            vm.ColorAdjustContrast = adjust.Contrast;
         }
         vm.SetDestRect(
             model.DestX,

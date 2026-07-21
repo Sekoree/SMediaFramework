@@ -319,7 +319,12 @@ public sealed unsafe class MiniAudioOutput :
                     Interlocked.Add(ref self._underrunSamples, underrunFrames);
             }
 
-            Interlocked.Add(ref self._playedSamples, frameCount);
+            // Count only CONSUMED frames, matching PortAudioOutput: _playedSamples drives
+            // ElapsedSinceStart (the A/V master clock when this output paces playback), and
+            // counting underrun silence as played skipped the clock forward past the submitted
+            // content on every dropout - permanent lip-sync drift on the miniaudio backend.
+            if (toRead > 0)
+                Interlocked.Add(ref self._playedSamples, toRead / self._format.Channels);
         }
         catch (Exception ex)
         {

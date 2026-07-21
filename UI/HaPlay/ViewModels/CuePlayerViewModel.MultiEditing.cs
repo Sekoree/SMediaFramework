@@ -500,6 +500,9 @@ public partial class CuePlayerViewModel
             case nameof(CueVideoPlacementViewModel.ChromaKeySimilarity): target.ChromaKeySimilarity = source.ChromaKeySimilarity; break;
             case nameof(CueVideoPlacementViewModel.ChromaKeySmoothness): target.ChromaKeySmoothness = source.ChromaKeySmoothness; break;
             case nameof(CueVideoPlacementViewModel.ChromaKeySpill): target.ChromaKeySpill = source.ChromaKeySpill; break;
+            case nameof(CueVideoPlacementViewModel.ColorAdjustEnabled): target.ColorAdjustEnabled = source.ColorAdjustEnabled; break;
+            case nameof(CueVideoPlacementViewModel.ColorAdjustBrightness): target.ColorAdjustBrightness = source.ColorAdjustBrightness; break;
+            case nameof(CueVideoPlacementViewModel.ColorAdjustContrast): target.ColorAdjustContrast = source.ColorAdjustContrast; break;
         }
     }
 

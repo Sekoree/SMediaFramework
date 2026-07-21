@@ -529,6 +529,22 @@ public sealed record CueVideoPlacement
 
     /// <summary>Whether <see cref="ChromaKey"/> is active.</summary>
     public bool ChromaKeyEnabled { get; init; }
+
+    /// <summary>Optional brightness/contrast for this layer. Same retained-while-disabled pattern
+    /// as <see cref="ChromaKey"/>. Null on older cues.</summary>
+    public CueColorAdjust? ColorAdjust { get; init; }
+
+    /// <summary>Whether <see cref="ColorAdjust"/> is active.</summary>
+    public bool ColorAdjustEnabled { get; init; }
+}
+
+/// <summary>Brightness/contrast settings on a video placement. Brightness is an additive offset in
+/// [-1, 1] (0 = unchanged); contrast multiplies around mid-gray (1 = unchanged, up to 4).</summary>
+public sealed record CueColorAdjust
+{
+    public double Brightness { get; init; }
+
+    public double Contrast { get; init; } = 1.0;
 }
 
 /// <summary>Chroma-key ("green screen") settings on a video placement. Semantics (and defaults)

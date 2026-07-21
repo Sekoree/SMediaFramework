@@ -33,7 +33,9 @@ public sealed record ShowVideoPlacement(
     double CropBottom = 0,
     ClipOutputMappingSpec? VideoFx = null,
     // Optional chroma key ("green screen") for this placement's layer; null = disabled.
-    Compositor.ChromaKeySettings? ChromaKey = null);
+    Compositor.ChromaKeySettings? ChromaKey = null,
+    // Optional brightness/contrast for this placement's layer; null = disabled.
+    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null);
 
 /// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
 /// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).
@@ -252,4 +254,6 @@ public sealed record ShowDocument(
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(ShowDocument))]
+// Standalone root for the geometry-effect registry factory (OutputMappingGeometryEffect.FromJson).
+[JsonSerializable(typeof(ClipOutputMappingSpec))]
 internal partial class ShowDocumentJsonContext : JsonSerializerContext;

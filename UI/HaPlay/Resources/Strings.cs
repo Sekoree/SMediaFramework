@@ -1235,6 +1235,12 @@ public static class Strings
     public static string MappingWarpSectionLabel => Get(nameof(MappingWarpSectionLabel));
     public static string MappingWarpEnableLabel => Get(nameof(MappingWarpEnableLabel));
     public static string ChromaKeySectionLabel => Get(nameof(ChromaKeySectionLabel));
+    public static string ColorAdjustSectionLabel => Get(nameof(ColorAdjustSectionLabel));
+    public static string ColorAdjustEnableLabel => Get(nameof(ColorAdjustEnableLabel));
+    public static string ColorAdjustBrightnessLabel => Get(nameof(ColorAdjustBrightnessLabel));
+    public static string ColorAdjustBrightnessTooltip => Get(nameof(ColorAdjustBrightnessTooltip));
+    public static string ColorAdjustContrastLabel => Get(nameof(ColorAdjustContrastLabel));
+    public static string ColorAdjustContrastTooltip => Get(nameof(ColorAdjustContrastTooltip));
     public static string ChromaKeyEnableLabel => Get(nameof(ChromaKeyEnableLabel));
     public static string ChromaKeyColorLabel => Get(nameof(ChromaKeyColorLabel));
     public static string ChromaKeyColorTooltip => Get(nameof(ChromaKeyColorTooltip));

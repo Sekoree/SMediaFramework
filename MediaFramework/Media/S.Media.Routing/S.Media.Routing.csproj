@@ -27,6 +27,7 @@
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.Players" />
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
+        <InternalsVisibleTo Include="S.Media.Audio.Benchmarks" />
     </ItemGroup>
 
 

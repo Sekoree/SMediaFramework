@@ -96,13 +96,22 @@ internal static class MediaRuntime
         {
             b.AddAudioEffect("gain", static config => S.Media.Routing.GainAudioEffect.FromJson(config));
             b.AddVideoEffect("grayscale", static _ => new S.Media.Routing.GrayscaleVideoEffect());
-            // Chroma key registers on BOTH stages of the unified catalog: as a compositor layer
-            // effect (GPU, per cue placement) and - through the CPU-kernel bridge - as an output
-            // bus effect insertable per output line in the I/O workspace.
+            // Color-stage layer effects register on BOTH stages of the unified catalog: as
+            // compositor layer effects (GPU, per cue placement) and - through the CPU-kernel
+            // bridge - as output bus effects insertable per output line in the I/O workspace.
             b.AddLayerEffect("chroma-key", static config =>
                 S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config));
             b.AddVideoEffect("chroma-key", static config => new S.Media.Routing.LayerEffectVideoBusAdapter(
                 [S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config)]));
+            b.AddLayerEffect("brightness-contrast", static config =>
+                S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson(config));
+            b.AddVideoEffect("brightness-contrast", static config => new S.Media.Routing.LayerEffectVideoBusAdapter(
+                [S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson(config)]));
+            // Geometry stage: the built-in mapping/warp registers from a serialized
+            // ClipOutputMappingSpec config (cue placements wire it directly via typed specs;
+            // this kind exists for plugins/remote surfaces enumerating the catalog).
+            b.AddGeometryEffect("mapping", static config =>
+                S.Media.Session.OutputMappingGeometryEffect.FromJson(config));
             if (RuntimeModules.IsProjectMAvailable)
             {
                 S.Media.Visualizer.ProjectM.ProjectMModule.Register(b);

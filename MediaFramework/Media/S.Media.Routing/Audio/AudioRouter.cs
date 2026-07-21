@@ -1489,8 +1489,19 @@ public sealed partial class AudioRouter : IDisposable
                 foreach (var (_, output) in snapshot.Outputs)
                     Array.Clear(output.Pump.WorkingBuffer);
 
-                foreach (var resolved in snapshot.Routes)
+                // Mix through the cached plan: single routes take the existing ApplyRoute path;
+                // co-routed single-cell (matrix) routes were fused into one dense pass per
+                // (source, output) pair. The plan rebuilds only when the route array changes.
+                EnsureMixPlan(snapshot.Routes);
+                foreach (var entry in _mixPlan)
                 {
+                    if (entry.Fused is { } group)
+                    {
+                        ApplyFusedMatrixGroup(group, _chunkSamples);
+                        continue;
+                    }
+
+                    var resolved = entry.Single!;
                     var route = resolved.Route;
                     var src = resolved.Source;
                     var output = resolved.Output;

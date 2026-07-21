@@ -70,6 +70,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
         _compositor = compositor;
         _disposeCompositorOnDispose = disposeCompositorOnDispose;
+        // This source streams composites continuously, so trade one frame of output latency for
+        // an async (non-stalling) GPU readback when the backend supports it.
+        if (compositor is IPipelinedReadbackVideoCompositor pipelined)
+            pipelined.PipelinedSingleOutputReadback = true;
         _output = output;
         _native = [output.PixelFormat];
         _ptsStep = DerivePeriod(output.FrameRate);

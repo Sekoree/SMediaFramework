@@ -2541,6 +2541,35 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void VideoPlacement_ColorAdjust_RoundTripsAndMapsOnlyWhenEnabled()
+    {
+        var vm = new CueVideoPlacementViewModel
+        {
+            ColorAdjustEnabled = true,
+            ColorAdjustBrightness = 0.2,
+            ColorAdjustContrast = 1.5,
+        };
+
+        var model = vm.ToModel();
+        var adjust = Assert.IsType<CueColorAdjust>(model.ColorAdjust);
+        Assert.Equal(0.2, adjust.Brightness);
+        Assert.Equal(1.5, adjust.Contrast);
+
+        var restored = CueVideoPlacementViewModel.FromModel(model);
+        Assert.True(restored.ColorAdjustEnabled);
+        Assert.Equal(0.2, restored.ColorAdjustBrightness);
+
+        var mapped = Playback.HaPlayShowMapper.ToColorAdjustSettings(model);
+        Assert.NotNull(mapped);
+        Assert.Equal(1.5f, mapped.Value.Contrast);
+        Assert.Null(Playback.HaPlayShowMapper.ToColorAdjustSettings(
+            model with { ColorAdjustEnabled = false }));
+
+        // Untouched placement stays null on the model (old-file round-trip contract).
+        Assert.Null(new CueVideoPlacementViewModel().ToModel().ColorAdjust);
+    }
+
+    [Fact]
     public void ShowMapper_ChromaKey_MapsOnlyWhenEnabled()
     {
         var placement = new CueVideoPlacement

@@ -56,7 +56,7 @@ namespace S.Media.Compositor.OpenGL;
 /// be embedded inside another output's render path without trashing host state.
 /// </para>
 /// </remarks>
-public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost
+public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost, IPipelinedReadbackVideoCompositor
 {
     // Surfaces this compositor has ConfigureGl'd, stamped with the canvas format they were configured
     // for - CompositeWithSurfaces (re)configures a surface on first sight and after a canvas change,
@@ -100,6 +100,19 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         public required VideoFormat Format { get; init; }
         public required int Stride { get; init; }
         public required int ByteCount { get; init; }
+    }
+
+    /// <summary>Async-readback state for the SINGLE-output paths (<see cref="Composite"/> /
+    /// <see cref="CompositeWithSurfaces"/>), mirroring the multi-output PBO pipeline: one
+    /// double-buffered slot, one in-flight readback, keyed on the read shape so warp toggles
+    /// and reconfigures rebuild it.</summary>
+    private sealed class SinglePboReadbackState(VideoFormat format, int stride, int byteCount)
+    {
+        public VideoFormat Format { get; } = format;
+        public int Stride { get; } = stride;
+        public int ByteCount { get; } = byteCount;
+        public PboOutputSlot Slot { get; } = new();
+        public PboReadback? Pending { get; set; }
     }
 
     private volatile WarpPassState? _warpPass;
@@ -186,6 +199,18 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     private readonly ConcurrentQueue<Action> _deferredExternalImageReleases = new();
     private PboReadbackState? _multiPboReadback;
     private bool _multiPboReadbackUnavailable;
+    private SinglePboReadbackState? _singlePboReadback;
+    private bool _singlePboReadbackUnavailable;
+    private object? _singlePboWarpIdentity;
+
+    /// <inheritdoc />
+    /// <remarks>Off by default: single-shot consumers must see the frame they just composited.
+    /// <see cref="VideoCompositorSource"/> (continuous streaming) opts in.</remarks>
+    public bool PipelinedSingleOutputReadback { get; set; }
+    /// <summary>Escape hatch for latency-critical hosts: forces the zero-latency blocking
+    /// readback on the single-output paths (at the cost of a GPU pipeline stall per frame).</summary>
+    private static readonly bool SinglePboReadbackDisabledByEnv =
+        Environment.GetEnvironmentVariable("MF_COMPOSITOR_SINGLE_SYNC_READBACK") == "1";
     private bool _configured;
     private bool _disposed;
 
@@ -286,7 +311,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                 ReleaseMeshBuffers();
             }
 
-            return ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+            return ReadCurrentFramebufferPipelined(frameFormat, readW, readH, readStride, readBytes, presentationTime);
         }
         finally
         {
@@ -602,7 +627,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             }
 
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
-            return ReadCurrentFramebuffer(_output, _output.Width, _output.Height, _outputStride, _outputByteCount, presentationTime);
+            return ReadCurrentFramebufferPipelined(_output, _output.Width, _output.Height, _outputStride, _outputByteCount, presentationTime);
         }
         finally
         {
@@ -838,6 +863,94 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
     }
 
+    /// <summary>
+    /// Single-output readback through the same double-buffered PBO + fence pipeline as the
+    /// multi-output path: returns the PREVIOUS composite's pixels (stamped with the current
+    /// presentation time) while this composite's readback drains asynchronously - one frame of
+    /// output latency instead of a full CPU↔GPU pipeline stall every frame. Warm-up (first call,
+    /// or after a shape change / driver fallback) reads synchronously AND issues the first async
+    /// readback, so every call returns a frame. Driver PBO failures permanently degrade this
+    /// compositor instance to the blocking path, mirroring the multi-output fallback;
+    /// <c>MF_COMPOSITOR_SINGLE_SYNC_READBACK=1</c> forces the blocking path up front.
+    /// </summary>
+    private VideoFrame ReadCurrentFramebufferPipelined(
+        VideoFormat frameFormat,
+        int readW,
+        int readH,
+        int readStride,
+        int readBytes,
+        TimeSpan presentationTime)
+    {
+        if (!PipelinedSingleOutputReadback || SinglePboReadbackDisabledByEnv || _singlePboReadbackUnavailable)
+            return ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+
+        // A warp-pass swap changes WHAT the canvas shows even when the read shape stays identical;
+        // drop the in-flight readback so the frame after a live layout change is never stale
+        // (warm-up re-reads synchronously). Reference identity is enough: SetWarpPass snapshots.
+        var warpIdentity = (object?)_warpPass;
+        if (!ReferenceEquals(warpIdentity, _singlePboWarpIdentity))
+        {
+            DisposeSinglePboReadback();
+            _singlePboWarpIdentity = warpIdentity;
+        }
+
+        try
+        {
+            var state = _singlePboReadback;
+            if (state is null
+                || state.Format != frameFormat
+                || state.Stride != readStride
+                || state.ByteCount != readBytes)
+            {
+                DisposeSinglePboReadback();
+                state = new SinglePboReadbackState(frameFormat, readStride, readBytes);
+                _singlePboReadback = state;
+            }
+
+            var previous = state.Pending;
+            state.Pending = null;
+
+            if (previous is null)
+            {
+                // Warm-up: synchronous read for THIS frame plus the first async issue for the next.
+                var warmFrame = ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+                try
+                {
+                    state.Pending = IssuePboReadback(state.Slot, frameFormat, readStride, readBytes);
+                }
+                catch
+                {
+                    warmFrame.Dispose();
+                    throw;
+                }
+
+                return warmFrame;
+            }
+
+            var current = IssuePboReadback(state.Slot, frameFormat, readStride, readBytes);
+            try
+            {
+                var frame = CompletePboReadback(previous, presentationTime);
+                state.Pending = current;
+                return frame;
+            }
+            catch
+            {
+                DisposePendingReadback(current);
+                throw;
+            }
+        }
+        catch (PboReadbackException)
+        {
+            _singlePboReadbackUnavailable = true;
+            DisposeSinglePboReadback();
+            // The canvas/warp FBO still holds this composite's pixels; unbind any half-bound pack
+            // buffer and degrade to the blocking read so this frame (and all following) still emit.
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, 0);
+            return ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+        }
+    }
+
     private unsafe VideoFrame ReadCurrentFramebuffer(
         VideoFormat frameFormat,
         int readW,
@@ -978,6 +1091,36 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             if (buffer is not null)
                 ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
         }
+    }
+
+    private void DisposePendingReadback(PboReadback? readback)
+    {
+        if (readback?.Sync is { } sync && sync != nint.Zero)
+        {
+            _gl.DeleteSync(sync);
+            readback.Sync = nint.Zero;
+        }
+    }
+
+    private void DisposeSinglePboReadback()
+    {
+        var state = _singlePboReadback;
+        if (state is null)
+            return;
+
+        DisposePendingReadback(state.Pending);
+        state.Pending = null;
+        for (var i = 0; i < state.Slot.Buffers.Length; i++)
+        {
+            var buffer = state.Slot.Buffers[i];
+            if (buffer == 0)
+                continue;
+            _gl.DeleteBuffer(buffer);
+            state.Slot.Buffers[i] = 0;
+            state.Slot.Capacities[i] = 0;
+        }
+
+        _singlePboReadback = null;
     }
 
     private void DisposeMultiPboReadback()
@@ -1848,6 +1991,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
         _yuvIntermediates.Clear();
         DisposeMultiPboReadback();
+        DisposeSinglePboReadback();
         if (_fboTexture != 0) { _gl.DeleteTexture(_fboTexture); _fboTexture = 0; }
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }

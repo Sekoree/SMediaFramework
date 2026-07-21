@@ -9,7 +9,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Compositor;
-using S.Media.Compositor.Effects;
+using S.Media.Core.Video.Effects;
 
 namespace S.Media.Session;
 
@@ -1805,14 +1805,24 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.SourceCrop = crop;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
-            RawSlot.Effects = BuildLayerEffects(_placement.ChromaKey);
+            RawSlot.Effects = BuildLayerEffects(_placement);
         }
 
-        /// <summary>Effect chain for this placement. Chroma key is currently the only
-        /// placement-driven effect; hosts driving <c>Slot.Effects</c> directly own the whole list.</summary>
-        private static IReadOnlyList<S.Media.Core.Video.Effects.VideoLayerEffect>? BuildLayerEffects(
-            ChromaKeySettings? chromaKey) =>
-            chromaKey is { } key ? [S.Media.Compositor.Effects.ChromaKeyVideoEffect.Create(key)] : null;
+        /// <summary>Color-stage effect chain for this placement. Chroma key runs FIRST (keying must
+        /// see the original colors - a brightness shift would move pixels off the key), then
+        /// brightness/contrast on the survivors. Hosts driving <c>Slot.Effects</c> directly own
+        /// the whole list.</summary>
+        private static IReadOnlyList<VideoLayerEffect>? BuildLayerEffects(VideoPlacementSpec placement)
+        {
+            if (placement is { ChromaKey: null, ColorAdjust: null })
+                return null;
+            var effects = new List<VideoLayerEffect>(2);
+            if (placement.ChromaKey is { } key)
+                effects.Add(S.Media.Compositor.Effects.ChromaKeyVideoEffect.Create(key));
+            if (placement.ColorAdjust is { } adjust)
+                effects.Add(S.Media.Compositor.Effects.BrightnessContrastVideoEffect.Create(adjust));
+            return effects;
+        }
 
         private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx) =>
             ApplyGeometryPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
@@ -1863,7 +1873,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.SourceCrop = RectNormalized.Full;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
-            RawSlot.Effects = BuildLayerEffects(_placement.ChromaKey);
+            RawSlot.Effects = BuildLayerEffects(_placement);
         }
 
         private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)

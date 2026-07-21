@@ -749,6 +749,26 @@
                     <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
                                    Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
                   </WrapPanel>
+
+                  <!-- Second color-stage effect: brightness/contrast (chained after the key). -->
+                  <TextBlock Text="{x:Static res:Strings.ColorAdjustSectionLabel}" FontWeight="SemiBold" Margin="0,6,0,0" />
+                  <CheckBox Content="{x:Static res:Strings.ColorAdjustEnableLabel}"
+                            IsChecked="{Binding SelectedVideoPlacement.ColorAdjustEnabled, Mode=TwoWay}" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4"
+                             IsEnabled="{Binding SelectedVideoPlacement.ColorAdjustEnabled}">
+                    <TextBlock Text="{x:Static res:Strings.ColorAdjustBrightnessLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ColorAdjustBrightnessTooltip}" />
+                    <Slider Width="110" Minimum="-1" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
+                    <NumericUpDown Width="92" Minimum="-1" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ColorAdjustContrastLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ColorAdjustContrastTooltip}" />
+                    <Slider Width="110" Minimum="0" Maximum="2" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
+                    <NumericUpDown Width="92" Minimum="0" Maximum="4" Increment="0.01" FormatString="0.00"
+                                   Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
+                  </WrapPanel>
                 </StackPanel>
               </StackPanel>
             </ScrollViewer>

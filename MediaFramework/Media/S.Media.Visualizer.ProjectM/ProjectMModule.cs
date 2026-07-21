@@ -59,7 +59,7 @@ public static class ProjectMModule
             Silk.NET.OpenGL.GL gl,
             uint targetFbo,
             TimeSpan masterTime,
-            Compositor.LayerTransform2D transform,
+            Core.Video.LayerTransform2D transform,
             float opacity) => inner.Render(gl, targetFbo, masterTime, transform, opacity);
 
         public void ReleaseGl(Silk.NET.OpenGL.GL gl)

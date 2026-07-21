@@ -1067,7 +1067,8 @@ public sealed class ShowSession : IAsyncDisposable
                 CropRight: p.CropRight, CropBottom: p.CropBottom,
                 RotationDegrees: p.RotationDegrees,
                 VideoFx: p.VideoFx,
-                ChromaKey: p.ChromaKey);
+                ChromaKey: p.ChromaKey,
+                ColorAdjust: p.ColorAdjust);
 
     /// <summary>Live-edit the active cue's composition placement while it plays (the GUI's
     /// <c>UpdateActiveCueVideoPlacement</c>) - repositions / re-opacities its layer. Returns false when the

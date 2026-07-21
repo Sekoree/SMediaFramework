@@ -71,6 +71,60 @@ public sealed class EffectCatalogTests
     }
 
     [Fact]
+    public void BusRegistry_CreatesGeometryEffectFromSpecJson()
+    {
+        var registry = BusRegistryBuilder.Build(b =>
+            b.AddGeometryEffect("mapping", static config => OutputMappingGeometryEffect.FromJson(config)));
+
+        Assert.Contains("mapping", registry.GeometryEffectKinds);
+        const string specJson = """
+            {
+              "Sections": [
+                {
+                  "Id": "a", "Enabled": true,
+                  "SrcX": 0, "SrcY": 0, "SrcWidth": 0.5, "SrcHeight": 1,
+                  "DestX": 0.5, "DestY": 0, "DestWidth": 0.5, "DestHeight": 1
+                }
+              ],
+              "OutputWidth": 640,
+              "OutputHeight": 360
+            }
+            """;
+        Assert.True(registry.TryCreateGeometryEffect("mapping", specJson, out var geometry));
+        var source = new VideoFormat(1280, 720, PixelFormat.Bgra32, new Rational(30, 1));
+        Assert.Equal(640, geometry.ResolveOutputFormat(source).Width);
+        Assert.Single(geometry.ResolveSections(source.Width, source.Height, RectNormalized.Full));
+
+        // No meaningful identity geometry: missing/empty config fails creation instead of
+        // silently splitting into nothing.
+        Assert.False(registry.TryCreateGeometryEffect("mapping", null, out _));
+        Assert.False(registry.TryCreateGeometryEffect("mapping", """{"Sections":[]}""", out _));
+    }
+
+    [Fact]
+    public void BrightnessContrast_CpuKernel_MatchesFormula()
+    {
+        var effect = BrightnessContrastVideoEffect.FromJson("""{"brightness":0.1,"contrast":2.0}""");
+        var kernel = effect.CpuKernel;
+        Assert.NotNull(kernel);
+
+        float r = 0.25f, g = 0.5f, b = 0.75f, a = 1f;
+        kernel.Apply(ref r, ref g, ref b, ref a);
+        // (v - 0.5) * 2 + 0.5 + 0.1, clamped.
+        Assert.Equal(0.1f, r, precision: 5);
+        Assert.Equal(0.6f, g, precision: 5);
+        Assert.Equal(1f, b, precision: 5);
+        Assert.Equal(1f, a);
+
+        // Malformed config → identity.
+        var identity = BrightnessContrastVideoEffect.FromJson("{oops");
+        float ir = 0.3f, ig = 0.3f, ib = 0.3f, ia = 0.5f;
+        identity.CpuKernel!.Apply(ref ir, ref ig, ref ib, ref ia);
+        Assert.Equal(0.3f, ir, precision: 5);
+        Assert.Equal(0.5f, ia);
+    }
+
+    [Fact]
     public void OutputMappingGeometryEffect_MatchesRawResolver()
     {
         var spec = new ClipOutputMappingSpec(

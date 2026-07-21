@@ -350,7 +350,8 @@ public static class HaPlayShowMapper
         placement.CropRight,
         placement.CropBottom,
         placement.VideoFxEnabled ? ToClipOutputMapping(placement.VideoFx) : null,
-        ToChromaKeySettings(placement));
+        ToChromaKeySettings(placement),
+        ToColorAdjustSettings(placement));
 
     /// <summary>Maps the placement's chroma key to the framework settings; null while disabled
     /// (settings are retained on the model but must not key the layer).</summary>
@@ -359,6 +360,14 @@ public static class HaPlayShowMapper
             ? new S.Media.Compositor.ChromaKeySettings(
                 (float)key.KeyR, (float)key.KeyG, (float)key.KeyB,
                 (float)key.Similarity, (float)key.Smoothness, (float)key.SpillSuppression)
+            : null;
+
+    /// <summary>Maps the placement's brightness/contrast to the framework settings; null while
+    /// disabled (settings retained on the model but must not alter the layer).</summary>
+    public static S.Media.Compositor.Effects.BrightnessContrastSettings? ToColorAdjustSettings(CueVideoPlacement placement) =>
+        placement is { ColorAdjustEnabled: true, ColorAdjust: { } adjust }
+            ? new S.Media.Compositor.Effects.BrightnessContrastSettings(
+                (float)adjust.Brightness, (float)adjust.Contrast)
             : null;
 
     /// <summary>Maps a persisted HaPlay warp/FX model to the session runtime representation.</summary>

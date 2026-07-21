@@ -92,7 +92,9 @@ public sealed record VideoPlacementSpec(
     // by the normal destination rectangle and fit mode so existing layout controls keep their meaning.
     ClipOutputMappingSpec? VideoFx = null,
     // Optional chroma key ("green screen") applied to the placed layer; null = disabled.
-    Compositor.ChromaKeySettings? ChromaKey = null);
+    Compositor.ChromaKeySettings? ChromaKey = null,
+    // Optional brightness/contrast applied to the placed layer; null = disabled.
+    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null);
 
 /// <summary>
 /// What to open and how the host intends to route it. The standby engine owns the open/seek/hold

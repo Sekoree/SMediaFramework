@@ -55,6 +55,15 @@ public class MatrixMixBenchmarks
             cell.ApplyAdditive(_src, Channels, _dst, SamplesPerChannel);
     }
 
+    /// <summary>The shipped fused kernel (AudioRouter.ApplyFusedMatrixSettled) - what the run
+    /// loop now executes for co-routed matrix cells instead of PerCellRoutes.</summary>
+    [Benchmark]
+    public void FusedKernelShipped()
+    {
+        Array.Clear(_dst);
+        S.Media.Routing.AudioRouter.ApplyFusedMatrixSettled(_src, Channels, _dst, Channels, _gains, SamplesPerChannel);
+    }
+
     [Benchmark]
     public void FusedScalar()
     {

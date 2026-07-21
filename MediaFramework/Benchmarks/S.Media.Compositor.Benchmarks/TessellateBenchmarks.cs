@@ -1,6 +1,7 @@
 using System.Numerics;
 using BenchmarkDotNet.Attributes;
 using S.Media.Compositor;
+using S.Media.Core.Video;
 
 namespace S.Media.Compositor.Benchmarks;
 

@@ -33,6 +33,13 @@ public interface IBusRegistryBuilder
     /// <see cref="AddVideoEffect"/>'s per-output CPU bus effects: layer effects run inside the
     /// composite pass before blending.</summary>
     IBusRegistryBuilder AddLayerEffect(string kind, Func<string?, VideoLayerEffect> factory);
+
+    /// <summary>Register a GEOMETRY-stage layer effect factory (splitting/warp - see
+    /// <see cref="IVideoLayerGeometryEffect"/>): resolves the section list a layer is drawn as.
+    /// Unlike the color stage, geometry runs in the vertex domain (one draw per section).
+    /// A factory should throw on unusable config (there is no meaningful identity geometry) -
+    /// <see cref="IBusRegistry.TryCreateGeometryEffect"/> then reports false.</summary>
+    IBusRegistryBuilder AddGeometryEffect(string kind, Func<string?, IVideoLayerGeometryEffect> factory);
 }
 
 /// <summary>Immutable resolved bus capabilities.</summary>
@@ -46,6 +53,8 @@ public interface IBusRegistry
 
     IReadOnlyCollection<string> LayerEffectKinds { get; }
 
+    IReadOnlyCollection<string> GeometryEffectKinds { get; }
+
     bool TryCreateAudioEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IAudioBusEffect effect);
 
     bool TryCreateVideoEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IVideoBusEffect effect);
@@ -53,6 +62,8 @@ public interface IBusRegistry
     bool TryCreateVisualSource(string kind, VisualSourceCreateArgs args, [MaybeNullWhen(false)] out IAudioVisualSource source);
 
     bool TryCreateLayerEffect(string kind, string? configJson, [MaybeNullWhen(false)] out VideoLayerEffect effect);
+
+    bool TryCreateGeometryEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IVideoLayerGeometryEffect effect);
 }
 
 /// <summary>Mutable builder for an <see cref="IBusRegistry"/>.</summary>
@@ -62,6 +73,7 @@ public sealed class BusRegistryBuilder : IBusRegistryBuilder
     private readonly Dictionary<string, Func<string?, IVideoBusEffect>> _video = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<VisualSourceCreateArgs, IAudioVisualSource>> _visual = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<string?, VideoLayerEffect>> _layer = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Func<string?, IVideoLayerGeometryEffect>> _geometry = new(StringComparer.OrdinalIgnoreCase);
 
     public IBusRegistryBuilder AddAudioEffect(string kind, Func<string?, IAudioBusEffect> factory)
     {
@@ -95,7 +107,15 @@ public sealed class BusRegistryBuilder : IBusRegistryBuilder
         return this;
     }
 
-    public IBusRegistry Build() => new BusRegistry(_audio, _video, _visual, _layer);
+    public IBusRegistryBuilder AddGeometryEffect(string kind, Func<string?, IVideoLayerGeometryEffect> factory)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(kind);
+        ArgumentNullException.ThrowIfNull(factory);
+        _geometry[kind] = factory;
+        return this;
+    }
+
+    public IBusRegistry Build() => new BusRegistry(_audio, _video, _visual, _layer, _geometry);
 
     public static IBusRegistry Build(Action<IBusRegistryBuilder> configure)
     {
@@ -110,7 +130,8 @@ internal sealed class BusRegistry(
     Dictionary<string, Func<string?, IAudioBusEffect>> audio,
     Dictionary<string, Func<string?, IVideoBusEffect>> video,
     Dictionary<string, Func<VisualSourceCreateArgs, IAudioVisualSource>> visual,
-    Dictionary<string, Func<string?, VideoLayerEffect>> layer) : IBusRegistry
+    Dictionary<string, Func<string?, VideoLayerEffect>> layer,
+    Dictionary<string, Func<string?, IVideoLayerGeometryEffect>> geometry) : IBusRegistry
 {
     private readonly Dictionary<string, Func<string?, IAudioBusEffect>> _audio =
         new(audio, StringComparer.OrdinalIgnoreCase);
@@ -120,6 +141,8 @@ internal sealed class BusRegistry(
         new(visual, StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<string?, VideoLayerEffect>> _layer =
         new(layer, StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Func<string?, IVideoLayerGeometryEffect>> _geometry =
+        new(geometry, StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyCollection<string> AudioEffectKinds => _audio.Keys;
 
@@ -128,6 +151,8 @@ internal sealed class BusRegistry(
     public IReadOnlyCollection<string> VisualSourceKinds => _visual.Keys;
 
     public IReadOnlyCollection<string> LayerEffectKinds => _layer.Keys;
+
+    public IReadOnlyCollection<string> GeometryEffectKinds => _geometry.Keys;
 
     public bool TryCreateAudioEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IAudioBusEffect effect)
     {
@@ -163,6 +188,16 @@ internal sealed class BusRegistry(
     {
         effect = null;
         if (!_layer.TryGetValue(kind, out var factory))
+            return false;
+        try { effect = factory(configJson); }
+        catch { return false; }
+        return effect is not null;
+    }
+
+    public bool TryCreateGeometryEffect(string kind, string? configJson, [MaybeNullWhen(false)] out IVideoLayerGeometryEffect effect)
+    {
+        effect = null;
+        if (!_geometry.TryGetValue(kind, out var factory))
             return false;
         try { effect = factory(configJson); }
         catch { return false; }

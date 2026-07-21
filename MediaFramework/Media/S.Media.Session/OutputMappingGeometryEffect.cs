@@ -1,5 +1,5 @@
 using S.Media.Compositor;
-using S.Media.Compositor.Effects;
+using S.Media.Core.Video.Effects;
 using S.Media.Core.Video;
 
 namespace S.Media.Session;
@@ -28,5 +28,23 @@ public sealed class OutputMappingGeometryEffect(ClipOutputMappingSpec spec) : IV
         }
 
         return sections;
+    }
+
+    /// <summary>
+    /// Registry factory (<c>IBusRegistry.AddGeometryEffect</c>): builds the effect from a
+    /// serialized <see cref="ClipOutputMappingSpec"/> JSON blob. Throws on missing/unusable
+    /// config per the geometry-stage contract - there is no meaningful identity geometry, so
+    /// <c>TryCreateGeometryEffect</c> reports false instead of silently splitting into nothing.
+    /// </summary>
+    public static OutputMappingGeometryEffect FromJson(string? configJson)
+    {
+        if (string.IsNullOrWhiteSpace(configJson))
+            throw new FormatException("mapping geometry effect requires a ClipOutputMappingSpec JSON config.");
+        var spec = System.Text.Json.JsonSerializer.Deserialize(
+            configJson, ShowDocumentJsonContext.Default.ClipOutputMappingSpec)
+            ?? throw new FormatException("mapping geometry effect config deserialized to null.");
+        if (spec.Sections.Count == 0)
+            throw new FormatException("mapping geometry effect config has no sections.");
+        return new OutputMappingGeometryEffect(spec);
     }
 }

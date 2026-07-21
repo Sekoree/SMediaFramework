@@ -24,13 +24,26 @@ namespace S.Media.Present.SDL3;
 /// NDI can consume the BGRA32 path through its existing sender.
 /// </para>
 /// </remarks>
-public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost
+public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost, IPipelinedReadbackVideoCompositor
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Present.SDL3.SDL3GLVideoCompositor");
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
     private VideoFormat _output;
     private GlVideoCompositor? _inner;
+    private bool _pipelinedSingleOutputReadback;
+
+    /// <inheritdoc />
+    public bool PipelinedSingleOutputReadback
+    {
+        get => _pipelinedSingleOutputReadback;
+        set
+        {
+            _pipelinedSingleOutputReadback = value;
+            if (_inner is { } inner)
+                inner.PipelinedSingleOutputReadback = value;
+        }
+    }
     private SharedSDLGlContext? _context;
     private int _ownerThreadId;
     private bool _disposeRequested;
@@ -255,6 +268,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
         _context.MakeCurrent();
 
         _inner = new GlVideoCompositor(_context.Gl, _output, PrecisionForOutput(_output.PixelFormat));
+        _inner.PipelinedSingleOutputReadback = _pipelinedSingleOutputReadback;
         lock (_warpGate)
         {
             if (_hasPendingWarp)

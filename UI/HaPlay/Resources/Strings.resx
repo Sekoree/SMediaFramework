@@ -3757,6 +3757,24 @@
   <data name="ChromaKeySectionLabel" xml:space="preserve">
     <value>Chroma key</value>
   </data>
+  <data name="ColorAdjustSectionLabel" xml:space="preserve">
+    <value>Brightness / contrast</value>
+  </data>
+  <data name="ColorAdjustEnableLabel" xml:space="preserve">
+    <value>Enable brightness / contrast</value>
+  </data>
+  <data name="ColorAdjustBrightnessLabel" xml:space="preserve">
+    <value>Brightness</value>
+  </data>
+  <data name="ColorAdjustBrightnessTooltip" xml:space="preserve">
+    <value>Additive offset, -1 to 1 (0 = unchanged)</value>
+  </data>
+  <data name="ColorAdjustContrastLabel" xml:space="preserve">
+    <value>Contrast</value>
+  </data>
+  <data name="ColorAdjustContrastTooltip" xml:space="preserve">
+    <value>Multiplier around mid-gray (1 = unchanged)</value>
+  </data>
   <data name="ChromaKeyEnableLabel" xml:space="preserve">
     <value>Chroma key (green screen)</value>
   </data>
