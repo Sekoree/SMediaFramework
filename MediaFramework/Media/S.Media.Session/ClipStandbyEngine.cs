@@ -90,7 +90,9 @@ public sealed record VideoPlacementSpec(
     double RotationDegrees = 0,
     // Optional media-layer mapping/video FX. The mapping is resolved in source-video space, then placed
     // by the normal destination rectangle and fit mode so existing layout controls keep their meaning.
-    ClipOutputMappingSpec? VideoFx = null);
+    ClipOutputMappingSpec? VideoFx = null,
+    // Optional chroma key ("green screen") applied to the placed layer; null = disabled.
+    Compositor.ChromaKeySettings? ChromaKey = null);
 
 /// <summary>
 /// What to open and how the host intends to route it. The standby engine owns the open/seek/hold

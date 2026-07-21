@@ -9,6 +9,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Compositor;
+using S.Media.Compositor.Effects;
 
 namespace S.Media.Session;
 
@@ -1804,11 +1805,27 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.SourceCrop = crop;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
+            RawSlot.Effects = BuildLayerEffects(_placement.ChromaKey);
         }
 
-        private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx)
+        /// <summary>Effect chain for this placement. Chroma key is currently the only
+        /// placement-driven effect; hosts driving <c>Slot.Effects</c> directly own the whole list.</summary>
+        private static IReadOnlyList<S.Media.Core.Video.Effects.VideoLayerEffect>? BuildLayerEffects(
+            ChromaKeySettings? chromaKey) =>
+            chromaKey is { } key ? [S.Media.Compositor.Effects.ChromaKeyVideoEffect.Create(key)] : null;
+
+        private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx) =>
+            ApplyGeometryPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
+
+        /// <summary>
+        /// Places a layer through a geometry-stage effect (<see cref="IVideoLayerGeometryEffect"/>):
+        /// the effect resolves its sections in its own output space; the placement's dest-rect/fit
+        /// transform is then composed onto every section (and its mesh) so the existing layout
+        /// controls keep their meaning. The mapping/warp "VideoFx" is the built-in implementation.
+        /// </summary>
+        private void ApplyGeometryPlacement(RectNormalized destRect, IVideoLayerGeometryEffect geometry)
         {
-            var effectFormat = OutputMappingResolver.ResolveOutputFormat(videoFx, _source);
+            var effectFormat = geometry.ResolveOutputFormat(_source);
             var (effectTransform, _) = PlacementResolver.Resolve(
                 destRect,
                 MapFit(_placement.Placement),
@@ -1827,11 +1844,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 1f - Math.Clamp((float)_placement.CropRight, 0f, 0.99f),
                 1f - Math.Clamp((float)_placement.CropBottom, 0f, 0.99f)).Clamped();
 
-            var resolved = OutputMappingResolver.Resolve(
-                videoFx,
-                _source.Width,
-                _source.Height,
-                sourceBounds);
+            var resolved = geometry.ResolveSections(_source.Width, _source.Height, sourceBounds);
 
             var sections = new WarpSection[resolved.Count];
             for (var i = 0; i < resolved.Count; i++)
@@ -1850,6 +1863,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.SourceCrop = RectNormalized.Full;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
+            RawSlot.Effects = BuildLayerEffects(_placement.ChromaKey);
         }
 
         private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)

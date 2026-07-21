@@ -317,6 +317,65 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     [ObservableProperty]
     private bool _videoFxEnabled;
 
+    // Chroma key ("green screen"). The color binds as a hex string so the drawer's text box and
+    // the Green/Blue preset buttons share one property; sliders bind the [0,1] ranges directly.
+    [ObservableProperty]
+    private bool _chromaKeyEnabled;
+
+    [ObservableProperty]
+    private string _chromaKeyColorHex = "#00FF00";
+
+    [ObservableProperty]
+    private double _chromaKeySimilarity = 0.4;
+
+    [ObservableProperty]
+    private double _chromaKeySmoothness = 0.08;
+
+    [ObservableProperty]
+    private double _chromaKeySpill = 0.1;
+
+    /// <summary>Parses <see cref="ChromaKeyColorHex"/> ("#RGB"/"#RRGGBB", leading '#' optional)
+    /// into [0,1] RGB; falls back to pure green on malformed input so a half-typed hex never
+    /// produces a surprise key color.</summary>
+    public (double R, double G, double B) ChromaKeyColorRgb()
+    {
+        var hex = ChromaKeyColorHex.AsSpan().Trim();
+        if (!hex.IsEmpty && hex[0] == '#')
+            hex = hex[1..];
+        if (hex.Length == 3)
+        {
+            if (TryHexNibble(hex[0], out var r3) && TryHexNibble(hex[1], out var g3) && TryHexNibble(hex[2], out var b3))
+                return (r3 * 17 / 255.0, g3 * 17 / 255.0, b3 * 17 / 255.0);
+        }
+        else if (hex.Length == 6 && int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var rgb))
+        {
+            return (((rgb >> 16) & 0xFF) / 255.0, ((rgb >> 8) & 0xFF) / 255.0, (rgb & 0xFF) / 255.0);
+        }
+
+        return (0.0, 1.0, 0.0);
+
+        static bool TryHexNibble(char c, out int value)
+        {
+            value = c switch
+            {
+                >= '0' and <= '9' => c - '0',
+                >= 'a' and <= 'f' => c - 'a' + 10,
+                >= 'A' and <= 'F' => c - 'A' + 10,
+                _ => -1,
+            };
+            return value >= 0;
+        }
+    }
+
+    private static string FormatChromaHex(double r, double g, double b) =>
+        $"#{(int)Math.Round(Math.Clamp(r, 0, 1) * 255):X2}{(int)Math.Round(Math.Clamp(g, 0, 1) * 255):X2}{(int)Math.Round(Math.Clamp(b, 0, 1) * 255):X2}";
+
+    [RelayCommand]
+    private void SetChromaKeyGreen() => ChromaKeyColorHex = "#00FF00";
+
+    [RelayCommand]
+    private void SetChromaKeyBlue() => ChromaKeyColorHex = "#0000FF";
+
     /// <summary>Sets the destination rectangle, clamped to the canvas with a sane minimum size.</summary>
     public void SetDestRect(double x, double y, double width, double height)
     {
@@ -393,7 +452,30 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         RotationDegrees = NormalizeRotation(RotationDegrees),
         VideoFx = VideoFx,
         VideoFxEnabled = VideoFxEnabled,
+        ChromaKey = BuildChromaKeyModel(),
+        ChromaKeyEnabled = ChromaKeyEnabled,
     };
+
+    private CueChromaKey? BuildChromaKeyModel()
+    {
+        // Settings persist while disabled (VideoFx pattern), but an untouched placement stays
+        // null so older project files round-trip byte-identical.
+        if (!ChromaKeyEnabled
+            && ChromaKeyColorHex == "#00FF00"
+            && ChromaKeySimilarity == 0.4 && ChromaKeySmoothness == 0.08 && ChromaKeySpill == 0.1)
+            return null;
+
+        var (r, g, b) = ChromaKeyColorRgb();
+        return new CueChromaKey
+        {
+            KeyR = r,
+            KeyG = g,
+            KeyB = b,
+            Similarity = Math.Clamp(ChromaKeySimilarity, 0.0, 1.0),
+            Smoothness = Math.Clamp(ChromaKeySmoothness, 0.0, 1.0),
+            SpillSuppression = Math.Clamp(ChromaKeySpill, 0.0, 1.0),
+        };
+    }
 
     /// <summary>Wraps rotation into (-180, 180] so the editor and serialized value stay tidy.</summary>
     private static double NormalizeRotation(double degrees)
@@ -419,7 +501,15 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
             RotationDegrees = model.RotationDegrees,
             VideoFx = model.VideoFx,
             VideoFxEnabled = model.VideoFxEnabled,
+            ChromaKeyEnabled = model.ChromaKeyEnabled,
         };
+        if (model.ChromaKey is { } chroma)
+        {
+            vm.ChromaKeyColorHex = FormatChromaHex(chroma.KeyR, chroma.KeyG, chroma.KeyB);
+            vm.ChromaKeySimilarity = chroma.Similarity;
+            vm.ChromaKeySmoothness = chroma.Smoothness;
+            vm.ChromaKeySpill = chroma.SpillSuppression;
+        }
         vm.SetDestRect(
             model.DestX,
             model.DestY,

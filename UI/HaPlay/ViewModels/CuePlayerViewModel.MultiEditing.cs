@@ -495,6 +495,11 @@ public partial class CuePlayerViewModel
                 break;
             case nameof(CueVideoPlacementViewModel.VideoFx): target.VideoFx = source.VideoFx; break;
             case nameof(CueVideoPlacementViewModel.VideoFxEnabled): target.VideoFxEnabled = source.VideoFxEnabled; break;
+            case nameof(CueVideoPlacementViewModel.ChromaKeyEnabled): target.ChromaKeyEnabled = source.ChromaKeyEnabled; break;
+            case nameof(CueVideoPlacementViewModel.ChromaKeyColorHex): target.ChromaKeyColorHex = source.ChromaKeyColorHex; break;
+            case nameof(CueVideoPlacementViewModel.ChromaKeySimilarity): target.ChromaKeySimilarity = source.ChromaKeySimilarity; break;
+            case nameof(CueVideoPlacementViewModel.ChromaKeySmoothness): target.ChromaKeySmoothness = source.ChromaKeySmoothness; break;
+            case nameof(CueVideoPlacementViewModel.ChromaKeySpill): target.ChromaKeySpill = source.ChromaKeySpill; break;
         }
     }
 

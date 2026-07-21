@@ -3739,4 +3739,55 @@
   <data name="TextCueFooterHint" xml:space="preserve">
     <value>Colors use #AARRGGBB hex, with alpha first. Set the hold duration on General and position the cue on Video.</value>
   </data>
+  <data name="EffectsTabLabel" xml:space="preserve">
+    <value>Effects</value>
+  </data>
+  <data name="EffectsTabPlacementHint" xml:space="preserve">
+    <value>Effects apply to the placement selected on the Video tab.</value>
+  </data>
+  <data name="EffectsTabNoPlacementHint" xml:space="preserve">
+    <value>Add and select a video placement on the Video tab to edit its effects.</value>
+  </data>
+  <data name="MappingWarpSectionLabel" xml:space="preserve">
+    <value>Mapping / warp (splitting)</value>
+  </data>
+  <data name="MappingWarpEnableLabel" xml:space="preserve">
+    <value>Enable mapping / warp</value>
+  </data>
+  <data name="ChromaKeySectionLabel" xml:space="preserve">
+    <value>Chroma key</value>
+  </data>
+  <data name="ChromaKeyEnableLabel" xml:space="preserve">
+    <value>Chroma key (green screen)</value>
+  </data>
+  <data name="ChromaKeyColorLabel" xml:space="preserve">
+    <value>Key color</value>
+  </data>
+  <data name="ChromaKeyColorTooltip" xml:space="preserve">
+    <value>Key color as #RRGGBB hex</value>
+  </data>
+  <data name="ChromaKeyPresetGreenButton" xml:space="preserve">
+    <value>Green</value>
+  </data>
+  <data name="ChromaKeyPresetBlueButton" xml:space="preserve">
+    <value>Blue</value>
+  </data>
+  <data name="ChromaKeySimilarityLabel" xml:space="preserve">
+    <value>Similarity</value>
+  </data>
+  <data name="ChromaKeySimilarityTooltip" xml:space="preserve">
+    <value>Chroma distance below which a pixel is fully keyed out</value>
+  </data>
+  <data name="ChromaKeySmoothnessLabel" xml:space="preserve">
+    <value>Smoothness</value>
+  </data>
+  <data name="ChromaKeySmoothnessTooltip" xml:space="preserve">
+    <value>Width of the soft alpha ramp at the key boundary</value>
+  </data>
+  <data name="ChromaKeySpillLabel" xml:space="preserve">
+    <value>Spill</value>
+  </data>
+  <data name="ChromaKeySpillTooltip" xml:space="preserve">
+    <value>Desaturates key-colored light bleeding onto the subject</value>
+  </data>
 </root>

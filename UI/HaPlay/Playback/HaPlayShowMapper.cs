@@ -349,7 +349,17 @@ public static class HaPlayShowMapper
         placement.CropTop,
         placement.CropRight,
         placement.CropBottom,
-        placement.VideoFxEnabled ? ToClipOutputMapping(placement.VideoFx) : null);
+        placement.VideoFxEnabled ? ToClipOutputMapping(placement.VideoFx) : null,
+        ToChromaKeySettings(placement));
+
+    /// <summary>Maps the placement's chroma key to the framework settings; null while disabled
+    /// (settings are retained on the model but must not key the layer).</summary>
+    public static S.Media.Compositor.ChromaKeySettings? ToChromaKeySettings(CueVideoPlacement placement) =>
+        placement is { ChromaKeyEnabled: true, ChromaKey: { } key }
+            ? new S.Media.Compositor.ChromaKeySettings(
+                (float)key.KeyR, (float)key.KeyG, (float)key.KeyB,
+                (float)key.Similarity, (float)key.Smoothness, (float)key.SpillSuppression)
+            : null;
 
     /// <summary>Maps a persisted HaPlay warp/FX model to the session runtime representation.</summary>
     public static ClipOutputMappingSpec? ToClipOutputMapping(CueOutputMapping? mapping) => mapping is null ? null : new(

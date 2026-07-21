@@ -522,6 +522,33 @@ public sealed record CueVideoPlacement
 
     /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
     public bool VideoFxEnabled { get; init; }
+
+    /// <summary>Optional chroma key ("green screen") settings for this layer. Follows the
+    /// <see cref="VideoFx"/> pattern: settings are retained while disabled. Null on older cues.</summary>
+    public CueChromaKey? ChromaKey { get; init; }
+
+    /// <summary>Whether <see cref="ChromaKey"/> is active.</summary>
+    public bool ChromaKeyEnabled { get; init; }
+}
+
+/// <summary>Chroma-key ("green screen") settings on a video placement. Semantics (and defaults)
+/// mirror the framework's <c>ChromaKeySettings</c> / OBS's chroma-key filter: pixels near the key
+/// color's chroma turn transparent, smoothness widens the alpha ramp, spill suppression
+/// desaturates key-colored light bleeding onto the subject.</summary>
+public sealed record CueChromaKey
+{
+    /// <summary>Key color RGB, each [0, 1]. Default = pure green.</summary>
+    public double KeyR { get; init; }
+
+    public double KeyG { get; init; } = 1.0;
+
+    public double KeyB { get; init; }
+
+    public double Similarity { get; init; } = 0.4;
+
+    public double Smoothness { get; init; } = 0.08;
+
+    public double SpillSuppression { get; init; } = 0.1;
 }
 
 public enum CueTriggerMode

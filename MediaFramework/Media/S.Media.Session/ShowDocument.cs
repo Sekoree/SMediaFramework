@@ -31,7 +31,9 @@ public sealed record ShowVideoPlacement(
     double CropTop = 0,
     double CropRight = 0,
     double CropBottom = 0,
-    ClipOutputMappingSpec? VideoFx = null);
+    ClipOutputMappingSpec? VideoFx = null,
+    // Optional chroma key ("green screen") for this placement's layer; null = disabled.
+    Compositor.ChromaKeySettings? ChromaKey = null);
 
 /// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
 /// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).

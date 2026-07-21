@@ -141,7 +141,8 @@ internal sealed class CueCompositionRuntime : IDisposable
             placement.CropRight,
             placement.CropBottom,
             placement.RotationDegrees,
-            placement.VideoFxEnabled ? ToMappingSpec(placement.VideoFx) : null);
+            placement.VideoFxEnabled ? ToMappingSpec(placement.VideoFx) : null,
+            HaPlayShowMapper.ToChromaKeySettings(placement));
     }
 
     public void Dispose()

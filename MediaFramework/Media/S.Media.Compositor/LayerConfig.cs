@@ -11,6 +11,10 @@ public readonly record struct LayerConfig(
     float Rotation = 0f,
     BlendMode Blend = BlendMode.SourceOver)
 {
+    /// <summary>Optional per-layer effect chain (e.g. chroma key); null = none. Not animated by
+    /// transitions - swap the config to change effect parameters.</summary>
+    public IReadOnlyList<VideoLayerEffect>? Effects { get; init; }
+
     /// <summary>Letterboxed full-frame background (scale-to-fit, centered).</summary>
     public static LayerConfig Background { get; } = new(LayerPosition.Center, 1f, 1f);
 

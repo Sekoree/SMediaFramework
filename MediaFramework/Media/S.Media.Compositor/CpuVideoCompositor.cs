@@ -1,4 +1,5 @@
 using System.Buffers;
+using S.Media.Core.Video.Effects;
 
 namespace S.Media.Compositor;
 
@@ -137,6 +138,22 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         try { inv = layer.Transform.Invert(); }
         catch (InvalidOperationException) { return; }
 
+        // Layer-effect chain, CPU fallback: run each effect's scalar kernel per pixel. GPU-only
+        // effects (no CPU kernel) are skipped by contract - this backend degrades to pass-through
+        // for them instead of failing the composite.
+        IVideoLayerCpuEffect[]? fxKernels = null;
+        if (layer.Effects is { Count: > 0 } fx)
+        {
+            var kernels = new List<IVideoLayerCpuEffect>(fx.Count);
+            foreach (var effect in fx)
+            {
+                if (effect.CpuKernel is { } kernel)
+                    kernels.Add(kernel);
+            }
+            if (kernels.Count > 0)
+                fxKernels = kernels.ToArray();
+        }
+
         var srcSpan = srcPlane.Span;
         var mode = SamplingMode;
         for (var dy = minY; dy < maxY; dy++)
@@ -178,7 +195,14 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                     }
                 }
 
-                NormalizeForPremultipliedBlend(b, g, r, a, opacity, alphaMode,
+                var pixelAlphaMode = alphaMode;
+                if (fxKernels is not null)
+                {
+                    ApplyCpuEffects(fxKernels, ref b, ref g, ref r, ref a, alphaMode);
+                    pixelAlphaMode = VideoAlphaMode.Straight;
+                }
+
+                NormalizeForPremultipliedBlend(b, g, r, a, opacity, pixelAlphaMode,
                     out var premulB, out var premulG, out var premulR, out var effA,
                     out var multiplyB, out var multiplyG, out var multiplyR);
                 if (effA <= 0) continue;
@@ -232,6 +256,39 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                 }
             }
         }
+    }
+
+    /// <summary>Runs the layer's CPU effect kernels on one sampled pixel. Kernels see straight
+    /// alpha in [0, 1] (matching the GPU path, where effects run before premultiply), so the
+    /// sample is converted from its source alpha mode first; the outputs are straight bytes.</summary>
+    private static void ApplyCpuEffects(
+        IVideoLayerCpuEffect[] kernels,
+        ref byte b, ref byte g, ref byte r, ref byte a,
+        VideoAlphaMode alphaMode)
+    {
+        var af = alphaMode == VideoAlphaMode.Opaque ? 1f : a / 255f;
+        float rf, gf, bf;
+        if (alphaMode == VideoAlphaMode.Premultiplied && a > 0 && a < 255)
+        {
+            var inv = 1f / a;
+            rf = Math.Min(1f, r * inv);
+            gf = Math.Min(1f, g * inv);
+            bf = Math.Min(1f, b * inv);
+        }
+        else
+        {
+            rf = r / 255f;
+            gf = g / 255f;
+            bf = b / 255f;
+        }
+
+        foreach (var kernel in kernels)
+            kernel.Apply(ref rf, ref gf, ref bf, ref af);
+
+        r = ToByte(Math.Clamp(rf, 0f, 1f) * 255f);
+        g = ToByte(Math.Clamp(gf, 0f, 1f) * 255f);
+        b = ToByte(Math.Clamp(bf, 0f, 1f) * 255f);
+        a = ToByte(Math.Clamp(af, 0f, 1f) * 255f);
     }
 
     private static VideoAlphaMode ResolveAlphaMode(VideoAlphaMode alphaMode) => alphaMode switch

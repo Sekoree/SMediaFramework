@@ -96,6 +96,13 @@ internal static class MediaRuntime
         {
             b.AddAudioEffect("gain", static config => S.Media.Routing.GainAudioEffect.FromJson(config));
             b.AddVideoEffect("grayscale", static _ => new S.Media.Routing.GrayscaleVideoEffect());
+            // Chroma key registers on BOTH stages of the unified catalog: as a compositor layer
+            // effect (GPU, per cue placement) and - through the CPU-kernel bridge - as an output
+            // bus effect insertable per output line in the I/O workspace.
+            b.AddLayerEffect("chroma-key", static config =>
+                S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config));
+            b.AddVideoEffect("chroma-key", static config => new S.Media.Routing.LayerEffectVideoBusAdapter(
+                [S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config)]));
             if (RuntimeModules.IsProjectMAvailable)
             {
                 S.Media.Visualizer.ProjectM.ProjectMModule.Register(b);

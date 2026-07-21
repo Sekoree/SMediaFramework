@@ -2504,6 +2504,60 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void VideoPlacement_ChromaKey_RoundTripsThroughModel()
+    {
+        var vm = new CueVideoPlacementViewModel
+        {
+            ChromaKeyEnabled = true,
+            ChromaKeyColorHex = "#11AA33",
+            ChromaKeySimilarity = 0.25,
+            ChromaKeySmoothness = 0.12,
+            ChromaKeySpill = 0.5,
+        };
+
+        var model = vm.ToModel();
+        var chroma = Assert.IsType<CueChromaKey>(model.ChromaKey);
+        Assert.True(model.ChromaKeyEnabled);
+        Assert.Equal(0x11 / 255.0, chroma.KeyR, precision: 6);
+        Assert.Equal(0xAA / 255.0, chroma.KeyG, precision: 6);
+        Assert.Equal(0x33 / 255.0, chroma.KeyB, precision: 6);
+        Assert.Equal(0.25, chroma.Similarity);
+
+        var restored = CueVideoPlacementViewModel.FromModel(model);
+        Assert.True(restored.ChromaKeyEnabled);
+        Assert.Equal("#11AA33", restored.ChromaKeyColorHex);
+        Assert.Equal(0.12, restored.ChromaKeySmoothness);
+        Assert.Equal(0.5, restored.ChromaKeySpill);
+    }
+
+    [Fact]
+    public void VideoPlacement_DefaultChromaKey_StaysNullOnModel()
+    {
+        // An untouched placement must serialize without a ChromaKey object so older project
+        // files round-trip unchanged.
+        var model = new CueVideoPlacementViewModel().ToModel();
+        Assert.Null(model.ChromaKey);
+        Assert.False(model.ChromaKeyEnabled);
+    }
+
+    [Fact]
+    public void ShowMapper_ChromaKey_MapsOnlyWhenEnabled()
+    {
+        var placement = new CueVideoPlacement
+        {
+            ChromaKey = new CueChromaKey { KeyG = 1.0, Similarity = 0.3 },
+            ChromaKeyEnabled = false,
+        };
+        Assert.Null(Playback.HaPlayShowMapper.ToShowVideoPlacement(placement).ChromaKey);
+
+        var enabled = placement with { ChromaKeyEnabled = true };
+        var mapped = Playback.HaPlayShowMapper.ToShowVideoPlacement(enabled).ChromaKey;
+        Assert.NotNull(mapped);
+        Assert.Equal(1f, mapped.Value.KeyG);
+        Assert.Equal(0.3f, mapped.Value.Similarity, precision: 6);
+    }
+
+    [Fact]
     public void ActionCueBuilderDialogViewModel_MIDI_ComposesCommand()
     {
         var vm = new ActionCueBuilderDialogViewModel();

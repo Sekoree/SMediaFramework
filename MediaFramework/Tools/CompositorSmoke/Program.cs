@@ -1,8 +1,11 @@
 // Phase 3 CompositorSmoke - proves the GL compositor (Gpu + Compositor + the SDL3 bridge) composites on
-// real hardware GL with NO decoder/FFmpeg/Skia in the graph. Builds two synthetic BGRA layers
+// real hardware GL with NO decoder/FFmpeg/Skia in the graph. Builds synthetic BGRA layers
 // (red background + a centered green foreground) entirely from StaticFrameSource, composites them on the
 // SDL3 GL backend, reads the frame back, and checks the pixels: corner stays red, centre turns green.
+// Also covers the layer-effect shader variants: a third, chroma-keyed solid-green layer over the corner
+// must vanish entirely (the corner stays red), proving the composed effect program compiles and keys on GL.
 using S.Media.Compositor;
+using S.Media.Compositor.Effects;
 using S.Media.Core.Video;
 using S.Media.Present.SDL3;
 
@@ -28,6 +31,14 @@ using (compositor)
     // Red background (full canvas) + green foreground at half size, centred.
     compositor.AddLayer(SolidBgra(W, H, b: 0, g: 0, r: 255), LayerConfig.Background);
     compositor.AddLayer(SolidBgra(W / 2, H / 2, b: 0, g: 255, r: 0), LayerConfig.CenteredHalf);
+    // Chroma-keyed pure-green quarter pinned to the sampled corner: keying must remove it completely,
+    // so the corner assertion below still sees the red background through it.
+    compositor.AddLayer(
+        SolidBgra(W / 4, H / 4, b: 0, g: 255, r: 0),
+        new LayerConfig(LayerPosition.AbsolutePixels(0f, 0f))
+        {
+            Effects = [ChromaKeyVideoEffect.Create(ChromaKeySettings.GreenScreen)],
+        });
 
     if (!compositor.TryReadNextFrame(out var frame))
     {

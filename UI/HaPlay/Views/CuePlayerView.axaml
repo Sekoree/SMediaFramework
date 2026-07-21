@@ -534,7 +534,6 @@
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddVideoPlacementButton}" Command="{Binding AddVideoPlacementCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoPlacementCommand}" />
-                  <Button Content="{x:Static res:Strings.EditVideoFxButton}" Command="{Binding EditSelectedPlacementVideoFxCommand}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"
@@ -678,6 +677,79 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                 </WrapPanel>
+
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <!-- Per-placement video effects, grouped in one place: the geometry stage (mapping/warp
+               splitting, the VideoFx dialog) and the color stage (the compositor's layer-effect
+               chain - chroma key today). Acts on the placement selected on the Video tab; edits fan
+               out across the multi-selection and push live into a running cue. -->
+          <TabItem Header="{x:Static res:Strings.EffectsTabLabel}"
+                   IsVisible="{Binding HasSelectedMediaCueWithVideo}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <Border Background="{DynamicResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
+                        CornerRadius="0" Padding="6,3"
+                        IsVisible="{Binding IsMultiSelected}">
+                  <TextBlock TextWrapping="Wrap"
+                             Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectVideoBannerFormat}}" />
+                </Border>
+                <TextBlock Opacity="0.65" TextWrapping="Wrap"
+                           Text="{x:Static res:Strings.EffectsTabNoPlacementHint}"
+                           IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNull}}" />
+
+                <StackPanel Spacing="8"
+                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <TextBlock Opacity="0.65" FontSize="11" TextWrapping="Wrap"
+                             Text="{x:Static res:Strings.EffectsTabPlacementHint}" />
+
+                  <!-- Geometry stage: mapping / warp / splitting (edited in the VideoFx dialog). -->
+                  <TextBlock Text="{x:Static res:Strings.MappingWarpSectionLabel}" FontWeight="SemiBold" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4">
+                    <CheckBox Content="{x:Static res:Strings.MappingWarpEnableLabel}"
+                              IsChecked="{Binding SelectedVideoPlacement.VideoFxEnabled, Mode=TwoWay}" />
+                    <Button Content="{x:Static res:Strings.EditVideoFxButton}"
+                            Command="{Binding EditSelectedPlacementVideoFxCommand}" />
+                  </WrapPanel>
+
+                  <!-- Color stage: the compositor layer-effect chain. Settings persist while
+                       disabled (VideoFx pattern). -->
+                  <TextBlock Text="{x:Static res:Strings.ChromaKeySectionLabel}" FontWeight="SemiBold" Margin="0,6,0,0" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4">
+                    <CheckBox Content="{x:Static res:Strings.ChromaKeyEnableLabel}"
+                              IsChecked="{Binding SelectedVideoPlacement.ChromaKeyEnabled, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeyColorLabel}" VerticalAlignment="Center" Opacity="0.7" Margin="6,0,0,0" />
+                    <TextBox Width="86" Text="{Binding SelectedVideoPlacement.ChromaKeyColorHex, Mode=TwoWay}"
+                             ToolTip.Tip="{x:Static res:Strings.ChromaKeyColorTooltip}" />
+                    <Button Content="{x:Static res:Strings.ChromaKeyPresetGreenButton}"
+                            Command="{Binding SelectedVideoPlacement.SetChromaKeyGreenCommand}" />
+                    <Button Content="{x:Static res:Strings.ChromaKeyPresetBlueButton}"
+                            Command="{Binding SelectedVideoPlacement.SetChromaKeyBlueCommand}" />
+                  </WrapPanel>
+                  <WrapPanel ItemSpacing="6" LineSpacing="4"
+                             IsEnabled="{Binding SelectedVideoPlacement.ChromaKeyEnabled}">
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeySimilarityLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ChromaKeySimilarityTooltip}" />
+                    <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ChromaKeySimilarity, Mode=TwoWay}" />
+                    <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   Value="{Binding SelectedVideoPlacement.ChromaKeySimilarity, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeySmoothnessLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ChromaKeySmoothnessTooltip}" />
+                    <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ChromaKeySmoothness, Mode=TwoWay}" />
+                    <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   Value="{Binding SelectedVideoPlacement.ChromaKeySmoothness, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeySpillLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ChromaKeySpillTooltip}" />
+                    <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
+                    <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
+                  </WrapPanel>
+                </StackPanel>
               </StackPanel>
             </ScrollViewer>
           </TabItem>

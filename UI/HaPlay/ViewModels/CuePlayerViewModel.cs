@@ -853,7 +853,12 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropBottom)
             or nameof(CueVideoPlacementViewModel.RotationDegrees)
             or nameof(CueVideoPlacementViewModel.VideoFx)
-            or nameof(CueVideoPlacementViewModel.VideoFxEnabled);
+            or nameof(CueVideoPlacementViewModel.VideoFxEnabled)
+            or nameof(CueVideoPlacementViewModel.ChromaKeyEnabled)
+            or nameof(CueVideoPlacementViewModel.ChromaKeyColorHex)
+            or nameof(CueVideoPlacementViewModel.ChromaKeySimilarity)
+            or nameof(CueVideoPlacementViewModel.ChromaKeySmoothness)
+            or nameof(CueVideoPlacementViewModel.ChromaKeySpill);
 
     private static bool IsLiveEditableVideoPlacementProperty(string? propertyName) =>
         propertyName is nameof(CueVideoPlacementViewModel.LayerIndex)
@@ -869,7 +874,12 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropBottom)
             or nameof(CueVideoPlacementViewModel.RotationDegrees)
             or nameof(CueVideoPlacementViewModel.VideoFx)
-            or nameof(CueVideoPlacementViewModel.VideoFxEnabled);
+            or nameof(CueVideoPlacementViewModel.VideoFxEnabled)
+            or nameof(CueVideoPlacementViewModel.ChromaKeyEnabled)
+            or nameof(CueVideoPlacementViewModel.ChromaKeyColorHex)
+            or nameof(CueVideoPlacementViewModel.ChromaKeySimilarity)
+            or nameof(CueVideoPlacementViewModel.ChromaKeySmoothness)
+            or nameof(CueVideoPlacementViewModel.ChromaKeySpill);
 
     /// <summary>Maps a cue-wide placement index to the placement's index AMONG THE CUE'S PLACEMENTS ON
     /// THE SAME COMPOSITION - the order the visualizer executor attached that composition's surface

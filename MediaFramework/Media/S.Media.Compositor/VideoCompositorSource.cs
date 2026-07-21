@@ -440,6 +440,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     {
         var opacity = slot.Opacity;
         var blendMode = slot.BlendMode;
+        var effects = slot.Effects;
         var mapping = slot.MappingSections;
         if (mapping is not null)
         {
@@ -453,6 +454,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 {
                     SourceCrop = section.SourceCrop,
                     Mesh = section.Mesh,
+                    Effects = effects,
                 });
             }
 
@@ -462,6 +464,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         _layerScratch.Add(new CompositorLayer(frame, slot.Transform, opacity, blendMode)
         {
             SourceCrop = slot.SourceCrop,
+            Effects = effects,
         });
     }
 
@@ -521,6 +524,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private BlendMode _blendMode = BlendMode.SourceOver;
         private RectNormalized _sourceCrop = RectNormalized.Full;
         private IReadOnlyList<WarpSection>? _mappingSections;
+        private IReadOnlyList<VideoLayerEffect>? _effects;
         private bool _closed;
 
         internal Slot(string id, IReadOnlyList<PixelFormat> accepted)
@@ -561,6 +565,15 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             get { lock (_gate) return _sourceCrop; }
             set { lock (_gate) _sourceCrop = value; }
+        }
+
+        /// <summary>Optional per-layer effect chain (e.g. chroma key) applied to this slot's
+        /// layer(s). Null = none. Live-editable; read on every Composite like <see cref="Opacity"/>.
+        /// Swap the whole list to change parameters (instances are immutable).</summary>
+        public IReadOnlyList<VideoLayerEffect>? Effects
+        {
+            get { lock (_gate) return _effects; }
+            set { lock (_gate) _effects = value; }
         }
 
         /// <summary>

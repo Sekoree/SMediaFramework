@@ -57,6 +57,15 @@ public readonly record struct CompositorLayer(
     /// </summary>
     public WarpMesh? Mesh { get; init; }
 
+    /// <summary>
+    /// Optional ordered per-layer effect chain (chroma key, plugin effects), applied to the
+    /// sampled straight-alpha color before opacity/blending. Null/empty = no effects. GPU
+    /// compositors compile one cached shader variant per distinct chain; the CPU fallback runs
+    /// each effect's <see cref="IVideoLayerCpuEffect"/> kernel and silently skips
+    /// GPU-only effects.
+    /// </summary>
+    public IReadOnlyList<VideoLayerEffect>? Effects { get; init; }
+
     /// <summary>Convenience: identity transform, full opacity, source-over blend, no crop.</summary>
     public static CompositorLayer Default(VideoFrame frame) =>
         new(frame, LayerTransform2D.Identity, 1f, BlendMode.SourceOver);
