@@ -483,6 +483,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private readonly Lock _gate = new();
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private float _opacity = 1f;
+        private IReadOnlyList<VideoLayerEffect>? _effects;
 
         internal SurfaceSlot(string id, IVideoCompositorLayerSurface surface)
         {
@@ -507,10 +508,19 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             set { lock (_gate) _opacity = Math.Clamp(value, 0f, 1f); }
         }
 
+        /// <summary>Optional per-layer effect chain (e.g. chroma key) applied to the surface's
+        /// rendered output. Null = none (the surface paints the canvas directly). Live-editable
+        /// like <see cref="Opacity"/>; swap the whole list to change parameters.</summary>
+        public IReadOnlyList<VideoLayerEffect>? Effects
+        {
+            get { lock (_gate) return _effects; }
+            set { lock (_gate) _effects = value; }
+        }
+
         /// <summary>Atomic placement snapshot for the composite thread.</summary>
         internal CompositorSurfaceLayer Placement
         {
-            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity); }
+            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects); }
         }
     }
 

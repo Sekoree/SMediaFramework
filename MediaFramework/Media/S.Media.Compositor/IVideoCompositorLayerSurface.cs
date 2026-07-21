@@ -36,12 +36,16 @@ public interface IVideoCompositorGlResource
 /// <summary>
 /// A layer-surface placed in a composite: the GL-rendering <see cref="IVideoCompositorLayerSurface"/> plus
 /// its destination <see cref="Transform"/> and <see cref="Opacity"/>. Surface layers render on top of the
-/// frame layers, in list order, directly into the compositor's canvas (no intermediate frame).
+/// frame layers, in list order, directly into the compositor's canvas (no intermediate frame) - unless
+/// <see cref="Effects"/> is non-empty, in which case the host renders the surface into an intermediate
+/// canvas-sized texture and composites that through the per-layer effect chain (chroma key etc.), the
+/// same shader path frame layers use.
 /// </summary>
 public readonly record struct CompositorSurfaceLayer(
     IVideoCompositorLayerSurface Surface,
     LayerTransform2D Transform,
-    float Opacity);
+    float Opacity,
+    IReadOnlyList<VideoLayerEffect>? Effects = null);
 
 /// <summary>
 /// Capability interface for compositors that can host <see cref="CompositorSurfaceLayer"/>s (NXT-10 -

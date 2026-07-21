@@ -1690,7 +1690,7 @@ public sealed class CueShowSessionCoordinator
     }
 
     /// <summary>Maps the cue editor's top-left-origin placement exactly like a regular media layer.</summary>
-    private static VideoPlacementSpec ToVisualizerPlacement(string compositionId, CueVideoPlacement? placement)
+    internal static VideoPlacementSpec ToVisualizerPlacement(string compositionId, CueVideoPlacement? placement)
     {
         if (placement is null)
             return new VideoPlacementSpec(compositionId, 0, Placement: "stretch");
@@ -1710,6 +1710,8 @@ public sealed class CueShowSessionCoordinator
             CropRight: mapped.CropRight,
             CropBottom: mapped.CropBottom,
             RotationDegrees: mapped.RotationDegrees,
-            VideoFx: mapped.VideoFx);
+            VideoFx: mapped.VideoFx,
+            ChromaKey: mapped.ChromaKey,
+            ColorAdjust: mapped.ColorAdjust);
     }
 }

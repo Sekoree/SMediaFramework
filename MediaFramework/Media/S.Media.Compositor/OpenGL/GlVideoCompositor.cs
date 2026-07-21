@@ -120,6 +120,12 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     private uint _warpFboTexture;
     private (int W, int H) _warpFboSize;
 
+    // Intermediate target for surface layers with an effect chain: the surface renders full-canvas
+    // into this texture, which is then composited through the effect-variant layer shader.
+    private uint _surfaceEffectFbo;
+    private uint _surfaceEffectFboTexture;
+    private (int W, int H) _surfaceEffectFboSize;
+
     /// <summary>One mesh section's uploaded tessellation, keyed back to its warp-section index.</summary>
     private readonly record struct MeshDraw(int SectionIndex, uint Vao, uint Vbo, uint Ebo, int IndexCount);
 
@@ -621,6 +627,12 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                     configured.Value = _output;
                 }
 
+                if (surfaceLayer.Effects is { Count: > 0 } fx)
+                {
+                    DrawSurfaceLayerWithEffects(surfaceLayer, fx, opacity, presentationTime);
+                    continue;
+                }
+
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
                 _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
                 surfaceLayer.Surface.Render(_gl, _fbo, presentationTime, surfaceLayer.Transform, opacity);
@@ -650,6 +662,82 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
             DrainDeferredExternalImageReleases();
         }
+    }
+
+    /// <summary>
+    /// Composites one surface layer through its effect chain: the surface renders full-canvas
+    /// (identity transform, full opacity) into the intermediate FBO, whose texture is then drawn
+    /// into the canvas by the effect-variant layer shader with the layer's own transform/opacity.
+    /// The intermediate is stored exactly like a direct BGRA32 layer upload relative to the canvas
+    /// paint convention, so the draw uses the frame-layer pair (mirrored dest NDC + V-flip
+    /// sampling) and lands byte-identical in geometry to a direct surface render. Effects see the
+    /// surface output as straight alpha (the frame-layer contract); a surface emitting partial
+    /// alpha over the transparent intermediate arrives premultiplied-by-coverage, which only
+    /// matters for translucent surfaces - the visualizer renders opaque.
+    /// </summary>
+    private void DrawSurfaceLayerWithEffects(
+        in CompositorSurfaceLayer surfaceLayer,
+        IReadOnlyList<VideoLayerEffect> fx,
+        float opacity,
+        TimeSpan presentationTime)
+    {
+        EnsureSurfaceEffectFbo(_output.Width, _output.Height);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _surfaceEffectFbo);
+        _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.ClearColor(0f, 0f, 0f, 0f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        surfaceLayer.Surface.Render(
+            _gl, _surfaceEffectFbo, presentationTime, LayerTransform2D.Identity, 1f);
+
+        // The surface may leave scissor enabled; it must not clip the composite quad below.
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        var variant = GetLayerVariant(fx, mesh: false);
+        _gl.UseProgram(variant.Program);
+        _gl.BindVertexArray(_vao);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
+        DrawQuad(_output.Width, _output.Height, _output.Width, _output.Height,
+            surfaceLayer.Transform, RectNormalized.Full, opacity, flipV: true, BlendMode.SourceOver,
+            variant: variant, effects: fx);
+    }
+
+    private unsafe void EnsureSurfaceEffectFbo(int width, int height)
+    {
+        if (_surfaceEffectFbo != 0 && _surfaceEffectFboSize == (width, height))
+            return;
+
+        if (_surfaceEffectFboTexture != 0) { _gl.DeleteTexture(_surfaceEffectFboTexture); _surfaceEffectFboTexture = 0; }
+        if (_surfaceEffectFbo != 0) { _gl.DeleteFramebuffer(_surfaceEffectFbo); _surfaceEffectFbo = 0; }
+
+        _surfaceEffectFboTexture = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, _fboInternalFormat,
+            (uint)width, (uint)height, 0,
+            GlPixelFormat.Rgba, PixelTypeForInternalFormat(_fboInternalFormat), null);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+        _surfaceEffectFbo = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _surfaceEffectFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, _surfaceEffectFboTexture, 0);
+        var status = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != GLEnum.FramebufferComplete)
+        {
+            _gl.DeleteFramebuffer(_surfaceEffectFbo);
+            _gl.DeleteTexture(_surfaceEffectFboTexture);
+            _surfaceEffectFbo = 0;
+            _surfaceEffectFboTexture = 0;
+            throw new InvalidOperationException($"GlVideoCompositor surface-effect FBO incomplete: {status}");
+        }
+
+        _surfaceEffectFboSize = (width, height);
     }
 
     private void ReleaseExternalImageOnOwnerThread(Action release)
@@ -2058,6 +2146,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
         if (_warpFbo != 0) { _gl.DeleteFramebuffer(_warpFbo); _warpFbo = 0; }
+        if (_surfaceEffectFboTexture != 0) { _gl.DeleteTexture(_surfaceEffectFboTexture); _surfaceEffectFboTexture = 0; }
+        if (_surfaceEffectFbo != 0) { _gl.DeleteFramebuffer(_surfaceEffectFbo); _surfaceEffectFbo = 0; }
         ReleaseMeshBuffers();
         ReleaseLayerMeshCache();
         foreach (var variant in _quadVariants.Values)

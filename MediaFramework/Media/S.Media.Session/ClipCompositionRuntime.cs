@@ -1698,6 +1698,9 @@ public sealed class ClipCompositionRuntime : IDisposable
 
             RawSlot.Transform = transform;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
+            // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
+            RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
         }
 
         public void Dispose()
@@ -1812,7 +1815,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// see the original colors - a brightness shift would move pixels off the key), then
         /// brightness/contrast on the survivors. Hosts driving <c>Slot.Effects</c> directly own
         /// the whole list.</summary>
-        private static IReadOnlyList<VideoLayerEffect>? BuildLayerEffects(VideoPlacementSpec placement)
+        internal static IReadOnlyList<VideoLayerEffect>? BuildLayerEffects(VideoPlacementSpec placement)
         {
             if (placement is { ChromaKey: null, ColorAdjust: null })
                 return null;

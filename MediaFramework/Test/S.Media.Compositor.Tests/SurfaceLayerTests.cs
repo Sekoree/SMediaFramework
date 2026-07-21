@@ -89,6 +89,28 @@ public sealed class SurfaceLayerTests
     }
 
     [Fact]
+    public void SurfaceSlotEffects_ReachTheCompositeSnapshot()
+    {
+        var host = new FakeSurfaceHost(Canvas);
+        using var mixer = new VideoCompositorSource(Canvas, host);
+        var slot = mixer.AddSurfaceSlot(new RecordingSurface());
+        var effects = new[] { Effects.ChromaKeyVideoEffect.Create(ChromaKeySettings.GreenScreen) };
+        slot.Effects = effects;
+
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.Zero, out var frame));
+        frame.Dispose();
+
+        var placed = Assert.Single(Assert.Single(host.SurfaceComposites).Surfaces);
+        Assert.Same(effects, placed.Effects);
+
+        // Live-clearing the chain (Effects-tab toggle) must reach the next snapshot too.
+        slot.Effects = null;
+        Assert.True(mixer.TryReadNextFrame(TimeSpan.FromSeconds(1), out frame));
+        frame.Dispose();
+        Assert.Null(host.SurfaceComposites[^1].Surfaces.Single().Effects);
+    }
+
+    [Fact]
     public void ZeroOpacitySurfaces_AreSkipped_AndPlainCompositeRuns()
     {
         var host = new FakeSurfaceHost(Canvas);
