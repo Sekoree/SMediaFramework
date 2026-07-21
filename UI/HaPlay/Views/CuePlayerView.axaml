@@ -559,9 +559,9 @@
                                     ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
                                     VerticalAlignment="Center" />
                         </Grid>
-                        <Grid ColumnDefinitions="Auto,8,110">
+                        <Grid ColumnDefinitions="Auto,8,125">
                           <TextBlock Grid.Column="0" Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
-                          <NumericUpDown Grid.Column="2" Width="110"
+                          <NumericUpDown Grid.Column="2" Width="125"
                                          FormatString="0"
                                          Value="{Binding LayerIndex, Mode=TwoWay}"
                                          VerticalAlignment="Center"
@@ -628,19 +628,19 @@
                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
                   <TextBlock Text="{x:Static res:Strings.PlacementPositionLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <TextBlock Text="{x:Static res:Strings.PlacementXLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestX, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementYLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestY, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementWidthLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestWidth, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementHeightLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestHeight, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementRotationLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="-180" Maximum="180" Increment="1" FormatString="0"
+                  <NumericUpDown Width="125" Minimum="-180" Maximum="180" Increment="1" FormatString="0"
                                  Value="{Binding SelectedVideoPlacement.RotationDegrees, Mode=TwoWay}" />
                 </WrapPanel>
 
@@ -655,16 +655,16 @@
                 <WrapPanel ItemSpacing="6" LineSpacing="4"
                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
                   <TextBlock Text="{x:Static res:Strings.CropLeftLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropLeft, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.CropTopLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropTop, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.CropRightLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropRight, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.CropBottomLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropBottom, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementFitModeLabel}" VerticalAlignment="Center" Opacity="0.7" Margin="6,0,0,0" />
                   <ComboBox MinWidth="120"
@@ -734,19 +734,22 @@
                                ToolTip.Tip="{x:Static res:Strings.ChromaKeySimilarityTooltip}" />
                     <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
                             Value="{Binding SelectedVideoPlacement.ChromaKeySimilarity, Mode=TwoWay}" />
-                    <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                    <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
                                    Value="{Binding SelectedVideoPlacement.ChromaKeySimilarity, Mode=TwoWay}" />
                     <TextBlock Text="{x:Static res:Strings.ChromaKeySmoothnessLabel}" VerticalAlignment="Center" Opacity="0.7"
                                ToolTip.Tip="{x:Static res:Strings.ChromaKeySmoothnessTooltip}" />
                     <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
                             Value="{Binding SelectedVideoPlacement.ChromaKeySmoothness, Mode=TwoWay}" />
-                    <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                    <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
                                    Value="{Binding SelectedVideoPlacement.ChromaKeySmoothness, Mode=TwoWay}" />
                     <TextBlock Text="{x:Static res:Strings.ChromaKeySpillLabel}" VerticalAlignment="Center" Opacity="0.7"
                                ToolTip.Tip="{x:Static res:Strings.ChromaKeySpillTooltip}" />
                     <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
                             Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
-                    <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                    <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
                                    Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
                   </WrapPanel>
 
@@ -760,13 +763,15 @@
                                ToolTip.Tip="{x:Static res:Strings.ColorAdjustBrightnessTooltip}" />
                     <Slider Width="110" Minimum="-1" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
                             Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
-                    <NumericUpDown Width="92" Minimum="-1" Maximum="1" Increment="0.01" FormatString="0.00"
+                    <NumericUpDown Width="125" Minimum="-1" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
                                    Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
                     <TextBlock Text="{x:Static res:Strings.ColorAdjustContrastLabel}" VerticalAlignment="Center" Opacity="0.7"
                                ToolTip.Tip="{x:Static res:Strings.ColorAdjustContrastTooltip}" />
                     <Slider Width="110" Minimum="0" Maximum="2" SmallChange="0.01" VerticalAlignment="Center"
                             Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
-                    <NumericUpDown Width="92" Minimum="0" Maximum="4" Increment="0.01" FormatString="0.00"
+                    <NumericUpDown Width="125" Minimum="0" Maximum="4" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
                                    Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
                   </WrapPanel>
                 </StackPanel>
