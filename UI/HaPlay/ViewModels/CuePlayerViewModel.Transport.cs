@@ -20,12 +20,20 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanStandbySelected))]
     private void StandbySelected()
     {
-        if (SelectedCueNode is null)
+        if (SelectedCueNode is not null)
+            StandbyCueFromView(SelectedCueNode);
+    }
+
+    /// <summary>Puts <paramref name="cue"/> on standby. Shared by the Standby command and the
+    /// tree's double-click gesture (double-click a row = standby, GO then fires it). Groups with
+    /// no fireable child are rejected, same as the command gate.</summary>
+    public void StandbyCueFromView(CueNodeViewModel cue)
+    {
+        ArgumentNullException.ThrowIfNull(cue);
+        if (cue.Kind == CueNodeKind.Group && ResolveFireableCue(cue) is null)
             return;
-        if (SelectedCueNode.Kind == CueNodeKind.Group && ResolveFireableCue(SelectedCueNode) is null)
-            return;
-        StandbyCueNode = SelectedCueNode;
-        StatusMessage = Strings.Format(nameof(Strings.CueStandbyStatusFormat), CueDisplay(SelectedCueNode));
+        StandbyCueNode = cue;
+        StatusMessage = Strings.Format(nameof(Strings.CueStandbyStatusFormat), CueDisplay(cue));
     }
 
     private bool CanStandbySelected() =>

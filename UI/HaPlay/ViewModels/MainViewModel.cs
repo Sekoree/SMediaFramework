@@ -137,6 +137,7 @@ public partial class MainViewModel : ViewModelBase
         SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == lastWorkspaceId)
                             ?? WorkspaceItem.Players;
         ToastCenter.Sink = OnToastPosted;
+        ToastCenter.ActionSink = OnActionToastPosted;
 
         // Remote API (per-machine setting) - seed via backing fields so the OnXChanged hooks don't
         // re-save during construction, then bring the listener up if it was left enabled.
@@ -402,6 +403,27 @@ public partial class MainViewModel : ViewModelBase
         Toasts.Add(new ToastViewModel(severity, message, t => Toasts.Remove(t))
         {
             DeadlineTicks = Environment.TickCount64 + (long)ToastLifetime.TotalMilliseconds,
+        });
+
+        _toastSweepTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, SweepExpiredToasts);
+        _toastSweepTimer.Start();
+    }
+
+    /// <summary>Action-carrying toast (e.g. "Removed 3 cues - Undo"). No dedup-refresh: each
+    /// action is a distinct one-shot, and the longer deadline gives the operator time to react.</summary>
+    private void OnActionToastPosted(string message, string actionLabel, Action action)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => OnActionToastPosted(message, actionLabel, action));
+            return;
+        }
+
+        while (Toasts.Count >= MaxVisibleToasts)
+            Toasts.RemoveAt(0);
+        Toasts.Add(new ToastViewModel(ToastSeverity.Info, message, t => Toasts.Remove(t), actionLabel, action)
+        {
+            DeadlineTicks = Environment.TickCount64 + 2 * (long)ToastLifetime.TotalMilliseconds,
         });
 
         _toastSweepTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, SweepExpiredToasts);

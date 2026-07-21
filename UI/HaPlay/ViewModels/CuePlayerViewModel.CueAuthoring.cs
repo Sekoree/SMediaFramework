@@ -640,6 +640,22 @@ public partial class CuePlayerViewModel
         targets.RemoveAll(node => targets.Any(other =>
             !ReferenceEquals(other, node) && ContainsNode(other.Children, node)));
 
+        // Remove has no confirmation dialog (operators mis-click under pressure), so every removal
+        // is undoable: snapshot the models + original positions before mutating, and offer the
+        // restore through an action toast. Ids are preserved on restore so jump targets re-resolve.
+        var listRef = SelectedCueList;
+        var undo = new List<RemovedCueEntry>();
+        foreach (var node in targets)
+        {
+            if (FindParentCollection(listRef.Nodes, node) is IList<CueNodeViewModel> parentList)
+            {
+                undo.Add(new RemovedCueEntry(
+                    node.ToModel(),
+                    FindParentGroup(listRef.Nodes, node)?.Id,
+                    parentList.IndexOf(node)));
+            }
+        }
+
         var orderedBefore = EnumerateFireableCueOrder().ToList();
         var removedFireable = ResolveFireableCue(SelectedCueNode) ?? SelectedCueNode;
         var removedFireableIndex = orderedBefore.FindIndex(c => ReferenceEquals(c, removedFireable));
@@ -656,6 +672,72 @@ public partial class CuePlayerViewModel
         ReconcileTransportAfterTreeMutation(removedFireableIndex);
         if (removed > 1)
             StatusMessage = $"Removed {removed} cues.";
+        if (undo.Count > 0)
+        {
+            var message = removed == 1
+                ? $"Removed cue {CueDisplay(targets[0])}."
+                : $"Removed {removed} cues.";
+            ToastCenter.PostAction(message, "Undo", () => RestoreRemovedCues(listRef, undo));
+        }
+    }
+
+    /// <summary>Model + original position of one removed cue, for the undo toast.</summary>
+    private readonly record struct RemovedCueEntry(CueNode Model, Guid? ParentGroupId, int Index);
+
+    private static CueNodeViewModel? FindParentGroup(
+        IEnumerable<CueNodeViewModel> nodes, CueNodeViewModel target)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Children.Contains(target))
+                return node;
+            if (FindParentGroup(node.Children, target) is { } nested)
+                return nested;
+        }
+        return null;
+    }
+
+    private static CueNodeViewModel? FindNodeById(IEnumerable<CueNodeViewModel> nodes, Guid id)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Id == id)
+                return node;
+            if (FindNodeById(node.Children, id) is { } nested)
+                return nested;
+        }
+        return null;
+    }
+
+    /// <summary>Undo for <see cref="RemoveNode"/>: re-inserts the snapshots at their original
+    /// positions (ascending index order rebuilds sibling order exactly). The original parent group
+    /// may itself have been removed since - those cues land at the list root rather than vanishing.</summary>
+    private void RestoreRemovedCues(CueListEditorViewModel list, List<RemovedCueEntry> entries)
+    {
+        var restored = new List<CueNodeViewModel>();
+        foreach (var entry in entries.OrderBy(e => e.Index))
+        {
+            IList<CueNodeViewModel> parent = list.Nodes;
+            if (entry.ParentGroupId is { } groupId
+                && FindNodeById(list.Nodes, groupId) is { IsGroup: true } group)
+                parent = group.Children;
+            var vm = CueNodeViewModel.FromModel(entry.Model, ResolveOutputLine);
+            parent.Insert(Math.Clamp(entry.Index, 0, parent.Count), vm);
+            restored.Add(vm);
+        }
+        if (restored.Count == 0)
+            return;
+
+        if (ReferenceEquals(list, SelectedCueList))
+        {
+            UpdateSelection(restored);
+            RefreshCueTargetDisplays();
+            RefreshRowStatuses();
+            RebuildUpcomingCues();
+            GoCommand.NotifyCanExecuteChanged();
+            BackCommand.NotifyCanExecuteChanged();
+        }
+        StatusMessage = restored.Count == 1 ? "Restored removed cue." : $"Restored {restored.Count} cues.";
     }
 
     private bool CanRemoveNode() => SelectedCueList is not null && SelectedCueNode is not null;

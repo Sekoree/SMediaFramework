@@ -37,4 +37,28 @@ public static class ToastCenter
     public static void Info(string message) => Post(ToastSeverity.Info, message);
     public static void Warn(string message) => Post(ToastSeverity.Warning, message);
     public static void Error(string message) => Post(ToastSeverity.Error, message);
+
+    /// <summary>
+    /// Receiver for action-carrying toasts. Separate from <see cref="Sink"/> so existing plain
+    /// posts keep their signature; wired by the same shell.
+    /// </summary>
+    public static Action<string, string, Action>? ActionSink { get; set; }
+
+    /// <summary>
+    /// Posts an Info toast carrying a one-shot action button (e.g. "Undo" after a destructive
+    /// edit). Falls back to a plain Info toast when no action-capable sink is attached
+    /// (headless tests) - the action is then simply unavailable, never silently executed.
+    /// </summary>
+    public static void PostAction(string message, string actionLabel, Action action)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+        var sink = ActionSink;
+        if (sink is null)
+        {
+            Post(ToastSeverity.Info, message);
+            return;
+        }
+        sink(message, actionLabel, action);
+    }
 }

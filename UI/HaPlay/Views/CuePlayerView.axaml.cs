@@ -51,6 +51,8 @@ public partial class CuePlayerView : UserControl
         CueTreeGrid.AddHandler(
             PointerPressedEvent, OnCueTreePointerPressed,
             RoutingStrategies.Tunnel, handledEventsToo: true);
+        // Double-click a row = standby that cue (cue-software convention; GO then fires it).
+        CueTreeGrid.DoubleTapped += OnCueTreeDoubleTapped;
         KeyDown += OnUserControlKeyDown;
         // The Preview tab's scrubber is the deck's ONLY scrub surface (the General tab used to
         // carry a second slider - and it was the only one wired to commit the seek).
@@ -129,6 +131,13 @@ public partial class CuePlayerView : UserControl
             if (vm.TogglePreviewCommand.CanExecute(null)) vm.TogglePreviewCommand.Execute(null);
             e.Handled = true;
         }
+        else if (e.Key == Avalonia.Input.Key.F
+                 && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+        {
+            CueSearchBox.Focus();
+            CueSearchBox.SelectAll();
+            e.Handled = true;
+        }
     }
 
     private void OnCueScrubberPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -152,6 +161,18 @@ public partial class CuePlayerView : UserControl
     {
         _ = sender;
         if (DataContext is not CuePlayerViewModel vm) return;
+
+        // Copy is non-destructive, so it works even in show mode (grab cues mid-show to paste
+        // into another list later). Everything below stays behind the edit gate.
+        if (e.Key == Avalonia.Input.Key.C
+            && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+        {
+            if (vm.CopySelectedCuesCommand.CanExecute(null))
+                vm.CopySelectedCuesCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         // Show-mode lockdown: every key below edits the list, so they all sit behind the same
         // Edit-cues gate as the toolbar buttons and row drag-drop.
         if (!vm.IsCueEditMode) return;
@@ -174,6 +195,11 @@ public partial class CuePlayerView : UserControl
             case Avalonia.Input.Key.D when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
                 if (vm.DuplicateSelectedCueCommand.CanExecute(null))
                     vm.DuplicateSelectedCueCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.V when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
+                if (vm.PasteCuesCommand.CanExecute(null))
+                    vm.PasteCuesCommand.Execute(null);
                 e.Handled = true;
                 break;
             case Avalonia.Input.Key.Up when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
@@ -334,8 +360,23 @@ public partial class CuePlayerView : UserControl
             .Select(f => f.Path.LocalPath)
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .ToList();
-        if (paths.Count > 0)
-            _ = vm.AddMediaFilesFromDrop(paths);
+        if (paths.Count == 0)
+            return;
+
+        // Honor the drop location: the row under the pointer (drop bubbles up from it) becomes
+        // the insert anchor - into a group, after any other row, append when dropped on empty space.
+        CueNodeViewModel? dropTarget = null;
+        for (var visual = e.Source as Visual; visual is not null && !ReferenceEquals(visual, CueTreeGrid);
+             visual = visual.GetVisualParent())
+        {
+            if (visual is Control { DataContext: CueNodeViewModel row })
+            {
+                dropTarget = row;
+                break;
+            }
+        }
+
+        _ = vm.AddMediaFilesFromDrop(paths, dropTarget);
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -343,11 +384,78 @@ public partial class CuePlayerView : UserControl
         _ = sender;
         _ = e;
         if (_subscribedVm is not null)
+        {
             _subscribedVm.PropertyChanged -= OnViewModelPropertyChanged;
+            _subscribedVm.CueSearchNavigationRequested -= OnCueSearchNavigationRequested;
+        }
         _subscribedVm = DataContext as CuePlayerViewModel;
         if (_subscribedVm is not null)
+        {
             _subscribedVm.PropertyChanged += OnViewModelPropertyChanged;
+            _subscribedVm.CueSearchNavigationRequested += OnCueSearchNavigationRequested;
+        }
         RebuildCueSource();
+    }
+
+    /// <summary>Selects the search match in the grid and scrolls it into view. Posted at Loaded
+    /// priority so ancestor expansion (the bound <c>IsExpanded</c> flips) has materialized the
+    /// row before we look for it in the flattened row list.</summary>
+    private void OnCueSearchNavigationRequested(CueNodeViewModel cue)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_source is null)
+                return;
+            for (var i = 0; i < _source.Rows.Count; i++)
+            {
+                if (_source.Rows[i] is HierarchicalRow<CueNodeViewModel> row
+                    && ReferenceEquals(row.Model, cue))
+                {
+                    _source.RowSelection!.SelectedIndex = row.ModelIndexPath;
+                    CueTreeGrid.RowsPresenter?.BringIntoView(i);
+                    return;
+                }
+            }
+        }, Avalonia.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnCueSearchBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not CuePlayerViewModel vm)
+            return;
+        switch (e.Key)
+        {
+            case Key.Enter when e.KeyModifiers.HasFlag(KeyModifiers.Shift):
+                vm.FindPreviousCueMatchCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Key.Enter:
+                vm.FindNextCueMatchCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                vm.ClearCueSearchCommand.Execute(null);
+                CueTreeGrid.Focus();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void OnCueTreeDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not CuePlayerViewModel vm)
+            return;
+        for (var visual = e.Source as Visual; visual is not null && !ReferenceEquals(visual, CueTreeGrid);
+             visual = visual.GetVisualParent())
+        {
+            if (visual is Control { DataContext: CueNodeViewModel row })
+            {
+                vm.StandbyCueFromView(row);
+                return;
+            }
+        }
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)

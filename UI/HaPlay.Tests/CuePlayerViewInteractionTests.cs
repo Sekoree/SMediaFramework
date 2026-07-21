@@ -218,6 +218,48 @@ public sealed class CuePlayerViewInteractionTests
         });
     }
 
+    [Fact]
+    public void CueSearchBox_Typing_SelectsMatchAndUpdatesTreeSelection()
+    {
+        DispatchUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            vm.AddEmptyMediaCue();
+            var intro = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            intro.Label = "Intro video";
+            vm.AddEmptyMediaCue();
+            var music = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            music.Label = "Walk-in music";
+            vm.AddEmptyMediaCue();
+            var outro = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            outro.Label = "Outro video";
+
+            var view = new CuePlayerView { DataContext = vm };
+            var window = HostInWindow(view);
+            try
+            {
+                var searchBox = window.GetVisualDescendants()
+                    .OfType<TextBox>()
+                    .First(t => t.Name == "CueSearchBox");
+
+                searchBox.Text = "video"; // TwoWay binding drives the VM search
+                Dispatcher.UIThread.RunJobs(); // flush the Loaded-priority grid-selection post
+
+                Assert.Same(intro, vm.SelectedCueNode);
+                Assert.Equal("1 of 2", vm.CueSearchStatus);
+
+                vm.FindNextCueMatchCommand.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                Assert.Same(outro, vm.SelectedCueNode);
+                Assert.Equal("2 of 2", vm.CueSearchStatus);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerViewInteractionTests).Assembly)

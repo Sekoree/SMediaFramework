@@ -579,4 +579,19 @@ public enum CueActionKind
 [JsonSerializable(typeof(CueListsCollectionDocument))]
 [JsonSerializable(typeof(CueCompositionsDocument))]
 [JsonSerializable(typeof(List<CueList>))]
+[JsonSerializable(typeof(CueClipboardDocument))]
 internal partial class CueListJsonContext : JsonSerializerContext;
+
+/// <summary>
+/// Clipboard envelope for cue copy/paste (Ctrl+C / Ctrl+V in the cue tree). Serialized as plain
+/// text on the OS clipboard so cues transfer across lists, projects, and app instances; the
+/// version stamp makes foreign clipboard text and future format changes fail closed on paste.
+/// </summary>
+public sealed record CueClipboardDocument
+{
+    public const int CurrentVersion = 1;
+
+    public int Version { get; init; } = CurrentVersion;
+
+    public List<CueNode> Cues { get; init; } = [];
+}

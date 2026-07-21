@@ -625,7 +625,9 @@
                      folded into the tooltip's second line. -->
                 <ListBox Grid.Row="1" Name="PlaylistListBox" Classes="draggable" MinHeight="160"
                          ItemsSource="{Binding PlaylistItems}"
+                         SelectionMode="Multiple"
                          SelectedItem="{Binding SelectedPlaylistItem, Mode=TwoWay}"
+                         SelectionChanged="OnPlaylistSelectionChanged"
                          DoubleTapped="OnPlaylistItemDoubleTapped">
                     <ToolTip.Tip>
                         <StackPanel Spacing="2">

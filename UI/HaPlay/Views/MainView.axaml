@@ -585,10 +585,15 @@
               <PathIcon Data="{x:Static views:AppIcons.Blocked}" Width="13" Height="13"
                         Foreground="{DynamicResource StatusErrorFg}" IsVisible="{Binding IsError}" />
             </Panel>
-            <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="Wrap"
-                       Foreground="{DynamicResource {x:Static common:SystemColors.InfoTextBrushKey}}"
-                       FontSize="12"
-                       PointerPressed="OnToastBodyPressed" />
+            <StackPanel Grid.Column="1" Spacing="4">
+              <TextBlock Text="{Binding Message}" TextWrapping="Wrap"
+                         Foreground="{DynamicResource {x:Static common:SystemColors.InfoTextBrushKey}}"
+                         FontSize="12"
+                         PointerPressed="OnToastBodyPressed" />
+              <Button Padding="10,2" FontSize="12" HorizontalAlignment="Left"
+                      Content="{Binding ActionLabel}" Command="{Binding RunActionCommand}"
+                      IsVisible="{Binding HasAction}" />
+            </StackPanel>
             <StackPanel Grid.Column="2" Spacing="2">
               <Button Padding="6,2" MinWidth="22" Command="{Binding CloseCommand}"
                       AutomationProperties.Name="{x:Static res:Strings.CloseButton}">

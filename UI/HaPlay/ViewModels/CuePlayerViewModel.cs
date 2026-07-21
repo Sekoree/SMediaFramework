@@ -2471,12 +2471,42 @@ public partial class CuePlayerViewModel : ViewModelBase
         ".mp2", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".wma",
     };
 
-    public Task AddMediaFilesFromDrop(IEnumerable<string> paths)
+    public Task AddMediaFilesFromDrop(IEnumerable<string> paths) =>
+        AddMediaFilesFromDrop(paths, dropTarget: null);
+
+    public Task AddMediaFilesFromDrop(IEnumerable<string> paths, CueNodeViewModel? dropTarget)
     {
         if (SelectedCueList is null)
             return Task.CompletedTask;
 
-        var parent = SelectedParentCollection() ?? SelectedCueList.Nodes;
+        // Honor the drop location (QoL): dropping onto a group appends inside it, onto any other
+        // row inserts right after that row; empty space keeps the old append-to-selection-parent.
+        IList<CueNodeViewModel> parent;
+        var insertAt = -1; // -1 = append
+        if (dropTarget is { IsGroup: true })
+        {
+            parent = dropTarget.Children;
+            dropTarget.IsExpanded = true;
+        }
+        else if (dropTarget is not null
+                 && FindParentCollection(SelectedCueList.Nodes, dropTarget) is IList<CueNodeViewModel> targetParent)
+        {
+            parent = targetParent;
+            insertAt = targetParent.IndexOf(dropTarget) + 1;
+        }
+        else
+        {
+            parent = SelectedParentCollection() as IList<CueNodeViewModel> ?? SelectedCueList.Nodes;
+        }
+
+        void Place(CueNodeViewModel node)
+        {
+            if (insertAt < 0 || insertAt > parent.Count)
+                parent.Add(node);
+            else
+                parent.Insert(insertAt++, node);
+        }
+
         var mediaAdded = 0;
         var groupsAdded = 0;
         var probes = new List<(CueNodeViewModel Row, string Path)>();
@@ -2487,7 +2517,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 
             if (File.Exists(path))
             {
-                AddDroppedMediaCue(parent, path, probes);
+                var row = AddDroppedMediaCue(parent, path, probes, add: false);
+                Place(row);
+                FinalizeAddedCue(row);
                 mediaAdded++;
                 continue;
             }
@@ -2501,7 +2533,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 Label = DroppedDirectoryLabel(path),
                 Extra = CueGroupFireMode.FirstCueOnly.ToString(),
             };
-            parent.Add(group);
+            Place(group);
             FinalizeAddedCue(group);
             groupsAdded++;
 
@@ -2529,10 +2561,15 @@ public partial class CuePlayerViewModel : ViewModelBase
             : Task.CompletedTask;
     }
 
-    private void AddDroppedMediaCue(
+    /// <summary>Builds (and by default appends + finalizes) a media cue for a dropped file. With
+    /// <paramref name="add"/> false the caller owns placement (positioned drops): it must insert
+    /// the returned row into <paramref name="parent"/> and then call <c>FinalizeAddedCue</c>,
+    /// so the auto-renumber pass sees the row at its real position.</summary>
+    private CueNodeViewModel AddDroppedMediaCue(
         ICollection<CueNodeViewModel> parent,
         string path,
-        ICollection<(CueNodeViewModel Row, string Path)> probes)
+        ICollection<(CueNodeViewModel Row, string Path)> probes,
+        bool add = true)
     {
         var row = new CueNodeViewModel(CueNodeKind.Media)
         {
@@ -2541,9 +2578,13 @@ public partial class CuePlayerViewModel : ViewModelBase
             MediaSourceItem = new FilePlaylistItem(path),
             SourceOrAction = path,
         };
-        parent.Add(row);
-        FinalizeAddedCue(row);
+        if (add)
+        {
+            parent.Add(row);
+            FinalizeAddedCue(row);
+        }
         probes.Add((row, path));
+        return row;
     }
 
     private static IReadOnlyList<string> EnumerateDroppedDirectoryMedia(string directory)

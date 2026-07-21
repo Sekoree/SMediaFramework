@@ -2379,6 +2379,131 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void RemoveNode_UndoToastAction_RestoresCuesAtOriginalPositions()
+    {
+        Action? undo = null;
+        var previousSink = ToastCenter.ActionSink;
+        ToastCenter.ActionSink = (_, _, action) => undo = action;
+        try
+        {
+            var vm = new CuePlayerViewModel();
+            var first = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+            first.Label = "A";
+            var second = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+            second.Label = "B";
+            var third = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+            third.Label = "C";
+            var list = Assert.IsType<CueListEditorViewModel>(vm.SelectedCueList);
+
+            vm.UpdateSelection([first, third]);
+            vm.RemoveNodeCommand.Execute(null);
+            Assert.Equal([second], list.Nodes);
+            Assert.NotNull(undo);
+
+            undo();
+
+            Assert.Equal(3, list.Nodes.Count);
+            Assert.Equal(["A", "B", "C"], list.Nodes.Select(n => n.Label));
+            // Ids survive the round-trip so jump targets keep resolving.
+            Assert.Equal(first.Id, list.Nodes[0].Id);
+            Assert.Equal(third.Id, list.Nodes[2].Id);
+        }
+        finally
+        {
+            ToastCenter.ActionSink = previousSink;
+        }
+    }
+
+    [Fact]
+    public void CueSearch_SelectsMatchesAndCycles()
+    {
+        var vm = new CuePlayerViewModel();
+        var intro = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        intro.Label = "Intro video";
+        var walkIn = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        walkIn.Label = "Walk-in music";
+        var outro = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        outro.Label = "Outro video";
+
+        vm.CueSearchText = "video";
+
+        Assert.Same(intro, vm.SelectedCueNode);
+        Assert.Equal("1 of 2", vm.CueSearchStatus);
+
+        vm.FindNextCueMatchCommand.Execute(null);
+        Assert.Same(outro, vm.SelectedCueNode);
+        Assert.Equal("2 of 2", vm.CueSearchStatus);
+
+        // Cycles back around.
+        vm.FindNextCueMatchCommand.Execute(null);
+        Assert.Same(intro, vm.SelectedCueNode);
+
+        vm.CueSearchText = "nothing-matches-this";
+        Assert.Equal("No matches", vm.CueSearchStatus);
+    }
+
+    [Fact]
+    public void StandbyCueFromView_SetsStandbyForFireableCue()
+    {
+        var vm = new CuePlayerViewModel();
+        var first = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var second = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        vm.SelectedCueNode = first;
+
+        // Double-click standby targets the row under the pointer, not the primary selection.
+        vm.StandbyCueFromView(second);
+
+        Assert.Same(second, vm.StandbyCueNode);
+    }
+
+    [Fact]
+    public void CueClipboardDocument_RoundTripsThroughJson()
+    {
+        var vm = new CuePlayerViewModel();
+        var cue = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        cue.Label = "Copy me";
+        cue.Number = "42";
+
+        var doc = new CueClipboardDocument { Cues = [cue.ToModel()] };
+        var json = System.Text.Json.JsonSerializer.Serialize(doc, CueListJsonContext.Default.CueClipboardDocument);
+        var parsed = System.Text.Json.JsonSerializer.Deserialize(json, CueListJsonContext.Default.CueClipboardDocument);
+
+        var restored = Assert.IsType<CueClipboardDocument>(parsed);
+        Assert.Equal(CueClipboardDocument.CurrentVersion, restored.Version);
+        var node = Assert.Single(restored.Cues);
+        Assert.Equal("Copy me", node.Label);
+        Assert.Equal("42", node.Number);
+        Assert.Equal(cue.Id, node.Id);
+    }
+
+    [Fact]
+    public void AddMediaFilesFromDrop_HonorsDropTargetPosition()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"haplay-test-{Guid.NewGuid():N}.mp4");
+        File.WriteAllBytes(tempFile, [0]);
+        try
+        {
+            var vm = new CuePlayerViewModel();
+            var first = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+            var second = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+            var list = Assert.IsType<CueListEditorViewModel>(vm.SelectedCueList);
+
+            // Cue insertion is synchronous; only the metadata probe is async (it needs the real
+            // FFmpeg runtime, so this headless test deliberately does not await it).
+            _ = vm.AddMediaFilesFromDrop([tempFile], first);
+
+            Assert.Equal(3, list.Nodes.Count);
+            Assert.Same(first, list.Nodes[0]);
+            Assert.Same(second, list.Nodes[2]);
+            Assert.Equal(Path.GetFileNameWithoutExtension(tempFile), list.Nodes[1].Label);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public void ActionCueBuilderDialogViewModel_MIDI_ComposesCommand()
     {
         var vm = new ActionCueBuilderDialogViewModel();

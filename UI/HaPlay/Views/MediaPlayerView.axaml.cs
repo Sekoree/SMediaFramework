@@ -239,6 +239,17 @@ public partial class MediaPlayerView : UserControl
             vm.ToggleMiddleTimeDisplay();
     }
 
+    /// <summary>Keeps the VM's playlist multi-selection in sync so the context-menu actions
+    /// (Move up/down, Remove) apply to every highlighted row, mirroring the cue tree.</summary>
+    private void OnPlaylistSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        _ = e;
+        if (DataContext is not MediaPlayerViewModel vm || sender is not ListBox listBox)
+            return;
+        vm.UpdatePlaylistSelection(
+            listBox.SelectedItems?.OfType<PlaylistItem>().ToList() ?? []);
+    }
+
     private void OnPlaylistItemDoubleTapped(object? sender, TappedEventArgs e)
     {
         SDebug.ChangeTrace.Begin("playlist double-tap");
