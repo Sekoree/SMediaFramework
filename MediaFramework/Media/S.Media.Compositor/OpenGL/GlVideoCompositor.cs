@@ -1599,6 +1599,90 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         _gl.DrawElements(PrimitiveType.Triangles, (uint)draw.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
     }
 
+    /// <summary>One cached tessellation for a <see cref="CompositorLayer.Mesh"/> layer. Meshes are
+    /// immutable snapshots, so reference identity keys the cache; a control-point edit produces a
+    /// new instance and naturally rebuilds. Without this cache every mesh layer re-tessellated
+    /// (up to ~2.5 MB of LOH vertex/index arrays) and re-uploaded fresh VAO/VBO/EBO every frame -
+    /// measured at ~1.9 ms + 644 KB per call for a 17×17 grid in the Tessellate benchmark.</summary>
+    private sealed class LayerMeshBuffers
+    {
+        public uint Vao;
+        public uint Vbo;
+        public uint Ebo;
+        public int IndexCount;
+        public long LastUseTick;
+    }
+
+    /// <summary>Bounded: a composite typically shows a handful of live meshes; stale entries
+    /// (replaced by edits) are evicted least-recently-used on insert, on the GL thread.</summary>
+    private const int MaxCachedLayerMeshes = 8;
+    private readonly Dictionary<WarpMesh, LayerMeshBuffers> _layerMeshCache = new(ReferenceEqualityComparer.Instance);
+    private long _layerMeshUseTick;
+
+    private unsafe LayerMeshBuffers GetOrCreateLayerMeshBuffers(WarpMesh mesh)
+    {
+        if (_layerMeshCache.TryGetValue(mesh, out var cached))
+        {
+            cached.LastUseTick = ++_layerMeshUseTick;
+            return cached;
+        }
+
+        if (_layerMeshCache.Count >= MaxCachedLayerMeshes)
+        {
+            WarpMesh? oldestKey = null;
+            var oldestTick = long.MaxValue;
+            foreach (var (key, value) in _layerMeshCache)
+            {
+                if (value.LastUseTick < oldestTick)
+                {
+                    oldestTick = value.LastUseTick;
+                    oldestKey = key;
+                }
+            }
+
+            if (oldestKey is not null && _layerMeshCache.Remove(oldestKey, out var evicted))
+                ReleaseLayerMeshBuffers(evicted);
+        }
+
+        WarpMeshTessellator.Tessellate(mesh, out var vertices, out var indices);
+        var buffers = new LayerMeshBuffers
+        {
+            Vao = _gl.GenVertexArray(),
+            Vbo = _gl.GenBuffer(),
+            Ebo = _gl.GenBuffer(),
+            IndexCount = indices.Length,
+            LastUseTick = ++_layerMeshUseTick,
+        };
+        _gl.BindVertexArray(buffers.Vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, buffers.Vbo);
+        fixed (float* p = vertices)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, buffers.Ebo);
+        fixed (uint* p = indices)
+            _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)(2 * sizeof(float)));
+
+        _layerMeshCache[mesh] = buffers;
+        return buffers;
+    }
+
+    private void ReleaseLayerMeshBuffers(LayerMeshBuffers buffers)
+    {
+        _gl.DeleteVertexArray(buffers.Vao);
+        _gl.DeleteBuffer(buffers.Vbo);
+        _gl.DeleteBuffer(buffers.Ebo);
+    }
+
+    private void ReleaseLayerMeshCache()
+    {
+        foreach (var buffers in _layerMeshCache.Values)
+            ReleaseLayerMeshBuffers(buffers);
+        _layerMeshCache.Clear();
+    }
+
     private unsafe void DrawLayerMesh(
         WarpMesh mesh,
         RectNormalized sourceCrop,
@@ -1611,27 +1695,11 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     {
         EnsureMeshPipeline();
         var variant = GetLayerVariant(effects, mesh: true);
-        WarpMeshTessellator.Tessellate(mesh, out var vertices, out var indices);
+        var buffers = GetOrCreateLayerMeshBuffers(mesh);
 
-        var vao = _gl.GenVertexArray();
-        var vbo = _gl.GenBuffer();
-        var ebo = _gl.GenBuffer();
-        try
         {
-            _gl.BindVertexArray(vao);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
-            fixed (float* p = vertices)
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), p, BufferUsageARB.StreamDraw);
-            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
-            fixed (uint* p = indices)
-                _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StreamDraw);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)0);
-            _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)(2 * sizeof(float)));
-
             _gl.UseProgram(variant.Program);
-            _gl.BindVertexArray(vao);
+            _gl.BindVertexArray(buffers.Vao);
 
             // Layer pass convention: write mirrored in Y so bottom-up glReadPixels returns top-down frames.
             Span<float> m = stackalloc float[9];
@@ -1666,13 +1734,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                     throw new NotSupportedException($"BlendMode {blendMode} not supported.");
             }
 
-            _gl.DrawElements(PrimitiveType.Triangles, (uint)indices.Length, DrawElementsType.UnsignedInt, (void*)0);
-        }
-        finally
-        {
-            if (ebo != 0) _gl.DeleteBuffer(ebo);
-            if (vbo != 0) _gl.DeleteBuffer(vbo);
-            if (vao != 0) _gl.DeleteVertexArray(vao);
+            _gl.DrawElements(PrimitiveType.Triangles, (uint)buffers.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
         }
     }
 
@@ -1997,6 +2059,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
         if (_warpFbo != 0) { _gl.DeleteFramebuffer(_warpFbo); _warpFbo = 0; }
         ReleaseMeshBuffers();
+        ReleaseLayerMeshCache();
         foreach (var variant in _quadVariants.Values)
             SharedGlProgramCache.Release(_gl, variant.CacheKey);
         _quadVariants.Clear();

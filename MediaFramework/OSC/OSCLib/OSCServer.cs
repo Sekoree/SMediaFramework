@@ -138,7 +138,42 @@ public sealed class OSCServer : IOSCServer
             if (_logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("Decoded OSC packet {Kind} from {Remote}", packet!.Kind, received.RemoteEndPoint);
 
+            // Head-of-line fix (perf review): a future-dated bundle used to be awaited INLINE,
+            // stalling this loop - and therefore every subsequent datagram - until its time tag
+            // (a bundle stamped 2 s ahead froze all OSC input for 2 s). Future bundles now
+            // schedule off-loop; due packets keep the existing in-order serial dispatch.
+            if (packet!.Kind == OSCPacketKind.Bundle
+                && !Options.IgnoreTimeTagScheduling
+                && OSCBundleScheduler.GetDelay(packet.Bundle!.TimeTag, DateTimeOffset.UtcNow) > TimeSpan.Zero)
+            {
+                _ = DispatchScheduledBundleAsync(packet, received.RemoteEndPoint, receivedAt, cancellationToken);
+                continue;
+            }
+
             await DispatchPacketAsync(packet!, received.RemoteEndPoint, null, receivedAt, cancellationToken, depth: 0).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Background dispatch for a future-dated bundle: <see cref="DispatchPacketAsync"/>
+    /// performs the time-tag delay itself; shutdown cancels the pending delay via the token.
+    /// Handler faults are logged here - there is no caller left to observe them.</summary>
+    private async Task DispatchScheduledBundleAsync(
+        OSCPacket packet,
+        IPEndPoint remote,
+        DateTimeOffset receivedAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await DispatchPacketAsync(packet, remote, null, receivedAt, cancellationToken, depth: 0).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Server stopping - the scheduled bundle is intentionally dropped.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Scheduled OSC bundle dispatch failed (from {Remote}).", remote);
         }
     }
 
