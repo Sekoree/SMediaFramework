@@ -169,13 +169,20 @@ VizConfig RunWizard(VizConfig? defaults, string savePath)
     var channels = ConsolePrompt.ReadChannels(
         "Channels to visualize", devPick.MaxInputChannels, d.Channels);
 
-    // --- Preset directory (default to the built preset pack when the user hasn't set one) ---
+    // --- Preset directory (default to the bundled pack; dev-tree pack is the fallback) ---
     var presetDefault = d.PresetDirectory ?? "";
-    if (presetDefault.Length == 0 && ProjectMLibraryResolver.TryFindDevBuildRoot() is { } devRoot)
+    if (presetDefault.Length == 0)
     {
-        var packed = Path.Combine(devRoot, "presets");
-        if (Directory.Exists(packed))
-            presetDefault = packed;
+        // Deployed layout: presets/ ships next to the executable (see csproj bundle items).
+        var appLocal = Path.Combine(AppContext.BaseDirectory, "presets");
+        if (Directory.Exists(appLocal))
+            presetDefault = appLocal;
+        else if (ProjectMLibraryResolver.TryFindDevBuildRoot() is { } devRoot)
+        {
+            var packed = Path.Combine(devRoot, "presets");
+            if (Directory.Exists(packed))
+                presetDefault = packed;
+        }
     }
 
     var presetDir = ConsolePrompt.ReadString("projectM preset directory (blank = idle preset)", presetDefault);

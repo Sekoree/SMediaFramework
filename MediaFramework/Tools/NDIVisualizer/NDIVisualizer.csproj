@@ -18,6 +18,16 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <!-- Bundle the preset/texture packs next to the executable so a deployed copy is
+             self-contained (the packs are arch-independent; linux-x64 is the staging source).
+             Runtime resolution prefers this app-local copy over the repo dev tree. -->
+        <None Include="../../../External/projectm/linux-x64/presets/**"
+              LinkBase="presets" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+        <None Include="../../../External/projectm/linux-x64/textures/**"
+              LinkBase="textures" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
         <ProjectReference Include="../../Media/S.Media.Visualizer.ProjectM/S.Media.Visualizer.ProjectM.csproj" />
         <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />

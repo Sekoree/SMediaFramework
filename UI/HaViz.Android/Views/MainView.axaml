@@ -1,0 +1,106 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:HaViz.Android.ViewModels"
+             x:Class="HaViz.Android.Views.MainView"
+             x:DataType="vm:MainViewModel">
+
+    <!-- 4-inch portrait screen: one tab strip, fat controls, no nested scrolling surprises. -->
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" Background="#22000000" Padding="8,4">
+            <StackPanel Spacing="2">
+                <TextBlock Text="{Binding StatusText}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding PresetText}" FontSize="11" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Border>
+
+        <TabControl>
+            <TabItem Header="Player">
+                <ScrollViewer>
+                    <StackPanel Spacing="10" Margin="10">
+                        <Button Content="Select music folder…" HorizontalAlignment="Stretch"
+                                Command="{Binding PickFolderCommand}" />
+                        <TextBlock Text="{Binding PlaylistSummary}" Opacity="0.7" FontSize="12" />
+                        <TextBlock Text="{Binding CurrentTrackName}" FontSize="15" FontWeight="SemiBold"
+                                   TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+
+                        <UniformGrid Columns="4" ColumnSpacing="6">
+                            <Button Content="⏮" FontSize="20" HorizontalAlignment="Stretch"
+                                    Command="{Binding PreviousTrackCommand}" />
+                            <Button Content="⏯" FontSize="20" HorizontalAlignment="Stretch"
+                                    Command="{Binding PlayPauseCommand}" />
+                            <Button Content="⏭" FontSize="20" HorizontalAlignment="Stretch"
+                                    Command="{Binding NextTrackCommand}" />
+                            <Button Content="⏹" FontSize="20" HorizontalAlignment="Stretch"
+                                    Command="{Binding StopPlaybackCommand}" />
+                        </UniformGrid>
+
+                        <Button Content="{Binding LoopModeLabel}" HorizontalAlignment="Stretch"
+                                Command="{Binding CycleLoopModeCommand}" />
+
+                        <CheckBox Content="Play on this device" IsChecked="{Binding PlayOnDevice}"
+                                  Margin="0,4,0,0" />
+                        <TextBlock Text="Audio output" Opacity="0.7" FontSize="12" />
+                        <ComboBox ItemsSource="{Binding OutputDevices}"
+                                  SelectedItem="{Binding SelectedOutputDevice}"
+                                  HorizontalAlignment="Stretch">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Capture">
+                <StackPanel Spacing="10" Margin="10">
+                    <TextBlock TextWrapping="Wrap" FontSize="12" Opacity="0.8"
+                               Text="Feeds other apps' audio into the visualizer (Android 10+). The system will ask for permission; apps that block capture stay silent." />
+                    <Button Content="Toggle system-audio capture" HorizontalAlignment="Stretch"
+                            Command="{Binding ToggleCaptureCommand}" />
+                    <TextBlock Text="{Binding CaptureStatus}" TextWrapping="Wrap" FontSize="12" />
+                </StackPanel>
+            </TabItem>
+
+            <TabItem Header="NDI">
+                <ScrollViewer>
+                    <StackPanel Spacing="8" Margin="10">
+                        <TextBlock Text="Source name" Opacity="0.7" FontSize="12" />
+                        <TextBox Text="{Binding NdiName}" IsEnabled="{Binding !IsEngineRunning}" />
+
+                        <Grid ColumnDefinitions="*,8,*" RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Width" Opacity="0.7" FontSize="12" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Height" Opacity="0.7" FontSize="12" />
+                            <NumericUpDown Grid.Row="1" Grid.Column="0" Value="{Binding OutputWidth}"
+                                           Minimum="160" Maximum="3840" Increment="2" FormatString="0"
+                                           IsEnabled="{Binding !IsEngineRunning}" />
+                            <NumericUpDown Grid.Row="1" Grid.Column="2" Value="{Binding OutputHeight}"
+                                           Minimum="120" Maximum="2160" Increment="2" FormatString="0"
+                                           IsEnabled="{Binding !IsEngineRunning}" />
+                        </Grid>
+
+                        <TextBlock Text="Frame rate" Opacity="0.7" FontSize="12" />
+                        <NumericUpDown Value="{Binding OutputFps}" Minimum="1" Maximum="120" Increment="1"
+                                       FormatString="0" IsEnabled="{Binding !IsEngineRunning}" />
+
+                        <TextBlock Text="Preset duration (s)" Opacity="0.7" FontSize="12" />
+                        <NumericUpDown Value="{Binding PresetDurationSeconds}" Minimum="5" Maximum="3600"
+                                       Increment="5" FormatString="0" IsEnabled="{Binding !IsEngineRunning}" />
+
+                        <CheckBox Content="Shuffle presets" IsChecked="{Binding ShufflePresets}"
+                                  IsEnabled="{Binding !IsEngineRunning}" />
+
+                        <TextBlock Text="Beat sensitivity" Opacity="0.7" FontSize="12" />
+                        <Slider Value="{Binding BeatSensitivity}" Minimum="0" Maximum="5" />
+
+                        <Button Content="Start / Stop NDI output" HorizontalAlignment="Stretch"
+                                FontWeight="SemiBold" Command="{Binding ToggleEngineCommand}" />
+                        <Button Content="Next preset" HorizontalAlignment="Stretch"
+                                Command="{Binding NextPresetCommand}" IsEnabled="{Binding IsEngineRunning}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</UserControl>

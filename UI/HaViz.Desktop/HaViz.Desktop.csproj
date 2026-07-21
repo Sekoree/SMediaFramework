@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Desktop twin of UI/HaViz.Android: visualizer→NDI box (projectM renders offscreen via the SDL3
+         context factory, frames+audio leave as an NDI source) plus the mini player (framework
+         MediaPlayer, audio-only) and a PortAudio line-in capture path. All engine/playlist logic lives
+         in UI/HaViz.Core; this head only supplies the desktop context factory, audio devices, and UI. -->
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+        <!-- Not the project-name default "HaViz.Desktop": file managers mistake a *.Desktop binary for
+             an XDG desktop entry (same rationale as HaPlay.Desktop → HaPlayer). -->
+        <AssemblyName>HaVizBox</AssemblyName>
+        <RootNamespace>HaViz.Desktop</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia" />
+        <PackageReference Include="Avalonia.Desktop" />
+        <PackageReference Include="Avalonia.Themes.Fluent" />
+        <PackageReference Include="Avalonia.Fonts.Inter" />
+        <PackageReference Include="CommunityToolkit.Mvvm" />
+        <PackageReference Include="Microsoft.Extensions.Logging" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+        <!-- SDL3 platform natives are app-owned deployment assets (framework libraries carry only the
+             SDL3-CS binding) - same policy as HaPlay.Desktop. -->
+        <PackageReference Include="SDL3-CS.Linux" />
+        <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <!-- FFmpeg 8.x native runtime for Windows publishes; Linux uses the system FFmpeg. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+        <PackageReference Include="FFmpeg.GPL" />
+    </ItemGroup>
+
+    <!-- RID-less Windows build (IDE Debug/run): the native package only places SDL3.dll through
+         runtimes/<rid>/native RID resolution; copy it next to the app for the no-RID Windows case. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(PkgSDL3-CS_Windows)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>SDL3.dll</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../HaViz.Core/HaViz.Core.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Routing/S.Media.Routing.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Audio.MiniAudio/S.Media.Audio.MiniAudio.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Bundle the preset/texture packs next to the executable so a deployed copy is self-contained
+             (the packs are arch-independent; linux-x64 is the staging source). Runtime resolution prefers
+             this app-local copy over the repo dev tree (see MainViewModel.ResolvePresetDirectory). -->
+        <None Include="../../External/projectm/linux-x64/presets/**"
+              LinkBase="presets" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+        <None Include="../../External/projectm/linux-x64/textures/**"
+              LinkBase="textures" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <!-- Linux: ship the dev-built desktop-GL libprojectM-4 next to the executable (the ProjectMLib
+         resolver probes app-local paths; this box's system libprojectM-4 is a GLES build that crashes
+         desktop GL). Windows relies on MFP_PROJECTM_LIB / a prebuilt bundle. Empty when the native was
+         never built (scripts/build-projectm.sh) - the visualizer then reports unavailable. -->
+    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+        <None Include="../../External/projectm/linux-x64/lib/libprojectM-4.so*" Visible="false"
+              Link="%(Filename)%(Extension)"
+              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
+</Project>

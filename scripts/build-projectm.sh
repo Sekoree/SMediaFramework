@@ -12,6 +12,12 @@
 #
 # Requirements: cmake >= 3.21, a C++17 compiler, OpenGL headers (mesa), and glm (the vendored tree
 # carries fallbacks for the rest via its vendor/ directory).
+#
+# Usage: scripts/build-projectm.sh [android-arm64]
+#   (no argument)  build for the host (desktop GL), installs to External/projectm/<host-rid>/
+#   android-arm64  cross-compile a GLES build with the Android NDK (ANDROID_NDK_ROOT, falling back
+#                  to /home/seko/Android/Sdk/ndk/android-ndk-r27c), installs to
+#                  External/projectm/android-arm64/
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,20 +33,39 @@ textures_revision="ff8edf2a8fa07e55ad562f1af97076526c484f7d"
 projectm_archive_url="https://github.com/projectM-visualizer/projectm/releases/download/v4.1.6/libprojectM-4.1.6.tar.gz"
 projectm_archive_sha256="1b9e6d56c59fe24e5416da4d42e941a34c982811003e43ac88b5aca8afa52c87"
 
-case "$(uname -m)" in
-    x86_64|amd64) arch="x64" ;;
-    aarch64|arm64) arch="arm64" ;;
-    *)
-        echo "error: unsupported architecture: $(uname -m)" >&2
-        exit 1
+target="${1:-host}"
+case "$target" in
+    host)
+        case "$(uname -m)" in
+            x86_64|amd64) arch="x64" ;;
+            aarch64|arm64) arch="arm64" ;;
+            *)
+                echo "error: unsupported architecture: $(uname -m)" >&2
+                exit 1
+                ;;
+        esac
+        case "$(uname -s)" in
+            Linux)  rid="linux-$arch" ;;
+            Darwin) rid="osx-$arch" ;;
+            MINGW*|MSYS*|CYGWIN*) rid="win-$arch" ;;
+            *)
+                echo "error: unsupported operating system: $(uname -s)" >&2
+                exit 1
+                ;;
+        esac
         ;;
-esac
-case "$(uname -s)" in
-    Linux)  rid="linux-$arch" ;;
-    Darwin) rid="osx-$arch" ;;
-    MINGW*|MSYS*|CYGWIN*) rid="win-$arch" ;;
+    android-arm64)
+        rid="android-arm64"
+        ndk_root="${ANDROID_NDK_ROOT:-/home/seko/Android/Sdk/ndk/android-ndk-r27c}"
+        ndk_toolchain="$ndk_root/build/cmake/android.toolchain.cmake"
+        if [[ ! -f "$ndk_toolchain" ]]; then
+            echo "error: Android NDK toolchain file not found: $ndk_toolchain" >&2
+            echo "       set ANDROID_NDK_ROOT to an NDK install (r27c known good)" >&2
+            exit 1
+        fi
+        ;;
     *)
-        echo "error: unsupported operating system: $(uname -s)" >&2
+        echo "usage: $0 [android-arm64]" >&2
         exit 1
         ;;
 esac
@@ -114,12 +139,26 @@ else
 fi
 
 echo "== configuring projectM 4.1.6 ($rid) =="
-cmake -S "$src_dir" -B "$build_dir" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=ON \
-    -DENABLE_PLAYLIST=OFF \
-    -DBUILD_TESTING=OFF \
+cmake_args=(
+    -DCMAKE_BUILD_TYPE=Release
+    -DBUILD_SHARED_LIBS=ON
+    -DENABLE_PLAYLIST=OFF
+    -DBUILD_TESTING=OFF
     -DCMAKE_INSTALL_PREFIX="$install_dir"
+)
+if [[ "$target" == "android-arm64" ]]; then
+    # Cross-compile with the NDK. CMAKE_SYSTEM_NAME=Android makes projectM's CMake force
+    # ENABLE_GLES=ON (see its cmake_dependent_option); we pass it explicitly for clarity.
+    cmake_args+=(
+        -DCMAKE_TOOLCHAIN_FILE="$ndk_toolchain"
+        -DANDROID_ABI=arm64-v8a
+        -DANDROID_PLATFORM=android-29
+        -DENABLE_GLES=ON
+        # Android 16 requires 16 KB page alignment for native libraries (XA0141 otherwise).
+        -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384
+    )
+fi
+cmake -S "$src_dir" -B "$build_dir" "${cmake_args[@]}"
 
 echo "== building =="
 jobs="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
@@ -190,9 +229,17 @@ if [[ "$installed_textures_revision" != "$textures_revision" ]]; then
 fi
 
 echo
-echo "projectM built. Add this to your environment (fish: set -Ux):"
-echo
-echo "    export MFP_PROJECTM_LIB=\"$lib_dir\""
-echo
+if [[ "$target" == "android-arm64" ]]; then
+    # APK payload: the unstripped NDK build carries ~10 MB of debug_info nobody reads on-device.
+    "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded \
+        "$lib_dir/libprojectM-4.so"
+    echo "projectM (Android arm64, GLES) built: $lib_dir/libprojectM-4.so"
+    echo "Bundle the library plus the presets/ and textures/ directories with the Android app."
+else
+    echo "projectM built. Add this to your environment (fish: set -Ux):"
+    echo
+    echo "    export MFP_PROJECTM_LIB=\"$lib_dir\""
+    echo
+fi
 echo "Presets (set as the visualizer's preset directory in HaPlay): $presets_dst"
 echo "Textures (discovered automatically by HaPlay): $textures_dst"

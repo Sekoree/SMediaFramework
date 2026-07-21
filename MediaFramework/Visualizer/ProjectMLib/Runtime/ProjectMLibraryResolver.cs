@@ -76,7 +76,9 @@ public static class ProjectMLibraryResolver
     /// desktop-GL compositor context. Rejecting it here lets probing continue past an unusable system
     /// default (Arch/CachyOS ship a GLES build) to a usable desktop-GL build supplied via the env override,
     /// the dev build, or an app-local bundle. Non-Linux and undeterminable cases are accepted; the
-    /// post-load <see cref="ProjectMRuntime"/> probe remains the backstop.</summary>
+    /// post-load <see cref="ProjectMRuntime"/> probe remains the backstop. Android deliberately
+    /// lands in the accept path (<c>IsLinux()</c> is false there): its bundled projectM IS a GLES
+    /// build and the renderer runs on a GLES context, so the desktop veto must not apply.</summary>
     private static bool IsUsableProjectMBuild(string candidate)
     {
         if (!OperatingSystem.IsLinux())
@@ -102,6 +104,7 @@ public static class ProjectMLibraryResolver
     private static string[] PlatformNames() =>
         OperatingSystem.IsWindows() ? ProjectMLibraryNames.WindowsCandidates
         : OperatingSystem.IsMacOS() ? ProjectMLibraryNames.MacCandidates
+        : OperatingSystem.IsAndroid() ? ProjectMLibraryNames.AndroidCandidates
         : ProjectMLibraryNames.LinuxCandidates;
 
     private static IEnumerable<string> EnvironmentFallbackPaths(IReadOnlyList<string> names)

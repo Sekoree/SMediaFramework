@@ -77,6 +77,11 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
     /// <summary>True when GL/projectM never came up - the blit surface then renders nothing (logged).</summary>
     public bool Failed => _failed;
 
+    /// <summary>Pixel layout of published frames: BGRA32 on desktop GL (readback is native there),
+    /// RGBA32 on GLES (its native readback - avoids the driver's BGRA slow path AND a CPU swizzle;
+    /// the NDI sender takes RGBA directly). Set on the render thread before the first publish.</summary>
+    public S.Media.Core.Video.PixelFormat PublishedPixelFormat { get; private set; } = S.Media.Core.Video.PixelFormat.Bgra32;
+
     /// <summary>Copies the newest frame into <paramref name="destination"/> when it changed since
     /// <paramref name="lastSeenVersion"/> (updated on copy). Any thread.</summary>
     public bool TryCopyLatestFrame(byte[] destination, ref long lastSeenVersion)
@@ -96,6 +101,7 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
         IOffscreenGlContext? context = null;
         nint projectM = 0;
         uint fbo = 0, colorTex = 0, depthRbo = 0;
+        var pbos = new uint[2];
         GL? gl = null;
         try
         {
@@ -164,7 +170,48 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                 return;
             }
 
+            // GLES contexts (Android) only support BGRA readback via GL_EXT_read_format_bgra;
+            // without it, read RGBA and swizzle in place so published frames stay BGRA either way.
+            // GLES: read back the FBO's native RGBA and publish RGBA32 - the BGRA extension path
+            // routes through a driver swizzle (measurably slower on mobile) and every Android
+            // consumer (NDI) takes RGBA directly. Desktop GL keeps BGRA (native there, and the
+            // composition blit path historically expects it).
+            var glVersion = gl.GetStringS(StringName.Version) ?? string.Empty;
+            var isGles = glVersion.StartsWith("OpenGL ES", StringComparison.Ordinal);
+            PublishedPixelFormat = isGles ? S.Media.Core.Video.PixelFormat.Rgba32 : S.Media.Core.Video.PixelFormat.Bgra32;
+            // One-shot markers around the first iteration: a driver-level hang (seen on mobile GLES)
+            // freezes this thread silently - these pin down WHERE without a debugger on the device.
+            Trace.LogInformation("renderer FBO ready on '{Version}' (publish={Format})", glVersion, PublishedPixelFormat);
+            var firstFramePublished = false;
+
             var readback = new byte[_width * _height * 4];
+            var frameBytes = (uint)(_width * _height * 4);
+
+            // Async readback ring: glReadPixels into a pixel-pack buffer returns without draining
+            // the GPU pipeline; the PREVIOUS frame's PBO is mapped instead, which by then has
+            // (usually) finished its DMA. Costs one frame of latency and roughly halves-to-quarters
+            // the per-frame stall on mobile GLES (the sync path measured 40-130 ms at 720p).
+            // Falls back to the synchronous path when buffer setup fails.
+            var usePbo = true;
+            try
+            {
+                for (var i = 0; i < pbos.Length; i++)
+                {
+                    pbos[i] = gl.GenBuffer();
+                    gl.BindBuffer(BufferTargetARB.PixelPackBuffer, pbos[i]);
+                    gl.BufferData(BufferTargetARB.PixelPackBuffer, frameBytes, null, BufferUsageARB.StreamRead);
+                }
+
+                gl.BindBuffer(BufferTargetARB.PixelPackBuffer, 0);
+            }
+            catch (Exception ex)
+            {
+                usePbo = false;
+                Trace.LogWarning(ex, "pixel-pack buffers unavailable - using synchronous readback");
+            }
+
+            var pboIndex = 0;
+            var pboPendingFrames = 0; // PBOs holding an issued-but-unmapped readback
             var intervalStopwatchTicks = Stopwatch.Frequency / (double)_fps;
             var nextDeadline = Stopwatch.GetTimestamp();
             var lastPresetSwitch = Stopwatch.GetTimestamp();
@@ -219,13 +266,53 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                         renderElapsed.TotalMilliseconds, _currentPresetName ?? "(idle)");
                 }
 
-                // Read the frame back (BGRA, FBO row order - the blit shader's V-flip shows it upright).
+                // Read the frame back (FBO row order - the blit shader's V-flip shows it upright).
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
                 gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
                 gl.PixelStore(PixelStoreParameter.PackRowLength, 0);
+                var readFormat = isGles ? GLEnum.Rgba : GLEnum.Bgra;
                 var readbackStarted = Stopwatch.GetTimestamp();
-                fixed (byte* dst = readback)
-                    gl.ReadPixels(0, 0, (uint)_width, (uint)_height, GLEnum.Bgra, GLEnum.UnsignedByte, dst);
+                var framePublishable = true;
+                if (usePbo)
+                {
+                    // Issue this frame's readback (async into the current PBO)...
+                    gl.BindBuffer(BufferTargetARB.PixelPackBuffer, pbos[pboIndex]);
+                    gl.ReadPixels(0, 0, (uint)_width, (uint)_height, readFormat, GLEnum.UnsignedByte, (void*)0);
+                    pboIndex = 1 - pboIndex;
+                    if (pboPendingFrames < 1)
+                    {
+                        // Ring not primed: nothing to map yet, publish starts next iteration.
+                        pboPendingFrames++;
+                        framePublishable = false;
+                    }
+                    else
+                    {
+                        // ...and map the PREVIOUS frame's PBO, whose transfer had a frame to finish.
+                        gl.BindBuffer(BufferTargetARB.PixelPackBuffer, pbos[pboIndex]);
+                        var mapped = gl.MapBufferRange(
+                            BufferTargetARB.PixelPackBuffer, 0, frameBytes, (uint)MapBufferAccessMask.ReadBit);
+                        if (mapped is not null)
+                        {
+                            new ReadOnlySpan<byte>(mapped, (int)frameBytes).CopyTo(readback);
+                            gl.UnmapBuffer(BufferTargetARB.PixelPackBuffer);
+                        }
+                        else
+                        {
+                            // Map failure (context loss etc.): drop to the sync path for good.
+                            usePbo = false;
+                            framePublishable = false;
+                            Trace.LogWarning("pixel-pack map failed - switching to synchronous readback");
+                        }
+                    }
+
+                    gl.BindBuffer(BufferTargetARB.PixelPackBuffer, 0);
+                }
+                else
+                {
+                    fixed (byte* dst = readback)
+                        gl.ReadPixels(0, 0, (uint)_width, (uint)_height, readFormat, GLEnum.UnsignedByte, dst);
+                }
+
                 var readbackElapsed = Stopwatch.GetElapsedTime(readbackStarted);
                 if (readbackElapsed.TotalMilliseconds > 500 && _currentPresetName != _lastSlowReadbackPresetLogged)
                 {
@@ -235,20 +322,42 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                         readbackElapsed.TotalMilliseconds, _currentPresetName ?? "(idle)");
                 }
 
-                lock (_frameGate)
+                if (framePublishable)
                 {
-                    // Double-buffer publication: the renderer never copies a full frame while holding
-                    // the lock; it swaps ownership with the previously published buffer.
-                    var reusable = _latestFrame;
-                    _latestFrame = readback;
-                    readback = reusable;
-                    _frameVersion++;
+                    lock (_frameGate)
+                    {
+                        // Double-buffer publication: the renderer never copies a full frame while
+                        // holding the lock; it swaps ownership with the previously published buffer.
+                        var reusable = _latestFrame;
+                        _latestFrame = readback;
+                        readback = reusable;
+                        _frameVersion++;
+                    }
+
+                    if (!firstFramePublished)
+                    {
+                        firstFramePublished = true;
+                        Trace.LogInformation(
+                            "first frame published (render {RenderMs:0.0}ms, readback {ReadbackMs:0.0}ms, pbo={Pbo})",
+                            renderElapsed.TotalMilliseconds, readbackElapsed.TotalMilliseconds, usePbo);
+                    }
                 }
 
                 nextDeadline += (long)Math.Round(intervalStopwatchTicks);
                 var now = Stopwatch.GetTimestamp();
                 if (nextDeadline <= now)
-                    nextDeadline = now + (long)Math.Round(intervalStopwatchTicks);
+                {
+                    // Behind schedule (slow preset, or oversleeping waits - Android applies tens of
+                    // ms of timer slack to background threads): render back-to-back to catch up
+                    // instead of waiting, resyncing only when hopelessly behind. Re-anchoring the
+                    // deadline every time capped the loop at ~1/(interval+slack) fps on device.
+                    if (now - nextDeadline > Stopwatch.Frequency)
+                        nextDeadline = now;
+                    if (token.IsCancellationRequested)
+                        break;
+                    continue;
+                }
+
                 var delay = TimeSpan.FromSeconds((nextDeadline - now) / (double)Stopwatch.Frequency);
                 if (token.WaitHandle.WaitOne(delay))
                     break;
@@ -270,6 +379,11 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
                     if (fbo != 0) gl.DeleteFramebuffer(fbo);
                     if (colorTex != 0) gl.DeleteTexture(colorTex);
                     if (depthRbo != 0) gl.DeleteRenderbuffer(depthRbo);
+                    foreach (var pbo in pbos)
+                    {
+                        if (pbo != 0)
+                            gl.DeleteBuffer(pbo);
+                    }
                 }
             }
             catch (Exception ex) { Trace.LogWarning(ex, "renderer GL teardown"); }

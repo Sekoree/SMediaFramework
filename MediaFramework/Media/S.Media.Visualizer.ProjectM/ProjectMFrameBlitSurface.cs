@@ -62,8 +62,10 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface, I
 
             _texture = gl.GenTexture();
             gl.BindTexture(TextureTarget.Texture2D, _texture);
+            // Upload format follows the renderer's publish layout (BGRA on desktop GL, RGBA on GLES).
+            var uploadFormat = _renderer.PublishedPixelFormat == S.Media.Core.Video.PixelFormat.Rgba32 ? GLEnum.Rgba : GLEnum.Bgra;
             gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8,
-                (uint)_renderer.Width, (uint)_renderer.Height, 0, GLEnum.Bgra, GLEnum.UnsignedByte, null);
+                (uint)_renderer.Width, (uint)_renderer.Height, 0, uploadFormat, GLEnum.UnsignedByte, null);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
             gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
@@ -112,7 +114,9 @@ internal sealed class ProjectMFrameBlitSurface : IVideoCompositorLayerSurface, I
             fixed (byte* src = _upload)
             {
                 gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0,
-                    (uint)_renderer.Width, (uint)_renderer.Height, GLEnum.Bgra, GLEnum.UnsignedByte, src);
+                    (uint)_renderer.Width, (uint)_renderer.Height,
+                    _renderer.PublishedPixelFormat == S.Media.Core.Video.PixelFormat.Rgba32 ? GLEnum.Rgba : GLEnum.Bgra,
+                    GLEnum.UnsignedByte, src);
             }
 
             _hasFrame = true;

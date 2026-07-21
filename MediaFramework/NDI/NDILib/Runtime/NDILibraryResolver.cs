@@ -67,7 +67,9 @@ public static class NDILibraryResolver
             ? NDILibraryNames.WindowsCandidates
             : OperatingSystem.IsMacOS()
                 ? NDILibraryNames.MacCandidates
-                : NDILibraryNames.LinuxCandidates;
+                : OperatingSystem.IsAndroid()
+                    ? NDILibraryNames.AndroidCandidates
+                    : NDILibraryNames.LinuxCandidates;
 
     private static IEnumerable<string> GetInstalledRuntimePaths(IReadOnlyList<string> candidates)
     {

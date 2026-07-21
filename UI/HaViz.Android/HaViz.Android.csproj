@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0-android</TargetFramework>
+        <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+        <OutputType>Exe</OutputType>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <ApplicationId>dev.sekoree.haviz</ApplicationId>
+        <ApplicationVersion>1</ApplicationVersion>
+        <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+        <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
+        <AndroidPackageFormats>apk</AndroidPackageFormats>
+        <!-- The framework's trimming assumptions are untested on Android; keep the linker off the
+             framework assemblies until exercised (APK size is not a concern on a dedicated device). -->
+        <AndroidLinkMode>None</AndroidLinkMode>
+        <!-- Profiled AOT aborts on device at startup (Mono class-init.c instance_size assertion,
+             .NET 10 android36 + this dependency graph). Interpreter/JIT is plenty here - all hot
+             work is native (GLES render, NDI pack, MediaCodec); keep AOT off until the runtime bug
+             is fixed upstream. -->
+        <RunAOTCompilation>false</RunAOTCompilation>
+        <!-- LLVM marshal methods cannot register natives for Java-visible classes with a GENERIC
+             base (AvaloniaAndroidApplication<App>) - the app dies at startup with
+             UnsatisfiedLinkError n_onCreate. Runtime RegisterNativeMembers handles generics. -->
+        <AndroidEnableMarshalMethods>false</AndroidEnableMarshalMethods>
+        <IsPackable>false</IsPackable>
+        <!-- .NET Android requires JDK 21; the system JVMs are newer. Local Temurin drop wins only
+             when nothing else set the property (CI/other machines override or provide their own). -->
+        <JavaSdkDirectory Condition="'$(JavaSdkDirectory)' == '' And Exists('$(HOME)/Android/jdk/jdk-21.0.11+10')">$(HOME)/Android/jdk/jdk-21.0.11+10</JavaSdkDirectory>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia" />
+        <PackageReference Include="Avalonia.Android" />
+        <PackageReference Include="Avalonia.Themes.Fluent" />
+        <PackageReference Include="Avalonia.Fonts.Inter" />
+        <PackageReference Include="CommunityToolkit.Mvvm" />
+        <PackageReference Include="Microsoft.Extensions.Logging" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../HaViz.Core/HaViz.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Bundled projectM preset/texture packs (deployed to the app files dir on first run). -->
+        <AndroidAsset Include="../../External/projectm/android-arm64/presets/**/*.milk"
+                      LogicalName="presets/%(RecursiveDir)%(Filename)%(Extension)" />
+        <AndroidAsset Include="../../External/projectm/android-arm64/textures/**/*.*"
+                      LogicalName="textures/%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- NDI native runtime from the vendored Android SDK (arm64 only per target device). -->
+        <AndroidNativeLibrary Include="../../Reference/NDI SDK for Android/lib/arm64-v8a/libndi.so" Abi="arm64-v8a" />
+        <!-- projectM GLES build (produced by scripts/build-projectm.sh android-arm64). Conditional so
+             the app still builds before the native build ran - the visualizer then reports unavailable. -->
+        <AndroidNativeLibrary Include="../../External/projectm/android-arm64/lib/libprojectM-4.so"
+                              Abi="arm64-v8a"
+                              Condition="Exists('../../External/projectm/android-arm64/lib/libprojectM-4.so')" />
+    </ItemGroup>
+
+</Project>

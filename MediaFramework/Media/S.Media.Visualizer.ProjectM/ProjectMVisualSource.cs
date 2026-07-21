@@ -87,6 +87,18 @@ public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVide
     internal void ReportLegacyPresetName(string? name) => _legacyPresetName = name;
 
     /// <summary>Test seam: copies the continuous renderer's newest frame (false in legacy mode).</summary>
+    /// <summary>Continuous-mode frame tap for hosts that pump frames themselves (the NDI visualizer
+    /// apps): copies the newest rendered frame when it changed since
+    /// <paramref name="lastSeenVersion"/>. Pixel layout is <see cref="RenderedFramePixelFormat"/>;
+    /// rows are in FBO order - flip vertically for top-down consumers (NDI, files). False in
+    /// legacy mode or before the first render.</summary>
+    public bool TryCopyLatestRenderedFrame(byte[] destination, ref long lastSeenVersion) =>
+        _renderer is not null && _renderer.TryCopyLatestFrame(destination, ref lastSeenVersion);
+
+    /// <summary>Layout of <see cref="TryCopyLatestRenderedFrame"/> frames: BGRA32 on desktop GL,
+    /// RGBA32 on GLES (native readback). Stable once the first frame published.</summary>
+    public PixelFormat RenderedFramePixelFormat => _renderer?.PublishedPixelFormat ?? PixelFormat.Bgra32;
+
     internal bool TryCopyLatestFrameForTest(byte[] destination, ref long lastSeenVersion) =>
         _renderer?.TryCopyLatestFrame(destination, ref lastSeenVersion) ?? false;
 

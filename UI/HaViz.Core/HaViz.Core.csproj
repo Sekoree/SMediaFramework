@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="HaViz.Core.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.Visualizer.ProjectM/S.Media.Visualizer.ProjectM.csproj" />
+        <ProjectReference Include="../../MediaFramework/Media/S.Media.NDI/S.Media.NDI.csproj" />
+    </ItemGroup>
+
+</Project>
