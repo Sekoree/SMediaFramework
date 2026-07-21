@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Runtime.Intrinsics;
 
 namespace S.Media.Routing;
 
@@ -147,10 +149,16 @@ public sealed partial class AudioRouter
         {
             var src = group.Source.Scratch.AsSpan(0, samplesPerChannel * group.SrcChannels);
             var dst = group.Output.Pump.WorkingBuffer.AsSpan(0, samplesPerChannel * group.DstChannels);
+            // Cells in a fused group never hit ApplyRoute's counters, so record the pass here or
+            // route-mix profiling silently undercounts whenever fusion is active.
+            var profile = ChannelRouteMixProfiling.ShouldProfileApplyRoute();
+            var t0 = profile ? Stopwatch.GetTimestamp() : 0L;
             if (anyRamp)
                 ApplyFusedMatrixRamp(src, group.SrcChannels, dst, group.DstChannels, from, to, samplesPerChannel);
             else
                 ApplyFusedMatrixSettled(src, group.SrcChannels, dst, group.DstChannels, from, samplesPerChannel);
+            if (profile)
+                ChannelRouteMixProfiling.RecordFusedMatrixMix(Stopwatch.GetTimestamp() - t0);
         }
 
         // Advance every cell's ramp exactly like the per-route loop does.
@@ -163,54 +171,123 @@ public sealed partial class AudioRouter
     }
 
     /// <summary>Dense settled-gain matrix mix: <c>dst[f,d] += Σ_s src[f,s] * gains[d*S+s]</c> -
-    /// one pass over src and dst regardless of live cell count.</summary>
+    /// one pass over src and dst regardless of live cell count. Source widths 8 and 4 take a
+    /// vector dot-product per output channel (one frame load, one gain-row load, horizontal sum -
+    /// ~3.7x the scalar shape in the MatrixMix benchmark); other widths use the scalar loop. The
+    /// vector sum reorders the additions, which is why the equivalence tests use a tolerance.</summary>
     internal static void ApplyFusedMatrixSettled(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
         ReadOnlySpan<float> gains, int samplesPerChannel)
     {
-        // Direct indexing (no per-frame/per-row Slice): measurably faster than the span-slicing
-        // shape in the MatrixMix benchmark and identical math.
+        if (Vector256.IsHardwareAccelerated && srcChannels == 8)
+        {
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var srcVec = Vector256.Create(src.Slice(s * 8, 8));
+                var dstFrame = dst.Slice(s * dstChannels, dstChannels);
+                for (var d = 0; d < dstChannels; d++)
+                    dstFrame[d] += Vector256.Sum(srcVec * Vector256.Create(gains.Slice(d * 8, 8)));
+            }
+
+            return;
+        }
+
+        if (Vector128.IsHardwareAccelerated && srcChannels == 4)
+        {
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var srcVec = Vector128.Create(src.Slice(s * 4, 4));
+                var dstFrame = dst.Slice(s * dstChannels, dstChannels);
+                for (var d = 0; d < dstChannels; d++)
+                    dstFrame[d] += Vector128.Sum(srcVec * Vector128.Create(gains.Slice(d * 4, 4)));
+            }
+
+            return;
+        }
+
+        // Span-slicing scalar shape: benchmarked faster than direct flat indexing (the slices give
+        // the JIT constant-length bounds elision on the inner dot product).
         for (var s = 0; s < samplesPerChannel; s++)
         {
-            var srcBase = s * srcChannels;
-            var dstBase = s * dstChannels;
+            var srcFrame = src.Slice(s * srcChannels, srcChannels);
+            var dstFrame = dst.Slice(s * dstChannels, dstChannels);
             for (var d = 0; d < dstChannels; d++)
             {
-                var rowBase = d * srcChannels;
+                var row = gains.Slice(d * srcChannels, srcChannels);
                 var acc = 0f;
                 for (var c = 0; c < srcChannels; c++)
-                    acc += src[srcBase + c] * gains[rowBase + c];
-                dst[dstBase + d] += acc;
+                    acc += srcFrame[c] * row[c];
+                dstFrame[d] += acc;
             }
         }
     }
 
     /// <summary>Ramping variant: every cell interpolates from→to at sample-mid
-    /// (<c>gain(s) = from + (to - from) * (s + 0.5) / n</c>), matching <see cref="ApplyRoute"/>'s
-    /// ramp exactly so fused and per-route fades are indistinguishable.</summary>
+    /// (<c>gain(s) = from + (to - from) * (s + 0.5) / n</c>), the same interpolation as
+    /// <see cref="ApplyRoute"/>'s ramp so fused and per-route fades stay click-free and match
+    /// within float rounding. Vector paths mirror <see cref="ApplyFusedMatrixSettled"/> with the
+    /// gain row interpolated per frame before the dot product.</summary>
     internal static void ApplyFusedMatrixRamp(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
         ReadOnlySpan<float> fromGains, ReadOnlySpan<float> toGains, int samplesPerChannel)
     {
         var invSamples = 1f / samplesPerChannel;
+
+        if (Vector256.IsHardwareAccelerated && srcChannels == 8)
+        {
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var t = Vector256.Create((s + 0.5f) * invSamples);
+                var srcVec = Vector256.Create(src.Slice(s * 8, 8));
+                var dstFrame = dst.Slice(s * dstChannels, dstChannels);
+                for (var d = 0; d < dstChannels; d++)
+                {
+                    var from = Vector256.Create(fromGains.Slice(d * 8, 8));
+                    var gain = from + (Vector256.Create(toGains.Slice(d * 8, 8)) - from) * t;
+                    dstFrame[d] += Vector256.Sum(srcVec * gain);
+                }
+            }
+
+            return;
+        }
+
+        if (Vector128.IsHardwareAccelerated && srcChannels == 4)
+        {
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var t = Vector128.Create((s + 0.5f) * invSamples);
+                var srcVec = Vector128.Create(src.Slice(s * 4, 4));
+                var dstFrame = dst.Slice(s * dstChannels, dstChannels);
+                for (var d = 0; d < dstChannels; d++)
+                {
+                    var from = Vector128.Create(fromGains.Slice(d * 4, 4));
+                    var gain = from + (Vector128.Create(toGains.Slice(d * 4, 4)) - from) * t;
+                    dstFrame[d] += Vector128.Sum(srcVec * gain);
+                }
+            }
+
+            return;
+        }
+
         for (var s = 0; s < samplesPerChannel; s++)
         {
             var t = (s + 0.5f) * invSamples;
-            var srcBase = s * srcChannels;
-            var dstBase = s * dstChannels;
+            var srcFrame = src.Slice(s * srcChannels, srcChannels);
+            var dstFrame = dst.Slice(s * dstChannels, dstChannels);
             for (var d = 0; d < dstChannels; d++)
             {
-                var rowBase = d * srcChannels;
+                var fromRow = fromGains.Slice(d * srcChannels, srcChannels);
+                var toRow = toGains.Slice(d * srcChannels, srcChannels);
                 var acc = 0f;
                 for (var c = 0; c < srcChannels; c++)
                 {
-                    var from = fromGains[rowBase + c];
-                    acc += src[srcBase + c] * (from + (toGains[rowBase + c] - from) * t);
+                    var from = fromRow[c];
+                    acc += srcFrame[c] * (from + (toRow[c] - from) * t);
                 }
 
-                dst[dstBase + d] += acc;
+                dstFrame[d] += acc;
             }
         }
     }

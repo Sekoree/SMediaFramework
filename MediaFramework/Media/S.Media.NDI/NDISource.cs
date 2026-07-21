@@ -47,6 +47,9 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     private TimeSpan _nextVideoPts;
     private TimeSpan _videoRebaseBasePts;
     private TimeSpan _lastResolvedVideoPts;
+    // Bumped (under _videoPtsLock) by every RebaseVideoToLatest so a frame whose PTS was resolved
+    // before a rebase is not enqueued after it - see ProcessVideoFrame.
+    private long _videoTimelineGeneration;
     private long _videoNDITimingOriginTicks;
     private bool _videoNDITimingOriginSet;
     private bool _hasLastResolvedVideoPts;
@@ -370,6 +373,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
             nextPresentationTime = TimeSpan.Zero;
         lock (_videoPtsLock)
         {
+            _videoTimelineGeneration++;
             while (_videoQueue.TryDequeue(out var frame))
                 frame.Dispose();
             _nextVideoPts = nextPresentationTime;
@@ -547,33 +551,59 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 
     private void ProcessVideoFrame(in NDIVideoFrameV2 video)
     {
+        // Only the capture thread calls this; _videoPtsLock exists to guard the PTS timeline state
+        // against RebaseVideoToLatest from player threads. The multi-MB unpack copy therefore runs
+        // OUTSIDE the lock so a concurrent rebase is never stalled behind a frame copy. The generation
+        // check on re-entry drops a frame whose PTS was resolved before a rebase - the same outcome as
+        // the old wide lock, where such a frame was enqueued and then drained by the rebase.
+        TimeSpan pts;
+        long generation;
         lock (_videoPtsLock)
         {
-            var pts = ResolveVideoPresentationTime(in video);
-            if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
+            pts = ResolveVideoPresentationTime(in video);
+            generation = _videoTimelineGeneration;
+        }
+
+        if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
+        {
+            // Log (and sample luma) BEFORE handing the frame to the queue - a consumer may dequeue and
+            // dispose it the moment it lands, and its pooled backing can be recycled immediately after.
+            var unpacked = Interlocked.Increment(ref _videoFramesUnpacked);
+            if (unpacked <= 3 && Trace.IsEnabled(LogLevel.Information))
             {
-                EnsureVideoFormat(vf.Format);
-                EnqueueVideoFrame(vf);
-                var unpacked = Interlocked.Increment(ref _videoFramesUnpacked);
-                if (unpacked <= 3 && Trace.IsEnabled(LogLevel.Information))
+                var avgLuma = NDIVideoFrameUnpack.SampleAveragePackedLuma(vf);
+                Trace.LogInformation(
+                    "NDISource: unpacked video frame #{N} fourCC={FourCc} native={NativeW}x{NativeH} stride={NativeStride} → {FmtW}x{FmtH} {FmtPf} avgLuma={AvgLuma:F1} range={Range} pts={Pts}",
+                    unpacked, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes,
+                    vf.Format.Width, vf.Format.Height, vf.Format.PixelFormat, avgLuma, vf.ColorRange,
+                    vf.PresentationTime);
+            }
+
+            var stale = false;
+            lock (_videoPtsLock)
+            {
+                if (generation == _videoTimelineGeneration)
                 {
-                    var avgLuma = NDIVideoFrameUnpack.SampleAveragePackedLuma(vf);
-                    Trace.LogInformation(
-                        "NDISource: unpacked video frame #{N} fourCC={FourCc} native={NativeW}x{NativeH} stride={NativeStride} → {FmtW}x{FmtH} {FmtPf} avgLuma={AvgLuma:F1} range={Range} pts={Pts}",
-                        unpacked, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes,
-                        vf.Format.Width, vf.Format.Height, vf.Format.PixelFormat, avgLuma, vf.ColorRange,
-                        vf.PresentationTime);
+                    EnsureVideoFormat(vf.Format);
+                    EnqueueVideoFrame(vf);
+                }
+                else
+                {
+                    stale = true;
                 }
             }
-            else
+
+            if (stale)
+                vf.Dispose();
+        }
+        else
+        {
+            var drops = Interlocked.Increment(ref _videoUnpackDrops);
+            if (drops <= 8)
             {
-                var drops = Interlocked.Increment(ref _videoUnpackDrops);
-                if (drops <= 8)
-                {
-                    Trace.LogWarning(
-                        "NDISource: dropped video frame (unpack failed) #{Drop} fourCC={FourCc} xres={Xres} yres={Yres} lineStride={Stride} pData={HasData}",
-                        drops, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes, video.PData != nint.Zero);
-                }
+                Trace.LogWarning(
+                    "NDISource: dropped video frame (unpack failed) #{Drop} fourCC={FourCc} xres={Xres} yres={Yres} lineStride={Stride} pData={HasData}",
+                    drops, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes, video.PData != nint.Zero);
             }
         }
     }

@@ -10,8 +10,9 @@ namespace S.Media.Audio.Benchmarks;
 /// full-buffer accumulate passes per chunk. <see cref="PerCellRoutes"/> reproduces that shape with
 /// 64 single-cell <see cref="ChannelMap.ApplyAdditive"/> passes (the router additionally applies a
 /// per-route gain, so the real path is slightly more expensive than this emulation);
-/// <see cref="FusedScalar"/>/<see cref="FusedVectorized"/> are the proposed replacement: one pass
-/// over src/dst computing the dense matrix-vector product per sample frame.
+/// <see cref="FusedKernelShipped"/> is what the run loop now executes for co-routed cells;
+/// <see cref="FusedScalar"/>/<see cref="FusedVectorized"/> stay as reference shapes (the scalar
+/// span-slicing loop and the Vector256 dot-product form the shipped kernel is built on).
 /// </summary>
 [MemoryDiagnoser]
 public class MatrixMixBenchmarks
@@ -20,19 +21,29 @@ public class MatrixMixBenchmarks
     private const int SamplesPerChannel = 480;
 
     private readonly float[] _gains = new float[Channels * Channels];
+    private readonly float[] _rampToGains = new float[Channels * Channels];
+    private readonly float[] _gainsSixWide = new float[6 * Channels];
     private ChannelMap[] _cellMaps = null!;
     private float[] _src = null!;
+    private float[] _srcSixChannels = null!;
     private float[] _dst = null!;
 
     [GlobalSetup]
     public void Setup()
     {
         _src = new float[SamplesPerChannel * Channels];
+        _srcSixChannels = new float[SamplesPerChannel * 6];
         _dst = new float[SamplesPerChannel * Channels];
         for (var i = 0; i < _src.Length; i++)
             _src[i] = MathF.Sin(i * 0.01f) * 0.25f;
+        for (var i = 0; i < _srcSixChannels.Length; i++)
+            _srcSixChannels[i] = MathF.Sin(i * 0.01f) * 0.25f;
         for (var i = 0; i < _gains.Length; i++)
             _gains[i] = 0.11f;
+        for (var i = 0; i < _rampToGains.Length; i++)
+            _rampToGains[i] = 0.23f;
+        for (var i = 0; i < _gainsSixWide.Length; i++)
+            _gainsSixWide[i] = 0.11f;
 
         _cellMaps = new ChannelMap[Channels * Channels];
         Span<int> map = stackalloc int[Channels];
@@ -62,6 +73,25 @@ public class MatrixMixBenchmarks
     {
         Array.Clear(_dst);
         S.Media.Routing.AudioRouter.ApplyFusedMatrixSettled(_src, Channels, _dst, Channels, _gains, SamplesPerChannel);
+    }
+
+    /// <summary>The shipped ramping fused kernel (AudioRouter.ApplyFusedMatrixRamp) - the chunk
+    /// shape while any cell of the group is mid-fade.</summary>
+    [Benchmark]
+    public void FusedKernelShippedRamp()
+    {
+        Array.Clear(_dst);
+        S.Media.Routing.AudioRouter.ApplyFusedMatrixRamp(_src, Channels, _dst, Channels, _gains, _rampToGains, SamplesPerChannel);
+    }
+
+    /// <summary>Odd source width (6ch → 8ch) - stays on the scalar fallback inside the shipped
+    /// kernel, guarding against a regression that only shows off the 8/4-wide vector paths.</summary>
+    [Benchmark]
+    public void FusedKernelShippedSixWide()
+    {
+        Array.Clear(_dst);
+        S.Media.Routing.AudioRouter.ApplyFusedMatrixSettled(
+            _srcSixChannels, 6, _dst, Channels, _gainsSixWide, SamplesPerChannel);
     }
 
     [Benchmark]

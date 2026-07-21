@@ -4,10 +4,10 @@ using S.Media.Core.Audio;
 namespace S.Media.Audio.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="AudioClipVoice.ReadInto"/> — currently a per-sample-frame scalar loop that
-/// re-fetches the clip span and re-checks exhaustion every iteration. <see cref="IdealGainCopy"/>
-/// is the theoretical floor (bulk copy with gain) showing the headroom of a segmented/vectorized
-/// rewrite; the soundboard runs many voices at once, so the delta multiplies.
+/// Measures <see cref="AudioClipVoice.ReadInto"/>. The settled-gain path is segmented/vectorized;
+/// <see cref="VoiceReadIntoRamping"/> pins the attack/release fade path, which stays a scalar
+/// per-frame loop (<see cref="IdealGainCopy"/> is the theoretical bulk-copy floor). The soundboard
+/// runs many voices at once, so any delta multiplies.
 /// </summary>
 [MemoryDiagnoser]
 public class AudioClipVoiceBenchmarks
@@ -15,6 +15,7 @@ public class AudioClipVoiceBenchmarks
     private const int ChunkFloats = 960; // 480 frames stereo = one 10 ms mix chunk at 48 kHz
 
     private AudioClipVoice _voice = null!;
+    private AudioClipVoice _rampingVoice = null!;
     private float[] _clipData = null!;
     private float[] _dst = null!;
     private int _cursor;
@@ -28,14 +29,29 @@ public class AudioClipVoiceBenchmarks
 
         var clip = AudioClip.FromSamples(new AudioFormat(48_000, 2), _clipData);
         _voice = clip.CreateVoice(AudioClipVoiceOptions.Default with { Loop = true, StartGain = 0.8f });
+        // Attack far longer than the run so every measured chunk stays mid-ramp.
+        _rampingVoice = clip.CreateVoice(AudioClipVoiceOptions.Default with
+        {
+            Loop = true,
+            StartGain = 0.8f,
+            AttackFade = TimeSpan.FromHours(1),
+        });
         _dst = new float[ChunkFloats];
     }
 
     [GlobalCleanup]
-    public void Cleanup() => _voice.Dispose();
+    public void Cleanup()
+    {
+        _voice.Dispose();
+        _rampingVoice.Dispose();
+    }
 
     [Benchmark(Baseline = true)]
     public int VoiceReadInto() => _voice.ReadInto(_dst);
+
+    /// <summary>Mid-fade chunk: the scalar per-frame ramp segment.</summary>
+    [Benchmark]
+    public int VoiceReadIntoRamping() => _rampingVoice.ReadInto(_dst);
 
     [Benchmark]
     public int IdealGainCopy()

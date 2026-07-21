@@ -104,6 +104,73 @@ public class CpuCompositorMultiLayerBenchmarks
     }
 }
 
+/// <summary>
+/// The layer-effect path (chroma-key) plus the blend/crop shapes the parameterized class leaves
+/// out. Effects gate off BOTH fast paths and force the generic per-pixel loop with a per-pixel
+/// premultiplied→straight conversion — the slowest CPU shape, so it needs its own numbers to
+/// guard the kernel-scratch reuse and any future row-specialized effects loop.
+/// </summary>
+[MemoryDiagnoser]
+public class CpuCompositorEffectsBenchmarks
+{
+    private const int Width = 1280;
+    private const int Height = 720;
+
+    private CpuVideoCompositor _compositor = null!;
+    private VideoFrame _source = null!;
+    private CompositorLayer[] _chromaKeyLayer = null!;
+    private CompositorLayer[] _multiplyLayer = null!;
+    private CompositorLayer[] _croppedLayer = null!;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var format = new VideoFormat(Width, Height, PixelFormat.Bgra32, new Rational(60, 1));
+        _compositor = new CpuVideoCompositor(format);
+        _source = BenchFrames.CreateBgra(Width, Height);
+        _chromaKeyLayer =
+        [
+            CompositorLayer.Default(_source) with
+            {
+                Effects = [Effects.ChromaKeyVideoEffect.Create(ChromaKeySettings.GreenScreen)],
+            },
+        ];
+        _multiplyLayer = [new CompositorLayer(_source, LayerTransform2D.Identity, 1f, BlendMode.Multiply)];
+        _croppedLayer =
+        [
+            CompositorLayer.Default(_source) with
+            {
+                SourceCrop = new RectNormalized(0.25f, 0.25f, 0.75f, 0.75f),
+            },
+        ];
+    }
+
+    [GlobalCleanup]
+    public void Cleanup() => _compositor.Dispose();
+
+    /// <summary>Generic per-pixel loop + CPU chroma-key kernel per pixel.</summary>
+    [Benchmark]
+    public void CompositeChromaKey()
+    {
+        using var result = _compositor.Composite(_chromaKeyLayer, TimeSpan.Zero);
+    }
+
+    /// <summary>Multiply blend arm of the generic loop (not reachable from either fast path).</summary>
+    [Benchmark]
+    public void CompositeMultiply()
+    {
+        using var result = _compositor.Composite(_multiplyLayer, TimeSpan.Zero);
+    }
+
+    /// <summary>Integer-translate blit with a sub-rect crop — exercises the crop-interval logic
+    /// in the fast paths instead of the full-frame crop the other benchmarks use.</summary>
+    [Benchmark]
+    public void CompositeCropped()
+    {
+        using var result = _compositor.Composite(_croppedLayer, TimeSpan.Zero);
+    }
+}
+
 internal static class BenchFrames
 {
     /// <summary>Array-backed BGRA frame filled with a gradient (avoids all-zero shortcut effects).</summary>

@@ -71,12 +71,21 @@ public static class ChannelRouteMixProfiling
 
     public static long ScalarRampLoopTicksTotal => Volatile.Read(ref _scalarRampTicksTotal);
 
+    /// <summary>Fused dense matrix passes (<see cref="AudioRouter"/> co-routed matrix cells).
+    /// Cells in a fused group bypass the per-route counters above, so without this the profile
+    /// undercounts whenever matrix fusion is active.</summary>
+    public static long FusedMatrixMixCalls => Volatile.Read(ref _fusedMatrixCalls);
+
+    public static long FusedMatrixMixTicksTotal => Volatile.Read(ref _fusedMatrixTicksTotal);
+
     private static long _applyAdditiveCalls;
     private static long _applyAdditiveTicksTotal;
     private static long _scalarUniformCalls;
     private static long _scalarUniformTicksTotal;
     private static long _scalarRampCalls;
     private static long _scalarRampTicksTotal;
+    private static long _fusedMatrixCalls;
+    private static long _fusedMatrixTicksTotal;
 
     private static bool ReadEnvFlag(string name)
     {
@@ -96,6 +105,8 @@ public static class ChannelRouteMixProfiling
         Interlocked.Exchange(ref _scalarUniformTicksTotal, 0);
         Interlocked.Exchange(ref _scalarRampCalls, 0);
         Interlocked.Exchange(ref _scalarRampTicksTotal, 0);
+        Interlocked.Exchange(ref _fusedMatrixCalls, 0);
+        Interlocked.Exchange(ref _fusedMatrixTicksTotal, 0);
     }
 
     /// <summary>
@@ -121,5 +132,11 @@ public static class ChannelRouteMixProfiling
     {
         Interlocked.Increment(ref _scalarRampCalls);
         Interlocked.Add(ref _scalarRampTicksTotal, ticks);
+    }
+
+    internal static void RecordFusedMatrixMix(long ticks)
+    {
+        Interlocked.Increment(ref _fusedMatrixCalls);
+        Interlocked.Add(ref _fusedMatrixTicksTotal, ticks);
     }
 }

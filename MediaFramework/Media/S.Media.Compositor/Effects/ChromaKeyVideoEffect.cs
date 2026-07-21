@@ -100,16 +100,20 @@ public static class ChromaKeyVideoEffect
             var dCb = cb - _keyCb;
             var dCr = cr - _keyCr;
             var baseMask = MathF.Sqrt(dCb * dCb + dCr * dCr) - _similarity;
-            var fullMask = MathF.Pow(Math.Clamp(baseMask / _smoothness, 0f, 1f), 1.5f);
+            var fullMask = Pow15(Math.Clamp(baseMask / _smoothness, 0f, 1f));
             a *= fullMask;
             if (_spill > 0f)
             {
-                var spillVal = MathF.Pow(Math.Clamp(baseMask / _spill, 0f, 1f), 1.5f);
+                var spillVal = Pow15(Math.Clamp(baseMask / _spill, 0f, 1f));
                 var luma = Math.Clamp(0.2126f * r + 0.7152f * g + 0.0722f * b, 0f, 1f);
                 r = luma + (r - luma) * spillVal;
                 g = luma + (g - luma) * spillVal;
                 b = luma + (b - luma) * spillVal;
             }
         }
+
+        /// <summary>pow(x, 1.5) for x in [0, 1] as x·√x - same curve as the GLSL body's pow at a
+        /// fraction of the per-pixel cost (this kernel runs once per pixel per frame).</summary>
+        private static float Pow15(float x) => x * MathF.Sqrt(x);
     }
 }

@@ -38,6 +38,11 @@ public sealed class CpuVideoCompositor : IVideoCompositor
     private bool _configured;
     private bool _disposed;
 
+    // Reusable scratch for the layer's resolved CPU effect kernels. Composite (and therefore
+    // DrawLayer) is single-threaded per compositor and the kernels never escape the call, so this
+    // avoids a List + ToArray allocation per layer per frame on the effects path.
+    private IVideoLayerCpuEffect[] _fxScratch = [];
+
     public CpuVideoCompositor(VideoFormat output, CompositorSamplingMode samplingMode = CompositorSamplingMode.Nearest)
     {
         SamplingMode = samplingMode;
@@ -141,18 +146,19 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         // Layer-effect chain, CPU fallback: run each effect's scalar kernel per pixel. GPU-only
         // effects (no CPU kernel) are skipped by contract - this backend degrades to pass-through
         // for them instead of failing the composite.
-        IVideoLayerCpuEffect[]? fxKernels = null;
+        var fxCount = 0;
         if (layer.Effects is { Count: > 0 } fx)
         {
-            var kernels = new List<IVideoLayerCpuEffect>(fx.Count);
+            if (_fxScratch.Length < fx.Count)
+                _fxScratch = new IVideoLayerCpuEffect[fx.Count];
             foreach (var effect in fx)
             {
                 if (effect.CpuKernel is { } kernel)
-                    kernels.Add(kernel);
+                    _fxScratch[fxCount++] = kernel;
             }
-            if (kernels.Count > 0)
-                fxKernels = kernels.ToArray();
         }
+
+        var fxKernels = fxCount > 0 ? _fxScratch.AsSpan(0, fxCount) : default;
 
         var srcSpan = srcPlane.Span;
         var mode = SamplingMode;
@@ -160,7 +166,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         // Fast path A - pure integer translate + Source + full opacity + premultiplied source:
         // the layer is a rectangular blit, one row CopyTo per line (the dominant single-layer
         // scaler/passthrough case; ~40x faster than the generic per-pixel loop).
-        if (fxKernels is null
+        if (fxKernels.IsEmpty
             && mode == CompositorSamplingMode.Nearest
             && layer.BlendMode == BlendMode.Source
             && opacity >= 1f
@@ -177,7 +183,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         // collapses to a per-row dx interval (each crop condition is linear in dx) instead of a
         // per-pixel test. Boundary pixels are nudged with the exact per-pixel predicate so the
         // output stays byte-identical to the generic loop.
-        if (fxKernels is null && mode == CompositorSamplingMode.Nearest)
+        if (fxKernels.IsEmpty && mode == CompositorSamplingMode.Nearest)
         {
             DrawLayerNearestFast(dst, layer, opacity, alphaMode, inv, srcSpan, srcStride, srcW, srcH,
                 cropX0, cropY0, cropX1, cropY1, minX, minY, maxX, maxY);
@@ -224,7 +230,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                 }
 
                 var pixelAlphaMode = alphaMode;
-                if (fxKernels is not null)
+                if (!fxKernels.IsEmpty)
                 {
                     ApplyCpuEffects(fxKernels, ref b, ref g, ref r, ref a, alphaMode);
                     pixelAlphaMode = VideoAlphaMode.Straight;
@@ -452,7 +458,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
     /// alpha in [0, 1] (matching the GPU path, where effects run before premultiply), so the
     /// sample is converted from its source alpha mode first; the outputs are straight bytes.</summary>
     private static void ApplyCpuEffects(
-        IVideoLayerCpuEffect[] kernels,
+        ReadOnlySpan<IVideoLayerCpuEffect> kernels,
         ref byte b, ref byte g, ref byte r, ref byte a,
         VideoAlphaMode alphaMode)
     {

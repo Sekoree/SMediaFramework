@@ -25,6 +25,10 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
     private readonly int[] _srcStride = new int[8];
     private readonly byte*[] _dstLines = new byte*[8];
     private readonly int[] _dstStride = new int[8];
+    // Pin scratch reused across Encode calls (the core is single-threaded on the encode worker);
+    // slots are reset to default after each dispose so cleanup after a mid-pin failure only ever
+    // touches live handles.
+    private readonly System.Buffers.MemoryHandle[] _planePins = new System.Buffers.MemoryHandle[8];
     private VideoFormat _sourceFormat;
     private PixelFormat _encodePixel;
     private int _encodeWidth;
@@ -160,11 +164,17 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
             throw new FFmpegException(0, "sws_getCachedContext returned NULL");
 
         var planeCount = Math.Min(src.Planes.Length, 8);
-        var pins = new System.Buffers.MemoryHandle[planeCount];
-        Array.Clear(_srcLines);
-        Array.Clear(_srcStride);
-        Array.Clear(_dstLines);
-        Array.Clear(_dstStride);
+        var pins = _planePins;
+        // _dstLines/_dstStride need no per-frame clear: slots 0..3 are rewritten below every call and
+        // slots 4..7 stay zero from construction (nothing ever writes them). The src arrays only need
+        // the slots above planeCount zeroed - libav copies the first stride/pointer entries regardless
+        // of the format's plane count, so a frame with fewer planes than the previous one must not
+        // hand sws_scale stale pointers.
+        for (var i = planeCount; i < 8; i++)
+        {
+            _srcLines[i] = null;
+            _srcStride[i] = 0;
+        }
         try
         {
             for (var i = 0; i < planeCount; i++)
@@ -187,7 +197,10 @@ internal sealed unsafe class FfmpegVideoEncoderCore : IDisposable
         finally
         {
             for (var i = 0; i < planeCount; i++)
+            {
                 pins[i].Dispose();
+                pins[i] = default;
+            }
         }
     }
 

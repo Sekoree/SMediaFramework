@@ -28,7 +28,10 @@ public sealed record WarpMesh
                 $"mesh needs {columns * rows} control points for {columns}x{rows}; got {points.Length}.", nameof(points));
         Columns = columns;
         Rows = rows;
-        Points = points;
+        // Defensive copy: the GL compositor caches tessellated meshes keyed on WarpMesh reference
+        // identity, so a caller mutating its array after construction would render stale geometry.
+        // Construction is control-plane rate (placement edits), never per frame.
+        Points = (Vector2[])points.Clone();
     }
 
     public int Columns { get; }

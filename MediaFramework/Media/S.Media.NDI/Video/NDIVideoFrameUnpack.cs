@@ -1,5 +1,5 @@
-using System.Buffers;
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NDILib;
@@ -312,9 +312,10 @@ internal static class NDIVideoFrameUnpack
         // Always copy row-by-row using SDK line stride - PData is not guaranteed tightly packed even
         // when LineStrideInBytes equals the visible bytes-per-line.
         var tightBytes = visibleStride * height;
-        var tight = ArrayPool<byte>.Shared.Rent(tightBytes);
+        var lease = PooledFrameRelease.Rent(1);
         try
         {
+            var tight = lease.RentPlane(0, tightBytes, visibleStride);
             unsafe
             {
                 var src = (byte*)native.PData;
@@ -326,17 +327,11 @@ internal static class NDIVideoFrameUnpack
                 }
             }
 
-            return new VideoFrame(
-                pts,
-                format,
-                tight.AsMemory(0, tightBytes),
-                visibleStride,
-                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(tight)),
-                metadata: metadata);
+            return new VideoFrame(pts, format, lease.Planes, lease.Strides, metadata: metadata, release: lease);
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(tight);
+            lease.Dispose();
             throw;
         }
     }
@@ -361,10 +356,11 @@ internal static class NDIVideoFrameUnpack
         var yTight = width * height;
         var uvTight = width * uvRows;
 
-        var yBuf = ArrayPool<byte>.Shared.Rent(yTight);
-        var uvBuf = ArrayPool<byte>.Shared.Rent(uvTight);
+        var lease = PooledFrameRelease.Rent(2);
         try
         {
+            var yBuf = lease.RentPlane(0, yTight, width);
+            var uvBuf = lease.RentPlane(1, uvTight, width);
             unsafe
             {
                 var src = (byte*)native.PData;
@@ -372,23 +368,11 @@ internal static class NDIVideoFrameUnpack
                 CopyPlaneRows(src + (yStride * height), yStride, width, uvRows, uvBuf.AsSpan(0, uvTight));
             }
 
-            var rented = new[] { yBuf, uvBuf };
-            return new VideoFrame(
-                pts,
-                format,
-                [yBuf.AsMemory(0, yTight), uvBuf.AsMemory(0, uvTight)],
-                [width, width],
-                release: DisposableRelease.Wrap(() =>
-                {
-                    foreach (var b in rented)
-                        ArrayPool<byte>.Shared.Return(b);
-                }),
-                metadata: metadata);
+            return new VideoFrame(pts, format, lease.Planes, lease.Strides, metadata: metadata, release: lease);
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(yBuf);
-            ArrayPool<byte>.Shared.Return(uvBuf);
+            lease.Dispose();
             throw;
         }
     }
@@ -409,11 +393,12 @@ internal static class NDIVideoFrameUnpack
         var uTight = chromaW * chromaH;
         var vTight = chromaW * chromaH;
 
-        var yBuf = ArrayPool<byte>.Shared.Rent(yTight);
-        var uBuf = ArrayPool<byte>.Shared.Rent(uTight);
-        var vBuf = ArrayPool<byte>.Shared.Rent(vTight);
+        var lease = PooledFrameRelease.Rent(3);
         try
         {
+            var yBuf = lease.RentPlane(0, yTight, width);
+            var uBuf = lease.RentPlane(1, uTight, chromaW);
+            var vBuf = lease.RentPlane(2, vTight, chromaW);
             unsafe
             {
                 var src = (byte*)native.PData;
@@ -424,24 +409,11 @@ internal static class NDIVideoFrameUnpack
                 CopyPlaneRows(vBase, chromaStride, chromaW, chromaH, vBuf.AsSpan(0, vTight));
             }
 
-            var rented = new[] { yBuf, uBuf, vBuf };
-            return new VideoFrame(
-                pts,
-                format,
-                [yBuf.AsMemory(0, yTight), uBuf.AsMemory(0, uTight), vBuf.AsMemory(0, vTight)],
-                [width, chromaW, chromaW],
-                release: DisposableRelease.Wrap(() =>
-                {
-                    foreach (var b in rented)
-                        ArrayPool<byte>.Shared.Return(b);
-                }),
-                metadata: metadata);
+            return new VideoFrame(pts, format, lease.Planes, lease.Strides, metadata: metadata, release: lease);
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(yBuf);
-            ArrayPool<byte>.Shared.Return(uBuf);
-            ArrayPool<byte>.Shared.Return(vBuf);
+            lease.Dispose();
             throw;
         }
     }
@@ -462,11 +434,12 @@ internal static class NDIVideoFrameUnpack
         var uTight = chromaW * chromaH;
         var vTight = chromaW * chromaH;
 
-        var yBuf = ArrayPool<byte>.Shared.Rent(yTight);
-        var uBuf = ArrayPool<byte>.Shared.Rent(uTight);
-        var vBuf = ArrayPool<byte>.Shared.Rent(vTight);
+        var lease = PooledFrameRelease.Rent(3);
         try
         {
+            var yBuf = lease.RentPlane(0, yTight, width);
+            var uBuf = lease.RentPlane(1, uTight, chromaW);
+            var vBuf = lease.RentPlane(2, vTight, chromaW);
             unsafe
             {
                 var src = (byte*)native.PData;
@@ -478,24 +451,11 @@ internal static class NDIVideoFrameUnpack
                 CopyPlaneRows(uBase, chromaStride, chromaW, chromaH, uBuf.AsSpan(0, uTight));
             }
 
-            var rented = new[] { yBuf, uBuf, vBuf };
-            return new VideoFrame(
-                pts,
-                format,
-                [yBuf.AsMemory(0, yTight), uBuf.AsMemory(0, uTight), vBuf.AsMemory(0, vTight)],
-                [width, chromaW, chromaW],
-                release: DisposableRelease.Wrap(() =>
-                {
-                    foreach (var b in rented)
-                        ArrayPool<byte>.Shared.Return(b);
-                }),
-                metadata: metadata);
+            return new VideoFrame(pts, format, lease.Planes, lease.Strides, metadata: metadata, release: lease);
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(yBuf);
-            ArrayPool<byte>.Shared.Return(uBuf);
-            ArrayPool<byte>.Shared.Return(vBuf);
+            lease.Dispose();
             throw;
         }
     }
@@ -538,46 +498,73 @@ internal static class NDIVideoFrameUnpack
 
         var uyvyStride = width * 2;
         var uyvyBytes = uyvyStride * height;
-        var uyvyBuffer = ArrayPool<byte>.Shared.Rent(uyvyBytes);
+        var lease = PooledFrameRelease.Rent(1);
         try
         {
+            var uyvyBuffer = lease.RentPlane(0, uyvyBytes, uyvyStride);
             unsafe
             {
                 var src = new ReadOnlySpan<byte>((void*)native.PData, totalBytes);
                 var dst = uyvyBuffer.AsSpan(0, uyvyBytes);
                 for (var row = 0; row < height; row++)
                 {
-                    var yRowBase = row * yStride;
-                    var uvRowBase = yBytes + (row * uvStride);
-                    var outBase = row * uyvyStride;
-                    for (var x = 0; x < width; x += 2)
-                    {
-                        var y0 = BinaryPrimitives.ReadUInt16LittleEndian(src[(yRowBase + (x * 2))..]);
-                        var y1 = BinaryPrimitives.ReadUInt16LittleEndian(src[(yRowBase + ((x + 1) * 2))..]);
-                        var u = BinaryPrimitives.ReadUInt16LittleEndian(src[(uvRowBase + (x * 2))..]);
-                        var v = BinaryPrimitives.ReadUInt16LittleEndian(src[(uvRowBase + ((x + 1) * 2))..]);
-
-                        dst[outBase++] = ToByte8(u);
-                        dst[outBase++] = ToByte8(y0);
-                        dst[outBase++] = ToByte8(v);
-                        dst[outBase++] = ToByte8(y1);
-                    }
+                    ReduceP216RowToUyvy(
+                        src.Slice(row * yStride, width * 2),
+                        src.Slice(yBytes + (row * uvStride), width * 2),
+                        dst.Slice(row * uyvyStride, uyvyStride));
                 }
             }
 
             var uyvyFormat = format with { PixelFormat = PixelFormat.Uyvy };
-            return new VideoFrame(
-                pts,
-                uyvyFormat,
-                uyvyBuffer.AsMemory(0, uyvyBytes),
-                uyvyStride,
-                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(uyvyBuffer)),
-                metadata: metadata);
+            return new VideoFrame(pts, uyvyFormat, lease.Planes, lease.Strides, metadata: metadata, release: lease);
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(uyvyBuffer);
+            lease.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Reduces one P216/PA16 row (16-bit LE Y plane row + interleaved 16-bit UV row) to packed 8-bit
+    /// UYVY. The UYVY byte layout U,Y0,V,Y1 is the UV row and Y row interleaved bytewise, so each
+    /// output 16-bit unit is <c>(y8 &lt;&lt; 8) | uv8</c> in little-endian memory. The vector 16→8
+    /// reduction <c>(ushort)(v + 128) &gt;&gt; 8</c> wraps at 16 bits exactly like the scalar
+    /// <c>(byte)((v + 128) &gt;&gt; 8)</c> truncation (both reduce values ≥ 0xFF80 to 0) - pinned by
+    /// the equivalence test against the scalar reference.
+    /// </summary>
+    internal static void ReduceP216RowToUyvy(ReadOnlySpan<byte> yRow16, ReadOnlySpan<byte> uvRow16, Span<byte> dstUyvy)
+    {
+        var width = dstUyvy.Length / 2;
+        var x = 0;
+        if (BitConverter.IsLittleEndian && Vector.IsHardwareAccelerated && width >= Vector<ushort>.Count)
+        {
+            var y16 = MemoryMarshal.Cast<byte, ushort>(yRow16);
+            var uv16 = MemoryMarshal.Cast<byte, ushort>(uvRow16);
+            var out16 = MemoryMarshal.Cast<byte, ushort>(dstUyvy);
+            var bias = new Vector<ushort>(128);
+            for (; x <= width - Vector<ushort>.Count; x += Vector<ushort>.Count)
+            {
+                var y8 = Vector.ShiftRightLogical(new Vector<ushort>(y16.Slice(x)) + bias, 8);
+                var uv8 = Vector.ShiftRightLogical(new Vector<ushort>(uv16.Slice(x)) + bias, 8);
+                (Vector.ShiftLeft(y8, 8) | uv8).CopyTo(out16.Slice(x));
+            }
+        }
+
+        // Scalar tail (and the full row when vectorization is unavailable). Vector<ushort>.Count is a
+        // power of two, so the tail always starts on an even x (a full U,Y0,V,Y1 group).
+        for (; x < width; x += 2)
+        {
+            var y0 = BinaryPrimitives.ReadUInt16LittleEndian(yRow16[(x * 2)..]);
+            var y1 = BinaryPrimitives.ReadUInt16LittleEndian(yRow16[((x + 1) * 2)..]);
+            var u = BinaryPrimitives.ReadUInt16LittleEndian(uvRow16[(x * 2)..]);
+            var v = BinaryPrimitives.ReadUInt16LittleEndian(uvRow16[((x + 1) * 2)..]);
+
+            var o = x * 2;
+            dstUyvy[o] = ToByte8(u);
+            dstUyvy[o + 1] = ToByte8(y0);
+            dstUyvy[o + 2] = ToByte8(v);
+            dstUyvy[o + 3] = ToByte8(y1);
         }
     }
 

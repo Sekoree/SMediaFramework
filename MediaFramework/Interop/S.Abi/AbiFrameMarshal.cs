@@ -48,38 +48,29 @@ internal static unsafe class AbiFrameMarshal
         var rate = fallbackRate.Numerator > 0 ? fallbackRate : new Rational(30, 1);
         var format = new VideoFormat((int)mf.Width, (int)mf.Height, pf, rate);
 
-        // Plane buffers come from the shared pool with a release callback (perf review: `new byte[]`
-        // put every 1080p plane straight on the LOH - ~500 MB/s of Gen2-churning allocation at 60 fps
-        // for plugin sources and the per-tick subtitle overlay). Same pattern as NDIVideoFrameUnpack.
+        // Plane buffers and the frame's plane/stride arrays come from PooledFrameRelease (perf
+        // review: `new byte[]` put every 1080p plane straight on the LOH - ~500 MB/s of
+        // Gen2-churning allocation at 60 fps for plugin sources and the per-tick subtitle overlay;
+        // the follow-up pass also pooled the residual per-frame small arrays + release closure).
         var cpu = mf.Payload.Cpu;
         var planeCount = Math.Clamp(cpu.PlaneCount, 0, 4);
-        var planes = new ReadOnlyMemory<byte>[planeCount];
-        var strides = new int[planeCount];
-        var rented = new byte[planeCount][];
+        if (planeCount == 0)
+            return new VideoFrame(TimeSpan.FromTicks(mf.PtsTicks), format, [], []);
+
+        var lease = PooledFrameRelease.Rent(planeCount);
         for (var i = 0; i < planeCount; i++)
         {
             var stride = StrideAt(in cpu, i);
             var rows = PlaneRows(pf, i, (int)mf.Height);
             var bytes = stride > 0 && rows > 0 ? stride * rows : 0;
-            var buf = bytes > 0 ? ArrayPool<byte>.Shared.Rent(bytes) : [];
+            var buf = lease.RentPlane(i, bytes, stride);
             var srcPtr = PlanePtr(in cpu, i);
             if (srcPtr != null && bytes > 0)
                 new ReadOnlySpan<byte>(srcPtr, bytes).CopyTo(buf);
-            rented[i] = buf;
-            planes[i] = new ReadOnlyMemory<byte>(buf, 0, bytes);
-            strides[i] = stride;
         }
 
         return new VideoFrame(
-            TimeSpan.FromTicks(mf.PtsTicks), format, planes, strides,
-            release: DisposableRelease.Wrap(() =>
-            {
-                foreach (var buf in rented)
-                {
-                    if (buf.Length > 0)
-                        ArrayPool<byte>.Shared.Return(buf, clearArray: false);
-                }
-            }));
+            TimeSpan.FromTicks(mf.PtsTicks), format, lease.Planes, lease.Strides, release: lease);
     }
 
     public static VideoFrame ToManagedFrame(in MfpVideoFrame mf, Rational fallbackRate) => mf.Kind switch
