@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- CPU compositor hot-path benchmarks: CpuVideoCompositor.Composite, VideoCpuOpacity.ApplyInPlace,
+         WarpMeshTessellator.Tessellate. No GPU/window required.
+         Run: dotnet run -c Release (BenchmarkDotNet args after a lone double dash). -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+    </ItemGroup>
+
+</Project>

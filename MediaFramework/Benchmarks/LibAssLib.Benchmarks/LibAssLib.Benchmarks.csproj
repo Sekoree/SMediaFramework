@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Subtitle blend benchmarks: AssImageBlender.Blend over synthetic AssImage lists (no libass
+         native library needed - the blender is pure managed code over the mirrored struct).
+         Run: dotnet run -c Release (BenchmarkDotNet args after a lone double dash). -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
+        <ProjectReference Include="../../Subtitles/LibAssLib/LibAssLib.csproj" />
+    </ItemGroup>
+
+</Project>

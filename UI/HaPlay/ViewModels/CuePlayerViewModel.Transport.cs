@@ -67,13 +67,29 @@ public partial class CuePlayerViewModel
         SelectedVisualizerCue is not null;
 
     [RelayCommand(CanExecute = nameof(CanStandbySelected))]
-    private Task FireSelectedCueNow()
+    private async Task FireSelectedCueNow()
     {
-        if (SelectedCueNode is not { } cue)
-            return Task.CompletedTask;
+        // Applies to the whole multi-selection: right-click GO on N highlighted cues starts all
+        // of them. Tree order (not click order) keeps the result deterministic.
+        var targets = EffectiveSelection().ToArray();
+        if (targets.Length == 0)
+            return;
         _selectedCuePendingForGo = false;
         _immediateJumpChain.Clear();
-        return FireOperatorSelectedCueAsync(cue);
+        foreach (var cue in OrderInTreeOrder(targets))
+            await FireOperatorSelectedCueAsync(cue);
+    }
+
+    /// <summary>Sorts a selection snapshot into visible tree order (selection order is click order).</summary>
+    private List<CueNodeViewModel> OrderInTreeOrder(IReadOnlyList<CueNodeViewModel> nodes)
+    {
+        if (nodes.Count <= 1)
+            return [.. nodes];
+        var order = new Dictionary<CueNodeViewModel, int>();
+        var i = 0;
+        foreach (var node in EnumerateAllCueNodes())
+            order[node] = i++;
+        return [.. nodes.OrderBy(n => order.GetValueOrDefault(n, int.MaxValue))];
     }
 
     private Task FireOperatorSelectedCueAsync(CueNodeViewModel cue)
@@ -109,17 +125,19 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanStopSelectedCue))]
     private async Task StopSelectedCue()
     {
-        if (SelectedCueNode is not { } cue)
-            return;
-        if (_runningVisualizers.ContainsKey(cue.Id))
-            await StopVisualizerAsync(cue.Id);
-        else if (_activeCueIds.Contains(cue.Id))
-            await (CancelCueCallback?.Invoke(cue.Id) ?? Task.CompletedTask);
+        // Applies to the whole multi-selection: every highlighted cue that is running stops.
+        foreach (var cue in EffectiveSelection().ToArray())
+        {
+            if (_runningVisualizers.ContainsKey(cue.Id))
+                await StopVisualizerAsync(cue.Id);
+            else if (_activeCueIds.Contains(cue.Id))
+                await (CancelCueCallback?.Invoke(cue.Id) ?? Task.CompletedTask);
+        }
     }
 
     private bool CanStopSelectedCue() =>
-        SelectedCueNode is { } cue
-        && (_activeCueIds.Contains(cue.Id) || _runningVisualizers.ContainsKey(cue.Id));
+        EffectiveSelection().Any(cue =>
+            _activeCueIds.Contains(cue.Id) || _runningVisualizers.ContainsKey(cue.Id));
 
     // Immediate Jump→Jump control flow carries this visited set across internally-triggered GO calls.
     // Any operator/Auto-Follow GO starts a fresh chain; landing on a non-jump clears it again.

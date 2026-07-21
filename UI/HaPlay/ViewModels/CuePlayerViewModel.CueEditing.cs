@@ -103,15 +103,59 @@ public partial class CuePlayerViewModel
     private void MoveSelectedCue(int delta)
     {
         if (SelectedCueNode is null || SelectedCueList is null) return;
-        if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
-            return;
-        var idx = parent.IndexOf(SelectedCueNode);
-        var next = idx + delta;
-        if (next < 0 || next >= parent.Count) return;
-        var node = SelectedCueNode;
-        parent.RemoveAt(idx);
-        parent.Insert(next, node);
-        SelectedCueNode = node;
+
+        // Applies to the whole multi-selection: each selected row shifts one slot within its own
+        // parent. A contiguous block keeps its relative order and piles up at the boundary
+        // instead of wrapping (the operator gets to feel the edge, same as single-select).
+        var primary = SelectedCueNode;
+        var entries = new List<(IList<CueNodeViewModel> Parent, int Index, CueNodeViewModel Node)>();
+        foreach (var node in EffectiveSelection())
+        {
+            if (FindParentCollection(SelectedCueList.Nodes, node) is IList<CueNodeViewModel> parent)
+                entries.Add((parent, parent.IndexOf(node), node));
+        }
+        if (entries.Count == 0) return;
+
+        var moved = false;
+        foreach (var group in entries.GroupBy(e => e.Parent))
+        {
+            var parent = group.Key;
+            if (delta < 0)
+            {
+                var blockedTop = 0;
+                foreach (var entry in group.OrderBy(e => e.Index))
+                {
+                    var idx = parent.IndexOf(entry.Node);
+                    if (idx <= blockedTop)
+                    {
+                        blockedTop = idx + 1;
+                        continue;
+                    }
+                    parent.RemoveAt(idx);
+                    parent.Insert(idx - 1, entry.Node);
+                    moved = true;
+                }
+            }
+            else
+            {
+                var blockedBottom = parent.Count - 1;
+                foreach (var entry in group.OrderByDescending(e => e.Index))
+                {
+                    var idx = parent.IndexOf(entry.Node);
+                    if (idx >= blockedBottom)
+                    {
+                        blockedBottom = idx - 1;
+                        continue;
+                    }
+                    parent.RemoveAt(idx);
+                    parent.Insert(idx + 1, entry.Node);
+                    moved = true;
+                }
+            }
+        }
+
+        if (!moved) return;
+        SelectedCueNode = primary;
         MaybeRenumberAfterStructureChange();
         RefreshCueTargetDisplays();
         SuggestPreRollRefresh();
@@ -198,29 +242,44 @@ public partial class CuePlayerViewModel
         return false;
     }
 
-    /// <summary>Deep-copy the selected cue with a fresh id and insert immediately after the
-    /// original. Routes, placements, and group-children all clone. Bound to Ctrl+D.</summary>
+    /// <summary>Deep-copy every selected cue with fresh ids, inserting each copy immediately after
+    /// its original. Routes, placements, and group-children all clone. Bound to Ctrl+D. The clones
+    /// become the new selection.</summary>
     [RelayCommand(CanExecute = nameof(CanDuplicateSelectedCue))]
     private void DuplicateSelectedCue()
     {
         if (SelectedCueNode is null || SelectedCueList is null) return;
-        if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
-            return;
 
-        // Deep-copy via the model layer. `ToModel()` projects through fresh `.Select(...).ToList()`
-        // collections for routes / placements / children, so the snapshot doesn't share list
-        // references with the original VM. `CloneCueNodeWithNewIds` then rotates ids (a `with` on
-        // a record only does a shallow copy - we'd otherwise share AudioRoutes / VideoPlacements
-        // lists between original and copy). `FromModel` rebuilds fresh VM collections from the
-        // cloned snapshot, so no list reference is shared with the original cue.
-        var snapshot = SelectedCueNode.ToModel();
-        var copy = CloneCueNodeWithNewIds(snapshot);
-        var copyVm = CueNodeViewModel.FromModel(copy, ResolveOutputLine);
+        // Applies to the whole multi-selection; a node whose selected ancestor group is also in
+        // the selection is skipped (cloning the group already clones it).
+        var targets = EffectiveSelection().ToList();
+        targets.RemoveAll(node => targets.Any(other =>
+            !ReferenceEquals(other, node) && ContainsNode(other.Children, node)));
 
-        var idx = parent.IndexOf(SelectedCueNode);
-        parent.Insert(idx + 1, copyVm);
-        SelectedCueNode = copyVm;
+        var clones = new List<CueNodeViewModel>();
+        foreach (var node in OrderInTreeOrder(targets))
+        {
+            if (FindParentCollection(SelectedCueList.Nodes, node) is not IList<CueNodeViewModel> parent)
+                continue;
+
+            // Deep-copy via the model layer. `ToModel()` projects through fresh `.Select(...).ToList()`
+            // collections for routes / placements / children, so the snapshot doesn't share list
+            // references with the original VM. `CloneCueNodeWithNewIds` then rotates ids (a `with` on
+            // a record only does a shallow copy - we'd otherwise share AudioRoutes / VideoPlacements
+            // lists between original and copy). `FromModel` rebuilds fresh VM collections from the
+            // cloned snapshot, so no list reference is shared with the original cue.
+            var snapshot = node.ToModel();
+            var copy = CloneCueNodeWithNewIds(snapshot);
+            var copyVm = CueNodeViewModel.FromModel(copy, ResolveOutputLine);
+            parent.Insert(parent.IndexOf(node) + 1, copyVm);
+            clones.Add(copyVm);
+        }
+
+        if (clones.Count == 0) return;
+        UpdateSelection(clones);
         RefreshCueTargetDisplays();
+        if (clones.Count > 1)
+            StatusMessage = $"Duplicated {clones.Count} cues.";
     }
 
     private bool CanDuplicateSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;

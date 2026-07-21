@@ -209,7 +209,12 @@ public partial class CuePlayerView : UserControl
             return;
 
         var point = e.GetCurrentPoint(CueTreeGrid);
-        if (point.Properties.IsRightButtonPressed)
+        // Right-clicking a row that is already part of the multi-selection keeps the selection so
+        // the context-menu actions (GO/Stop/Duplicate/Remove) apply to all of it; right-clicking
+        // outside the selection collapses to that row (standard file-manager semantics).
+        if (point.Properties.IsRightButtonPressed
+            && !vm.SelectedCueNodes.Contains(cue)
+            && !ReferenceEquals(vm.SelectedCueNode, cue))
             vm.UpdateSelection([cue]);
         vm.MarkCueForNextGo(cue);
     }

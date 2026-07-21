@@ -633,14 +633,29 @@ public partial class CuePlayerViewModel
     {
         if (SelectedCueList is null || SelectedCueNode is null)
             return;
+
+        // Applies to the whole multi-selection. A node whose selected ancestor group is also in
+        // the selection is skipped - removing the group removes it.
+        var targets = EffectiveSelection().ToList();
+        targets.RemoveAll(node => targets.Any(other =>
+            !ReferenceEquals(other, node) && ContainsNode(other.Children, node)));
+
         var orderedBefore = EnumerateFireableCueOrder().ToList();
         var removedFireable = ResolveFireableCue(SelectedCueNode) ?? SelectedCueNode;
         var removedFireableIndex = orderedBefore.FindIndex(c => ReferenceEquals(c, removedFireable));
-        if (!RemoveNodeRecursive(SelectedCueList.Nodes, SelectedCueNode))
+        var removed = 0;
+        foreach (var node in targets)
+        {
+            if (RemoveNodeRecursive(SelectedCueList.Nodes, node))
+                removed++;
+        }
+        if (removed == 0)
             return;
         RefreshCueTargetDisplays();
         PruneSelectionToCurrentTree();
         ReconcileTransportAfterTreeMutation(removedFireableIndex);
+        if (removed > 1)
+            StatusMessage = $"Removed {removed} cues.";
     }
 
     private bool CanRemoveNode() => SelectedCueList is not null && SelectedCueNode is not null;

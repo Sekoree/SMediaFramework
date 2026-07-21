@@ -2300,6 +2300,85 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void RemoveNode_MultiSelect_RemovesEverySelectedCue()
+    {
+        var vm = new CuePlayerViewModel();
+        var first = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var second = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var third = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+
+        vm.UpdateSelection([first, third]);
+        vm.RemoveNodeCommand.Execute(null);
+
+        var list = Assert.IsType<CueListEditorViewModel>(vm.SelectedCueList);
+        Assert.Equal([second], list.Nodes);
+    }
+
+    [Fact]
+    public void RemoveNode_MultiSelect_SkipsDescendantsOfSelectedGroup()
+    {
+        var vm = new CuePlayerViewModel();
+        var child = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var keeper = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        vm.AddGroupCommand.Execute(null);
+        var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        Assert.True(vm.MoveCueNode(child, group, CueNodeDropPlacement.Inside));
+
+        // Selecting a group and one of its children then removing must not double-remove: the
+        // group removal already takes the child with it.
+        vm.UpdateSelection([group, child]);
+        vm.RemoveNodeCommand.Execute(null);
+
+        var list = Assert.IsType<CueListEditorViewModel>(vm.SelectedCueList);
+        Assert.Equal([keeper], list.Nodes);
+    }
+
+    [Fact]
+    public void DuplicateSelectedCue_MultiSelect_InsertsCloneAfterEachOriginal()
+    {
+        var vm = new CuePlayerViewModel();
+        var first = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        first.Label = "A";
+        var second = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        second.Label = "B";
+
+        vm.UpdateSelection([first, second]);
+        vm.DuplicateSelectedCueCommand.Execute(null);
+
+        var list = Assert.IsType<CueListEditorViewModel>(vm.SelectedCueList);
+        Assert.Equal(4, list.Nodes.Count);
+        Assert.Same(first, list.Nodes[0]);
+        Assert.Equal("A", list.Nodes[1].Label);
+        Assert.NotEqual(first.Id, list.Nodes[1].Id);
+        Assert.Same(second, list.Nodes[2]);
+        Assert.Equal("B", list.Nodes[3].Label);
+        Assert.NotEqual(second.Id, list.Nodes[3].Id);
+        // The clones become the new selection so a follow-up bulk edit targets them.
+        Assert.Equal([list.Nodes[1], list.Nodes[3]], vm.SelectedCueNodes);
+    }
+
+    [Fact]
+    public void MoveSelectedCueUp_MultiSelect_MovesBlockAndStopsAtTop()
+    {
+        var vm = new CuePlayerViewModel();
+        var first = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var second = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var third = Assert.IsType<CueNodeViewModel>(vm.AddEmptyMediaCue());
+        var list = Assert.IsType<CueListEditorViewModel>(vm.SelectedCueList);
+
+        vm.UpdateSelection([second, third]);
+        vm.MoveSelectedCueUpCommand.Execute(null);
+        Assert.Equal([second, third, first], list.Nodes);
+
+        // At the boundary the block stays put instead of wrapping or reordering.
+        vm.MoveSelectedCueUpCommand.Execute(null);
+        Assert.Equal([second, third, first], list.Nodes);
+
+        vm.MoveSelectedCueDownCommand.Execute(null);
+        Assert.Equal([first, second, third], list.Nodes);
+    }
+
+    [Fact]
     public void ActionCueBuilderDialogViewModel_MIDI_ComposesCommand()
     {
         var vm = new ActionCueBuilderDialogViewModel();

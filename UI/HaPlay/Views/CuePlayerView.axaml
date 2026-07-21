@@ -940,9 +940,9 @@
           <TreeDataGrid Name="CueTreeGrid" DragDrop.AllowDrop="True">
             <TreeDataGrid.ContextMenu>
               <ContextMenu>
-                <MenuItem Header="GO / start selected cue" Command="{Binding FireSelectedCueNowCommand}" />
+                <MenuItem Header="GO / start selected" Command="{Binding FireSelectedCueNowCommand}" />
                 <MenuItem Header="Standby selected cue" Command="{Binding StandbySelectedCommand}" />
-                <MenuItem Header="Stop selected cue" Command="{Binding StopSelectedCueCommand}" />
+                <MenuItem Header="Stop selected" Command="{Binding StopSelectedCueCommand}" />
                 <MenuItem Header="Next visualizer preset" Command="{Binding NextVisualizerPresetCommand}" />
                 <Separator />
                 <MenuItem Header="Rename…" Command="{Binding RenameSelectedCueCommand}" />

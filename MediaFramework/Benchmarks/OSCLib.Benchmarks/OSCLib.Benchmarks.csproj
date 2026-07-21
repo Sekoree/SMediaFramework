@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- OSC codec + address-matching benchmarks: per-message encode/decode allocation floor and the
+         matcher path every incoming control message pays per registered route. No network required.
+         Run: dotnet run -c Release (BenchmarkDotNet args after a lone double dash). -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
+        <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
+    </ItemGroup>
+
+</Project>
