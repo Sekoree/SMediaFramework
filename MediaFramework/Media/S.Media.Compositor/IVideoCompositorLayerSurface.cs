@@ -45,7 +45,8 @@ public readonly record struct CompositorSurfaceLayer(
     IVideoCompositorLayerSurface Surface,
     LayerTransform2D Transform,
     float Opacity,
-    IReadOnlyList<VideoLayerEffect>? Effects = null);
+    IReadOnlyList<VideoLayerEffect>? Effects = null,
+    IReadOnlyList<WarpSection>? MappingSections = null);
 
 /// <summary>
 /// Capability interface for compositors that can host <see cref="CompositorSurfaceLayer"/>s (NXT-10 -

@@ -627,9 +627,9 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                     configured.Value = _output;
                 }
 
-                if (surfaceLayer.Effects is { Count: > 0 } fx)
+                if (surfaceLayer.Effects is { Count: > 0 } || surfaceLayer.MappingSections is not null)
                 {
-                    DrawSurfaceLayerWithEffects(surfaceLayer, fx, opacity, presentationTime);
+                    DrawSurfaceLayerIndirect(surfaceLayer, opacity, presentationTime);
                     continue;
                 }
 
@@ -665,22 +665,26 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     }
 
     /// <summary>
-    /// Composites one surface layer through its effect chain: the surface renders full-canvas
-    /// (identity transform, full opacity) into the intermediate FBO, whose texture is then drawn
-    /// into the canvas by the effect-variant layer shader with the layer's own transform/opacity.
+    /// Composites one surface layer indirectly (an effect chain and/or mapping sections): the
+    /// surface renders full-canvas (identity transform, full opacity) into the intermediate FBO,
+    /// whose texture is then drawn into the canvas by the layer shader — one quad with the layer's
+    /// own transform, or one draw per mapping section (crop/transform/mesh, media-layer parity).
     /// The intermediate is stored exactly like a direct BGRA32 layer upload relative to the canvas
-    /// paint convention, so the draw uses the frame-layer pair (mirrored dest NDC + V-flip
-    /// sampling) and lands byte-identical in geometry to a direct surface render. Effects see the
+    /// paint convention, so the draws use the frame-layer pair (mirrored dest NDC + V-flip
+    /// sampling) and land byte-identical in geometry to a direct surface render. Effects see the
     /// surface output as straight alpha (the frame-layer contract); a surface emitting partial
     /// alpha over the transparent intermediate arrives premultiplied-by-coverage, which only
     /// matters for translucent surfaces - the visualizer renders opaque.
     /// </summary>
-    private void DrawSurfaceLayerWithEffects(
+    private void DrawSurfaceLayerIndirect(
         in CompositorSurfaceLayer surfaceLayer,
-        IReadOnlyList<VideoLayerEffect> fx,
         float opacity,
         TimeSpan presentationTime)
     {
+        var sections = surfaceLayer.MappingSections;
+        if (sections is { Count: 0 })
+            return; // every mapping section disabled - layer hidden, like a frame layer's empty mapping
+
         EnsureSurfaceEffectFbo(_output.Width, _output.Height);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _surfaceEffectFbo);
@@ -691,17 +695,52 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         surfaceLayer.Surface.Render(
             _gl, _surfaceEffectFbo, presentationTime, LayerTransform2D.Identity, 1f);
 
-        // The surface may leave scissor enabled; it must not clip the composite quad below.
+        // The surface may leave scissor enabled; it must not clip the composite draws below.
         _gl.Disable(EnableCap.ScissorTest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        var fx = surfaceLayer.Effects;
+
+        if (sections is null)
+        {
+            DrawSurfaceScratchQuad(surfaceLayer.Transform, RectNormalized.Full, opacity, fx);
+            return;
+        }
+
+        foreach (var section in sections)
+        {
+            var sectionOpacity = opacity * Math.Clamp(section.Opacity, 0f, 1f);
+            if (sectionOpacity <= 0f)
+                continue;
+
+            if (section.Mesh is { } mesh)
+            {
+                // Mesh control points are absolute canvas pixels (transform already baked in by the
+                // session), exactly like a frame layer's mapped mesh - same draw path.
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
+                DrawLayerMesh(mesh, section.SourceCrop, _output.Width, _output.Height,
+                    sectionOpacity, flipV: true, BlendMode.SourceOver, fx);
+            }
+            else
+            {
+                DrawSurfaceScratchQuad(section.Transform, section.SourceCrop, sectionOpacity, fx);
+            }
+        }
+    }
+
+    /// <summary>One canvas-sized quad sampling the surface-intermediate texture.</summary>
+    private void DrawSurfaceScratchQuad(
+        LayerTransform2D transform, RectNormalized sourceCrop, float opacity,
+        IReadOnlyList<VideoLayerEffect>? fx)
+    {
         var variant = GetLayerVariant(fx, mesh: false);
         _gl.UseProgram(variant.Program);
         _gl.BindVertexArray(_vao);
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
         DrawQuad(_output.Width, _output.Height, _output.Width, _output.Height,
-            surfaceLayer.Transform, RectNormalized.Full, opacity, flipV: true, BlendMode.SourceOver,
+            transform, sourceCrop, opacity, flipV: true, BlendMode.SourceOver,
             variant: variant, effects: fx);
     }
 

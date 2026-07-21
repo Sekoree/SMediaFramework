@@ -1669,7 +1669,8 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         /// <summary>Resolves the placement to the surface's canvas transform - the same
         /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
-        /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity).</summary>
+        /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity). A
+        /// placement with VideoFx takes the mapping/warp section path, media-layer parity.</summary>
         internal void ApplyPlacement()
         {
             var destRect = new RectNormalized(
@@ -1677,30 +1678,81 @@ public sealed class ClipCompositionRuntime : IDisposable
                 (float)_placement.DestY,
                 (float)(_placement.DestX + _placement.DestWidth),
                 (float)(_placement.DestY + _placement.DestHeight));
+
+            if (_placement.VideoFx is { } videoFx)
+            {
+                ApplyMappedPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
+                return;
+            }
+
             var (transform, _) = PlacementResolver.Resolve(
                 destRect,
                 LayerSlot.MapFit(_placement.Placement),
                 0f, 0f, 0f, 0f,
                 _owner._canvasFormat,
                 _owner._canvasFormat);
+            transform = ApplyPlacementRotation(transform);
 
-            if (_placement.RotationDegrees != 0)
-            {
-                var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
-                var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
-                var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
-                transform = LayerTransform2D.Compose(
-                    LayerTransform2D.Translate(cx, cy),
-                    LayerTransform2D.Compose(
-                        LayerTransform2D.Rotate(rad),
-                        LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
-            }
-
+            RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
             // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
             RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
+        }
+
+        /// <summary>Mirror of <see cref="LayerSlot.ApplyGeometryPlacement"/> with the canvas as the
+        /// source: the mapping's sections sample the surface's full-canvas render, so section crops,
+        /// transforms and meshes mean the same thing they do on a media layer.</summary>
+        private void ApplyMappedPlacement(RectNormalized destRect, IVideoLayerGeometryEffect geometry)
+        {
+            var canvas = _owner._canvasFormat;
+            var effectFormat = geometry.ResolveOutputFormat(canvas);
+            var (effectTransform, _) = PlacementResolver.Resolve(
+                destRect,
+                LayerSlot.MapFit(_placement.Placement),
+                0f, 0f, 0f, 0f,
+                effectFormat,
+                canvas);
+            effectTransform = ApplyPlacementRotation(effectTransform);
+
+            var sourceBounds = new RectNormalized(
+                Math.Clamp((float)_placement.CropLeft, 0f, 0.99f),
+                Math.Clamp((float)_placement.CropTop, 0f, 0.99f),
+                1f - Math.Clamp((float)_placement.CropRight, 0f, 0.99f),
+                1f - Math.Clamp((float)_placement.CropBottom, 0f, 0.99f)).Clamped();
+
+            var resolved = geometry.ResolveSections(canvas.Width, canvas.Height, sourceBounds);
+            var sections = new WarpSection[resolved.Count];
+            for (var i = 0; i < resolved.Count; i++)
+            {
+                var section = resolved[i];
+                sections[i] = new WarpSection(
+                    section.SourceCrop,
+                    LayerTransform2D.Compose(effectTransform, section.Transform),
+                    section.Opacity,
+                    section.Mesh is null ? null : LayerSlot.TransformMesh(section.Mesh, effectTransform));
+            }
+
+            RawSlot.MappingSections = sections;
+            RawSlot.Transform = LayerTransform2D.Identity;
+            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
+        }
+
+        private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)
+        {
+            if (_placement.RotationDegrees == 0)
+                return transform;
+
+            var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
+            var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
+            var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
+            return LayerTransform2D.Compose(
+                LayerTransform2D.Translate(cx, cy),
+                LayerTransform2D.Compose(
+                    LayerTransform2D.Rotate(rad),
+                    LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
         }
 
         public void Dispose()
@@ -1894,7 +1946,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                     LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
         }
 
-        private static WarpMesh TransformMesh(WarpMesh mesh, LayerTransform2D transform)
+        internal static WarpMesh TransformMesh(WarpMesh mesh, LayerTransform2D transform)
         {
             var points = new System.Numerics.Vector2[mesh.Points.Length];
             for (var i = 0; i < points.Length; i++)

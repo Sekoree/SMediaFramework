@@ -94,6 +94,67 @@ public sealed class SurfaceEffectGlTests
         Assert.True(ka < 10, $"green-screen key should make the surface transparent, got alpha {ka}");
     }
 
+    [SkippableFact]
+    public void FullIdentityMappingSection_IsPixelIdenticalToDirectSurfaceRender()
+    {
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var glError), $"no GL on this host: {glError}");
+
+        var surface = new TwoToneSurface();
+        var direct = new CompositorSurfaceLayer(surface, LayerTransform2D.Identity, 1f);
+        var mapped = direct with
+        {
+            MappingSections = [new WarpSection(RectNormalized.Full, LayerTransform2D.Identity, 1f)],
+        };
+
+        Assert.Equal(CompositeToPixels(direct), CompositeToPixels(mapped));
+    }
+
+    [SkippableFact]
+    public void CornerPinMeshSection_AtCanvasCorners_IsPixelIdenticalToDirectSurfaceRender()
+    {
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var glError), $"no GL on this host: {glError}");
+
+        var surface = new TwoToneSurface();
+        var direct = new CompositorSurfaceLayer(surface, LayerTransform2D.Identity, 1f);
+        // 2×2 mesh = exact corner pin; pinned to the canvas corners it is the identity warp.
+        var mesh = new WarpMesh(2, 2,
+        [
+            new System.Numerics.Vector2(0, 0),
+            new System.Numerics.Vector2(W, 0),
+            new System.Numerics.Vector2(0, H),
+            new System.Numerics.Vector2(W, H),
+        ]);
+        var warped = direct with
+        {
+            MappingSections = [new WarpSection(RectNormalized.Full, LayerTransform2D.Identity, 1f, mesh)],
+        };
+
+        Assert.Equal(CompositeToPixels(direct), CompositeToPixels(warped));
+    }
+
+    [SkippableFact]
+    public void CroppedMappingSection_ShowsOnlyTheCroppedRegion()
+    {
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var glError), $"no GL on this host: {glError}");
+
+        var surface = new TwoToneSurface();
+        var direct = new CompositorSurfaceLayer(surface, LayerTransform2D.Identity, 1f);
+        var directPixels = CompositeToPixels(direct);
+
+        // SourceCrop is bottom-left-origin (the compositor's destination axis - same convention as
+        // frame layers): y ∈ [0, 0.5] selects the image's BOTTOM half, rendered in place, leaving
+        // the rest of the canvas untouched (transparent).
+        var cropped = direct with
+        {
+            MappingSections = [new WarpSection(new RectNormalized(0f, 0f, 1f, 0.5f), LayerTransform2D.Identity, 1f)],
+        };
+        var croppedPixels = CompositeToPixels(cropped);
+
+        Assert.Equal(PixelAt(directPixels, W / 2, H - 2), PixelAt(croppedPixels, W / 2, H - 2));
+        var (_, _, _, outsideAlpha) = PixelAt(croppedPixels, W / 2, 1);
+        Assert.True(outsideAlpha < 10, $"outside the cropped section the canvas must stay clear, got alpha {outsideAlpha}");
+    }
+
     /// <summary>Composites the layer a few times (the readback is pipelined, so the first frames can
     /// lag) and returns the final frame's BGRA pixels as a flat copy.</summary>
     private static byte[] CompositeToPixels(CompositorSurfaceLayer layer)

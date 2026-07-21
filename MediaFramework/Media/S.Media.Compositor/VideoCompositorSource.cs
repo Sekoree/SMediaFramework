@@ -484,6 +484,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private float _opacity = 1f;
         private IReadOnlyList<VideoLayerEffect>? _effects;
+        private IReadOnlyList<WarpSection>? _mappingSections;
 
         internal SurfaceSlot(string id, IVideoCompositorLayerSurface surface)
         {
@@ -517,10 +518,21 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             set { lock (_gate) _effects = value; }
         }
 
+        /// <summary>
+        /// Optional per-slot section mapping (media-layer parity): each section samples the
+        /// surface's full-canvas render and places/warps it independently; <see cref="Transform"/>
+        /// is ignored while set. Null keeps the direct single-transform path.
+        /// </summary>
+        public IReadOnlyList<WarpSection>? MappingSections
+        {
+            get { lock (_gate) return _mappingSections; }
+            set { lock (_gate) _mappingSections = value; }
+        }
+
         /// <summary>Atomic placement snapshot for the composite thread.</summary>
         internal CompositorSurfaceLayer Placement
         {
-            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects); }
+            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects, _mappingSections); }
         }
     }
 

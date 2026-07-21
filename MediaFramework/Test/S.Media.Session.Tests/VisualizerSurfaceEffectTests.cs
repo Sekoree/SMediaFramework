@@ -26,11 +26,13 @@ public sealed class VisualizerSurfaceEffectTests
         public void Dispose() { }
     }
 
-    /// <summary>Surface-hosting CPU compositor recording each composited surface layer's effect chain.</summary>
+    /// <summary>Surface-hosting CPU compositor recording each composited surface layer's effect
+    /// chain and mapping sections.</summary>
     private sealed class EffectRecordingSurfaceHost(VideoFormat output) : IVideoCompositorSurfaceHost
     {
         private readonly CpuVideoCompositor _inner = new(output);
         public readonly ConcurrentQueue<IReadOnlyList<VideoLayerEffect>?> EffectSnapshots = new();
+        public readonly ConcurrentQueue<IReadOnlyList<WarpSection>?> MappingSnapshots = new();
         public VideoFormat OutputFormat => _inner.OutputFormat;
         public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats => _inner.AcceptedLayerPixelFormats;
         public void Configure(VideoFormat output) => _inner.Configure(output);
@@ -42,7 +44,10 @@ public sealed class VisualizerSurfaceEffectTests
             TimeSpan presentationTime)
         {
             foreach (var layer in surfaceLayers)
+            {
                 EffectSnapshots.Enqueue(layer.Effects);
+                MappingSnapshots.Enqueue(layer.MappingSections);
+            }
             return _inner.Composite(frameLayers, presentationTime);
         }
 
@@ -117,6 +122,52 @@ public sealed class VisualizerSurfaceEffectTests
             "screen", new VideoPlacementSpec("screen", 1)));
         host!.EffectSnapshots.Clear();
         await WaitUntilAsync(() => host.EffectSnapshots.Any(e => e is null), TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task VisualizerPlacementWithVideoFx_ReachesSurfaceLayerAsMappingSections()
+    {
+        var host = default(EffectRecordingSurfaceHost);
+        await using var session = new ShowSession(
+            MediaRegistry.Build(_ => { }),
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                host = new EffectRecordingSurfaceHost(fmt), RequiresBgraLayerConversion: true, "TEST-SURFACE-HOST"));
+        await session.LoadDocumentAsync(CanvasDoc());
+
+        var viz = new FakeVisualizer();
+        var mapping = new ClipOutputMappingSpec(
+            Sections:
+            [
+                new ClipOutputMappingSection(
+                    "s1", Enabled: true,
+                    SrcX: 0, SrcY: 0, SrcWidth: 1, SrcHeight: 1,
+                    DestX: 0, DestY: 0, DestWidth: 64, DestHeight: 72,
+                    RotationDegrees: 0, Opacity: 1, Brightness: 1,
+                    MeshColumns: 0, MeshRows: 0, MeshPoints: null),
+                new ClipOutputMappingSection(
+                    "s2", Enabled: true,
+                    SrcX: 0, SrcY: 0, SrcWidth: 1, SrcHeight: 1,
+                    DestX: 64, DestY: 0, DestWidth: 64, DestHeight: 72,
+                    RotationDegrees: 0, Opacity: 0.5, Brightness: 1,
+                    MeshColumns: 0, MeshRows: 0, MeshPoints: null),
+            ],
+            OutputWidth: 128,
+            OutputHeight: 72);
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", viz,
+            placement: new VideoPlacementSpec("screen", 1, VideoFx: mapping)));
+
+        await WaitUntilAsync(() => !host!.MappingSnapshots.IsEmpty, TimeSpan.FromSeconds(2));
+        Assert.True(host!.MappingSnapshots.TryDequeue(out var sections));
+        Assert.NotNull(sections);
+        Assert.Equal(2, sections.Count);
+        Assert.Equal(0.5f, sections[1].Opacity, 3);
+
+        // Live edit clearing VideoFx must drop the sections and return to the direct path.
+        Assert.True(await session.UpdateCompositionVisualizerPlacementAsync(
+            "screen", new VideoPlacementSpec("screen", 1)));
+        host.MappingSnapshots.Clear();
+        await WaitUntilAsync(() => host.MappingSnapshots.Any(s => s is null), TimeSpan.FromSeconds(2));
     }
 
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
