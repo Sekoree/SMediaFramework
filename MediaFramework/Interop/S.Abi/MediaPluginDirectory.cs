@@ -105,11 +105,12 @@ public sealed class MediaPluginDirectory : IDisposable
     public void RegisterInto(
         IMediaRegistryBuilder? media = null,
         ControlMeterBlobDecoderRegistry? control = null,
-        ICompositorRegistryBuilder? compositor = null)
+        ICompositorRegistryBuilder? compositor = null,
+        S.Media.Core.Buses.IBusRegistryBuilder? buses = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         foreach (var plugin in _plugins)
-            AbiPluginHost.RegisterInto(plugin, media, control, compositor);
+            AbiPluginHost.RegisterInto(plugin, media, control, compositor, buses);
     }
 
     /// <summary>Requests unload of every plugin (reverse load order). Libraries with outstanding adapter

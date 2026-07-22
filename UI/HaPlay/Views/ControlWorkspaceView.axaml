@@ -61,7 +61,7 @@
         <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2"
                    Text="{Binding ConfigFilePath}"
                    VerticalAlignment="Center"
-                   Foreground="{StaticResource TextSecondary}"
+                   Foreground="{DynamicResource TextSecondary}"
                    TextTrimming="CharacterEllipsis"
                    ToolTip.Tip="{Binding ConfigFilePath}"
                    IsVisible="{Binding ConfigFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

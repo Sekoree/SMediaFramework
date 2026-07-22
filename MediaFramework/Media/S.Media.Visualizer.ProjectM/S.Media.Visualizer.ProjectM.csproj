@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Visualizer.ProjectM - the projectM (Milkdrop) audio visualizer as an effect-bus
+         visual source: IAudioVisualSource (audio tap in → video out) + ILayerSurfaceVideoSource
+         (renders GPU-side as a compositor layer surface, the same NXT-10 seam as S.Media.Source.MMD).
+         Degrades gracefully when the host has no libprojectM-4 (ProjectMRuntime.IsAvailable). -->
+
+    <PropertyGroup>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <Description>projectM (Milkdrop-style) audio visualizer source and compositor layer surface.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Visualizer/ProjectMLib/ProjectMLib.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="S.Media.Core" />
+        <Using Include="S.Media.Core.Audio" />
+        <Using Include="S.Media.Core.Video" />
+        <Using Include="S.Media.Core.Diagnostics" />
+        <Using Include="S.Media.Core.Buses" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Visualizer.ProjectM.Tests" />
+    </ItemGroup>
+
+</Project>

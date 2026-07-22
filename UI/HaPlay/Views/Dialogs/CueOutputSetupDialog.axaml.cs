@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using System.ComponentModel;
 using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.ViewModels.Dialogs;
@@ -116,7 +117,7 @@ public partial class CueOutputSetupDialog : Window
             composition.Height,
             siblings.Select(b =>
             {
-                var (width, height) = ResolveOutputResolution(b.LineRef?.Definition);
+                var (width, height) = ResolveOutputResolution(b.LineRef);
                 return (
                     b.OutputLineId,
                     b.LineRef?.Definition.DisplayName ?? HaPlay.Resources.Strings.UnsetLabel,
@@ -153,7 +154,7 @@ public partial class CueOutputSetupDialog : Window
             composition.Height,
             siblings.Select(b =>
             {
-                var (width, height) = ResolveOutputResolution(b.LineRef?.Definition);
+                var (width, height) = ResolveOutputResolution(b.LineRef);
                 return (
                     b.OutputLineId,
                     b.LineRef?.Definition.DisplayName ?? HaPlay.Resources.Strings.UnsetLabel,
@@ -162,8 +163,42 @@ public partial class CueOutputSetupDialog : Window
                     b.Mapping);
             }));
 
+        // A saved mapping retains its last render raster, but a local window is itself the physical output.
+        // Its current client/fullscreen size therefore wins when the editor opens and continues to update
+        // while this modal editor is visible.
+        foreach (var binding in siblings)
+            RefreshLocalOutputResolution(vm, binding);
+
         var dialog = new CompositionOutputLayoutDialog { DataContext = vm };
-        var saved = await dialog.ShowDialog<bool>(this);
+        var watchedLines = siblings
+            .Select(binding => binding.LineRef)
+            .Where(line => line?.Definition is LocalVideoOutputDefinition)
+            .OfType<OutputLineViewModel>()
+            .Distinct()
+            .ToList();
+        PropertyChangedEventHandler onOutputChanged = (changed, args) =>
+        {
+            if (changed is not OutputLineViewModel line
+                || args.PropertyName is not (nameof(OutputLineViewModel.Definition)
+                    or nameof(OutputLineViewModel.LiveVideoWidth)
+                    or nameof(OutputLineViewModel.LiveVideoHeight)))
+                return;
+            foreach (var binding in siblings.Where(candidate => ReferenceEquals(candidate.LineRef, line)))
+                RefreshLocalOutputResolution(vm, binding);
+        };
+        foreach (var line in watchedLines)
+            line.PropertyChanged += onOutputChanged;
+
+        bool saved;
+        try
+        {
+            saved = await dialog.ShowDialog<bool>(this);
+        }
+        finally
+        {
+            foreach (var line in watchedLines)
+                line.PropertyChanged -= onOutputChanged;
+        }
         if (!saved)
             return;
 
@@ -179,8 +214,22 @@ public partial class CueOutputSetupDialog : Window
         }
     }
 
-    private static (int? Width, int? Height) ResolveOutputResolution(OutputDefinition? definition) =>
-        definition is not null && HaPlayPlaybackHelpers.TryGetOutputResolution(definition, out var width, out var height)
+    private static void RefreshLocalOutputResolution(
+        CompositionOutputLayoutViewModel layout,
+        CueVideoOutputBindingViewModel binding)
+    {
+        if (binding.LineRef?.Definition is not LocalVideoOutputDefinition)
+            return;
+        var (width, height) = ResolveOutputResolution(binding.LineRef);
+        if (width is { } w && height is { } h)
+            layout.UpdateOutputResolution(binding.OutputLineId, w, h);
+    }
+
+    private static (int? Width, int? Height) ResolveOutputResolution(OutputLineViewModel? line) =>
+        line is { LiveVideoWidth: > 0, LiveVideoHeight: > 0 }
+            ? (line.LiveVideoWidth, line.LiveVideoHeight)
+            : line?.Definition is { } definition
+              && HaPlayPlaybackHelpers.TryGetOutputResolution(definition, out var width, out var height)
             ? (width, height)
             : (null, null);
 }

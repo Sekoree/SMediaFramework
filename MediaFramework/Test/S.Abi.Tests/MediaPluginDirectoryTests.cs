@@ -127,6 +127,58 @@ public sealed class MediaPluginDirectoryTests : IDisposable
     }
 
     [GccFact]
+    public void RealPlugin_AudioEffect_RegistersProcessesAndOwnsLifetime()
+    {
+        CompileTestPlugin(_dir);
+
+        using var plugins = MediaPluginDirectory.Load(_dir);
+        Assert.Empty(plugins.Failures);
+
+        // The plugin's "test.gain" effect registers into a real bus registry like any built-in kind.
+        var buses = S.Media.Core.Buses.BusRegistryBuilder.Build(b => plugins.RegisterInto(buses: b));
+        Assert.Contains("test.gain", buses.AudioEffectKinds);
+        Assert.True(buses.TryCreateAudioEffect("test.gain", null, out var effect));
+
+        // Configure + process straight through the C vtable: a fixed 0.5x gain.
+        effect!.Configure(new S.Media.Core.Audio.AudioFormat(48_000, 2));
+        var samples = new float[] { 1f, 0.5f, -1f, 0.25f };
+        effect.Process(samples, 0);
+        Assert.Equal([0.5f, 0.25f, -0.5f, 0.125f], samples);
+
+        effect.Dispose(); // releases its plugin lease so the library can unload
+    }
+
+    [GccFact]
+    public void RealPlugin_VideoEffect_ProcessesCpuFrameInPlace()
+    {
+        CompileTestPlugin(_dir);
+
+        using var plugins = MediaPluginDirectory.Load(_dir);
+        Assert.Empty(plugins.Failures);
+
+        var buses = S.Media.Core.Buses.BusRegistryBuilder.Build(b => plugins.RegisterInto(buses: b));
+        Assert.Contains("test.invert", buses.VideoEffectKinds);
+        Assert.True(buses.TryCreateVideoEffect("test.invert", null, out var effect));
+
+        var format = new S.Media.Core.Video.VideoFormat(
+            2, 2, S.Media.Core.Video.PixelFormat.Bgra32, new S.Media.Core.Video.Rational(30, 1));
+        effect!.Configure(format);
+
+        var pixels = new byte[16];
+        for (var i = 0; i < pixels.Length; i++)
+            pixels[i] = (byte)(i * 10);
+        var frame = new S.Media.Core.Video.VideoFrame(TimeSpan.Zero, format, [pixels], [8]);
+
+        var result = effect.Process(frame, TimeSpan.Zero);
+        Assert.Same(frame, result); // in-place contract
+        for (var i = 0; i < pixels.Length; i++)
+            Assert.Equal((byte)(255 - i * 10), pixels[i]); // inverted by the C plugin
+
+        effect.Dispose();
+        frame.Dispose();
+    }
+
+    [GccFact]
     public void NonPluginLibrary_IsSkippedSilently()
     {
         CompileTestPlugin(_dir);

@@ -29,4 +29,8 @@
         <InternalsVisibleTo Include="S.Media.MiniAudio.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>miniaudio audio backend for MFPlayer (alternative backend; also proves the backend seam). Requires the exact pinned miniaudio 0.11.25 native build - the binding refuses any other version.</Description>
+    </PropertyGroup>
 </Project>

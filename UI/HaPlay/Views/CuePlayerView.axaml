@@ -91,7 +91,7 @@
       <TextBlock Grid.Column="8"
                  Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
-                 Foreground="{StaticResource TextSecondary}"
+                 Foreground="{DynamicResource TextSecondary}"
                  TextTrimming="CharacterEllipsis"
                  ToolTip.Tip="{Binding DisplayedCueFilePath}"
                  IsVisible="{Binding DisplayedCueFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -122,6 +122,10 @@
             <Separator />
             <MenuItem Header="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddVisualizerCueButton}" Command="{Binding AddVisualizerCueCommand}"
+                      ToolTip.Tip="Starts (or stops) the projectM visualizer as a placeable layer on a composition - position/size and audio-feed routing in the drawer. It keeps running across later cues until a Stop visualizer cue." />
+            <MenuItem Header="{x:Static res:Strings.AddJumpCueButton}" Command="{Binding AddJumpCueCommand}"
+                      ToolTip.Tip="Adds a control-flow cue that jumps the playhead to its target cue(s) - select the loop-back target first. Random mode picks one of several targets." />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
@@ -132,6 +136,9 @@
             <MenuItem Header="{x:Static res:Strings.BrowseMediaButton}" Command="{Binding BrowseMediaSourceCommand}" />
             <MenuItem Header="{x:Static res:Strings.EditActionButton}" Command="{Binding EditActionCueCommand}" />
             <Separator />
+            <MenuItem Header="{x:Static res:Strings.ReorganizeCueListButton}"
+                      Command="{Binding ReorganizeCueListCommand}"
+                      ToolTip.Tip="{x:Static res:Strings.ReorganizeCueListTooltip}" />
             <MenuItem Header="{x:Static res:Strings.RenumberButton}" Command="{Binding RenumberCommand}" />
           </MenuFlyout>
         </Button.Flyout>
@@ -209,10 +216,17 @@
                      between rows. A row collapses to zero height when its cue-kind hides all
                      its children. -->
                 <Grid ColumnDefinitions="Auto,170,Auto,170"
-                      RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
                       ColumnSpacing="8" RowSpacing="8">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.TriggerLabel}" VerticalAlignment="Center" />
-                  <ComboBox Grid.Row="0" Grid.Column="1"
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.CueTreeNumberColumnHeader}" VerticalAlignment="Center" />
+                  <TextBox Grid.Row="0" Grid.Column="1"
+                           Text="{Binding SelectedCueNumber, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                  <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.CueTreeNameColumnHeader}" VerticalAlignment="Center" />
+                  <TextBox Grid.Row="0" Grid.Column="3"
+                           Text="{Binding SelectedCueLabel, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+
+                  <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.StartTriggerLabel}" VerticalAlignment="Center" />
+                  <ComboBox Grid.Row="1" Grid.Column="1"
                             ItemsSource="{Binding CueTriggerModes}"
                             SelectedItem="{Binding SelectedCueNode.TriggerMode, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>
@@ -221,64 +235,64 @@
                       </DataTemplate>
                     </ComboBox.ItemTemplate>
                   </ComboBox>
-                  <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.PreWaitLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown FormatString="0" Grid.Row="0" Grid.Column="3"
+                  <TextBlock Grid.Row="1" Grid.Column="2" Text="{x:Static res:Strings.PreWaitLabel}" VerticalAlignment="Center" />
+                  <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="3"
                                  Minimum="0"
                                  Maximum="120000"
                                  Value="{Binding SelectedCueNode.PreWaitMs, Mode=TwoWay}" />
 
-                  <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.FadeInMsLabel}" VerticalAlignment="Center"
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="{x:Static res:Strings.FadeInMsLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="1"
+                  <NumericUpDown FormatString="0" Grid.Row="2" Grid.Column="1"
                                  Minimum="0"
                                  Maximum="120000"
                                  IsVisible="{Binding HasSelectedMediaCue}"
-                                 Value="{Binding SelectedCueNode.FadeInMs, Mode=TwoWay}" />
-                  <TextBlock Grid.Row="1" Grid.Column="2" Text="{x:Static res:Strings.FadeOutMsLabel}" VerticalAlignment="Center"
+                                 Value="{Binding SelectedMediaCue.FadeInMs, Mode=TwoWay}" />
+                  <TextBlock Grid.Row="2" Grid.Column="2" Text="{x:Static res:Strings.FadeOutMsLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <NumericUpDown FormatString="0" Grid.Row="1" Grid.Column="3"
+                  <NumericUpDown FormatString="0" Grid.Row="2" Grid.Column="3"
                                  Minimum="0"
                                  Maximum="120000"
                                  IsVisible="{Binding HasSelectedMediaCue}"
-                                 Value="{Binding SelectedCueNode.FadeOutMs, Mode=TwoWay}" />
+                                 Value="{Binding SelectedMediaCue.FadeOutMs, Mode=TwoWay}" />
 
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="{x:Static res:Strings.StartMsLabel}" VerticalAlignment="Center"
+                  <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static res:Strings.StartMsLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <TextBox Grid.Row="2" Grid.Column="1"
-                           Text="{Binding SelectedCueNode.StartOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                           PlaceholderText="00:00:00.000"
-                           TextAlignment="Right"
-                           IsVisible="{Binding HasSelectedMediaCue}" />
-                  <TextBlock Grid.Row="2" Grid.Column="2" Text="{x:Static res:Strings.EndTrimMsLabel}" VerticalAlignment="Center"
-                             IsVisible="{Binding HasSelectedMediaCue}" />
-                  <TextBox Grid.Row="2" Grid.Column="3"
-                           Text="{Binding SelectedCueNode.EndOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                           PlaceholderText="00:00:00.000"
-                           TextAlignment="Right"
-                           IsVisible="{Binding HasSelectedMediaCue}" />
-
-                  <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static res:Strings.HoldDurationLabel}" VerticalAlignment="Center"
-                             IsVisible="{Binding HasSelectedStaticCue}" />
                   <TextBox Grid.Row="3" Grid.Column="1"
-                           Text="{Binding SelectedCueNode.DurationTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           Text="{Binding SelectedMediaCue.StartOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="00:00:00.000"
+                           TextAlignment="Right"
+                           IsVisible="{Binding HasSelectedMediaCue}" />
+                  <TextBlock Grid.Row="3" Grid.Column="2" Text="{x:Static res:Strings.EndTrimMsLabel}" VerticalAlignment="Center"
+                             IsVisible="{Binding HasSelectedMediaCue}" />
+                  <TextBox Grid.Row="3" Grid.Column="3"
+                           Text="{Binding SelectedMediaCue.EndOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="00:00:00.000"
+                           TextAlignment="Right"
+                           IsVisible="{Binding HasSelectedMediaCue}" />
+
+                  <TextBlock Grid.Row="4" Grid.Column="0" Text="{x:Static res:Strings.HoldDurationLabel}" VerticalAlignment="Center"
+                             IsVisible="{Binding HasSelectedStaticCue}" />
+                  <TextBox Grid.Row="4" Grid.Column="1"
+                           Text="{Binding SelectedStaticCue.DurationTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                            PlaceholderText="00:00:05.000"
                            TextAlignment="Right"
                            IsVisible="{Binding HasSelectedStaticCue}" />
-                  <TextBlock Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2"
+                  <TextBlock Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2"
                              VerticalAlignment="Center" Opacity="0.55" FontSize="11"
                              IsVisible="{Binding HasSelectedStaticCue}"
                              Text="{x:Static res:Strings.DurationFormatHint}" />
 
-                  <CheckBox Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
+                  <CheckBox Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
                             Content="{x:Static res:Strings.LoopLabel}" VerticalAlignment="Center"
                             IsVisible="{Binding HasSelectedMediaCue}"
-                            IsChecked="{Binding SelectedCueNode.Loop, Mode=TwoWay}" />
-                  <TextBlock Grid.Row="4" Grid.Column="2" Text="{x:Static res:Strings.EndLabel}" VerticalAlignment="Center"
+                            IsChecked="{Binding SelectedMediaCue.Loop, Mode=TwoWay}" />
+                  <TextBlock Grid.Row="5" Grid.Column="2" Text="{x:Static res:Strings.EndLabel}" VerticalAlignment="Center"
                              IsVisible="{Binding HasSelectedMediaCue}" />
-                  <ComboBox Grid.Row="4" Grid.Column="3"
+                  <ComboBox Grid.Row="5" Grid.Column="3"
                             IsVisible="{Binding HasSelectedMediaCue}"
                             ItemsSource="{Binding CueEndBehaviors}"
-                            SelectedItem="{Binding SelectedCueNode.EndBehavior, Mode=TwoWay}">
+                            SelectedItem="{Binding SelectedMediaCue.EndBehavior, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -287,10 +301,39 @@
                   </ComboBox>
                 </Grid>
 
+                <!-- Custom natural-end trigger. The target can itself be a random Jump cue, keeping
+                     large random-song pools compact. Empty uses the normal Auto Follow chain. -->
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasSelectedMediaCue}"
+                            ToolTip.Tip="{x:Static res:Strings.EndTriggerTargetTooltip}">
+                  <TextBlock Text="{x:Static res:Strings.EndTriggerTargetLabel}" VerticalAlignment="Center" />
+                  <TextBox Width="90" Text="{Binding SelectedEndTargetText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="Cue no. (default)" />
+                </StackPanel>
+
                 <!-- Preview + scrubbing live ONLY on the Preview tab now - this tab used to carry
                      a second Preview button and a bare scrubber, and the duplicate was the one
                      whose seeks actually committed (the Preview tab's copy silently didn't). -->
-                <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
+                <!-- Media FX send (#26): this cue's audio also drives a selective-feed visualizer. -->
+                <CheckBox Content="FX: send audio to visualizer (when a visualizer cue with selective feed is running)"
+                          IsVisible="{Binding SelectedAudioCue, Converter={x:Static ObjectConverters.IsNotNull}}"
+                          IsChecked="{Binding SelectedAudioCue.SendToVisualizer, Mode=TwoWay}" />
+
+                <!-- Jump-cue editor (#27): targets entered as cue NUMBERS (stored as stable IDs, so
+                     renumber/reorder never retargets), plus random-pick and fire/standby. -->
+                <StackPanel Spacing="6" IsVisible="{Binding IsJumpCueSelected}">
+                  <TextBlock Text="{x:Static res:Strings.CueJumpTargetsLabel}" FontWeight="SemiBold" />
+                  <TextBox Text="{Binding SelectedJumpTargetsText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="e.g. 3, 7, 12" />
+                  <CheckBox Content="{x:Static res:Strings.CueJumpRandomLabel}"
+                            IsChecked="{Binding SelectedJumpRandom, Mode=TwoWay}" />
+                  <CheckBox Content="{x:Static res:Strings.CueJumpAvoidRepeatLabel}"
+                            IsEnabled="{Binding SelectedJumpRandom}"
+                            IsChecked="{Binding SelectedJumpAvoidImmediateRepeat, Mode=TwoWay}" />
+                  <CheckBox Content="{x:Static res:Strings.CueJumpFireLabel}"
+                            IsChecked="{Binding SelectedJumpFiresTarget, Mode=TwoWay}" />
+                </StackPanel>
+
+                                <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
                 <TextBox AcceptsReturn="True"
                          MinHeight="60"
                          TextWrapping="Wrap"
@@ -362,24 +405,24 @@
               <StackPanel Margin="6" Spacing="8">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <TextBlock Text="{x:Static res:Strings.AudioTabSourceLabel}" FontWeight="SemiBold" />
-                  <TextBlock Text="{Binding SelectedCueNode.SourceAudioChannels, StringFormat={x:Static res:Strings.AudioChannelCountFormat}}"
-                             IsVisible="{Binding SelectedCueNode.SourceHasAudio}" />
+                  <TextBlock Text="{Binding SelectedAudioCue.SourceAudioChannels, StringFormat={x:Static res:Strings.AudioChannelCountFormat}}"
+                             IsVisible="{Binding SelectedAudioCue.SourceHasAudio}" />
                   <TextBlock Text="{x:Static res:Strings.AudioSourceHasNoneLabel}"
                              Opacity="0.65"
-                             IsVisible="{Binding !SelectedCueNode.SourceHasAudio}" />
+                             IsVisible="{Binding !SelectedAudioCue.SourceHasAudio}" />
                 </StackPanel>
                 <!-- Multi-track sources (MKV with several languages): pick which audio track the cue
                      plays. Hidden for single-track files - most cues never see this row. -->
                 <StackPanel Orientation="Horizontal" Spacing="6"
-                            IsVisible="{Binding SelectedCueNode.HasMultipleAudioTracks, FallbackValue=False}"
+                            IsVisible="{Binding SelectedAudioCue.HasMultipleAudioTracks, FallbackValue=False}"
                             ToolTip.Tip="{x:Static res:Strings.AudioTrackTooltip}">
                   <TextBlock Text="{x:Static res:Strings.AudioTrackLabel}" FontWeight="SemiBold"
                              VerticalAlignment="Center" />
                   <ComboBox MinWidth="260"
-                            ItemsSource="{Binding SelectedCueNode.AudioTrackChoices}"
-                            SelectedItem="{Binding SelectedCueNode.SelectedAudioTrackChoice, Mode=TwoWay}" />
+                            ItemsSource="{Binding SelectedAudioCue.AudioTrackChoices}"
+                            SelectedItem="{Binding SelectedAudioCue.SelectedAudioTrackChoice, Mode=TwoWay}" />
                 </StackPanel>
-                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{DynamicResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
@@ -470,16 +513,27 @@
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding VideoFrameRateMismatchWarning}" />
                 </Border>
-                <Border Background="{StaticResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
+                <Border Background="{DynamicResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="0" Padding="6,3"
                         IsVisible="{Binding IsMultiSelected}">
                   <TextBlock TextWrapping="Wrap"
                              Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectVideoBannerFormat}}" />
                 </Border>
+                <!-- Multi-stream sources: pick which video stream the cue shows (mirrors the Audio
+                     tab's track picker). Hidden for single-stream files; an embedded thumbnail /
+                     cover-art stream is explicitly selectable here. -->
+                <StackPanel Orientation="Horizontal" Spacing="6"
+                            IsVisible="{Binding SelectedVideoCue.HasMultipleVideoTracks, FallbackValue=False}"
+                            ToolTip.Tip="{x:Static res:Strings.VideoTrackTooltip}">
+                  <TextBlock Text="{x:Static res:Strings.VideoTrackLabel}" FontWeight="SemiBold"
+                             VerticalAlignment="Center" />
+                  <ComboBox MinWidth="260"
+                            ItemsSource="{Binding SelectedVideoCue.VideoTrackChoices}"
+                            SelectedItem="{Binding SelectedVideoCue.SelectedVideoTrackChoice, Mode=TwoWay}" />
+                </StackPanel>
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddVideoPlacementButton}" Command="{Binding AddVideoPlacementCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoPlacementCommand}" />
-                  <Button Content="{x:Static res:Strings.EditVideoFxButton}" Command="{Binding EditSelectedPlacementVideoFxCommand}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"
@@ -492,30 +546,53 @@
                          SelectedItem="{Binding SelectedVideoPlacement, Mode=TwoWay}">
                   <ListBox.ItemTemplate>
                     <DataTemplate DataType="vm:CueVideoPlacementViewModel">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{x:Static res:Strings.CompositionLabel}" VerticalAlignment="Center" />
-                        <ComboBox SelectedValue="{Binding CompositionId, Mode=TwoWay}"
-                                  SelectedValueBinding="{Binding Id}"
-                                  DisplayMemberBinding="{Binding DisplayName}"
-                                  ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
-                                  MinWidth="220" />
-                        <TextBlock Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
-                        <NumericUpDown FormatString="0" Value="{Binding LayerIndex, Mode=TwoWay}" VerticalAlignment="Center" Minimum="-100" Maximum="100" />
-                        <TextBlock Text="{x:Static res:Strings.LayerPositionLabel}" VerticalAlignment="Center" />
-                        <ComboBox SelectedItem="{Binding Position, Mode=TwoWay}"
-                                  ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).LayerPositions}"
-                                  MinWidth="120">
-                          <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                              <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
-                            </DataTemplate>
-                          </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <TextBlock Text="{x:Static res:Strings.OpacityLabel}" VerticalAlignment="Center" />
-                        <Slider Minimum="0" Maximum="1" SmallChange="0.05"
-                                VerticalAlignment="Center"
-                                Value="{Binding Opacity, Mode=TwoWay}" Width="120" />
-                      </StackPanel>
+                      <!-- Keep each label/editor pair together when the drawer narrows. Using a grid
+                           inside each group also gives every item the same vertical centre; the former
+                           horizontal StackPanel aligned controls by their differing desired heights. -->
+                      <WrapPanel ItemSpacing="12" LineSpacing="6">
+                        <Grid ColumnDefinitions="Auto,8,220">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CompositionLabel}" VerticalAlignment="Center" />
+                          <ComboBox Grid.Column="2"
+                                    SelectedValue="{Binding CompositionId, Mode=TwoWay}"
+                                    SelectedValueBinding="{Binding Id}"
+                                    DisplayMemberBinding="{Binding DisplayName}"
+                                    ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,8,125">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
+                          <NumericUpDown Grid.Column="2" Width="125"
+                                         FormatString="0"
+                                         Value="{Binding LayerIndex, Mode=TwoWay}"
+                                         VerticalAlignment="Center"
+                                         Minimum="-100" Maximum="100" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,8,140">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.LayerPositionLabel}" VerticalAlignment="Center" />
+                          <ComboBox Grid.Column="2"
+                                    SelectedItem="{Binding Position, Mode=TwoWay}"
+                                    ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).LayerPositions}"
+                                    VerticalAlignment="Center">
+                            <ComboBox.ItemTemplate>
+                              <DataTemplate>
+                                <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                              </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                          </ComboBox>
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,8,105,6,130">
+                          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.OpacityLabel}" VerticalAlignment="Center" />
+                          <Slider Grid.Column="2" Width="105"
+                                  Minimum="0" Maximum="1" SmallChange="0.05"
+                                  VerticalAlignment="Center"
+                                  Value="{Binding Opacity, Mode=TwoWay}" />
+                          <NumericUpDown Grid.Column="4" Width="130"
+                                         Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                         VerticalAlignment="Center"
+                                         ToolTip.Tip="Exact layer opacity (0.00–1.00)"
+                                         Value="{Binding Opacity, Mode=TwoWay}" />
+                        </Grid>
+                      </WrapPanel>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
@@ -537,12 +614,12 @@
                 </WrapPanel>
 
                 <!-- Visual placement canvas: drag to move, bottom-right handle to resize, click to select -->
-                <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" MinHeight="220">
+                <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" MinHeight="220">
                   <controls:CompositionPlacementCanvas
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
                       AspectRatio="{Binding PlacementCanvasAspect}"
-                      TextBounds="{Binding SelectedCueNode.TextBounds}" />
+                      TextBounds="{Binding SelectedVideoCue.TextBounds}" />
                 </Border>
                 <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.PlacementCanvasDragHint}" />
@@ -551,19 +628,19 @@
                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
                   <TextBlock Text="{x:Static res:Strings.PlacementPositionLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <TextBlock Text="{x:Static res:Strings.PlacementXLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestX, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementYLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestY, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementWidthLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestWidth, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementHeightLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestHeight, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementRotationLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="-180" Maximum="180" Increment="1" FormatString="0"
+                  <NumericUpDown Width="125" Minimum="-180" Maximum="180" Increment="1" FormatString="0"
                                  Value="{Binding SelectedVideoPlacement.RotationDegrees, Mode=TwoWay}" />
                 </WrapPanel>
 
@@ -578,16 +655,16 @@
                 <WrapPanel ItemSpacing="6" LineSpacing="4"
                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
                   <TextBlock Text="{x:Static res:Strings.CropLeftLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropLeft, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.CropTopLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropTop, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.CropRightLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropRight, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.CropBottomLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                  <NumericUpDown Width="125" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropBottom, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.PlacementFitModeLabel}" VerticalAlignment="Center" Opacity="0.7" Margin="6,0,0,0" />
                   <ComboBox MinWidth="120"
@@ -600,17 +677,208 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                 </WrapPanel>
+
               </StackPanel>
             </ScrollViewer>
           </TabItem>
 
-          <TabItem Header="{x:Static res:Strings.SubtitlesTabLabel}" IsVisible="{Binding SelectedCueNode.HasSubtitleTracks, FallbackValue=False}">
+          <!-- Per-placement video effects, grouped in one place: the geometry stage (mapping/warp
+               splitting, the VideoFx dialog) and the color stage (the compositor's layer-effect
+               chain - chroma key today). Acts on the placement selected on the Video tab; edits fan
+               out across the multi-selection and push live into a running cue. -->
+          <TabItem Header="{x:Static res:Strings.EffectsTabLabel}"
+                   IsVisible="{Binding HasSelectedMediaCueWithVideo}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <Border Background="{DynamicResource ChipNeutral}" BorderBrush="#44808080" BorderThickness="1"
+                        CornerRadius="0" Padding="6,3"
+                        IsVisible="{Binding IsMultiSelected}">
+                  <TextBlock TextWrapping="Wrap"
+                             Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectVideoBannerFormat}}" />
+                </Border>
+                <TextBlock Opacity="0.65" TextWrapping="Wrap"
+                           Text="{x:Static res:Strings.EffectsTabNoPlacementHint}"
+                           IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNull}}" />
+
+                <StackPanel Spacing="8"
+                            IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <TextBlock Opacity="0.65" FontSize="11" TextWrapping="Wrap"
+                             Text="{x:Static res:Strings.EffectsTabPlacementHint}" />
+
+                  <!-- Geometry stage: mapping / warp / splitting (edited in the VideoFx dialog). -->
+                  <TextBlock Text="{x:Static res:Strings.MappingWarpSectionLabel}" FontWeight="SemiBold" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4">
+                    <CheckBox Content="{x:Static res:Strings.MappingWarpEnableLabel}"
+                              IsChecked="{Binding SelectedVideoPlacement.VideoFxEnabled, Mode=TwoWay}" />
+                    <Button Content="{x:Static res:Strings.EditVideoFxButton}"
+                            Command="{Binding EditSelectedPlacementVideoFxCommand}" />
+                  </WrapPanel>
+
+                  <!-- Color stage: the compositor layer-effect chain. Settings persist while
+                       disabled (VideoFx pattern). -->
+                  <TextBlock Text="{x:Static res:Strings.ChromaKeySectionLabel}" FontWeight="SemiBold" Margin="0,6,0,0" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4">
+                    <CheckBox Content="{x:Static res:Strings.ChromaKeyEnableLabel}"
+                              IsChecked="{Binding SelectedVideoPlacement.ChromaKeyEnabled, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeyColorLabel}" VerticalAlignment="Center" Opacity="0.7" Margin="6,0,0,0" />
+                    <TextBox Width="86" Text="{Binding SelectedVideoPlacement.ChromaKeyColorHex, Mode=TwoWay}"
+                             ToolTip.Tip="{x:Static res:Strings.ChromaKeyColorTooltip}" />
+                    <Button Content="{x:Static res:Strings.ChromaKeyPresetGreenButton}"
+                            Command="{Binding SelectedVideoPlacement.SetChromaKeyGreenCommand}" />
+                    <Button Content="{x:Static res:Strings.ChromaKeyPresetBlueButton}"
+                            Command="{Binding SelectedVideoPlacement.SetChromaKeyBlueCommand}" />
+                  </WrapPanel>
+                  <WrapPanel ItemSpacing="6" LineSpacing="4"
+                             IsEnabled="{Binding SelectedVideoPlacement.ChromaKeyEnabled}">
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeySimilarityLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ChromaKeySimilarityTooltip}" />
+                    <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ChromaKeySimilarity, Mode=TwoWay}" />
+                    <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
+                                   Value="{Binding SelectedVideoPlacement.ChromaKeySimilarity, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeySmoothnessLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ChromaKeySmoothnessTooltip}" />
+                    <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ChromaKeySmoothness, Mode=TwoWay}" />
+                    <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
+                                   Value="{Binding SelectedVideoPlacement.ChromaKeySmoothness, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ChromaKeySpillLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ChromaKeySpillTooltip}" />
+                    <Slider Width="90" Minimum="0" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
+                    <NumericUpDown Width="125" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
+                                   Value="{Binding SelectedVideoPlacement.ChromaKeySpill, Mode=TwoWay}" />
+                  </WrapPanel>
+
+                  <!-- Second color-stage effect: brightness/contrast (chained after the key). -->
+                  <TextBlock Text="{x:Static res:Strings.ColorAdjustSectionLabel}" FontWeight="SemiBold" Margin="0,6,0,0" />
+                  <CheckBox Content="{x:Static res:Strings.ColorAdjustEnableLabel}"
+                            IsChecked="{Binding SelectedVideoPlacement.ColorAdjustEnabled, Mode=TwoWay}" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4"
+                             IsEnabled="{Binding SelectedVideoPlacement.ColorAdjustEnabled}">
+                    <TextBlock Text="{x:Static res:Strings.ColorAdjustBrightnessLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ColorAdjustBrightnessTooltip}" />
+                    <Slider Width="110" Minimum="-1" Maximum="1" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
+                    <NumericUpDown Width="125" Minimum="-1" Maximum="1" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
+                                   Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
+                    <TextBlock Text="{x:Static res:Strings.ColorAdjustContrastLabel}" VerticalAlignment="Center" Opacity="0.7"
+                               ToolTip.Tip="{x:Static res:Strings.ColorAdjustContrastTooltip}" />
+                    <!-- Slider and NumericUpDown MUST share one range: a slider capped below the
+                         model max coerces a persisted higher value on render and the TwoWay
+                         binding writes the clamp back, silently editing the cue. -->
+                    <Slider Width="110" Minimum="0" Maximum="4" SmallChange="0.01" VerticalAlignment="Center"
+                            Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
+                    <NumericUpDown Width="125" Minimum="0" Maximum="4" Increment="0.01" FormatString="0.00"
+                                   VerticalAlignment="Center"
+                                   Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
+                  </WrapPanel>
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="{x:Static res:Strings.CueKindVisualizerLabel}"
+                   IsVisible="{Binding IsVisualizerCueSelected}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <WrapPanel ItemSpacing="8" LineSpacing="4">
+                  <CheckBox Content="Start visualizer (off = stop the visualizer on this composition)"
+                            IsChecked="{Binding SelectedVisualizerStarts, Mode=TwoWay}" />
+                  <Button Content="Fire selected cue now"
+                          Command="{Binding FireSelectedVisualizerCommand}"
+                          ToolTip.Tip="Applies this visualizer Start/Stop cue without firing or replacing the main transport standby." />
+                  <Button Content="{x:Static res:Strings.VisualizerNextPresetMenuHeader}"
+                          Command="{Binding NextVisualizerPresetCommand}"
+                          ToolTip.Tip="Advances the currently running visualizer without restarting it." />
+                </WrapPanel>
+
+                <StackPanel Spacing="8" IsEnabled="{Binding SelectedVisualizerStarts}">
+                  <TextBlock Text="Playback" FontWeight="SemiBold" />
+                  <Grid ColumnDefinitions="Auto,170,Auto,170"
+                        RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Cue duration (seconds)" VerticalAlignment="Center"
+                               ToolTip.Tip="0 is non-blocking: the layer keeps running until a Stop cue." />
+                    <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="86400" Increment="1" FormatString="0.#"
+                                   Value="{Binding SelectedVisualizerDurationSeconds, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Preset duration (seconds)" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="0" Maximum="3600" Increment="1" FormatString="0.#"
+                                   ToolTip.Tip="0 uses the default: 30 seconds. Positive values have a 5-second minimum."
+                                   Value="{Binding SelectedVisualizerCue.VisualizerPresetDurationSeconds, Mode=TwoWay}" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Transition (seconds)" VerticalAlignment="Center"
+                               ToolTip.Tip="Default: 2 seconds. 0 is an immediate preset switch." />
+                    <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="30" Increment="0.25" FormatString="0.##"
+                                   Value="{Binding SelectedVisualizerCue.VisualizerTransitionSeconds, Mode=TwoWay}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Beat sensitivity" VerticalAlignment="Center"
+                               ToolTip.Tip="Default: 1.0. 0 disables beat response." />
+                    <NumericUpDown Grid.Row="1" Grid.Column="3" Minimum="0" Maximum="5" Increment="0.1" FormatString="0.0"
+                                   Value="{Binding SelectedVisualizerCue.VisualizerBeatSensitivity, Mode=TwoWay}" />
+
+                    <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                              Content="Shuffle presets"
+                              IsChecked="{Binding SelectedVisualizerCue.VisualizerShufflePresets, Mode=TwoWay}" />
+                  </Grid>
+                  <TextBlock Opacity="0.65" FontSize="11" TextWrapping="Wrap"
+                             Text="Defaults: preset duration 30 s, transition 2 s, beat sensitivity 1.0. Zero means: cue duration runs until a Stop cue; preset duration uses 30 s; transition is immediate; beat response is disabled." />
+
+                  <TextBlock Text="Rendering" FontWeight="SemiBold" Margin="0,4,0,0" />
+                  <Grid ColumnDefinitions="Auto,150,Auto,150,Auto,120" ColumnSpacing="8">
+                    <TextBlock Grid.Column="0" Text="Width" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="1" Minimum="0" Maximum="7680" Increment="2" FormatString="0"
+                                   Value="{Binding SelectedVisualizerCue.VisualizerRenderWidth, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="2" Text="Height" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="3" Minimum="0" Maximum="4320" Increment="2" FormatString="0"
+                                   Value="{Binding SelectedVisualizerCue.VisualizerRenderHeight, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="4" Text="FPS" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="5" Minimum="0" Maximum="240" Increment="1" FormatString="0"
+                                   Value="{Binding SelectedVisualizerCue.VisualizerRenderFps, Mode=TwoWay}" />
+                  </Grid>
+                  <TextBlock Opacity="0.65" FontSize="11" TextWrapping="Wrap"
+                             Text="0 for width, height, or FPS means use the target composition's current value." />
+                  <WrapPanel ItemSpacing="6" LineSpacing="4">
+                    <Button Content="Match composition" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="0x0@0" />
+                    <Button Content="720p60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="1280x720@60" />
+                    <Button Content="1080p60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="1920x1080@60" />
+                    <Button Content="1440p60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="2560x1440@60" />
+                    <Button Content="4K60" Command="{Binding SetVisualizerCueResolutionCommand}" CommandParameter="3840x2160@60" />
+                  </WrapPanel>
+
+                  <TextBlock Text="Preset folder" FontWeight="SemiBold" Margin="0,4,0,0" />
+                  <TextBox Text="{Binding SelectedVisualizerCue.SourceOrAction, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="Folder containing *.milk presets (searched recursively)" />
+
+                  <TextBlock Text="Audio feed" FontWeight="SemiBold" Margin="0,4,0,0" />
+                  <CheckBox Content="Feed audio from all playing media"
+                            IsChecked="{Binding SelectedVisualizerFeedAll, Mode=TwoWay}" />
+                  <Grid ColumnDefinitions="Auto,220" ColumnSpacing="8"
+                        IsVisible="{Binding !SelectedVisualizerFeedAll}">
+                    <TextBlock Grid.Column="0" Text="Cue numbers"
+                               VerticalAlignment="Center"
+                               ToolTip.Tip="Also includes media cues whose 'send audio to visualizer' option is enabled." />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding SelectedVisualizerFeedText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                             PlaceholderText="e.g. 2, 4" />
+                  </Grid>
+                </StackPanel>
+
+                <TextBlock Opacity="0.65" FontSize="11" TextWrapping="Wrap"
+                           Text="Composition placement uses the Video tab. Position, fit, crop, opacity, rotation, and effects update the running visualizer live." />
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="{x:Static res:Strings.SubtitlesTabLabel}" IsVisible="{Binding HasSelectedSubtitleCue}">
             <ScrollViewer>
               <StackPanel Spacing="8" Margin="6">
                 <TextBlock Text="{x:Static res:Strings.SubtitleTracksHeader}" FontWeight="SemiBold" />
                 <TextBlock Opacity="0.65" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.SubtitleTracksHint}" />
-                <ItemsControl ItemsSource="{Binding SelectedCueNode.SubtitleTrackChoices}">
+                <ItemsControl ItemsSource="{Binding SelectedSubtitleCue.SubtitleTrackChoices}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:CueSubtitleTrackChoice">
                       <CheckBox Margin="0,1"
@@ -624,14 +892,14 @@
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.SubtitleFontFamilyLabel}" />
                   <TextBox Width="180" PlaceholderText="{x:Static res:Strings.SubtitleFontFamilyPlaceholder}"
-                           Text="{Binding SelectedCueNode.SubtitleFontFamily, Mode=TwoWay}" />
+                           Text="{Binding SelectedSubtitleCue.SubtitleFontFamily, Mode=TwoWay}" />
                   <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.SubtitleFontScaleLabel}" />
                   <NumericUpDown Width="120" Minimum="0.25" Maximum="5" Increment="0.1" PlaceholderText="1.0"
-                                 Value="{Binding SelectedCueNode.SubtitleFontScaleValue, Mode=TwoWay}" />
+                                 Value="{Binding SelectedSubtitleCue.SubtitleFontScaleValue, Mode=TwoWay}" />
                   <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.SubtitleAlignLabel}" />
                   <ComboBox MinWidth="150"
-                            ItemsSource="{Binding SelectedCueNode.SubtitleAlignmentChoices}"
-                            SelectedItem="{Binding SelectedCueNode.SelectedSubtitleAlignment, Mode=TwoWay}" />
+                            ItemsSource="{Binding SelectedSubtitleCue.SubtitleAlignmentChoices}"
+                            SelectedItem="{Binding SelectedSubtitleCue.SelectedSubtitleAlignment, Mode=TwoWay}" />
                 </StackPanel>
                 <TextBlock Opacity="0.6" FontSize="11" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.SubtitleFontOverridesHint}" />
@@ -644,39 +912,39 @@
               <StackPanel Spacing="8" Margin="6">
                 <TextBlock Text="{x:Static res:Strings.TextContentLabel}" Opacity="0.7" />
                 <TextBox AcceptsReturn="True" MinHeight="80" TextWrapping="Wrap"
-                         Text="{Binding SelectedCueNode.TextContent, Mode=TwoWay}" />
+                         Text="{Binding SelectedTextCue.TextContent, Mode=TwoWay}" />
                 <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.TextFontFamilyLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch"
-                            ItemsSource="{Binding SelectedCueNode.FontFamilyOptions}"
-                            SelectedItem="{Binding SelectedCueNode.TextFontFamily, Mode=TwoWay}">
+                            ItemsSource="{Binding SelectedTextCue.FontFamilyOptions}"
+                            SelectedItem="{Binding SelectedTextCue.TextFontFamily, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding}" FontFamily="{Binding}" />
                       </DataTemplate>
                     </ComboBox.ItemTemplate>
                   </ComboBox>
-                  <CheckBox Grid.Row="0" Grid.Column="2" Content="{x:Static res:Strings.TextBoldLabel}" IsChecked="{Binding SelectedCueNode.TextBold, Mode=TwoWay}" />
-                  <CheckBox Grid.Row="0" Grid.Column="3" Content="{x:Static res:Strings.TextItalicLabel}" IsChecked="{Binding SelectedCueNode.TextItalic, Mode=TwoWay}" />
+                  <CheckBox Grid.Row="0" Grid.Column="2" Content="{x:Static res:Strings.TextBoldLabel}" IsChecked="{Binding SelectedTextCue.TextBold, Mode=TwoWay}" />
+                  <CheckBox Grid.Row="0" Grid.Column="3" Content="{x:Static res:Strings.TextItalicLabel}" IsChecked="{Binding SelectedTextCue.TextItalic, Mode=TwoWay}" />
                   <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.TextFontSizeLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <NumericUpDown Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" Width="130"
                                  Minimum="4" Maximum="2000" Increment="4" FormatString="0"
-                                 Value="{Binding SelectedCueNode.TextFontSizePx, Mode=TwoWay}" />
+                                 Value="{Binding SelectedTextCue.TextFontSizePx, Mode=TwoWay}" />
                 </Grid>
                 <WrapPanel ItemSpacing="8" LineSpacing="6">
                   <TextBlock Text="{x:Static res:Strings.TextColorLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <ColorPicker Color="{Binding SelectedCueNode.TextColor, Mode=TwoWay}" />
+                  <ColorPicker Color="{Binding SelectedTextCue.TextColor, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.TextBackgroundColorLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <ColorPicker Color="{Binding SelectedCueNode.TextBackgroundColor, Mode=TwoWay}" />
+                  <ColorPicker Color="{Binding SelectedTextCue.TextBackgroundColor, Mode=TwoWay}" />
                   <TextBlock Text="{x:Static res:Strings.TextOutlineColorLabel}" VerticalAlignment="Center" Opacity="0.7" />
-                  <ColorPicker Color="{Binding SelectedCueNode.TextOutlineColor, Mode=TwoWay}" />
+                  <ColorPicker Color="{Binding SelectedTextCue.TextOutlineColor, Mode=TwoWay}" />
                   <NumericUpDown Width="92" Minimum="0" Maximum="40" Increment="1" FormatString="0"
-                                 Value="{Binding SelectedCueNode.TextOutlineWidthPx, Mode=TwoWay}" />
+                                 Value="{Binding SelectedTextCue.TextOutlineWidthPx, Mode=TwoWay}" />
                 </WrapPanel>
                 <WrapPanel ItemSpacing="8" LineSpacing="6">
                   <TextBlock Text="{x:Static res:Strings.TextHAlignLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <ComboBox MinWidth="92" ItemsSource="{Binding TextHAlignOptions}"
-                            SelectedItem="{Binding SelectedCueNode.TextHAlign, Mode=TwoWay}">
+                            SelectedItem="{Binding SelectedTextCue.TextHAlign, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -685,7 +953,7 @@
                   </ComboBox>
                   <TextBlock Text="{x:Static res:Strings.TextVAlignLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <ComboBox MinWidth="92" ItemsSource="{Binding TextVAlignOptions}"
-                            SelectedItem="{Binding SelectedCueNode.TextVAlign, Mode=TwoWay}">
+                            SelectedItem="{Binding SelectedTextCue.TextVAlign, Mode=TwoWay}">
                     <ComboBox.ItemTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -694,7 +962,7 @@
                   </ComboBox>
                   <TextBlock Text="{x:Static res:Strings.TextWrapWidthLabel}" VerticalAlignment="Center" Opacity="0.7" />
                   <Slider Width="120" Minimum="0" Maximum="1" SmallChange="0.05"
-                          Value="{Binding SelectedCueNode.TextWrapWidthFraction, Mode=TwoWay}" />
+                          Value="{Binding SelectedTextCue.TextWrapWidthFraction, Mode=TwoWay}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.5" FontSize="11" TextWrapping="Wrap"
                            Text="{x:Static res:Strings.TextCueFooterHint}" />
@@ -717,7 +985,7 @@
                 <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionKindLabel}" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="1"
                           ItemsSource="{Binding ActionKinds}"
-                          SelectedItem="{Binding SelectedCueNode.ActionKind, Mode=TwoWay}">
+                          SelectedItem="{Binding SelectedActionCue.ActionKind, Mode=TwoWay}">
                   <ComboBox.ItemTemplate>
                     <DataTemplate>
                       <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -727,7 +995,7 @@
               </Grid>
               <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                 <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionCommandLabel}" VerticalAlignment="Center" />
-                <TextBox Grid.Column="1" Text="{Binding SelectedCueNode.SourceOrAction, Mode=TwoWay}" />
+                <TextBox Grid.Column="1" Text="{Binding SelectedActionCue.SourceOrAction, Mode=TwoWay}" />
               </Grid>
               <Button Content="{x:Static res:Strings.EditActionButton}"
                       Command="{Binding EditActionCueCommand}"
@@ -742,7 +1010,7 @@
               <TextBox AcceptsReturn="True"
                        MinHeight="120"
                        TextWrapping="Wrap"
-                       Text="{Binding SelectedCueNode.SourceOrAction, Mode=TwoWay}" />
+                       Text="{Binding SelectedCommentCue.SourceOrAction, Mode=TwoWay}" />
             </StackPanel>
           </TabItem>
 
@@ -753,7 +1021,7 @@
                 <TextBlock Grid.Column="0" Text="{x:Static res:Strings.GroupFireModeLabel}" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="1"
                           ItemsSource="{Binding GroupFireModes}"
-                          SelectedItem="{Binding SelectedCueNode.GroupFireMode, Mode=TwoWay}">
+                          SelectedItem="{Binding SelectedGroupCue.GroupFireMode, Mode=TwoWay}">
                   <ComboBox.ItemTemplate>
                     <DataTemplate>
                       <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
@@ -768,25 +1036,56 @@
       </Expander>
 
       <Grid ColumnDefinitions="*,Auto,260">
-        <Panel Grid.Column="0">
-          <TreeDataGrid Name="CueTreeGrid" DragDrop.AllowDrop="True"/>
+        <Grid Grid.Column="0" RowDefinitions="Auto,*">
+          <!-- Ctrl+F jump-to-cue search. Not a filter: the full list stays visible (transport
+               context), matches are selected/expanded/scrolled. Enter = next, Shift+Enter =
+               previous, Esc = clear + back to the tree. -->
+          <DockPanel Grid.Row="0" Margin="0,0,0,4">
+            <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,2,0"
+                       FontSize="11" Opacity="0.7"
+                       Text="{Binding CueSearchStatus}"
+                       IsVisible="{Binding HasCueSearchText}" />
+            <TextBox Name="CueSearchBox"
+                     PlaceholderText="Search cues (Ctrl+F) — Enter: next match"
+                     Text="{Binding CueSearchText, Mode=TwoWay}"
+                     KeyDown="OnCueSearchBoxKeyDown" />
+          </DockPanel>
+          <Panel Grid.Row="1">
+          <TreeDataGrid Name="CueTreeGrid" DragDrop.AllowDrop="True">
+            <TreeDataGrid.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="GO / start selected" Command="{Binding FireSelectedCueNowCommand}" />
+                <MenuItem Header="Standby selected cue" Command="{Binding StandbySelectedCommand}" />
+                <MenuItem Header="Stop selected" Command="{Binding StopSelectedCueCommand}" />
+                <MenuItem Header="Next visualizer preset" Command="{Binding NextVisualizerPresetCommand}" />
+                <Separator />
+                <MenuItem Header="Rename…" Command="{Binding RenameSelectedCueCommand}" />
+                <MenuItem Header="Duplicate" Command="{Binding DuplicateSelectedCueCommand}" />
+                <MenuItem Header="Copy" Command="{Binding CopySelectedCuesCommand}" InputGesture="Ctrl+C" />
+                <MenuItem Header="Paste" Command="{Binding PasteCuesCommand}" InputGesture="Ctrl+V" />
+                <MenuItem Header="Remove" Command="{Binding RemoveNodeCommand}" />
+              </ContextMenu>
+            </TreeDataGrid.ContextMenu>
+          </TreeDataGrid>
           <!-- UX-10: empty-list call-to-action (icon + one line + primary action), matching the I/O
                workspace's empty state instead of a bare grid. -->
           <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360"
                       IsVisible="{Binding HasNoCues}">
-            <PathIcon Data="{x:Static views:AppIcons.Cue}" Width="34" Height="34" Opacity="0.3"
+            <PathIcon Data="{x:Static views:AppIcons.CueList}" Width="34" Height="34" Opacity="0.3"
                       HorizontalAlignment="Center" />
             <TextBlock Text="{x:Static res:Strings.CueEmptyHint}" Opacity="0.65"
                        TextWrapping="Wrap" TextAlignment="Center" />
             <Button Content="{x:Static res:Strings.CueEmptyAction}"
                     Command="{Binding AddMediaCueCommand}" HorizontalAlignment="Center" />
           </StackPanel>
-        </Panel>
-        <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
+          </Panel>
+        </Grid>
+        <GridSplitter Grid.Column="1" Width="3" Background="{DynamicResource BorderSubtle}" ResizeDirection="Columns" />
 
-        <!-- Phase 5.3 - Now Playing panel: active cues (with progress + per-cue ✕) and the
-             upcoming-queue preview. Width set generously so the operator can shrink via the
-             splitter; multi-cue groups need room. -->
+        <!-- Phase 5.3 - Now Playing panel: active cues (with progress + per-cue ✕); expanded groups
+             list the rest of their automatic chain with time-until-start countdowns (#29 - replaced
+             the old panel-wide "Upcoming" preview). Width set generously so the operator can shrink
+             via the splitter; multi-cue groups need room. -->
         <HeaderedContentControl Grid.Column="2" Margin="4,0,0,0" Padding="6,4"
                                 Header="{x:Static res:Strings.NowPlayingHeader}">
           <DockPanel LastChildFill="True">
@@ -804,13 +1103,20 @@
               </StackPanel>
             </Grid>
 
-            <ScrollViewer DockPanel.Dock="Top" MaxHeight="320" Margin="0,0,0,8">
+            <TextBlock DockPanel.Dock="Top"
+                       Text="{x:Static res:Strings.NowPlayingNoneHint}"
+                       Opacity="0.55"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+
+            <ScrollViewer>
             <!-- P4 (plan §3.2): rows are singles OR group aggregates. The implicit per-type
-                 templates below also apply to the group's nested children list. -->
+                 templates below also apply to the group's nested children + upcoming lists. -->
             <ItemsControl ItemsSource="{Binding NowPlayingRows}">
               <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
-                  <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
+                  <Border BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0"
                           Padding="6,4" Margin="0,0,0,4">
                     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">
@@ -870,39 +1176,24 @@
                                    ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekTooltip}" />
                       <TextBlock Classes="postime" Classes.lowtime="{Binding IsNearEnd}"
                                  Text="{Binding PositionDisplay}" />
-                      <ItemsControl ItemsSource="{Binding Children}" Margin="16,2,0,0"
-                                    IsVisible="{Binding IsExpanded}" />
+                      <StackPanel Margin="16,2,0,0" IsVisible="{Binding IsExpanded}">
+                        <ItemsControl ItemsSource="{Binding Children}" />
+                        <!-- #29: the rest of the automatic chain, each with a ticking time-until-start
+                             (replaces the panel-wide "Upcoming" section). -->
+                        <ItemsControl ItemsSource="{Binding UpcomingItems}" />
+                      </StackPanel>
                     </StackPanel>
                   </Border>
                 </DataTemplate>
-              </ItemsControl.DataTemplates>
-            </ItemsControl>
-            </ScrollViewer>
 
-            <TextBlock DockPanel.Dock="Top"
-                       Text="{x:Static res:Strings.NowPlayingNoneHint}"
-                       Opacity="0.55"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8"
-                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
-
-            <TextBlock DockPanel.Dock="Top"
-                       Text="{x:Static res:Strings.UpcomingCuesHeader}"
-                       FontWeight="SemiBold"
-                       Margin="0,8,0,4"
-                       IsVisible="{Binding UpcomingCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
-
-            <ScrollViewer>
-            <ItemsControl ItemsSource="{Binding UpcomingCues}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="vm:CueNodeViewModel">
-                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,2">
-                    <TextBlock Text="{Binding Number}" Opacity="0.6" MinWidth="32" />
-                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding DurationDisplay}" Opacity="0.5" />
-                  </StackPanel>
+                <DataTemplate DataType="vm:UpcomingChainItemViewModel">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6" Margin="6,1,6,3" Opacity="0.6">
+                    <TextBlock Grid.Column="0" Text="{Binding Node.Number}" FontWeight="SemiBold" Opacity="0.8" />
+                    <TextBlock Grid.Column="1" Text="{Binding Node.Label}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="2" Classes="postime" Text="{Binding CountdownDisplay}" />
+                  </Grid>
                 </DataTemplate>
-              </ItemsControl.ItemTemplate>
+              </ItemsControl.DataTemplates>
             </ItemsControl>
             </ScrollViewer>
           </DockPanel>

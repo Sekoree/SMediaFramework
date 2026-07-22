@@ -50,8 +50,26 @@ public sealed class AppSettings
     /// </summary>
     public bool PreferLiveUyvyPassthrough { get; set; }
 
-    /// <summary>HTTP remote API listener (per-machine, off by default). Requests require
-    /// <see cref="RestApiAccessToken"/>; LAN binding is opt-in via <see cref="RestApiAllowLan"/>.</summary>
+    /// <summary>The projectM visualizer's *.milk preset folder (per-machine; the VIZ ▾ picker sets
+    /// it). Null = auto-discover the dev build's fetched pack, else projectM's built-in idle preset.</summary>
+    public string? VisualizerPresetDirectory { get; set; }
+
+    /// <summary>Visualizer render width/height (per-machine). The REAL default is 1920x1080 - stored
+    /// explicitly so the settings file says what actually happens (review H5: the old 0 sentinel was
+    /// labelled "Match output" in the UI but resolved to a hardcoded 1080p). 0 in an older file still
+    /// resolves to the same default.</summary>
+    public int VisualizerWidth { get; set; } = 1920;
+
+    public int VisualizerHeight { get; set; } = 1080;
+
+    /// <summary>Visualizer target FPS (default 60; 0 in an older file resolves to 60).</summary>
+    public int VisualizerFps { get; set; } = 60;
+
+    /// <summary>HTTP remote API listener (per-machine, off by default). The
+    /// <see cref="RestApiAccessToken"/> is OPTIONAL: with no token configured every request is
+    /// authorized - the intended contract for closed-LAN show-control automation (e.g. Bitfocus
+    /// Companion). LAN binding is opt-in via <see cref="RestApiAllowLan"/>; that combination assumes
+    /// an isolated/trusted show network and the UI warns about it prominently (review P2-7).</summary>
     public bool RestApiEnabled { get; set; }
 
     public int RestApiPort { get; set; } = 8990;
@@ -59,6 +77,9 @@ public sealed class AppSettings
     public bool RestApiAllowLan { get; set; }
 
     public string? RestApiAccessToken { get; set; }
+
+    /// <summary>Configurable cue-player transport and visualizer shortcuts.</summary>
+    public CueHotkeyProfile CueHotkeys { get; set; } = new();
 
     private static string FilePath
     {
@@ -72,6 +93,21 @@ public sealed class AppSettings
         }
     }
 
+    /// <summary>THE write path for every settings writer (review H5): a serialized
+    /// load-fresh → mutate → save under the file gate, so no writer can clobber another writer's
+    /// fields with a stale whole-object snapshot (the bug that silently reverted visualizer values
+    /// whenever a sidebar/theme/dialog save fired with its startup-time copy).</summary>
+    public static void Update(Action<AppSettings> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        lock (FileGate)
+        {
+            var settings = Load();
+            mutate(settings);
+            settings.Save();
+        }
+    }
+
     /// <summary>Loads settings, recovering from the one-deep backup when the primary file is corrupt
     /// (SET-01). A missing file is a clean first-run (no log); an unreadable file is logged.</summary>
     public static AppSettings Load()
@@ -80,20 +116,37 @@ public sealed class AppSettings
         {
             var path = FilePath;
             if (TryLoadFrom(path, out var primary))
-                return primary;
+                return Migrate(primary);
 
             var primaryExisted = File.Exists(path);
             if (TryLoadFrom(path + ".bak", out var backup))
             {
                 if (primaryExisted)
                     MediaDiagnostics.LogWarning("AppSettings: primary settings file was unreadable; recovered from backup.");
-                return backup;
+                return Migrate(backup);
             }
 
             if (primaryExisted)
                 MediaDiagnostics.LogWarning("AppSettings: settings file was unreadable and no usable backup exists; using defaults.");
             return new AppSettings();
         }
+    }
+
+    /// <summary>Load-time migration: files written before the visualizer defaults became explicit carry
+    /// literal zeros (the old "match output" sentinel) - coerce them to the real 1080p60 defaults so the
+    /// dialog and renderer agree with what actually happens (review H5).</summary>
+    private static AppSettings Migrate(AppSettings s)
+    {
+        if (s.VisualizerWidth <= 0 || s.VisualizerHeight <= 0)
+        {
+            s.VisualizerWidth = 1920;
+            s.VisualizerHeight = 1080;
+        }
+
+        if (s.VisualizerFps <= 0)
+            s.VisualizerFps = 60;
+        s.CueHotkeys ??= new CueHotkeyProfile();
+        return s;
     }
 
     private static bool TryLoadFrom(string path, [NotNullWhen(true)] out AppSettings? settings)
@@ -254,5 +307,6 @@ public enum AppBaseTheme
 [JsonSerializable(typeof(AppSettings))]
 [JsonSerializable(typeof(WindowStateSnapshot))]
 [JsonSerializable(typeof(DialogSizeSnapshot))]
+[JsonSerializable(typeof(CueHotkeyProfile))]
 [JsonSerializable(typeof(List<string>))]
 internal partial class AppSettingsJsonContext : JsonSerializerContext;

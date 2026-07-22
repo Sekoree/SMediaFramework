@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using S.Media.Compositor;
+using S.Media.Core.Video.Effects;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Gpu;
@@ -55,13 +56,15 @@ namespace S.Media.Compositor.OpenGL;
 /// be embedded inside another output's render path without trashing host state.
 /// </para>
 /// </remarks>
-public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost
+public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoCompositorSurfaceHost, IPipelinedReadbackVideoCompositor
 {
     // Surfaces this compositor has ConfigureGl'd, stamped with the canvas format they were configured
     // for - CompositeWithSurfaces (re)configures a surface on first sight and after a canvas change,
-    // always on the GL thread (NXT-10: the host owns the configure contract, not the caller). Weak so
-    // an abandoned surface never pins.
+    // always on the GL thread (NXT-10: the host owns the configure contract, not the caller). The weak
+    // table tracks configuration state; GL-owning surfaces additionally remain strongly tracked until
+    // compositor teardown so their native resources can be released while the context is still current.
     private readonly ConditionalWeakTable<IVideoCompositorLayerSurface, StrongBox<VideoFormat>> _configuredSurfaces = new();
+    private readonly HashSet<IVideoCompositorGlResource> _surfaceGlResources = [];
     /// <summary>Immutable warp-pass snapshot (swapped atomically by <see cref="SetWarpPass"/>;
     /// read once per <see cref="Composite"/> so a mid-frame swap can't tear).</summary>
     private sealed record WarpPassState(VideoFormat Output, WarpSection[] Sections);
@@ -99,10 +102,29 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         public required int ByteCount { get; init; }
     }
 
+    /// <summary>Async-readback state for the SINGLE-output paths (<see cref="Composite"/> /
+    /// <see cref="CompositeWithSurfaces"/>), mirroring the multi-output PBO pipeline: one
+    /// double-buffered slot, one in-flight readback, keyed on the read shape so warp toggles
+    /// and reconfigures rebuild it.</summary>
+    private sealed class SinglePboReadbackState(VideoFormat format, int stride, int byteCount)
+    {
+        public VideoFormat Format { get; } = format;
+        public int Stride { get; } = stride;
+        public int ByteCount { get; } = byteCount;
+        public PboOutputSlot Slot { get; } = new();
+        public PboReadback? Pending { get; set; }
+    }
+
     private volatile WarpPassState? _warpPass;
     private uint _warpFbo;
     private uint _warpFboTexture;
     private (int W, int H) _warpFboSize;
+
+    // Intermediate target for surface layers with an effect chain: the surface renders full-canvas
+    // into this texture, which is then composited through the effect-variant layer shader.
+    private uint _surfaceEffectFbo;
+    private uint _surfaceEffectFboTexture;
+    private (int W, int H) _surfaceEffectFboSize;
 
     /// <summary>One mesh section's uploaded tessellation, keyed back to its warp-section index.</summary>
     private readonly record struct MeshDraw(int SectionIndex, uint Vao, uint Vbo, uint Ebo, int IndexCount);
@@ -123,6 +145,34 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
 
     private static readonly ConcurrentDictionary<string, string> ShaderSourceCache = new(StringComparer.Ordinal);
     private const string ProgramCacheKey = "GlVideoCompositor:composite_layer";
+
+    /// <summary>
+    /// One linked program + uniform locations for a specific layer-effect chain ("" = no effects,
+    /// the default programs). Layer draws resolve their variant per frame from the layer's effect
+    /// chain; variants are compiled once per distinct descriptor-id chain and shared process-wide
+    /// through <see cref="SharedGlProgramCache"/>. <see cref="EffectParams"/> holds one uniform
+    /// location per declared parameter per chain position (-1 = optimized out, skip upload).
+    /// </summary>
+    private sealed class LayerProgramVariant
+    {
+        public string CacheKey = "";
+        public uint Program;
+        public int Xform = -1;
+        public int Crop = -1;
+        public int Opacity = -1;
+        public int BlendKind = -1;
+        public int Layer = -1;
+        public int FlipV = -1;
+        public int[][] EffectParams = [];
+    }
+
+    private LayerProgramVariant? _quadDefault;
+    private LayerProgramVariant? _meshDefault;
+    private readonly Dictionary<string, LayerProgramVariant> _quadVariants = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LayerProgramVariant> _meshVariants = new(StringComparer.Ordinal);
+    private string? _quadVertSrc;
+    private string? _meshVertSrc;
+    private string? _layerFragSrc;
 
     private readonly GL _gl;
     private readonly GlCompositorOutputPrecision _outputPrecision;
@@ -155,6 +205,18 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     private readonly ConcurrentQueue<Action> _deferredExternalImageReleases = new();
     private PboReadbackState? _multiPboReadback;
     private bool _multiPboReadbackUnavailable;
+    private SinglePboReadbackState? _singlePboReadback;
+    private bool _singlePboReadbackUnavailable;
+    private object? _singlePboWarpIdentity;
+
+    /// <inheritdoc />
+    /// <remarks>Off by default: single-shot consumers must see the frame they just composited.
+    /// <see cref="VideoCompositorSource"/> (continuous streaming) opts in.</remarks>
+    public bool PipelinedSingleOutputReadback { get; set; }
+    /// <summary>Escape hatch for latency-critical hosts: forces the zero-latency blocking
+    /// readback on the single-output paths (at the cost of a GPU pipeline stall per frame).</summary>
+    private static readonly bool SinglePboReadbackDisabledByEnv =
+        Environment.GetEnvironmentVariable("MF_COMPOSITOR_SINGLE_SYNC_READBACK") == "1";
     private bool _configured;
     private bool _disposed;
 
@@ -255,7 +317,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                 ReleaseMeshBuffers();
             }
 
-            return ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+            return ReadCurrentFramebufferPipelined(frameFormat, readW, readH, readStride, readBytes, presentationTime);
         }
         finally
         {
@@ -536,6 +598,14 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         {
             RenderLayersToCanvas(frameLayers, savedScissor);
 
+            // Surfaces get DEFAULT pixel-store state: the layer uploads above set GL_UNPACK_ROW_LENGTH
+            // to each frame's stride, and a surface that uploads its own textures during ConfigureGl
+            // (projectM's preloads, MMD's material textures) would inherit that stale row stride - the
+            // driver then reads past the surface's (smaller) source buffer and SEGFAULTS (2026-07-11:
+            // cover-art layer + visualizer crash). The host's own values are restored in finally.
+            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+
             // Surface layers render on top of the frame layers, directly into the canvas FBO, each in the
             // compositor's GL context/thread (the "3D object layer" seam, Doc 04 §5).
             for (var i = 0; i < surfaceLayers.Count; i++)
@@ -551,8 +621,16 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
                 var configured = _configuredSurfaces.GetOrCreateValue(surfaceLayer.Surface);
                 if (configured.Value != _output)
                 {
+                    if (surfaceLayer.Surface is IVideoCompositorGlResource glResource)
+                        _surfaceGlResources.Add(glResource);
                     surfaceLayer.Surface.ConfigureGl(_gl, _output);
                     configured.Value = _output;
+                }
+
+                if (surfaceLayer.Effects is { Count: > 0 } || surfaceLayer.MappingSections is not null)
+                {
+                    DrawSurfaceLayerIndirect(surfaceLayer, opacity, presentationTime);
+                    continue;
                 }
 
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
@@ -561,7 +639,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             }
 
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
-            return ReadCurrentFramebuffer(_output, _output.Width, _output.Height, _outputStride, _outputByteCount, presentationTime);
+            return ReadCurrentFramebufferPipelined(_output, _output.Width, _output.Height, _outputStride, _outputByteCount, presentationTime);
         }
         finally
         {
@@ -584,6 +662,121 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
             DrainDeferredExternalImageReleases();
         }
+    }
+
+    /// <summary>
+    /// Composites one surface layer indirectly (an effect chain and/or mapping sections): the
+    /// surface renders full-canvas (identity transform, full opacity) into the intermediate FBO,
+    /// whose texture is then drawn into the canvas by the layer shader — one quad with the layer's
+    /// own transform, or one draw per mapping section (crop/transform/mesh, media-layer parity).
+    /// The intermediate is stored exactly like a direct BGRA32 layer upload relative to the canvas
+    /// paint convention, so the draws use the frame-layer pair (mirrored dest NDC + V-flip
+    /// sampling) and land byte-identical in geometry to a direct surface render. Effects see the
+    /// surface output as straight alpha (the frame-layer contract); a surface emitting partial
+    /// alpha over the transparent intermediate arrives premultiplied-by-coverage, which only
+    /// matters for translucent surfaces - the visualizer renders opaque.
+    /// </summary>
+    private void DrawSurfaceLayerIndirect(
+        in CompositorSurfaceLayer surfaceLayer,
+        float opacity,
+        TimeSpan presentationTime)
+    {
+        var sections = surfaceLayer.MappingSections;
+        if (sections is { Count: 0 })
+            return; // every mapping section disabled - layer hidden, like a frame layer's empty mapping
+
+        EnsureSurfaceEffectFbo(_output.Width, _output.Height);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _surfaceEffectFbo);
+        _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.ClearColor(0f, 0f, 0f, 0f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        surfaceLayer.Surface.Render(
+            _gl, _surfaceEffectFbo, presentationTime, LayerTransform2D.Identity, 1f);
+
+        // The surface may leave scissor enabled; it must not clip the composite draws below.
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        var fx = surfaceLayer.Effects;
+
+        if (sections is null)
+        {
+            DrawSurfaceScratchQuad(surfaceLayer.Transform, RectNormalized.Full, opacity, fx);
+            return;
+        }
+
+        foreach (var section in sections)
+        {
+            var sectionOpacity = opacity * Math.Clamp(section.Opacity, 0f, 1f);
+            if (sectionOpacity <= 0f)
+                continue;
+
+            if (section.Mesh is { } mesh)
+            {
+                // Mesh control points are absolute canvas pixels (transform already baked in by the
+                // session), exactly like a frame layer's mapped mesh - same draw path.
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
+                DrawLayerMesh(mesh, section.SourceCrop, _output.Width, _output.Height,
+                    sectionOpacity, flipV: true, BlendMode.SourceOver, fx);
+            }
+            else
+            {
+                DrawSurfaceScratchQuad(section.Transform, section.SourceCrop, sectionOpacity, fx);
+            }
+        }
+    }
+
+    /// <summary>One canvas-sized quad sampling the surface-intermediate texture.</summary>
+    private void DrawSurfaceScratchQuad(
+        LayerTransform2D transform, RectNormalized sourceCrop, float opacity,
+        IReadOnlyList<VideoLayerEffect>? fx)
+    {
+        var variant = GetLayerVariant(fx, mesh: false);
+        _gl.UseProgram(variant.Program);
+        _gl.BindVertexArray(_vao);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
+        DrawQuad(_output.Width, _output.Height, _output.Width, _output.Height,
+            transform, sourceCrop, opacity, flipV: true, BlendMode.SourceOver,
+            variant: variant, effects: fx);
+    }
+
+    private unsafe void EnsureSurfaceEffectFbo(int width, int height)
+    {
+        if (_surfaceEffectFbo != 0 && _surfaceEffectFboSize == (width, height))
+            return;
+
+        if (_surfaceEffectFboTexture != 0) { _gl.DeleteTexture(_surfaceEffectFboTexture); _surfaceEffectFboTexture = 0; }
+        if (_surfaceEffectFbo != 0) { _gl.DeleteFramebuffer(_surfaceEffectFbo); _surfaceEffectFbo = 0; }
+
+        _surfaceEffectFboTexture = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _surfaceEffectFboTexture);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, _fboInternalFormat,
+            (uint)width, (uint)height, 0,
+            GlPixelFormat.Rgba, PixelTypeForInternalFormat(_fboInternalFormat), null);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+        _surfaceEffectFbo = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _surfaceEffectFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, _surfaceEffectFboTexture, 0);
+        var status = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != GLEnum.FramebufferComplete)
+        {
+            _gl.DeleteFramebuffer(_surfaceEffectFbo);
+            _gl.DeleteTexture(_surfaceEffectFboTexture);
+            _surfaceEffectFbo = 0;
+            _surfaceEffectFboTexture = 0;
+            throw new InvalidOperationException($"GlVideoCompositor surface-effect FBO incomplete: {status}");
+        }
+
+        _surfaceEffectFboSize = (width, height);
     }
 
     private void ReleaseExternalImageOnOwnerThread(Action release)
@@ -663,7 +856,10 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         var returnPrevious = previousPending is { Length: > 0 };
         var currentPending = new PboReadback[outputs.Count];
         var currentPendingCount = 0;
-        var frames = new VideoFrame[outputs.Count];
+        // Steady state (returnPrevious) returns the completed PREVIOUS readbacks, so the local frames
+        // array would go unused - only allocate it on the warm-up pass. The returned array escapes to
+        // the caller by contract (TryReadNextFrames hands it out), so it cannot be pooled/reused.
+        VideoFrame[] frames = returnPrevious ? [] : new VideoFrame[outputs.Count];
         var created = 0;
 
         try
@@ -791,6 +987,94 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
             var opacity = Math.Clamp(layer.Opacity, 0f, 1f);
             if (opacity <= 0f) continue;
             DrawLayer(layer, opacity);
+        }
+    }
+
+    /// <summary>
+    /// Single-output readback through the same double-buffered PBO + fence pipeline as the
+    /// multi-output path: returns the PREVIOUS composite's pixels (stamped with the current
+    /// presentation time) while this composite's readback drains asynchronously - one frame of
+    /// output latency instead of a full CPU↔GPU pipeline stall every frame. Warm-up (first call,
+    /// or after a shape change / driver fallback) reads synchronously AND issues the first async
+    /// readback, so every call returns a frame. Driver PBO failures permanently degrade this
+    /// compositor instance to the blocking path, mirroring the multi-output fallback;
+    /// <c>MF_COMPOSITOR_SINGLE_SYNC_READBACK=1</c> forces the blocking path up front.
+    /// </summary>
+    private VideoFrame ReadCurrentFramebufferPipelined(
+        VideoFormat frameFormat,
+        int readW,
+        int readH,
+        int readStride,
+        int readBytes,
+        TimeSpan presentationTime)
+    {
+        if (!PipelinedSingleOutputReadback || SinglePboReadbackDisabledByEnv || _singlePboReadbackUnavailable)
+            return ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+
+        // A warp-pass swap changes WHAT the canvas shows even when the read shape stays identical;
+        // drop the in-flight readback so the frame after a live layout change is never stale
+        // (warm-up re-reads synchronously). Reference identity is enough: SetWarpPass snapshots.
+        var warpIdentity = (object?)_warpPass;
+        if (!ReferenceEquals(warpIdentity, _singlePboWarpIdentity))
+        {
+            DisposeSinglePboReadback();
+            _singlePboWarpIdentity = warpIdentity;
+        }
+
+        try
+        {
+            var state = _singlePboReadback;
+            if (state is null
+                || state.Format != frameFormat
+                || state.Stride != readStride
+                || state.ByteCount != readBytes)
+            {
+                DisposeSinglePboReadback();
+                state = new SinglePboReadbackState(frameFormat, readStride, readBytes);
+                _singlePboReadback = state;
+            }
+
+            var previous = state.Pending;
+            state.Pending = null;
+
+            if (previous is null)
+            {
+                // Warm-up: synchronous read for THIS frame plus the first async issue for the next.
+                var warmFrame = ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
+                try
+                {
+                    state.Pending = IssuePboReadback(state.Slot, frameFormat, readStride, readBytes);
+                }
+                catch
+                {
+                    warmFrame.Dispose();
+                    throw;
+                }
+
+                return warmFrame;
+            }
+
+            var current = IssuePboReadback(state.Slot, frameFormat, readStride, readBytes);
+            try
+            {
+                var frame = CompletePboReadback(previous, presentationTime);
+                state.Pending = current;
+                return frame;
+            }
+            catch
+            {
+                DisposePendingReadback(current);
+                throw;
+            }
+        }
+        catch (PboReadbackException)
+        {
+            _singlePboReadbackUnavailable = true;
+            DisposeSinglePboReadback();
+            // The canvas/warp FBO still holds this composite's pixels; unbind any half-bound pack
+            // buffer and degrade to the blocking read so this frame (and all following) still emit.
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, 0);
+            return ReadCurrentFramebuffer(frameFormat, readW, readH, readStride, readBytes, presentationTime);
         }
     }
 
@@ -936,6 +1220,36 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
     }
 
+    private void DisposePendingReadback(PboReadback? readback)
+    {
+        if (readback?.Sync is { } sync && sync != nint.Zero)
+        {
+            _gl.DeleteSync(sync);
+            readback.Sync = nint.Zero;
+        }
+    }
+
+    private void DisposeSinglePboReadback()
+    {
+        var state = _singlePboReadback;
+        if (state is null)
+            return;
+
+        DisposePendingReadback(state.Pending);
+        state.Pending = null;
+        for (var i = 0; i < state.Slot.Buffers.Length; i++)
+        {
+            var buffer = state.Slot.Buffers[i];
+            if (buffer == 0)
+                continue;
+            _gl.DeleteBuffer(buffer);
+            state.Slot.Buffers[i] = 0;
+            state.Slot.Capacities[i] = 0;
+        }
+
+        _singlePboReadback = null;
+    }
+
     private void DisposeMultiPboReadback()
     {
         var state = _multiPboReadback;
@@ -1024,14 +1338,21 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         if (layer.Mesh is { } mesh)
         {
             DrawLayerMesh(mesh, layer.SourceCrop, _output.Width, _output.Height,
-                opacity, flipV: directBgraUpload, layer.BlendMode);
+                opacity, flipV: directBgraUpload, layer.BlendMode, layer.Effects);
             _gl.UseProgram(_program);
             _gl.BindVertexArray(_vao);
         }
         else
         {
+            var variant = GetLayerVariant(layer.Effects, mesh: false);
+            _gl.UseProgram(variant.Program);
             DrawQuad(srcW, srcH, _output.Width, _output.Height,
-                layer.Transform, layer.SourceCrop, opacity, flipV: directBgraUpload, layer.BlendMode);
+                layer.Transform, layer.SourceCrop, opacity, flipV: directBgraUpload, layer.BlendMode,
+                variant: variant, effects: layer.Effects);
+            // Restore the base program so the surrounding composite loop (and the warp pass)
+            // keep their long-standing "composite program is bound" invariant.
+            if (!ReferenceEquals(variant, _quadDefault))
+                _gl.UseProgram(_program);
         }
     }
 
@@ -1044,8 +1365,10 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     private void DrawQuad(
         int srcW, int srcH, int destW, int destH,
         LayerTransform2D t, RectNormalized sourceCrop, float opacity, bool flipV, BlendMode blendMode,
-        bool mirrorDestY = true)
+        bool mirrorDestY = true, LayerProgramVariant? variant = null,
+        IReadOnlyList<VideoLayerEffect>? effects = null)
     {
+        var v = variant ?? _quadDefault!;
         var outW = (float)destW;
         var outH = (float)destH;
         var ySign = mirrorDestY ? -1f : 1f;
@@ -1065,27 +1388,28 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         m[6] = (2f * t.Tx / outW) - 1f;
         m[7] = mirrorDestY ? 1f - (2f * t.Ty / outH) : (2f * t.Ty / outH) - 1f;
         m[8] = 1f;
-        _gl.UniformMatrix3(_uXformLoc, 1, false, m);
+        _gl.UniformMatrix3(v.Xform, 1, false, m);
         var crop = sourceCrop.Clamped();
-        _gl.Uniform4(_uCropLoc, crop.X0, crop.Y0, crop.X1, crop.Y1);
-        _gl.Uniform1(_uOpacityLoc, opacity);
-        _gl.Uniform1(_uLayerFlipVLoc, flipV ? 1f : 0f);
+        _gl.Uniform4(v.Crop, crop.X0, crop.Y0, crop.X1, crop.Y1);
+        _gl.Uniform1(v.Opacity, opacity);
+        _gl.Uniform1(v.FlipV, flipV ? 1f : 0f);
+        UploadEffectUniforms(v, effects);
 
         switch (blendMode)
         {
             case BlendMode.Source:
                 _gl.Disable(EnableCap.Blend);
-                _gl.Uniform1(_uBlendKindLoc, 0);
+                _gl.Uniform1(v.BlendKind, 0);
                 break;
             case BlendMode.SourceOver:
                 _gl.Enable(EnableCap.Blend);
                 _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
-                _gl.Uniform1(_uBlendKindLoc, 0);
+                _gl.Uniform1(v.BlendKind, 0);
                 break;
             case BlendMode.Multiply:
                 _gl.Enable(EnableCap.Blend);
                 _gl.BlendFunc(BlendingFactor.DstColor, BlendingFactor.Zero);
-                _gl.Uniform1(_uBlendKindLoc, 1);
+                _gl.Uniform1(v.BlendKind, 1);
                 break;
             default:
                 throw new NotSupportedException($"BlendMode {blendMode} not supported.");
@@ -1205,6 +1529,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     {
         var vertSrc = LoadShaderCached("composite_layer.vert.glsl");
         var fragSrc = LoadShaderCached("composite_layer.frag.glsl");
+        _quadVertSrc = vertSrc;
+        _layerFragSrc = fragSrc;
         _program = SharedGlProgramCache.Acquire(ProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
 
         _uXformLoc = _gl.GetUniformLocation(_program, "uXform");
@@ -1215,6 +1541,20 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         _uLayerFlipVLoc = _gl.GetUniformLocation(_program, "uLayerFlipV");
         if (_uXformLoc < 0 || _uCropLoc < 0 || _uOpacityLoc < 0 || _uBlendKindLoc < 0 || _uLayerLoc < 0 || _uLayerFlipVLoc < 0)
             throw new InvalidOperationException("composite_layer program missing required uniforms.");
+
+        // The default (no-effects) variant aliases the base program so layer draws and effect-chain
+        // draws go through one code path (DrawQuad/DrawLayerMesh take the variant's locations).
+        _quadDefault = new LayerProgramVariant
+        {
+            CacheKey = ProgramCacheKey,
+            Program = _program,
+            Xform = _uXformLoc,
+            Crop = _uCropLoc,
+            Opacity = _uOpacityLoc,
+            BlendKind = _uBlendKindLoc,
+            Layer = _uLayerLoc,
+            FlipV = _uLayerFlipVLoc,
+        };
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -1386,6 +1726,90 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         _gl.DrawElements(PrimitiveType.Triangles, (uint)draw.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
     }
 
+    /// <summary>One cached tessellation for a <see cref="CompositorLayer.Mesh"/> layer. Meshes are
+    /// immutable snapshots, so reference identity keys the cache; a control-point edit produces a
+    /// new instance and naturally rebuilds. Without this cache every mesh layer re-tessellated
+    /// (up to ~2.5 MB of LOH vertex/index arrays) and re-uploaded fresh VAO/VBO/EBO every frame -
+    /// measured at ~1.9 ms + 644 KB per call for a 17×17 grid in the Tessellate benchmark.</summary>
+    private sealed class LayerMeshBuffers
+    {
+        public uint Vao;
+        public uint Vbo;
+        public uint Ebo;
+        public int IndexCount;
+        public long LastUseTick;
+    }
+
+    /// <summary>Bounded: a composite typically shows a handful of live meshes; stale entries
+    /// (replaced by edits) are evicted least-recently-used on insert, on the GL thread.</summary>
+    private const int MaxCachedLayerMeshes = 8;
+    private readonly Dictionary<WarpMesh, LayerMeshBuffers> _layerMeshCache = new(ReferenceEqualityComparer.Instance);
+    private long _layerMeshUseTick;
+
+    private unsafe LayerMeshBuffers GetOrCreateLayerMeshBuffers(WarpMesh mesh)
+    {
+        if (_layerMeshCache.TryGetValue(mesh, out var cached))
+        {
+            cached.LastUseTick = ++_layerMeshUseTick;
+            return cached;
+        }
+
+        if (_layerMeshCache.Count >= MaxCachedLayerMeshes)
+        {
+            WarpMesh? oldestKey = null;
+            var oldestTick = long.MaxValue;
+            foreach (var (key, value) in _layerMeshCache)
+            {
+                if (value.LastUseTick < oldestTick)
+                {
+                    oldestTick = value.LastUseTick;
+                    oldestKey = key;
+                }
+            }
+
+            if (oldestKey is not null && _layerMeshCache.Remove(oldestKey, out var evicted))
+                ReleaseLayerMeshBuffers(evicted);
+        }
+
+        WarpMeshTessellator.Tessellate(mesh, out var vertices, out var indices);
+        var buffers = new LayerMeshBuffers
+        {
+            Vao = _gl.GenVertexArray(),
+            Vbo = _gl.GenBuffer(),
+            Ebo = _gl.GenBuffer(),
+            IndexCount = indices.Length,
+            LastUseTick = ++_layerMeshUseTick,
+        };
+        _gl.BindVertexArray(buffers.Vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, buffers.Vbo);
+        fixed (float* p = vertices)
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, buffers.Ebo);
+        fixed (uint* p = indices)
+            _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)0);
+        _gl.EnableVertexAttribArray(1);
+        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)(2 * sizeof(float)));
+
+        _layerMeshCache[mesh] = buffers;
+        return buffers;
+    }
+
+    private void ReleaseLayerMeshBuffers(LayerMeshBuffers buffers)
+    {
+        _gl.DeleteVertexArray(buffers.Vao);
+        _gl.DeleteBuffer(buffers.Vbo);
+        _gl.DeleteBuffer(buffers.Ebo);
+    }
+
+    private void ReleaseLayerMeshCache()
+    {
+        foreach (var buffers in _layerMeshCache.Values)
+            ReleaseLayerMeshBuffers(buffers);
+        _layerMeshCache.Clear();
+    }
+
     private unsafe void DrawLayerMesh(
         WarpMesh mesh,
         RectNormalized sourceCrop,
@@ -1393,70 +1817,51 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         int destH,
         float opacity,
         bool flipV,
-        BlendMode blendMode)
+        BlendMode blendMode,
+        IReadOnlyList<VideoLayerEffect>? effects = null)
     {
         EnsureMeshPipeline();
-        WarpMeshTessellator.Tessellate(mesh, out var vertices, out var indices);
+        var variant = GetLayerVariant(effects, mesh: true);
+        var buffers = GetOrCreateLayerMeshBuffers(mesh);
 
-        var vao = _gl.GenVertexArray();
-        var vbo = _gl.GenBuffer();
-        var ebo = _gl.GenBuffer();
-        try
         {
-            _gl.BindVertexArray(vao);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
-            fixed (float* p = vertices)
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), p, BufferUsageARB.StreamDraw);
-            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
-            fixed (uint* p = indices)
-                _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StreamDraw);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)0);
-            _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)(2 * sizeof(float)));
-
-            _gl.UseProgram(_meshProgram);
-            _gl.BindVertexArray(vao);
+            _gl.UseProgram(variant.Program);
+            _gl.BindVertexArray(buffers.Vao);
 
             // Layer pass convention: write mirrored in Y so bottom-up glReadPixels returns top-down frames.
             Span<float> m = stackalloc float[9];
             m[0] = 2f / destW; m[1] = 0f; m[2] = 0f;
             m[3] = 0f; m[4] = -2f / destH; m[5] = 0f;
             m[6] = -1f; m[7] = 1f; m[8] = 1f;
-            _gl.UniformMatrix3(_meshXformLoc, 1, false, m);
+            _gl.UniformMatrix3(variant.Xform, 1, false, m);
             var crop = sourceCrop.Clamped();
-            _gl.Uniform4(_meshCropLoc, crop.X0, crop.Y0, crop.X1, crop.Y1);
-            _gl.Uniform1(_meshOpacityLoc, opacity);
-            _gl.Uniform1(_meshLayerFlipVLoc, flipV ? 1f : 0f);
-            _gl.Uniform1(_meshLayerLoc, 0);
+            _gl.Uniform4(variant.Crop, crop.X0, crop.Y0, crop.X1, crop.Y1);
+            _gl.Uniform1(variant.Opacity, opacity);
+            _gl.Uniform1(variant.FlipV, flipV ? 1f : 0f);
+            _gl.Uniform1(variant.Layer, 0);
+            UploadEffectUniforms(variant, effects);
 
             switch (blendMode)
             {
                 case BlendMode.Source:
                     _gl.Disable(EnableCap.Blend);
-                    _gl.Uniform1(_meshBlendKindLoc, 0);
+                    _gl.Uniform1(variant.BlendKind, 0);
                     break;
                 case BlendMode.SourceOver:
                     _gl.Enable(EnableCap.Blend);
                     _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
-                    _gl.Uniform1(_meshBlendKindLoc, 0);
+                    _gl.Uniform1(variant.BlendKind, 0);
                     break;
                 case BlendMode.Multiply:
                     _gl.Enable(EnableCap.Blend);
                     _gl.BlendFunc(BlendingFactor.DstColor, BlendingFactor.Zero);
-                    _gl.Uniform1(_meshBlendKindLoc, 1);
+                    _gl.Uniform1(variant.BlendKind, 1);
                     break;
                 default:
                     throw new NotSupportedException($"BlendMode {blendMode} not supported.");
             }
 
-            _gl.DrawElements(PrimitiveType.Triangles, (uint)indices.Length, DrawElementsType.UnsignedInt, (void*)0);
-        }
-        finally
-        {
-            if (ebo != 0) _gl.DeleteBuffer(ebo);
-            if (vbo != 0) _gl.DeleteBuffer(vbo);
-            if (vao != 0) _gl.DeleteVertexArray(vao);
+            _gl.DrawElements(PrimitiveType.Triangles, (uint)buffers.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
         }
     }
 
@@ -1467,6 +1872,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
 
         var vertSrc = LoadShaderCached("composite_mesh.vert.glsl");
         var fragSrc = LoadShaderCached("composite_layer.frag.glsl");
+        _meshVertSrc = vertSrc;
+        _layerFragSrc ??= fragSrc;
         _meshProgram = SharedGlProgramCache.Acquire(MeshProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
 
         _meshXformLoc = _gl.GetUniformLocation(_meshProgram, "uXform");
@@ -1478,6 +1885,104 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         if (_meshXformLoc < 0 || _meshCropLoc < 0 || _meshOpacityLoc < 0 || _meshBlendKindLoc < 0
             || _meshLayerLoc < 0 || _meshLayerFlipVLoc < 0)
             throw new InvalidOperationException("composite_mesh program missing required uniforms.");
+
+        _meshDefault = new LayerProgramVariant
+        {
+            CacheKey = MeshProgramCacheKey,
+            Program = _meshProgram,
+            Xform = _meshXformLoc,
+            Crop = _meshCropLoc,
+            Opacity = _meshOpacityLoc,
+            BlendKind = _meshBlendKindLoc,
+            Layer = _meshLayerLoc,
+            FlipV = _meshLayerFlipVLoc,
+        };
+    }
+
+    /// <summary>Resolves the program variant for a layer's effect chain, compiling + caching it on
+    /// first sight of a new chain. Invalid plugin GLSL throws here, on the composite thread, at the
+    /// first draw that uses the chain - loud by design. Leaves the variant's program bound when a
+    /// new variant was built (callers bind their own program before drawing anyway).</summary>
+    private LayerProgramVariant GetLayerVariant(IReadOnlyList<VideoLayerEffect>? effects, bool mesh)
+    {
+        if (mesh)
+            EnsureMeshPipeline();
+        var fallback = mesh ? _meshDefault! : _quadDefault!;
+        if (effects is not { Count: > 0 })
+            return fallback;
+
+        var variants = mesh ? _meshVariants : _quadVariants;
+        var chain = VideoLayerEffectShaderComposer.ChainKey(effects);
+        if (variants.TryGetValue(chain, out var variant))
+            return variant;
+
+        var vertSrc = mesh ? _meshVertSrc! : _quadVertSrc!;
+        var fragSrc = VideoLayerEffectShaderComposer.Compose(_layerFragSrc!, effects);
+        var cacheKey = (mesh ? MeshProgramCacheKey : ProgramCacheKey) + ":fx:" + chain;
+        var program = SharedGlProgramCache.Acquire(cacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
+        variant = new LayerProgramVariant
+        {
+            CacheKey = cacheKey,
+            Program = program,
+            Xform = _gl.GetUniformLocation(program, "uXform"),
+            Crop = _gl.GetUniformLocation(program, "uCrop"),
+            Opacity = _gl.GetUniformLocation(program, "uOpacity"),
+            BlendKind = _gl.GetUniformLocation(program, "uBlendKind"),
+            Layer = _gl.GetUniformLocation(program, "uLayer"),
+            FlipV = _gl.GetUniformLocation(program, "uLayerFlipV"),
+        };
+        if (variant.Xform < 0 || variant.Crop < 0 || variant.Opacity < 0 || variant.BlendKind < 0
+            || variant.Layer < 0 || variant.FlipV < 0)
+            throw new InvalidOperationException($"composite_layer effect variant '{chain}' missing required uniforms.");
+
+        variant.EffectParams = new int[effects.Count][];
+        for (var i = 0; i < effects.Count; i++)
+        {
+            var parameters = effects[i].Descriptor.Parameters;
+            var locs = new int[parameters.Count];
+            for (var j = 0; j < parameters.Count; j++)
+                locs[j] = _gl.GetUniformLocation(program, VideoLayerEffectShaderComposer.UniformName(i, parameters[j].Name));
+            variant.EffectParams[i] = locs;
+        }
+
+        // Sampler binding is per-program state; set it once at build time.
+        _gl.UseProgram(program);
+        _gl.Uniform1(variant.Layer, 0);
+
+        variants[chain] = variant;
+        return variant;
+    }
+
+    /// <summary>Uploads the chain's packed parameter values into the variant's uniforms. Runs every
+    /// draw (programs are shared process-wide, so another compositor may have overwritten them).</summary>
+    private void UploadEffectUniforms(LayerProgramVariant variant, IReadOnlyList<VideoLayerEffect>? effects)
+    {
+        if (effects is not { Count: > 0 } || variant.EffectParams.Length == 0)
+            return;
+        for (var i = 0; i < effects.Count; i++)
+        {
+            var effect = effects[i];
+            var locs = variant.EffectParams[i];
+            var values = effect.Values;
+            var parameters = effect.Descriptor.Parameters;
+            var offset = 0;
+            for (var j = 0; j < parameters.Count; j++)
+            {
+                var components = parameters[j].Components;
+                var loc = locs[j];
+                if (loc >= 0)
+                {
+                    switch (components)
+                    {
+                        case 1: _gl.Uniform1(loc, values[offset]); break;
+                        case 2: _gl.Uniform2(loc, values[offset], values[offset + 1]); break;
+                        case 3: _gl.Uniform3(loc, values[offset], values[offset + 1], values[offset + 2]); break;
+                        default: _gl.Uniform4(loc, values[offset], values[offset + 1], values[offset + 2], values[offset + 3]); break;
+                    }
+                }
+                offset += components;
+            }
+        }
     }
 
     private void ReleaseMeshBuffers()
@@ -1657,6 +2162,11 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
         DrainDeferredExternalImageReleases();
         _disposed = true;
+        foreach (var resource in _surfaceGlResources)
+            MediaDiagnostics.SwallowDisposeErrors(
+                () => resource.ReleaseGl(_gl),
+                $"GlVideoCompositor.Dispose: surface GL resource {resource.GetType().Name}");
+        _surfaceGlResources.Clear();
         foreach (var (_, tex) in _layerTextures)
             _gl.DeleteTexture(tex);
         _layerTextures.Clear();
@@ -1670,11 +2180,21 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
         }
         _yuvIntermediates.Clear();
         DisposeMultiPboReadback();
+        DisposeSinglePboReadback();
         if (_fboTexture != 0) { _gl.DeleteTexture(_fboTexture); _fboTexture = 0; }
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
         if (_warpFbo != 0) { _gl.DeleteFramebuffer(_warpFbo); _warpFbo = 0; }
+        if (_surfaceEffectFboTexture != 0) { _gl.DeleteTexture(_surfaceEffectFboTexture); _surfaceEffectFboTexture = 0; }
+        if (_surfaceEffectFbo != 0) { _gl.DeleteFramebuffer(_surfaceEffectFbo); _surfaceEffectFbo = 0; }
         ReleaseMeshBuffers();
+        ReleaseLayerMeshCache();
+        foreach (var variant in _quadVariants.Values)
+            SharedGlProgramCache.Release(_gl, variant.CacheKey);
+        _quadVariants.Clear();
+        foreach (var variant in _meshVariants.Values)
+            SharedGlProgramCache.Release(_gl, variant.CacheKey);
+        _meshVariants.Clear();
         if (_meshProgram != 0) { SharedGlProgramCache.Release(_gl, MeshProgramCacheKey); _meshProgram = 0; }
         if (_vbo != 0) { _gl.DeleteBuffer(_vbo); _vbo = 0; }
         if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }

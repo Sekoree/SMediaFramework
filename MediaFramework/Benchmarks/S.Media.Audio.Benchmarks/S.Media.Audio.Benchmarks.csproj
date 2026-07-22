@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Audio hot-path benchmarks: ChannelMap accumulate kernels (incl. the matrix-mode per-cell
+         route emulation vs a fused dense kernel), FrameAlignedFloatRing, AudioClipVoice.ReadInto.
+         No audio hardware required. Run: dotnet run -c Release (BenchmarkDotNet args after a lone
+         double dash, e.g. job short / filter). -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
+        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Routing/S.Media.Routing.csproj" />
+    </ItemGroup>
+
+</Project>

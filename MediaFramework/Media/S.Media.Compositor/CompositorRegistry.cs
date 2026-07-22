@@ -83,8 +83,16 @@ internal sealed class CompositorRegistry : ICompositorRegistry
     {
         if (kind is not null && _surfaces.TryGetValue(kind, out var factory))
         {
-            surface = factory(configJson);
-            return true;
+            try
+            {
+                surface = factory(configJson);
+                return surface is not null;
+            }
+            catch
+            {
+                surface = null;
+                return false;
+            }
         }
 
         surface = null;

@@ -75,6 +75,15 @@ public sealed record CueComposition
 
     /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
     public bool VideoFxEnabled { get; init; }
+
+    /// <summary>Runs a projectM audio visualizer on this composition as a persistent full-canvas layer.
+    /// Because a cue composition persists across every cue fire, the visualizer runs CONTINUOUSLY while the
+    /// cue list plays - each fired clip's audio feeds it via a session tap. Absent in older projects
+    /// (deserializes false).</summary>
+    public bool VisualizerEnabled { get; init; }
+
+    /// <summary>Optional *.milk preset folder for this composition's visualizer (null = built-in idle preset).</summary>
+    public string? VisualizerPresetDirectory { get; init; }
 }
 
 public sealed record CueVideoOutputBinding
@@ -207,6 +216,8 @@ public enum CueLayerPosition
 [JsonDerivedType(typeof(MediaCueNode), typeDiscriminator: "media")]
 [JsonDerivedType(typeof(ActionCueNode), typeDiscriminator: "action")]
 [JsonDerivedType(typeof(CommentCueNode), typeDiscriminator: "comment")]
+[JsonDerivedType(typeof(JumpCueNode), typeDiscriminator: "jump")]
+[JsonDerivedType(typeof(VisualizerCueNode), typeDiscriminator: "visualizer")]
 public abstract record CueNode
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -265,6 +276,14 @@ public sealed record CueSubtitleSelection
 
 public sealed record MediaCueNode : CueNode
 {
+    /// <summary>FX send (#26): when a selective-feed visualizer cue is active, this media cue's audio
+    /// also drives it (in addition to the visualizer cue's own FeedCueIds). Absent in older files.</summary>
+    public bool SendToVisualizer { get; init; }
+
+    /// <summary>On natural end, fire THIS cue (stable id; null = default behaviour: the next cue's
+    /// Auto-Follow trigger, if set). Lets a chain jump anywhere - "after this song, go to Q12".</summary>
+    public Guid? EndTargetCueId { get; init; }
+
     public PlaylistItem? Source { get; init; }
 
     public int DurationMs { get; init; }
@@ -291,6 +310,18 @@ public sealed record MediaCueNode : CueNode
     /// Guards <see cref="AudioTrackIndex"/> against re-muxed files whose stream indices shifted -
     /// on mismatch the engine re-resolves by signature or falls back to automatic.</summary>
     public string? AudioTrackSignature { get; init; }
+
+    /// <summary>
+    /// Explicit video track for multi-stream sources (container stream index). <c>null</c> =
+    /// automatic election (which skips attached pictures). An explicit index CAN select an
+    /// attached-picture stream - e.g. a YouTube asset's embedded thumbnail or MP3 cover art.
+    /// The demuxer falls back to automatic when the index is stale.
+    /// </summary>
+    public int? VideoTrackIndex { get; init; }
+
+    /// <summary>Content signature of the chosen video track at pick time (codec/resolution) -
+    /// same re-mux guard as <see cref="AudioTrackSignature"/>.</summary>
+    public string? VideoTrackSignature { get; init; }
 
     /// <summary>True when the source's only video is an attached picture (e.g. MP3 with cover art).
     /// The Video tab still shows so the cover art can be placed into a composition, but with a
@@ -353,6 +384,89 @@ public sealed record CommentCueNode : CueNode
     public string Text { get; init; } = string.Empty;
 }
 
+/// <summary>Visualizer control cue (#26): firing it STARTS (or stops) the projectM visualizer as a
+/// placeable LAYER on a composition - a section of the frame, not just a full-canvas background. The
+/// layer persists across subsequent cue fires until a Stop visualizer cue (or an edit reload) removes
+/// it. Executes at the HaPlay transport layer (no ShowDocument mapping).</summary>
+public sealed record VisualizerCueNode : CueNode
+{
+    /// <summary>Composition the layer renders on (from <see cref="CueList.Compositions"/>).</summary>
+    public Guid CompositionId { get; init; }
+
+    /// <summary>False = this cue STOPS the composition's visualizer instead of starting one.</summary>
+    public bool StartVisualizer { get; init; } = true;
+
+    /// <summary>Optional *.milk preset folder (null = built-in idle preset).</summary>
+    public string? PresetDirectory { get; init; }
+
+    /// <summary>Placements onto compositions - the SAME editor/model as media cues (#26 v3): position,
+    /// size, opacity, rotation, fit. Older files carry the legacy Dest*/Opacity fields instead; they are
+    /// migrated to one placement at load.</summary>
+    public List<CueVideoPlacement> VideoPlacements { get; init; } = new();
+
+    /// <summary>Timeline occupancy like an image slide: 0 = infinite (runs until a Stop cue; the
+    /// chain advances immediately), &gt;0 = the next Auto-Follow cue fires after this many ms (the
+    /// visualizer itself keeps running as a layer either way).</summary>
+    public int DurationMs { get; init; }
+
+    /// <summary>projectM render resolution/fps (its internal FBO). 0 = follow the composition.</summary>
+    public int RenderWidth { get; init; }
+
+    public int RenderHeight { get; init; }
+
+    public int RenderFps { get; init; }
+
+    /// <summary>Seconds before the visualizer automatically advances to another preset.</summary>
+    public double PresetDurationSeconds { get; init; } = 30;
+
+    /// <summary>Whether automatic/manual advances choose a random preset instead of the next one.</summary>
+    public bool ShufflePresets { get; init; } = true;
+
+    /// <summary>projectM beat sensitivity (0..5; the library default is 1).</summary>
+    public double BeatSensitivity { get; init; } = 1;
+
+    /// <summary>Seconds used to cross-fade between presets.</summary>
+    public double TransitionSeconds { get; init; } = 2;
+
+    /// <summary>Legacy single-rect placement (pre-v3 files); migrated to <see cref="VideoPlacements"/>.</summary>
+    public double DestX { get; init; }
+
+    public double DestY { get; init; }
+
+    public double DestWidth { get; init; } = 1.0;
+
+    public double DestHeight { get; init; } = 1.0;
+
+    public double Opacity { get; init; } = 1.0;
+
+    /// <summary>Audio feed: true = every playing media cue drives the visualizer; false = only the
+    /// cues in <see cref="FeedCueIds"/> plus media cues flagged <see cref="MediaCueNode.SendToVisualizer"/>.</summary>
+    public bool FeedAll { get; init; } = true;
+
+    /// <summary>Selected feed sources (stable cue IDs) when <see cref="FeedAll"/> is false.</summary>
+    public List<Guid> FeedCueIds { get; init; } = new();
+}
+
+/// <summary>Control-flow cue: firing it moves the playhead to a TARGET cue (loops, section repeats,
+/// shuffle blocks). Targets are stable cue IDs - never numbers - so renumbering/reordering (incl.
+/// auto-renumber) can never silently retarget a jump. With several targets, <see cref="RandomTarget"/>
+/// picks one at random; otherwise the first live target wins. Executes at the HaPlay transport layer
+/// (the ActionCueNode precedent) - no ShowDocument mapping.</summary>
+public sealed record JumpCueNode : CueNode
+{
+    public List<Guid> TargetCueIds { get; init; } = new();
+
+    /// <summary>Pick a random target from <see cref="TargetCueIds"/> instead of the first live one.</summary>
+    public bool RandomTarget { get; init; }
+
+    /// <summary>When randomly choosing, avoid the target picked by this Jump cue last time whenever
+    /// another live target is available. Runtime choice history is intentionally not persisted.</summary>
+    public bool AvoidImmediateRepeat { get; init; }
+
+    /// <summary>Fire the target on arrival (default). False = arm it as standby only (next GO fires it).</summary>
+    public bool FireTargetOnJump { get; init; } = true;
+}
+
 public sealed record CueAudioRoute
 {
     public int SourceChannel { get; init; }
@@ -408,6 +522,49 @@ public sealed record CueVideoPlacement
 
     /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
     public bool VideoFxEnabled { get; init; }
+
+    /// <summary>Optional chroma key ("green screen") settings for this layer. Follows the
+    /// <see cref="VideoFx"/> pattern: settings are retained while disabled. Null on older cues.</summary>
+    public CueChromaKey? ChromaKey { get; init; }
+
+    /// <summary>Whether <see cref="ChromaKey"/> is active.</summary>
+    public bool ChromaKeyEnabled { get; init; }
+
+    /// <summary>Optional brightness/contrast for this layer. Same retained-while-disabled pattern
+    /// as <see cref="ChromaKey"/>. Null on older cues.</summary>
+    public CueColorAdjust? ColorAdjust { get; init; }
+
+    /// <summary>Whether <see cref="ColorAdjust"/> is active.</summary>
+    public bool ColorAdjustEnabled { get; init; }
+}
+
+/// <summary>Brightness/contrast settings on a video placement. Brightness is an additive offset in
+/// [-1, 1] (0 = unchanged); contrast multiplies around mid-gray (1 = unchanged, up to 4).</summary>
+public sealed record CueColorAdjust
+{
+    public double Brightness { get; init; }
+
+    public double Contrast { get; init; } = 1.0;
+}
+
+/// <summary>Chroma-key ("green screen") settings on a video placement. Semantics (and defaults)
+/// mirror the framework's <c>ChromaKeySettings</c> / OBS's chroma-key filter: pixels near the key
+/// color's chroma turn transparent, smoothness widens the alpha ramp, spill suppression
+/// desaturates key-colored light bleeding onto the subject.</summary>
+public sealed record CueChromaKey
+{
+    /// <summary>Key color RGB, each [0, 1]. Default = pure green.</summary>
+    public double KeyR { get; init; }
+
+    public double KeyG { get; init; } = 1.0;
+
+    public double KeyB { get; init; }
+
+    public double Similarity { get; init; } = 0.4;
+
+    public double Smoothness { get; init; } = 0.08;
+
+    public double SpillSuppression { get; init; } = 0.1;
 }
 
 public enum CueTriggerMode
@@ -465,4 +622,19 @@ public enum CueActionKind
 [JsonSerializable(typeof(CueListsCollectionDocument))]
 [JsonSerializable(typeof(CueCompositionsDocument))]
 [JsonSerializable(typeof(List<CueList>))]
+[JsonSerializable(typeof(CueClipboardDocument))]
 internal partial class CueListJsonContext : JsonSerializerContext;
+
+/// <summary>
+/// Clipboard envelope for cue copy/paste (Ctrl+C / Ctrl+V in the cue tree). Serialized as plain
+/// text on the OS clipboard so cues transfer across lists, projects, and app instances; the
+/// version stamp makes foreign clipboard text and future format changes fail closed on paste.
+/// </summary>
+public sealed record CueClipboardDocument
+{
+    public const int CurrentVersion = 1;
+
+    public int Version { get; init; } = CurrentVersion;
+
+    public List<CueNode> Cues { get; init; } = [];
+}

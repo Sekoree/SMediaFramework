@@ -102,6 +102,15 @@ public sealed class OSCServerOptions
     public bool IgnoreTimeTagScheduling { get; init; } = true;
 
     /// <summary>
+    /// Maximum number of future-dated bundles concurrently pending server-side dispatch (only
+    /// relevant when <see cref="IgnoreTimeTagScheduling"/> is <see langword="false"/>). Further
+    /// future-dated bundles are dropped and counted in <see cref="OSCServer.ScheduledBundleDropCount"/> -
+    /// without a cap a flood of far-future time tags would pin unbounded tasks and packets in memory.
+    /// Default: <c>64</c>.
+    /// </summary>
+    public int MaxPendingScheduledBundles { get; init; } = 64;
+
+    /// <summary>
     /// If set, the server joins this multicast group immediately after binding.
     /// </summary>
     public IPAddress? MulticastGroup { get; init; }

@@ -95,7 +95,7 @@
       </StackPanel>
 
       <!-- Code editor -->
-      <Border Grid.Row="1" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
+      <Border Grid.Row="1" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
         <!-- Variant-aware editor surface (ScriptEditor*Brush, App.axaml): light under Classic (pinned Light)
              and the Simple/Fluent light variant, dark under their dark variant. The syntax highlighting
              swaps to a dark-friendly palette to match - see ApplyMondSyntaxHighlighting. -->
@@ -108,7 +108,7 @@
       </Border>
 
       <!-- Triggers / Learn / Diagnostics -->
-      <Border Grid.Row="2" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
+      <Border Grid.Row="2" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0" Padding="10">
         <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Spacing="10">
 

@@ -27,4 +27,8 @@
         <InternalsVisibleTo Include="S.Media.Players.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Playback engines for MFPlayer: media players with seek/epoch handling, audio-clock sync and playlist-friendly transport.</Description>
+    </PropertyGroup>
 </Project>

@@ -197,8 +197,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
             PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
             NDIOutputDefinition { StreamMode: NDIOutputStreamMode.VideoOnly } => 0,
             NDIOutputDefinition nd => Math.Max(1, nd.AudioChannelCount),
+            // Encode lines expose the combined multi-track layout (concatenated per-track channels),
+            // so the deck matrix can route source channels onto specific tracks.
+            FileOutputDefinition f => EncodeCombinedChannelsOrZero(f.EffectiveEncode),
+            LiveStreamOutputDefinition s => EncodeCombinedChannelsOrZero(s.EffectiveEncode),
             _ => 0,
         };
+
+        static int EncodeCombinedChannelsOrZero(EncodeSettingsDefinition encode) =>
+            encode.OutputMode == "VideoOnly" ? 0 : encode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2);
     }
 
     private static string OutputChannelSuffix(int outputChannels, int outputChannel) =>
@@ -255,16 +262,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _outputs = outputs;
         _requestRemove = requestRemove;
         Name = name;
+        InitializeVisualizerSettings();
         SyncOutputsCollection();
         _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
         // Phase B (§3.4) - also resync on definition changes (Edit) so clone-of transitions update
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged += OnOutputNamingChanged;
-        // Phase B follow-up - unwire from the active session BEFORE the runtime is disposed (§4.3.3).
-        // Without this the AudioRouter pump keeps Submit'ing to a disposed PortAudioOutput and spams
-        // ObjectDisposedException until the session is torn down.
-        _outputs.OutputLineRemoving += OnOutputLineRemoving;
         _outputs.OutputLineReconfiguringAsync += OnOutputLineReconfiguringAsync;
         _outputs.OutputLineReconfiguredAsync += OnOutputLineReconfiguredAsync;
         _idleSlateSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -346,6 +350,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
             try { await playerSession.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession dispose"); }
         }
+
+        // The deck owns the persistent visualizer source (disposeSourceOnRemove: false) - stop its
+        // continuous render thread with the deck. Session dispose above only unhooked it.
+        await _visualizerApplyGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            try { _visualizerSource?.Dispose(); }
+            catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: visualizer source dispose"); }
+            _visualizerSource = null;
+        }
+        finally
+        {
+            _visualizerApplyGate.Release();
+        }
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var held in _playerAcquiredLines)
@@ -410,7 +428,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _outputs.Outputs.CollectionChanged -= OnSharedOutputsCollectionChanged;
         _outputs.RoutingTopologyChanged -= OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged -= OnOutputNamingChanged;
-        _outputs.OutputLineRemoving -= OnOutputLineRemoving;
         _outputs.OutputLineReconfiguringAsync -= OnOutputLineReconfiguringAsync;
         _outputs.OutputLineReconfiguredAsync -= OnOutputLineReconfiguredAsync;
     }
@@ -1249,6 +1266,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// audio-output factory on the session thread, read by the UI poll) - the deck's VU source.</summary>
     private readonly object _meterTapGate = new();
     private readonly List<Playback.MeteringAudioOutput> _meterTaps = [];
+    /// <summary>UI-poll-thread scratch snapshot of <see cref="_meterTaps"/> (reused per tick).</summary>
+    private readonly List<Playback.MeteringAudioOutput> _meterTapScratch = [];
 
     private void RegisterMeterTap(Playback.MeteringAudioOutput tap)
     {
@@ -1264,17 +1283,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void PollAudioMeters()
     {
-        Playback.MeteringAudioOutput[] taps;
+        _meterTapScratch.Clear();
         lock (_meterTapGate)
-            taps = _meterTaps.Count > 0 ? _meterTaps.ToArray() : [];
+            _meterTapScratch.AddRange(_meterTaps);
 
         var peak = double.NegativeInfinity;
-        foreach (var tap in taps)
+        foreach (var tap in _meterTapScratch)
         {
             var db = tap.ReadAndResetPeakDb();
             if (db > peak) peak = db;
         }
 
+        _meterTapScratch.Clear();
         PeakLevelDb = peak;
     }
 
@@ -2025,16 +2045,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     add ? HotAddOutputToShowSessionAsync(t) : HotRemoveOutputFromShowSessionAsync(t));
             }
         }).ConfigureAwait(false);
-    }
-
-    private void OnOutputLineRemoving(object? sender, OutputLineViewModel line)
-    {
-        // The management VM is about to dispose the runtime: detach the line from the live composition +
-        // release it now so nothing submits into an output that's seconds away from disposal. The detach hops
-        // the session dispatcher (best-effort, fire-and-forget) but the runtime is only disposed "seconds
-        // away", so it completes first. Clones tied to this parent route through this handler in turn.
-        if (ShowSessionHotSwapActive)
-            _ = HotRemoveOutputFromShowSessionAsync(line);
     }
 
     /// <summary>

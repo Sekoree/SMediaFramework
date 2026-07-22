@@ -7,6 +7,7 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <Compile Include="../../Shared/SystemFirstNativeLibraryResolver.cs" Link="Runtime/SystemFirstNativeLibraryResolver.cs" />
         <!-- System.Text.Encoding.CodePages (Shift-JIS / cp932 for VMD bone names) is NOT referenced as a
              package: its assembly ships in the .NET 10 shared framework + NativeAOT runtime pack, so the
              explicit PackageReference was redundant (SDK NU1510). CodePagesEncodingProvider resolves from
@@ -52,4 +53,8 @@
         <Using Include="System.Numerics" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>MikuMikuDance (PMX/VMD) scene source for MFPlayer with Bullet-physics-backed animation. Requires the mmd_bullet native shim built by this repo.</Description>
+    </PropertyGroup>
 </Project>

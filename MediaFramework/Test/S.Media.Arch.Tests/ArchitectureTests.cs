@@ -28,6 +28,16 @@ public sealed class ArchitectureTests
         // forward IPlaybackClock, which lives in S.Media.Time. Downward ref (Time is tier 2); the module
         // keeps the cohesive FFmpeg audio-processing set together rather than spinning up a new project.
         ["S.Media.Decode.FFmpeg"] = ["S.Media.Core", "S.Media.Time", "S.Media.FFmpeg.Common"],
+        // Encode module (Tier 3b slot from the rewrite docs): packet-producing encoders + mux sinks
+        // behind IVideoOutput/IAudioOutput. Never references Decode.FFmpeg - shared glue lives in Common.
+        ["S.Media.Encode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
+        // LAN streaming server over the encode module's packet-sink seam. Sockets stay OUT of the
+        // encode project; this is the one place HTTP meets the muxers.
+        ["S.Media.Stream.Http"] = ["S.Media.Core", "S.Media.Encode.FFmpeg"],
+        // projectM visualizer: an effect-bus visual source + NXT-10 GL layer surface (Compositor for
+        // the surface contract, like Source.MMD). ProjectMLib is its dedicated P/Invoke binding.
+        ["S.Media.Visualizer.ProjectM"] = ["S.Media.Core", "S.Media.Compositor", "ProjectMLib"],
+        ["ProjectMLib"] = [],
         // External-source module (Gate 5): YoutubeExplode is an out-of-tree LOCAL SOURCE reference
         // (Reference/YoutubeExplode-6.6) and deliberately not part of the layering table.
         ["S.Media.Source.YouTube"] =
@@ -75,7 +85,7 @@ public sealed class ArchitectureTests
     // exempt). Includes the native-wrapper trees (TEST-02) so PALib/MALib/PMLib/NDILib/OSCLib/LibAssLib are
     // checked too, not just the S.Media.* / S.Control.* / S.Abi projects.
     private static readonly string[] FrameworkDirs =
-        ["Media", "Control", "Interop", "Audio", "MIDI", "NDI", "OSC", "Subtitles"];
+        ["Media", "Control", "Interop", "Audio", "MIDI", "NDI", "OSC", "Subtitles", "Visualizer"];
 
     private static string RepoRoot()  // repo root = the directory holding MFPlayer.sln
     {
@@ -155,6 +165,88 @@ public sealed class ArchitectureTests
     {
         var project = Path.Combine(RepoRoot(), "MediaFramework", relativePath);
         Assert.Empty(ProjectRefNames(project));
+    }
+
+    [Theory]
+    [InlineData("Audio/PALib/PALib.csproj")]
+    [InlineData("Audio/MALib/MALib.csproj")]
+    [InlineData("MIDI/PMLib/PMLib.csproj")]
+    [InlineData("NDI/NDILib/NDILib.csproj")]
+    [InlineData("Subtitles/LibAssLib/LibAssLib.csproj")]
+    [InlineData("Visualizer/ProjectMLib/ProjectMLib.csproj")]
+    [InlineData("Media/S.Media.Source.MMD/S.Media.Source.MMD.csproj")]
+    [InlineData("Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj")]
+    public void BundledNativeWrappersUseSharedSystemFirstResolverPolicy(string relativePath)
+    {
+        var project = Path.Combine(RepoRoot(), "MediaFramework", relativePath);
+        var linkedSources = XDocument.Load(project).Descendants("Compile")
+            .Select(element => (string?)element.Attribute("Include"))
+            .Where(include => !string.IsNullOrWhiteSpace(include));
+
+        Assert.Contains(linkedSources, include =>
+            include!.Replace('\\', '/').EndsWith("Shared/SystemFirstNativeLibraryResolver.cs", StringComparison.Ordinal));
+    }
+
+    private static string[] SolutionProjectPaths(string root) =>
+        File.ReadLines(Path.Combine(root, "MFPlayer.sln"))
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, "= \"[^\"]+\", \"([^\"]+\\.csproj)\""))
+            .Where(m => m.Success)
+            .Select(m => m.Groups[1].Value.Replace('\\', '/'))
+            .ToArray();
+
+    [Fact]
+    public void EverySolutionProjectExistsOnDisk()
+    {
+        // A fresh clone must build: an sln entry whose csproj was never committed (the review P2-5
+        // meta packages were once added to the sln without the new Packages/ directory reaching git)
+        // fails every `dotnet build MFPlayer.sln` with MSB3202. Packages/ is outside FrameworkDirs,
+        // so only this check covers it.
+        var root = RepoRoot();
+        var missing = SolutionProjectPaths(root)
+            .Where(p => !File.Exists(Path.Combine(root, p)))
+            .ToList();
+
+        Assert.True(missing.Count == 0,
+            "MFPlayer.sln references project files that do not exist on disk (forgotten `git add`?):\n  "
+            + string.Join("\n  ", missing));
+    }
+
+    [Fact]
+    public void NoSolutionProjectIsGitignored()
+    {
+        // The trap that lost MediaFramework/Packages/ TWICE: the stock VS .gitignore's
+        // `**/[Pp]ackages/*` rule (meant for the legacy NuGet restore cache) silently made
+        // `git add` skip the meta-package sources, so the local tree built and tested green while
+        // every fresh clone failed. On-disk existence can't see that - ask git itself.
+        var root = RepoRoot();
+        if (!Directory.Exists(Path.Combine(root, ".git")))
+            return; // source tarball / exported tree - nothing to check
+
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = root,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("check-ignore");
+        psi.ArgumentList.Add("--stdin");
+
+        using var git = System.Diagnostics.Process.Start(psi);
+        Assert.NotNull(git);
+        foreach (var path in SolutionProjectPaths(root))
+            git.StandardInput.WriteLine(path);
+        git.StandardInput.Close();
+        var ignored = git.StandardOutput.ReadToEnd();
+        git.WaitForExit();
+
+        // Exit 1 = nothing ignored (good); 0 = at least one ignored; anything else (128 = not a
+        // repo, missing git) means the environment cannot answer - do not fail the build for that.
+        Assert.True(git.ExitCode != 0,
+            "MFPlayer.sln references project files that are GITIGNORED - `git add` will silently "
+            + "skip them and a fresh clone cannot build. Fix .gitignore (see the "
+            + "MediaFramework/Packages/ negation) for:\n  "
+            + ignored.Trim().Replace("\n", "\n  "));
     }
 
     [Fact]

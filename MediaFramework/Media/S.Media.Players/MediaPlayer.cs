@@ -185,13 +185,15 @@ public sealed class MediaPlayer : IDisposable
             : "(external)";
         var clockSnap = new MediaClockMetricsSnapshot(clock.CurrentPosition, masterName);
 
-        VideoPlayerMetricsSnapshot? videoSnap = null;
         var vp = Video;
-        videoSnap = new VideoPlayerMetricsSnapshot(
+        var videoSnap = new VideoPlayerMetricsSnapshot(
             vp.DecodedCount,
             vp.DisplayedCount,
             vp.DroppedLate,
-            vp.DroppedDrain);
+            vp.DroppedDrain,
+            vp.DecodeTiming,
+            vp.QueuedFrameCount,
+            vp.QueueCapacity);
 
         AudioRouterMetricsSnapshot? audioRouterSnap = null;
         IReadOnlyList<AudioOutputPumpMetricsEntry> audioOutputs = [];
@@ -204,7 +206,8 @@ public sealed class MediaPlayer : IDisposable
                 agg.TotalEnqueued,
                 agg.TotalProcessed,
                 agg.TotalDropped,
-                agg.OutputCount);
+                agg.OutputCount,
+                ar.MixTiming);
             var ids = ar.GetRegisteredOutputIds();
             var list = new AudioOutputPumpMetricsEntry[ids.Count];
             for (var i = 0; i < ids.Count; i++)
@@ -335,11 +338,9 @@ public sealed class MediaPlayer : IDisposable
         _liveSession!.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
     }
 
-    public void Pause(CancellationToken cancellationToken = default,
-        PauseFlushPolicy flushPolicy = PauseFlushPolicy.FlushCodecPipelines)
+    public void Pause(CancellationToken cancellationToken = default)
     {
-        var flush = ResolveFlushAction(flushPolicy);
-        _liveSession!.Pause(cancellationToken, flush);
+        _liveSession!.Pause(cancellationToken);
     }
 
     public void PauseWithFlushAction(Action flushAction, CancellationToken cancellationToken = default)
@@ -352,11 +353,9 @@ public sealed class MediaPlayer : IDisposable
         _liveSession!.Seek(position);
     }
 
-    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
-        PauseFlushPolicy flushPolicy = PauseFlushPolicy.FlushCodecPipelines)
+    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default)
     {
-        var flush = ResolveFlushAction(flushPolicy);
-        _liveSession!.SeekCoordinated(position, cancellationToken, flush);
+        _liveSession!.SeekCoordinated(position, cancellationToken);
     }
 
     /// <summary>
@@ -366,8 +365,6 @@ public sealed class MediaPlayer : IDisposable
     {
         // Registry/live sources prewarm through the VideoPlayer; there is no container decoder to spin up.
     }
-
-    private static Action? ResolveFlushAction(PauseFlushPolicy policy) => null;
 
     public void Dispose()
     {

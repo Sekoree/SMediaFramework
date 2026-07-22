@@ -271,7 +271,7 @@ public sealed class SessionRecoveryTests : IDisposable
 
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SessionRecoveryTests).Assembly)
-            .Dispatch(async () =>
+            .DispatchAsync(async () =>
             {
                 var vm = new MainViewModel();
                 Assert.False(await vm.RestoreRecoverySessionAndDeleteAsync(recoverable, intoOriginal: false));
@@ -303,7 +303,7 @@ public sealed class SessionRecoveryTests : IDisposable
 
         await HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(SessionRecoveryTests).Assembly)
-            .Dispatch(async () =>
+            .DispatchAsync(async () =>
             {
                 var vm = new MainViewModel();
                 Assert.True(await vm.RestoreRecoverySessionAndDeleteAsync(recoverable, intoOriginal: true));

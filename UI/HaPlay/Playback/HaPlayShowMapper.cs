@@ -97,8 +97,9 @@ public static class HaPlayShowMapper
                 switch (node)
                 {
                     case CueGroupNode group:
-                        // A top-level group is one transport/clock unit: its cues share a SessionClock
-                        // (so they seek/pause together and, when fired simultaneously, stay phase-locked).
+                        // A top-level group is the authored transport/replacement unit for normal single-cue GO.
+                        // Fire-all batches temporarily override it with stable per-cue runtime groups so siblings
+                        // can remain active together; HaPlay coordinates pause/seek across those runtime groups.
                         // Nested subgroups collapse into their OUTERMOST ancestor (first non-null wins) so
                         // the whole tree moves as one unit rather than splitting across per-subgroup clocks.
                         // WHICH cues fire on GO - including per-subgroup fire modes (FirstCueOnly / …) - is
@@ -120,7 +121,8 @@ public static class HaPlayShowMapper
                             clips.Add(binding);
                         break;
 
-                    // ActionCueNode / CommentCueNode have no ShowDocument equivalent yet (deferred slice).
+                    // ActionCueNode / CommentCueNode / JumpCueNode have no ShowDocument equivalent - action
+                    // and jump (control-flow) cues execute at the HaPlay transport layer.
                 }
             }
         }
@@ -170,6 +172,7 @@ public static class HaPlayShowMapper
             LayerIndex: primary?.LayerIndex ?? 0,
             AudioStreamIndex: media.AudioTrackIndex)
         {
+            VideoStreamIndex = media.VideoTrackIndex,
             StartOffset = TimeSpan.FromMilliseconds(media.StartOffsetMs),
             EndOffset = TimeSpan.FromMilliseconds(media.EndOffsetMs),
             FadeIn = TimeSpan.FromMilliseconds(media.FadeInMs),
@@ -202,7 +205,7 @@ public static class HaPlayShowMapper
     }
 
     /// <summary>GUI per-cue <see cref="CueAudioRoute"/>s → per-clip <see cref="ShowClipAudioRoute"/>s, one per
-    /// output line: the line's PortAudio device, an N→M <see cref="ChannelMap"/> array (out-channel ← src-channel,
+    /// output line: the line's shared PortAudio runtime, an N→M <see cref="ChannelMap"/> array (out-channel ← src-channel,
     /// unrouted = silent), and a line gain (mean of its routes' dB → linear). Muted routes are dropped; a fully
     /// muted line contributes no output. Returns an explicit empty list when the cue has no usable routes so
     /// HaPlay never falls back to an inferred/default device.</summary>
@@ -235,14 +238,37 @@ public static class HaPlayShowMapper
             // Treating the persisted value as an array index turned a normal stereo 1/2 route into
             // a three-channel [-1, L, R] output. PortAudio then rejected that format on a 2-channel
             // device, so the ShowSession cue faulted as soon as it was fired.
-            var matrix = new int[lineRoutes.Max(r => r.OutputChannel)];
+            outputsById.TryGetValue(line.Key, out var def);
+
+            // Encode lines: the matrix MUST span the sink's full combined track layout - a matrix
+            // sized only to the highest routed channel would force a channel-count adapter whose
+            // default mixing bleeds audio across tracks. Unrouted combined channels stay silent (-1).
+            var minChannels = def switch
+            {
+                // The shared hardware runtime is opened at the line's declared width. Preserve
+                // silent trailing channels so no generic channel adapter can upmix into them.
+                PortAudioOutputDefinition p => p.ChannelCount,
+                FileOutputDefinition f when f.EffectiveEncode.OutputMode != "VideoOnly" =>
+                    f.EffectiveEncode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2),
+                LiveStreamOutputDefinition s when s.EffectiveEncode.OutputMode != "VideoOnly" =>
+                    s.EffectiveEncode.AudioLegs.Sum(l => l.Channels > 0 ? l.Channels : 2),
+                _ => 0,
+            };
+            var matrix = new int[Math.Max(lineRoutes.Max(r => r.OutputChannel), minChannels)];
             Array.Fill(matrix, -1); // ChannelMap.Silence - channels with no route stay silent
             foreach (var r in lineRoutes)
                 if (r.SourceChannel >= 0)
                     matrix[r.OutputChannel - 1] = r.SourceChannel;
-
-            outputsById.TryGetValue(line.Key, out var def);
-            var deviceId = (def as PortAudioOutputDefinition)?.EffectiveAudioBackendDeviceId;
+            var deviceId = def switch
+            {
+                // Resolve the configured line's already-open shared runtime in the host factory.
+                // Emitting the backend hardware id here would make ShowSession open a second stream.
+                PortAudioOutputDefinition => OutputAudioRouteDeviceIds.PortAudio(line.Key),
+                // Encode lines resolve through the cue session's audio-output factory (the armed
+                // session's combined multi-track sink) - same carrier pattern as the deck.
+                FileOutputDefinition or LiveStreamOutputDefinition => OutputAudioRouteDeviceIds.Encode(line.Key),
+                _ => null,
+            };
             var sampleRate = def switch
             {
                 PortAudioOutputDefinition pa => pa.SampleRate,
@@ -323,7 +349,26 @@ public static class HaPlayShowMapper
         placement.CropTop,
         placement.CropRight,
         placement.CropBottom,
-        placement.VideoFxEnabled ? ToClipOutputMapping(placement.VideoFx) : null);
+        placement.VideoFxEnabled ? ToClipOutputMapping(placement.VideoFx) : null,
+        ToChromaKeySettings(placement),
+        ToColorAdjustSettings(placement));
+
+    /// <summary>Maps the placement's chroma key to the framework settings; null while disabled
+    /// (settings are retained on the model but must not key the layer).</summary>
+    public static S.Media.Compositor.ChromaKeySettings? ToChromaKeySettings(CueVideoPlacement placement) =>
+        placement is { ChromaKeyEnabled: true, ChromaKey: { } key }
+            ? new S.Media.Compositor.ChromaKeySettings(
+                (float)key.KeyR, (float)key.KeyG, (float)key.KeyB,
+                (float)key.Similarity, (float)key.Smoothness, (float)key.SpillSuppression)
+            : null;
+
+    /// <summary>Maps the placement's brightness/contrast to the framework settings; null while
+    /// disabled (settings retained on the model but must not alter the layer).</summary>
+    public static S.Media.Compositor.Effects.BrightnessContrastSettings? ToColorAdjustSettings(CueVideoPlacement placement) =>
+        placement is { ColorAdjustEnabled: true, ColorAdjust: { } adjust }
+            ? new S.Media.Compositor.Effects.BrightnessContrastSettings(
+                (float)adjust.Brightness, (float)adjust.Contrast)
+            : null;
 
     /// <summary>Maps a persisted HaPlay warp/FX model to the session runtime representation.</summary>
     public static ClipOutputMappingSpec? ToClipOutputMapping(CueOutputMapping? mapping) => mapping is null ? null : new(

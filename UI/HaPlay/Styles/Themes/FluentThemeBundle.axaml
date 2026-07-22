@@ -3,7 +3,15 @@
         x:Class="HaPlay.Themes.FluentThemeBundle">
   <!-- Avalonia's built-in Fluent theme (modern, light/dark, density-aware) with the package TreeDataGrid +
        ColorPicker themes. AppearanceController reaches this FluentTheme instance to apply the density axis. -->
-  <FluentTheme />
+  <FluentTheme>
+    <!-- Deliberate accent (review P3-7): without this Fluent inherits the OS/system accent - often
+         magenta/pink on default installs - which clashes with the app's green/amber/red operational
+         palette. The neutral blue matches the shared AccentSelectedNav/StateSelected tokens. -->
+    <FluentTheme.Palettes>
+      <ColorPaletteResources x:Key="Light" Accent="#3B82F6" />
+      <ColorPaletteResources x:Key="Dark" Accent="#5B9BF8" />
+    </FluentTheme.Palettes>
+  </FluentTheme>
   <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml" />
   <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
   <!-- Dock.Avalonia docking chrome (Control workspace), matched to the Fluent base theme. -->

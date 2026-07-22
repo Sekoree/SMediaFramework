@@ -94,8 +94,8 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
         FilePlaylistItem f => f.Path,
         ImagePlaylistItem i => i.Path,
         SubtitlePlaylistItem s => s.Path,
-        YouTubePlaylistItem y when Preparer.IsPrepared(y.VideoId, y.VideoStreamDescriptor, y.AudioStreamDescriptor) =>
-            Preparer.AssetPathFor(y.VideoId, y.VideoStreamDescriptor, y.AudioStreamDescriptor),
+        YouTubePlaylistItem y when Preparer.IsPrepared(y.VideoId, y.VideoStreamDescriptor, y.AudioStreamDescriptor, y.IncludeThumbnail) =>
+            Preparer.AssetPathFor(y.VideoId, y.VideoStreamDescriptor, y.AudioStreamDescriptor, y.IncludeThumbnail),
         _ => null,
     };
 
@@ -378,7 +378,7 @@ public sealed partial class MediaPropertiesDialogViewModel : ObservableObject
                 YouTubeRows.Add(new MediaPropertyRow(Strings.MediaPropertiesRowSubtitleLanguage, yt.SubtitleLanguage));
             YouTubeRows.Add(new MediaPropertyRow(
                 Strings.MediaPropertiesRowCacheState,
-                Preparer.IsPrepared(yt.VideoId, yt.VideoStreamDescriptor, yt.AudioStreamDescriptor)
+                Preparer.IsPrepared(yt.VideoId, yt.VideoStreamDescriptor, yt.AudioStreamDescriptor, yt.IncludeThumbnail)
                     ? Strings.MediaPropertiesCacheStateCached
                     : Strings.MediaPropertiesCacheStateNotCached));
         }

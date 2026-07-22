@@ -21,4 +21,8 @@
         <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Outbound C ABI for MFPlayer: publishes the framework as the NativeAOT s_media_player shared library for non-.NET hosts.</Description>
+    </PropertyGroup>
 </Project>

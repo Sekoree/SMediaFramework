@@ -1,5 +1,6 @@
 using HaPlay.OutputPreview;
 using HaPlay.ViewModels;
+using Avalonia.Headless;
 using S.Media.Audio.PortAudio;
 using Xunit;
 
@@ -7,6 +8,43 @@ namespace HaPlay.Tests;
 
 public sealed class OutputManagementViewModelTests
 {
+    private static Task DispatchAsync(Func<Task> body) =>
+        HeadlessUnitTestSession
+            .GetOrStartForAssembly(typeof(OutputManagementViewModelTests).Assembly)
+            .DispatchAsync(body, CancellationToken.None);
+
+    [Fact]
+    public async Task PrepareForDefinitionsReplacementAsync_AwaitsDetachBeforeDefinitionsCanBeReplaced()
+    {
+        var vm = new OutputManagementViewModel();
+        var lineId = Guid.NewGuid();
+        vm.ReplaceDefinitionsForLoad(
+        [
+            new LocalVideoOutputDefinition(
+                lineId, "Program", VideoOutputEngine.SDLOpenGl, VideoSurfaceMode.Windowed,
+                ScreenIndex: 0, WindowWidth: 1280, WindowHeight: 720),
+        ]);
+        var detachEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDetach = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.OutputLineReconfiguringAsync += async line =>
+        {
+            Assert.Equal(lineId, line.Definition.Id);
+            detachEntered.SetResult();
+            await allowDetach.Task;
+        };
+
+        var prepare = vm.PrepareForDefinitionsReplacementAsync();
+        await detachEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(prepare.IsCompleted);
+        Assert.Single(vm.Outputs);
+
+        allowDetach.SetResult();
+        await prepare.WaitAsync(TimeSpan.FromSeconds(2));
+        vm.ReplaceDefinitionsForLoad([]);
+
+        Assert.Empty(vm.Outputs);
+    }
+
     /// <summary>Phase E (§8.1) - the sparkline ring on <see cref="OutputLineViewModel"/> stores
     /// per-tick deltas. Three ticks of growing cumulative counters must produce three positive
     /// samples whose peak matches the largest delta.</summary>
@@ -93,86 +131,98 @@ public sealed class OutputManagementViewModelTests
     [Fact]
     public async Task ReconfigureLineAsync_NoRunningRuntime_UpdatesDefinitionInPlace()
     {
-        var vm = new OutputManagementViewModel();
-        var id = Guid.NewGuid();
-        var original = new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "dev", 2, 48000);
-        vm.ReplaceDefinitionsForLoad(new OutputDefinition[] { original });
+        await DispatchAsync(async () =>
+        {
+            var vm = new OutputManagementViewModel();
+            var id = Guid.NewGuid();
+            var original = new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "dev", 2, 48000);
+            vm.ReplaceDefinitionsForLoad(new OutputDefinition[] { original });
 
-        var line = vm.Outputs[0];
-        Assert.Equal(48000, ((PortAudioOutputDefinition)line.Definition).SampleRate);
+            var line = vm.Outputs[0];
+            Assert.Equal(48000, ((PortAudioOutputDefinition)line.Definition).SampleRate);
 
-        // No PortAudio runtime is started in this VM (ReplaceDefinitionsForLoad never spins up runtimes
-        // by design - Phase B's load orchestration does that). The reconfigure should still update the
-        // definition on the line VM so consumers observe the new values.
-        var updated = original with { SampleRate = 96000, ChannelCount = 4 };
-        await vm.ReconfigureLineAsync(line, updated);
+            // No PortAudio runtime is started in this VM (ReplaceDefinitionsForLoad never spins up runtimes
+            // by design - Phase B's load orchestration does that). The reconfigure should still update the
+            // definition on the line VM so consumers observe the new values.
+            var updated = original with { SampleRate = 96000, ChannelCount = 4 };
+            await vm.ReconfigureLineAsync(line, updated);
 
-        var pa = Assert.IsType<PortAudioOutputDefinition>(line.Definition);
-        Assert.Equal(96000, pa.SampleRate);
-        Assert.Equal(4, pa.ChannelCount);
-        Assert.Equal(id, pa.Id);
+            var pa = Assert.IsType<PortAudioOutputDefinition>(line.Definition);
+            Assert.Equal(96000, pa.SampleRate);
+            Assert.Equal(4, pa.ChannelCount);
+            Assert.Equal(id, pa.Id);
+        });
     }
 
     [Fact]
     public async Task ReconfigureLineAsync_MismatchedId_Throws()
     {
-        var vm = new OutputManagementViewModel();
-        var id = Guid.NewGuid();
-        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+        await DispatchAsync(async () =>
         {
-            new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000),
-        });
+            var vm = new OutputManagementViewModel();
+            var id = Guid.NewGuid();
+            vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+            {
+                new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000),
+            });
 
-        var line = vm.Outputs[0];
-        var foreign = new PortAudioOutputDefinition(Guid.NewGuid(), "X", 0, "Alsa", 1, "d", 2, 48000);
-        await Assert.ThrowsAsync<ArgumentException>(() => vm.ReconfigureLineAsync(line, foreign));
+            var line = vm.Outputs[0];
+            var foreign = new PortAudioOutputDefinition(Guid.NewGuid(), "X", 0, "Alsa", 1, "d", 2, 48000);
+            await Assert.ThrowsAsync<ArgumentException>(() => vm.ReconfigureLineAsync(line, foreign));
+        });
     }
 
     [Fact]
     public async Task ReconfigureLineAsync_KindChange_Throws()
     {
-        var vm = new OutputManagementViewModel();
-        var id = Guid.NewGuid();
-        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+        await DispatchAsync(async () =>
         {
-            new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000),
-        });
+            var vm = new OutputManagementViewModel();
+            var id = Guid.NewGuid();
+            vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+            {
+                new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000),
+            });
 
-        var line = vm.Outputs[0];
-        // Same Id, different kind. The runtime mapping doesn't work - must be rejected so callers can
-        // surface the right error instead of silently doing nothing.
-        var swapped = new NDIOutputDefinition(id, "PA", "src", null, NDIOutputStreamMode.VideoAndAudio, 2, 48000);
-        await Assert.ThrowsAsync<ArgumentException>(() => vm.ReconfigureLineAsync(line, swapped));
+            var line = vm.Outputs[0];
+            // Same Id, different kind. The runtime mapping doesn't work - must be rejected so callers can
+            // surface the right error instead of silently doing nothing.
+            var swapped = new NDIOutputDefinition(id, "PA", "src", null, NDIOutputStreamMode.VideoAndAudio, 2, 48000);
+            await Assert.ThrowsAsync<ArgumentException>(() => vm.ReconfigureLineAsync(line, swapped));
+        });
     }
 
     [Fact]
     public async Task ReconfigureLineAsync_RaisesHooks_AroundDefinitionSwap()
     {
-        var vm = new OutputManagementViewModel();
-        var id = Guid.NewGuid();
-        var original = new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000);
-        vm.ReplaceDefinitionsForLoad(new OutputDefinition[] { original });
-
-        var line = vm.Outputs[0];
-        var updated = original with { SampleRate = 96000 };
-        var events = new List<string>();
-
-        vm.OutputLineReconfiguringAsync += l =>
+        await DispatchAsync(async () =>
         {
-            var pa = Assert.IsType<PortAudioOutputDefinition>(l.Definition);
-            events.Add($"pre:{pa.SampleRate}");
-            return Task.CompletedTask;
-        };
-        vm.OutputLineReconfiguredAsync += l =>
-        {
-            var pa = Assert.IsType<PortAudioOutputDefinition>(l.Definition);
-            events.Add($"post:{pa.SampleRate}");
-            return Task.CompletedTask;
-        };
+            var vm = new OutputManagementViewModel();
+            var id = Guid.NewGuid();
+            var original = new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000);
+            vm.ReplaceDefinitionsForLoad(new OutputDefinition[] { original });
 
-        await vm.ReconfigureLineAsync(line, updated);
+            var line = vm.Outputs[0];
+            var updated = original with { SampleRate = 96000 };
+            var events = new List<string>();
 
-        Assert.Equal(new[] { "pre:48000", "post:96000" }, events);
+            vm.OutputLineReconfiguringAsync += l =>
+            {
+                var pa = Assert.IsType<PortAudioOutputDefinition>(l.Definition);
+                events.Add($"pre:{pa.SampleRate}");
+                return Task.CompletedTask;
+            };
+            vm.OutputLineReconfiguredAsync += l =>
+            {
+                var pa = Assert.IsType<PortAudioOutputDefinition>(l.Definition);
+                events.Add($"post:{pa.SampleRate}");
+                return Task.CompletedTask;
+            };
+
+            await vm.ReconfigureLineAsync(line, updated);
+
+            Assert.Equal(new[] { "pre:48000", "post:96000" }, events);
+        });
     }
 
     [Fact]
@@ -195,7 +245,7 @@ public sealed class OutputManagementViewModelTests
     }
 
     [Fact]
-    public void NotifyLocalPreviewResized_IgnoresFullscreenAndTooSmallSizes()
+    public void NotifyLocalPreviewResized_TracksFullscreenWithoutOverwritingWindowedRestoreSize()
     {
         var vm = new OutputManagementViewModel();
         var fullscreenId = Guid.NewGuid();
@@ -214,9 +264,13 @@ public sealed class OutputManagementViewModelTests
         var fullscreen = Assert.IsType<LocalVideoOutputDefinition>(vm.Outputs[0].Definition);
         Assert.Null(fullscreen.WindowWidth);
         Assert.Null(fullscreen.WindowHeight);
+        Assert.Equal(1920, vm.Outputs[0].LiveVideoWidth);
+        Assert.Equal(1080, vm.Outputs[0].LiveVideoHeight);
         var windowed = Assert.IsType<LocalVideoOutputDefinition>(vm.Outputs[1].Definition);
         Assert.Equal(1280, windowed.WindowWidth);
         Assert.Equal(720, windowed.WindowHeight);
+        Assert.Null(vm.Outputs[1].LiveVideoWidth);
+        Assert.Null(vm.Outputs[1].LiveVideoHeight);
     }
 
     [Fact]

@@ -14,4 +14,8 @@
         <ProjectReference Include="../S.Media.Gpu/S.Media.Gpu.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Embed MFPlayer video into Avalonia applications (the framework's UI presentation seam).</Description>
+    </PropertyGroup>
 </Project>

@@ -9,7 +9,7 @@ namespace S.Media.NDI;
 /// <param name="VideoFramesUnpacked">Video frames successfully unpacked from the native receiver.</param>
 /// <param name="VideoUnpackDrops">Frames dropped because unpacking/conversion could not keep up.</param>
 /// <param name="VideoOverflowFrames">Frames dropped because the bounded receive queue was full.</param>
-/// <param name="AudioOverflowFloats">Audio samples dropped on ring-buffer overflow.</param>
+/// <param name="AudioOverflowFloats">Interleaved floating-point channel values dropped on ring-buffer overflow.</param>
 /// <param name="AudioConversionDrops">Audio blocks dropped during format conversion.</param>
 /// <param name="QueuedVideoFrames">Video frames currently buffered waiting for the consumer.</param>
 /// <param name="CaptureThreadStuck">True when the native capture thread was detected wedged.</param>

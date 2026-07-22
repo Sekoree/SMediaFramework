@@ -31,4 +31,8 @@
         <InternalsVisibleTo Include="HaPlay.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>PortAudio audio backend for MFPlayer (the mature primary host API). Requires the native PortAudio 19.7 library at runtime.</Description>
+    </PropertyGroup>
 </Project>

@@ -94,6 +94,7 @@ public class ShowDocumentMapperTests
             FadeInMs = 300,
             FadeOutMs = 750,
             AudioTrackIndex = 2,
+            VideoTrackIndex = 1,
             EndBehavior = CueEndBehavior.FreezeLastFrame,
             VideoPlacements = { new CueVideoPlacement { CompositionId = compId, LayerIndex = 1 } },
         };
@@ -157,6 +158,7 @@ public class ShowDocumentMapperTests
         Assert.Equal(compId.ToString(), introClip.CompositionId);
         Assert.Equal(1, introClip.LayerIndex);
         Assert.Equal(2, introClip.AudioStreamIndex);
+        Assert.Equal(1, introClip.VideoStreamIndex);
         Assert.Equal(TimeSpan.FromMilliseconds(500), introClip.StartOffset);
         Assert.Equal(TimeSpan.FromMilliseconds(1000), introClip.EndOffset);
         Assert.Equal(TimeSpan.FromMilliseconds(300), introClip.FadeIn);
@@ -321,13 +323,15 @@ public class ShowDocumentMapperTests
         };
         var output = new PortAudioOutputDefinition(
             Id: lineId, DisplayName: "Main Out", HostApiIndex: 0, HostApiName: "JACK",
-            GlobalDeviceIndex: 7, DeviceName: "system", ChannelCount: 2, SampleRate: 48_000);
+            GlobalDeviceIndex: 7, DeviceName: "system", ChannelCount: 32, SampleRate: 48_000);
 
         var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }, [output]).Clips);
 
         var route = Assert.Single(clip.AudioRoutes!);
-        Assert.Equal("7", route.DeviceId);                  // EffectiveAudioBackendDeviceId → GlobalDeviceIndex
-        Assert.Equal(new[] { 0, 1 }, route.ChannelMatrix);  // identity stereo; muted/invalid routes are dropped
+        Assert.Equal(OutputAudioRouteDeviceIds.PortAudio(lineId), route.DeviceId); // app-owned shared line
+        Assert.Equal(32, route.ChannelMatrix!.Length);      // preserve the configured hardware width
+        Assert.Equal(new[] { 0, 1 }, route.ChannelMatrix.Take(2));
+        Assert.All(route.ChannelMatrix.Skip(2), channel => Assert.Equal(-1, channel)); // trailing outputs stay silent
         Assert.Equal(1f, route.Gain);                       // 0 dB → linear 1.0
         Assert.Equal(48_000, route.SampleRate);              // output/device rate, not the media source rate
     }

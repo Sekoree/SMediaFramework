@@ -13,4 +13,8 @@
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Clocks and A/V synchronization for MFPlayer: monotonic clocks, session timelines, output sync groups and rate discipline.</Description>
+    </PropertyGroup>
 </Project>

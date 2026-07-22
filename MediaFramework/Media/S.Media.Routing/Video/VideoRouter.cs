@@ -88,6 +88,13 @@ public sealed class VideoRouter : IDisposable
         remove => _pumpPressure -= value;
     }
 
+    /// <summary>Snapshot of registered output ids.</summary>
+    public IReadOnlyList<string> GetRegisteredOutputIds()
+    {
+        lock (_gate)
+            return _outputs.Keys.ToArray();
+    }
+
     /// <summary>Registers a output. <paramref name="id"/> defaults to <c>vout_1</c>, <c>vout_2</c>, …</summary>
     /// <param name="asyncPump">
     /// Explicit <see cref="VideoOutputPump"/> attach options. Overrides the default pump-by-default path
@@ -107,13 +114,6 @@ public sealed class VideoRouter : IDisposable
     /// the inner output only when <paramref name="disposeOutputOnRouterDispose"/> is <c>true</c>; the pump
     /// itself is always disposed with the router.
     /// </param>
-    /// <summary>Snapshot of registered output ids.</summary>
-    public IReadOnlyList<string> GetRegisteredOutputIds()
-    {
-        lock (_gate)
-            return _outputs.Keys.ToArray();
-    }
-
     public string AddOutput(IVideoOutput output, string? id = null, bool disposeOutputOnRouterDispose = false,
         VideoOutputPumpAttachOptions? asyncPump = null, bool synchronous = false)
     {
@@ -495,7 +495,8 @@ public sealed class VideoRouter : IDisposable
             pump.DroppedFrames,
             pump.SubmittedFrames,
             pump.MaxQueueDepth,
-            pump.CurrentQueuedDepth);
+            pump.CurrentQueuedDepth,
+            pump.SubmitTiming);
         return true;
     }
 
@@ -516,15 +517,6 @@ public sealed class VideoRouter : IDisposable
 
     private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
-
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 
     private IVideoCpuFrameConverter CreateCpuFrameConverter() =>
         _options.VideoCpuFrameConverterFactory?.Invoke()
@@ -971,7 +963,7 @@ public sealed class VideoRouter : IDisposable
         {
             var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
             if (elapsedMs < SlowSubmitPhaseWarningMs ||
-                !TryUpdateThrottle(ref _lastSlowSubmitPhaseLogTicks, TimeSpan.FromSeconds(2)))
+                !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowSubmitPhaseLogTicks, TimeSpan.FromSeconds(2)))
                 return;
 
             VideoRouter.Trace.LogWarning(

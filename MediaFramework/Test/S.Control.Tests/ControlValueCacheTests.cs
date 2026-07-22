@@ -70,4 +70,35 @@ public sealed class ControlValueCacheTests
         Assert.NotNull(flipped);
         Assert.False(flipped!.Value.BooleanValue);
     }
+
+    [Fact]
+    public void VersionTracksSetStaleAndClearMutations()
+    {
+        var cache = new ControlValueCache();
+        Assert.Equal(0, cache.Version);
+
+        cache.SetNumber("x32", "/ch/01/mix/fader", 0.5, ControlValueCacheSource.Incoming);
+        var afterSet = cache.Version;
+        Assert.True(afterSet > 0);
+
+        cache.MarkDeviceStale("x32");
+        Assert.True(cache.Version > afterSet);
+        var afterStale = cache.Version;
+
+        cache.ClearDevice("x32");
+        Assert.True(cache.Version > afterStale);
+        Assert.Empty(cache.Entries);
+    }
+
+    [Fact]
+    public void StringKeyLookup_ReturnsEntryWithoutChangingPublicKeySemantics()
+    {
+        var cache = new ControlValueCache();
+        cache.SetNumber("x32", "/ch/01/mix/fader", 0.5, ControlValueCacheSource.Incoming);
+
+        Assert.True(cache.TryGet("x32", "/ch/01/mix/fader", out var entry));
+        Assert.Equal(new ControlValueCacheKey("x32", "/ch/01/mix/fader"), entry.Key);
+        Assert.False(cache.TryGet("X32", "/ch/01/mix/fader", out _)); // keys remain ordinal/case-sensitive
+        Assert.Throws<ArgumentException>(() => cache.TryGet("", "/ch/01/mix/fader", out _));
+    }
 }

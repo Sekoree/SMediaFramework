@@ -14,7 +14,7 @@ public sealed class MediaPlayerDeckOutputAggregateTests
     private static Task DispatchUi(Func<Task> action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerDeckOutputAggregateTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .DispatchAsync(action, CancellationToken.None);
 
     // Audio outputs can be routed on any number of players without a video-conflict prompt, so they make
     // the cleanest fixture for exercising the aggregate over an arbitrary routed set.

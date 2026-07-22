@@ -54,3 +54,15 @@ public interface IVideoCompositor : IDisposable
     /// </remarks>
     VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime);
 }
+
+/// <summary>
+/// Capability: the compositor can pipeline its single-output readback (double-buffered PBO +
+/// fence), returning frame N-1 while frame N drains instead of stalling the GPU pipeline every
+/// composite. One frame of OUTPUT LATENCY is the trade, so it is opt-in: continuous streaming
+/// hosts (<see cref="VideoCompositorSource"/>) enable it; single-shot consumers (tests, stills,
+/// probes) keep the immediate synchronous semantics by default.
+/// </summary>
+public interface IPipelinedReadbackVideoCompositor : IVideoCompositor
+{
+    bool PipelinedSingleOutputReadback { get; set; }
+}

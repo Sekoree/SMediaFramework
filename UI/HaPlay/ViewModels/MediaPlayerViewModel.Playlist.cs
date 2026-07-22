@@ -36,9 +36,7 @@ public partial class MediaPlayerViewModel
         PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = value;
         try
         {
-            var settings = AppSettings.Load();
-            settings.PreferLiveUyvyPassthrough = value;
-            settings.Save();
+            AppSettings.Update(settings => settings.PreferLiveUyvyPassthrough = value);
         }
         catch
         {
@@ -437,53 +435,100 @@ public partial class MediaPlayerViewModel
         }
     }
 
+    /// <summary>Live multi-selection from the view's ListBox (multi-select parity with the cue
+    /// tree). <see cref="SelectedPlaylistItem"/> stays the primary for play/properties.</summary>
+    private readonly List<PlaylistItem> _selectedPlaylistItems = [];
+
+    public void UpdatePlaylistSelection(IReadOnlyList<PlaylistItem> selected)
+    {
+        _selectedPlaylistItems.Clear();
+        _selectedPlaylistItems.AddRange(selected);
+        MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
+        MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
+        RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>The multi-selection when the primary is part of it, else just the primary -
+    /// same fallback contract as the cue tree's EffectiveSelection.</summary>
+    private IReadOnlyList<PlaylistItem> EffectivePlaylistSelection()
+    {
+        if (SelectedPlaylistItem is { } primary && _selectedPlaylistItems.Contains(primary))
+            return _selectedPlaylistItems;
+        return SelectedPlaylistItem is null ? [] : [SelectedPlaylistItem];
+    }
+
     [RelayCommand(CanExecute = nameof(CanRemovePlaylistItem))]
     private void RemoveFromPlaylist()
     {
-        var item = SelectedPlaylistItem;
-        if (item is null) return;
-        var i = PlaylistItems.IndexOf(item);
-        if (i < 0) return;
-        PlaylistItems.RemoveAt(i);
+        // Applies to the whole multi-selection.
+        var targets = EffectivePlaylistSelection().Where(PlaylistItems.Contains).ToList();
+        if (targets.Count == 0) return;
+        var anchor = PlaylistItems.IndexOf(targets[0]);
+        foreach (var item in targets)
+            PlaylistItems.Remove(item);
         SelectedPlaylistItem = PlaylistItems.Count > 0
-            ? PlaylistItems[Math.Min(i, PlaylistItems.Count - 1)]
+            ? PlaylistItems[Math.Clamp(anchor, 0, PlaylistItems.Count - 1)]
             : null;
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
     }
 
     private bool CanRemovePlaylistItem() =>
-        SelectedPlaylistItem is not null && PlaylistItems.Contains(SelectedPlaylistItem);
+        EffectivePlaylistSelection().Any(PlaylistItems.Contains);
 
     [RelayCommand(CanExecute = nameof(CanMovePlaylistItemUp))]
-    private void MovePlaylistItemUp()
-    {
-        var item = SelectedPlaylistItem;
-        if (item is null) return;
-        var i = PlaylistItems.IndexOf(item);
-        if (i <= 0) return;
-        (PlaylistItems[i - 1], PlaylistItems[i]) = (PlaylistItems[i], PlaylistItems[i - 1]);
-        SelectedPlaylistItem = item;
-    }
+    private void MovePlaylistItemUp() => MoveSelectedPlaylistItems(-1);
 
     private bool CanMovePlaylistItemUp() =>
-        SelectedPlaylistItem is not null && PlaylistItems.IndexOf(SelectedPlaylistItem) > 0;
+        EffectivePlaylistSelection().Any(item => PlaylistItems.IndexOf(item) > 0);
 
     [RelayCommand(CanExecute = nameof(CanMovePlaylistItemDown))]
-    private void MovePlaylistItemDown()
-    {
-        var item = SelectedPlaylistItem;
-        if (item is null) return;
-        var i = PlaylistItems.IndexOf(item);
-        if (i < 0 || i >= PlaylistItems.Count - 1) return;
-        (PlaylistItems[i + 1], PlaylistItems[i]) = (PlaylistItems[i], PlaylistItems[i + 1]);
-        SelectedPlaylistItem = item;
-    }
+    private void MovePlaylistItemDown() => MoveSelectedPlaylistItems(+1);
 
-    private bool CanMovePlaylistItemDown()
+    private bool CanMovePlaylistItemDown() =>
+        EffectivePlaylistSelection().Any(item =>
+        {
+            var idx = PlaylistItems.IndexOf(item);
+            return idx >= 0 && idx < PlaylistItems.Count - 1;
+        });
+
+    /// <summary>Moves every selected row one slot. A contiguous block keeps its relative order and
+    /// piles up at the boundary instead of wrapping (same feel as the cue tree's block move).</summary>
+    private void MoveSelectedPlaylistItems(int delta)
     {
-        if (SelectedPlaylistItem is null) return false;
-        var idx = PlaylistItems.IndexOf(SelectedPlaylistItem);
-        return idx >= 0 && idx < PlaylistItems.Count - 1;
+        var targets = EffectivePlaylistSelection().Where(PlaylistItems.Contains).ToList();
+        if (targets.Count == 0) return;
+        var primary = SelectedPlaylistItem;
+
+        if (delta < 0)
+        {
+            var blockedTop = 0;
+            foreach (var item in targets.OrderBy(PlaylistItems.IndexOf))
+            {
+                var i = PlaylistItems.IndexOf(item);
+                if (i <= blockedTop)
+                {
+                    blockedTop = i + 1;
+                    continue;
+                }
+                PlaylistItems.Move(i, i - 1);
+            }
+        }
+        else
+        {
+            var blockedBottom = PlaylistItems.Count - 1;
+            foreach (var item in targets.OrderByDescending(PlaylistItems.IndexOf))
+            {
+                var i = PlaylistItems.IndexOf(item);
+                if (i >= blockedBottom)
+                {
+                    blockedBottom = i - 1;
+                    continue;
+                }
+                PlaylistItems.Move(i, i + 1);
+            }
+        }
+
+        SelectedPlaylistItem = primary;
     }
 
     public void MovePlaylistItem(PlaylistItem item, int targetIndex)

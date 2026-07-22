@@ -13,7 +13,7 @@ namespace S.Media.Core.Video;
 /// the GL stack still binds a consumer <c>ID3D11Device</c> (negotiated borrow, SDL interop host, or lazy
 /// creation from a decoded COM-backed frame) to call <c>OpenSharedResource</c> on those handles. Full
 /// “zero COM on the descriptor” including removing that consumer-device dependency is **PO-01**
-/// (<c>Doc/Todo.md</c>).
+///.
 /// </remarks>
 public static class HardwareVideoWin32Nv12
 {

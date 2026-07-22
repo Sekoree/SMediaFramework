@@ -196,6 +196,9 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
         PostRequestNextFrame();
     }
 
+    // Cached so the per-submitted-frame dispatcher post does not allocate a fresh closure each time.
+    private Action? _requestNextFrameRendering;
+
     private void PostRequestNextFrame()
     {
         if (_sinkDisposed)
@@ -204,7 +207,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
         if (d.CheckAccess())
             RequestNextFrameRendering();
         else
-            d.Post(() => RequestNextFrameRendering(), DispatcherPriority.Render);
+            d.Post(_requestNextFrameRendering ??= RequestNextFrameRendering, DispatcherPriority.Render);
     }
 
     protected override void OnOpenGlInit(GlInterface gl)

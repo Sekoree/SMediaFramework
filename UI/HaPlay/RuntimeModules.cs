@@ -12,9 +12,13 @@ internal static class RuntimeModules
     private static readonly Lazy<RuntimeModuleStatus> NDI = new(ProbeNDI, LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<RuntimeModuleStatus> MIDI = new(ProbeMIDI, LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<RuntimeModuleStatus> PortAudio = new(ProbePortAudio, LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly Lazy<RuntimeModuleStatus> ProjectM = new(ProbeProjectM, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static bool IsNDIAvailable => NDI.Value.IsAvailable;
     public static string? NDIUnavailableReason => NDI.Value.IsAvailable ? null : NDI.Value.Detail;
+
+    public static bool IsProjectMAvailable => ProjectM.Value.IsAvailable;
+    public static string? ProjectMUnavailableReason => ProjectM.Value.IsAvailable ? null : ProjectM.Value.Detail;
 
     public static bool IsMIDIAvailable => MIDI.Value.IsAvailable;
     public static string? MIDIUnavailableReason => MIDI.Value.IsAvailable ? null : MIDI.Value.Detail;
@@ -58,6 +62,15 @@ internal static class RuntimeModules
         {
             return new RuntimeModuleStatus(false, $"PortAudio runtime unavailable: {ex.Message}");
         }
+    }
+
+    private static RuntimeModuleStatus ProbeProjectM()
+    {
+        // ProjectMRuntime probes lazily and never throws (graceful degradation like NDI): no native
+        // libprojectM-4 ⇒ the visualizer toggle greys out with the reason.
+        return S.Media.Visualizer.ProjectM.ProjectMModule.IsAvailable
+            ? new RuntimeModuleStatus(true, $"projectM {S.Media.Visualizer.ProjectM.ProjectMModule.Version}")
+            : new RuntimeModuleStatus(false, S.Media.Visualizer.ProjectM.ProjectMModule.UnavailableReason);
     }
 
     private static RuntimeModuleStatus ProbeMIDI()

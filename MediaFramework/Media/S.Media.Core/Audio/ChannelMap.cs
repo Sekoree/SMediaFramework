@@ -144,79 +144,7 @@ public readonly partial struct ChannelMap : IEquatable<ChannelMap>
         if (dst.Length < samplesPerChannel * outChannels)
             throw new ArgumentException("dst is shorter than samplesPerChannel * OutputChannels", nameof(dst));
 
-        if (TryAccumulateStereoFullSilenceStereoInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoIdentityInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateWideSourceStereoConsecutivePairInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateWideSourceSingleChannelDupStereoInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoDupSingleChannelInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoToMonoSingleOutputInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateWideSourceMonoSingleOutputInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoSilenceOrZeroDupInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateMonoSilenceOrZeroDupInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateMonoDupStereoInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateMonoDupNInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoDuplexWideInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoDuplexGroupedInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoDuplexGroupedSwappedInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoDuplexWideSwappedInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoToNInterleavedSwapped(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulateStereoToNInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulatePackedIdentityInterleaved(src, srcChannels, dst, outChannels,
-                this, samplesPerChannel, uniformGain: 1f))
-            return;
-
-        if (TryAccumulatePackedPermutationInterleaved(src, srcChannels, dst, outChannels,
+        if (TryAccumulateAnyInterleaved(src, srcChannels, dst, outChannels,
                 this, samplesPerChannel, uniformGain: 1f))
             return;
 
@@ -231,6 +159,43 @@ public readonly partial struct ChannelMap : IEquatable<ChannelMap>
                 if (ic >= 0) dst[dstBase + oc] += src[srcBase + ic];
             }
         }
+    }
+
+    /// <summary>
+    /// The single, ordered SIMD fast-path chain shared by <see cref="ApplyAdditive"/> (gain 1) and the
+    /// router's uniform-gain mix (<c>AudioRouter.ApplyRoute</c>). Returns <c>true</c> when a fast path
+    /// accumulated <paramref name="src"/> × <paramref name="uniformGain"/> into <paramref name="dst"/>;
+    /// <c>false</c> means the caller must run its scalar fallback. Keeping the chain in ONE place
+    /// guarantees the two call sites can't drift (they had: six shapes were SIMD at gain 1.0 but
+    /// scalar at any other uniform gain) and each mix probes the chain at most once.
+    /// </summary>
+    /// <remarks>Callers validate buffer sizes; the probes only inspect map shape. Every probe honors
+    /// an arbitrary <paramref name="uniformGain"/> (several bail to scalar on exactly 0, which callers
+    /// already short-circuit).</remarks>
+    internal static bool TryAccumulateAnyInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        return TryAccumulateStereoFullSilenceStereoInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoIdentityInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateWideSourceStereoConsecutivePairInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateWideSourceSingleChannelDupStereoInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoDupSingleChannelInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoToMonoSingleOutputInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateWideSourceMonoSingleOutputInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoSilenceOrZeroDupInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateMonoSilenceOrZeroDupInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateMonoDupStereoInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateMonoDupNInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoDuplexWideInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoDuplexGroupedInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoDuplexGroupedSwappedInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoDuplexWideSwappedInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoToNInterleavedSwapped(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulateStereoToNInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulatePackedIdentityInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain)
+            || TryAccumulatePackedPermutationInterleaved(src, srcChannels, dst, dstChannels, map, samplesPerChannel, uniformGain);
     }
 
     // --- helpers ----------------------------------------------------------

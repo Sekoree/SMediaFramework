@@ -104,8 +104,17 @@ public partial class MainViewModel : ViewModelBase
             line => Players.Any(p => p.IsActivelyPlayingThroughLine(line));
         OutputManagement.ActivePlayersProbe = () => Players;
 
+        // I/O Debug page: same probe family as the health poll, plus the cue session via its coordinator.
+        PipelineStats = new PipelineStatsViewModel
+        {
+            ActivePlayersProbe = () => Players,
+            CueSessionProbe = () => _cueShow.PipelineStatsSession,
+        };
+        PipelineStats.Start();
+
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
+        CuePlayer.Hotkeys = _appSettings.CueHotkeys.Copy();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
         // Appearance (§8.6) - load saved values and apply them immediately. The OnXChanged hooks would
         // re-save on first set; seed via backing fields so we don't fire that pointlessly.
@@ -128,6 +137,7 @@ public partial class MainViewModel : ViewModelBase
         SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == lastWorkspaceId)
                             ?? WorkspaceItem.Players;
         ToastCenter.Sink = OnToastPosted;
+        ToastCenter.ActionSink = OnActionToastPosted;
 
         // Remote API (per-machine setting) - seed via backing fields so the OnXChanged hooks don't
         // re-save during construction, then bring the listener up if it was left enabled.
@@ -198,6 +208,9 @@ public partial class MainViewModel : ViewModelBase
         _endpointHealth.Dispose();
         _remoteApi.Dispose();
         _cueShow.ShutdownCleanup();
+        // Finalize armed file recordings LAST-ish but before the media host teardown: flushes encoders
+        // and writes container trailers so an exit mid-record never leaves a truncated file.
+        OutputManagement.FinishAllRecordingsForShutdown();
     }
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
@@ -243,6 +256,12 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Degradation note (e.g. Windows loopback fallback) or bind error; null when clean.</summary>
     public string? RestApiStatusNote => _remoteApi.StatusNote;
 
+    /// <summary>True when the API is reachable from the network with NO token - the deliberate
+    /// zero-friction Companion mode. It stays supported, but the state must be unmistakable in the
+    /// UI (review P2-7): this drives the prominent trusted-network warning in the Project card.</summary>
+    public bool RestApiOpenLanActive =>
+        RestApiEnabled && RestApiAllowLan && string.IsNullOrEmpty(RestApiAccessToken);
+
     public string RestApiSecurityStatus =>
         (RestApiAllowLan ? Strings.RemoteApiSecurityLan : Strings.RemoteApiSecurityLoopback)
         + " "
@@ -278,29 +297,51 @@ public partial class MainViewModel : ViewModelBase
     partial void OnRestApiEnabledChanged(bool value)
     {
         _appSettings.RestApiEnabled = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
 
     partial void OnRestApiPortChanged(int value)
     {
         _appSettings.RestApiPort = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
 
     partial void OnRestApiAllowLanChanged(bool value)
     {
         _appSettings.RestApiAllowLan = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
+
+    /// <summary>Persists ONLY this view-model's owned settings fields via the merge-safe write path
+    /// (review H5): serializing the long-lived `_appSettings` snapshot clobbered fields other writers
+    /// (visualizer dialog, playlist toggles, dialog sizes) had saved since startup.</summary>
+    private void SaveOwnedAppSettings() => AppSettings.Update(s =>
+    {
+        s.RestApiEnabled = _appSettings.RestApiEnabled;
+        s.RestApiPort = _appSettings.RestApiPort;
+        s.RestApiAllowLan = _appSettings.RestApiAllowLan;
+        s.RestApiAccessToken = _appSettings.RestApiAccessToken;
+        s.SidebarCollapsed = _appSettings.SidebarCollapsed;
+        s.LastSelectedWorkspace = _appSettings.LastSelectedWorkspace;
+        s.MainWindow = _appSettings.MainWindow;
+        s.BaseTheme = _appSettings.BaseTheme;
+        s.Theme = _appSettings.Theme;
+        s.Density = _appSettings.Density;
+        s.CueHotkeys = _appSettings.CueHotkeys.Copy();
+    });
 
     private void RestartRestApi()
     {
         _remoteApi.Restart(
             RestApiEnabled, RestApiPort, RestApiAccessToken, RestApiAllowLan,
-            () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control));
+            () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control)
+            {
+                LanBindingEnabled = RestApiAllowLan,
+                TokenConfigured = !string.IsNullOrEmpty(RestApiAccessToken),
+            });
 
         // Copy-API-URL menus keep working while the listener is off - the copied URL targets the
         // configured port and becomes live the moment the API is enabled. The token is never embedded in
@@ -309,12 +350,13 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
         OnPropertyChanged(nameof(RestApiStatusNote));
         OnPropertyChanged(nameof(RestApiSecurityStatus));
+        OnPropertyChanged(nameof(RestApiOpenLanActive));
     }
 
     partial void OnRestApiAccessTokenChanged(string value)
     {
         _appSettings.RestApiAccessToken = string.IsNullOrEmpty(value) ? null : value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         RestartRestApi();
     }
 
@@ -361,6 +403,27 @@ public partial class MainViewModel : ViewModelBase
         Toasts.Add(new ToastViewModel(severity, message, t => Toasts.Remove(t))
         {
             DeadlineTicks = Environment.TickCount64 + (long)ToastLifetime.TotalMilliseconds,
+        });
+
+        _toastSweepTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, SweepExpiredToasts);
+        _toastSweepTimer.Start();
+    }
+
+    /// <summary>Action-carrying toast (e.g. "Removed 3 cues - Undo"). No dedup-refresh: each
+    /// action is a distinct one-shot, and the longer deadline gives the operator time to react.</summary>
+    private void OnActionToastPosted(string message, string actionLabel, Action action)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => OnActionToastPosted(message, actionLabel, action));
+            return;
+        }
+
+        while (Toasts.Count >= MaxVisibleToasts)
+            Toasts.RemoveAt(0);
+        Toasts.Add(new ToastViewModel(ToastSeverity.Info, message, t => Toasts.Remove(t), actionLabel, action)
+        {
+            DeadlineTicks = Environment.TickCount64 + 2 * (long)ToastLifetime.TotalMilliseconds,
         });
 
         _toastSweepTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, SweepExpiredToasts);
@@ -434,7 +497,7 @@ public partial class MainViewModel : ViewModelBase
     partial void OnSidebarCollapsedChanged(bool value)
     {
         _appSettings.SidebarCollapsed = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
     }
 
     partial void OnSelectedWorkspaceChanged(WorkspaceItem value)
@@ -455,7 +518,7 @@ public partial class MainViewModel : ViewModelBase
             OnPropertyChanged(nameof(LoadedControlWorkspace));
         }
         _appSettings.LastSelectedWorkspace = value.Id;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         if (value == WorkspaceItem.Project)
             RefreshMediaCacheSizes(); // sizes are current by the time the operator sees the section
     }
@@ -473,7 +536,7 @@ public partial class MainViewModel : ViewModelBase
     public void SaveWindowState(WindowStateSnapshot snapshot)
     {
         _appSettings.MainWindow = snapshot;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
     }
 
     [RelayCommand]
@@ -499,7 +562,12 @@ public partial class MainViewModel : ViewModelBase
         var owner = TryGetOwnerWindow();
         if (owner is null)
             return;
-        await new Views.Dialogs.KeyboardShortcutsDialog().ShowDialog(owner);
+        await new Views.Dialogs.KeyboardShortcutsDialog(CuePlayer.Hotkeys, hotkeys =>
+        {
+            CuePlayer.Hotkeys = hotkeys.Copy();
+            _appSettings.CueHotkeys = hotkeys.Copy();
+            SaveOwnedAppSettings();
+        }).ShowDialog(owner);
     }
 
     /// <summary>Ctrl+1..N keyboard handler. Index is 1-based to match the modifier key. (§12.5)</summary>
@@ -511,6 +579,9 @@ public partial class MainViewModel : ViewModelBase
     }
 
     public OutputManagementViewModel OutputManagement { get; }
+
+    /// <summary>The I/O workspace's Debug page (1 Hz pipeline timings across decks + cues).</summary>
+    public PipelineStatsViewModel PipelineStats { get; }
     public CuePlayerViewModel CuePlayer { get; }
     public SoundboardWorkspaceViewModel Soundboard { get; }
     public ControlWorkspaceViewModel Control { get; }
@@ -572,7 +643,7 @@ public partial class MainViewModel : ViewModelBase
     partial void OnBaseThemeChanged(AppBaseTheme value)
     {
         _appSettings.BaseTheme = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         // The variant/density selectors gate on the newly-selected base theme so the user can pre-pick them
         // for the pending style.
         OnPropertyChanged(nameof(IsVariantSelectable));
@@ -583,14 +654,14 @@ public partial class MainViewModel : ViewModelBase
     partial void OnThemeChanged(AppThemeMode value)
     {
         _appSettings.Theme = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         MarkAppearanceChanged();
     }
 
     partial void OnDensityChanged(AppDensityMode value)
     {
         _appSettings.Density = value;
-        _appSettings.Save();
+        SaveOwnedAppSettings();
         MarkAppearanceChanged();
     }
 
@@ -1434,10 +1505,7 @@ public partial class MainViewModel : ViewModelBase
         RebuildProjectMIDIDeviceRows();
 
         if (!Has(ProjectSections.Players))
-        {
-            FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync project-load-no-players");
             return;
-        }
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)
@@ -1453,7 +1521,6 @@ public partial class MainViewModel : ViewModelBase
         for (var i = 0; i < project.Players.Count && i < Players.Count; i++)
             Players[i].ApplyPlayerConfigSnapshot(project.Players[i]);
 
-        FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync project-load");
     }
 
     // ----- Phase B (§7): Project save / load command plumbing --------------------------------
@@ -1508,12 +1575,14 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Content hash of the project as of the last New / Open / Save - the "clean" baseline the
     /// unsaved-changes check compares against. There's no central dirty flag, so this hash IS the flag.</summary>
     private string _savedProjectHash = string.Empty;
+    private bool _isRaisingDirtyState;
+    private bool _notifiedProjectDirty;
 
     /// <summary>Records the current project state as the clean baseline (call after New / Open / Save).</summary>
     private void MarkProjectClean()
     {
         _savedProjectHash = ProjectHash.Of(BuildProjectSnapshot());
-        NotifyDirtyStateChanged();
+        NotifyDirtyStateChanged(knownProjectDirty: false);
     }
 
     private void MarkProjectDirty()
@@ -1522,16 +1591,16 @@ public partial class MainViewModel : ViewModelBase
         NotifyDirtyStateChanged();
     }
 
-    /// <summary>True when the live project differs from the last-saved baseline. Recomputed on demand (it builds
-    /// a snapshot), so evaluate it at decision points like close - do not bind it in a hot UI path.</summary>
-    public bool IsProjectDirty
+    /// <summary>True when the live project differs from the saved/persisted baseline. During a dirty-state
+    /// notification all dependent bindings share the one precomputed value instead of serializing the entire
+    /// project independently for IsProjectDirty, HasUnsavedChanges, and ProjectTitle.</summary>
+    public bool IsProjectDirty => _isRaisingDirtyState ? _notifiedProjectDirty : EvaluateProjectDirty();
+
+    private bool EvaluateProjectDirty()
     {
-        get
-        {
-            var currentHash = ProjectHash.Of(BuildProjectSnapshot());
-            return !string.Equals(_savedProjectHash, currentHash, StringComparison.Ordinal)
-                   && !_projectPersistence.IsPersisted(CurrentProjectPath, currentHash);
-        }
+        var currentHash = ProjectHash.Of(BuildProjectSnapshot());
+        return !string.Equals(_savedProjectHash, currentHash, StringComparison.Ordinal)
+               && !_projectPersistence.IsPersisted(CurrentProjectPath, currentHash);
     }
 
     /// <summary>Whether closing now would lose work: the document is dirty (or control scripts live only in the
@@ -1540,11 +1609,30 @@ public partial class MainViewModel : ViewModelBase
     public bool HasUnsavedChanges =>
         IsProjectDirty || HasUnsavedScratchScripts || Control.IsSelectedScriptDirty;
 
-    private void NotifyDirtyStateChanged()
+    private bool HasUnsavedChangesFor(bool projectDirty) =>
+        projectDirty || HasUnsavedScratchScripts || Control.IsSelectedScriptDirty;
+
+    /// <summary>Recomputes the project hash once and shares it across all synchronous binding evaluations.
+    /// Returns that project-only dirty value so decision points can avoid immediately hashing a second time.</summary>
+    private bool NotifyDirtyStateChanged(bool? knownProjectDirty = null)
     {
-        OnPropertyChanged(nameof(IsProjectDirty));
-        OnPropertyChanged(nameof(HasUnsavedChanges));
-        OnPropertyChanged(nameof(ProjectTitle));
+        var previousRaising = _isRaisingDirtyState;
+        var previousValue = _notifiedProjectDirty;
+        _notifiedProjectDirty = knownProjectDirty ?? EvaluateProjectDirty();
+        _isRaisingDirtyState = true;
+        try
+        {
+            OnPropertyChanged(nameof(IsProjectDirty));
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            OnPropertyChanged(nameof(ProjectTitle));
+            return _notifiedProjectDirty;
+        }
+        finally
+        {
+            _isRaisingDirtyState = previousRaising;
+            if (previousRaising)
+                _notifiedProjectDirty = previousValue;
+        }
     }
 
     public string ProjectTitle =>

@@ -14,12 +14,38 @@
   <!-- DOCS-02: only the reusable framework libraries under MediaFramework/ publish as NuGet packages (the
        chosen per-project model). Everything else is forced non-packable so `dotnet pack` never emits
        accidental packages: the UI app + its VM/view library (UI/), the smoke tools + launcher (Exe/WinExe),
-       and test projects. External/ carries its own Directory.Build.props and is unaffected by this file. -->
+       test projects, and External/ (whose Classic.Avalonia projects pack on build with their own metadata).
+       The check is anchored to THIS repo's MediaFramework/ subtree: a bare substring
+       Contains('MediaFramework') matched EVERY project when the repo was checked out into a directory whose
+       own path contains "MediaFramework" (CI's .../SMediaFramework/...), pulling External/ into the packable
+       set and failing its build-time pack against the README gate below. -->
   <PropertyGroup>
-    <IsFrameworkLibrary Condition="'$(OutputType)' != 'Exe' and '$(OutputType)' != 'WinExe' and $(MSBuildProjectDirectory.Contains('MediaFramework'))">true</IsFrameworkLibrary>
+    <RepoMediaFrameworkDir>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', 'MediaFramework'))</RepoMediaFrameworkDir>
+    <IsFrameworkLibrary Condition="'$(OutputType)' != 'Exe' and '$(OutputType)' != 'WinExe' and $(MSBuildProjectDirectory.StartsWith('$(RepoMediaFrameworkDir)'))">true</IsFrameworkLibrary>
   </PropertyGroup>
   <PropertyGroup Condition="'$(IsFrameworkLibrary)' != 'true'">
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+
+  <!-- Review P2-5: every published package carries its README (shown on nuget.org) and the XML
+       documentation already written on the public types (IntelliSense). CS1591 (member missing an XML
+       comment) stays a non-error: the docs requirement is per-package README + existing type docs, not
+       a hard comment-on-everything rule. -->
+  <PropertyGroup Condition="'$(IsFrameworkLibrary)' == 'true'">
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IsFrameworkLibrary)' == 'true' and Exists('$(MSBuildProjectDirectory)/README.md')">
+    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <!-- Pack gate (review P2-5): a packable project without a README fails `dotnet pack` instead of
+       emitting an undocumented package with a warning. -->
+  <Target Name="RequirePackageReadme" BeforeTargets="GenerateNuspec"
+          Condition="'$(IsPackable)' != 'false'">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)/README.md')"
+           Text="Packable project $(MSBuildProjectName) has no README.md next to its csproj - per-package documentation is required (review P2-5)." />
+  </Target>
 
 </Project>

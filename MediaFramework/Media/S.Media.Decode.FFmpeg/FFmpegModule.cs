@@ -23,6 +23,8 @@ public sealed class FFmpegModule : IMediaModule
             .SetCpuConverterFactory(static () => new VideoCpuFrameConverter())
             .SetResamplerFactory(static (inner, targetRate) =>
                 ResamplingAudioSource.Create(inner, targetRate, disposeInnerWhenDisposed: false))
+            .SetResamplingOutputFactory(static (inner, routerFormat) =>
+                ResamplingAudioOutput.Wrap(inner, routerFormat))
             .SetAdaptiveRateOutputFactory(static (inner, bias, maxDeltaHz, biasSource) =>
                 new AdaptiveRateAudioOutput(inner, bias, maxDeltaHz, biasSource))
             .SetDeinterlacerFactory(static input =>

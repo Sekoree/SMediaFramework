@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using S.Media.NativeInterop;
 
 namespace NDILib.Runtime;
 
@@ -42,40 +43,42 @@ public static class NDILibraryResolver
         if (!string.Equals(libraryName, NDILibraryNames.Default, StringComparison.Ordinal))
             return nint.Zero;
 
-        // On Windows the NDI installer sets NDI_RUNTIME_DIR_V6 to the install directory.
-        // Probe that path first so the installed SDK is preferred over PATH.
-        if (OperatingSystem.IsWindows())
+        var candidates = GetCandidates();
+        var installedPaths = GetInstalledRuntimePaths(candidates);
+        if (SystemFirstNativeLibraryResolver.TryLoad(
+                assembly,
+                searchPath,
+                candidates,
+                installedPaths,
+                SystemFirstNativeLibraryResolver.AppLocalPaths(candidates),
+                out var handle,
+                out var loadedCandidate))
         {
-            var runtimeDir = Environment.GetEnvironmentVariable("NDI_RUNTIME_DIR_V6");
-            if (!string.IsNullOrEmpty(runtimeDir))
-            {
-                foreach (var candidate in NDILibraryNames.WindowsCandidates)
-                {
-                    var fullPath = Path.Combine(runtimeDir, candidate + ".dll");
-                    if (NativeLibrary.TryLoad(fullPath, out var hdl))
-                    {
-                        _logger.LogDebug("Loaded NDI native library from NDI_RUNTIME_DIR_V6: '{Path}'.", fullPath);
-                        return hdl;
-                    }
-                }
-            }
-        }
-
-        foreach (var candidate in GetCandidates())
-        {
-            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out var handle))
-            {
-                _logger.LogDebug("Loaded NDI native library candidate '{Candidate}'.", candidate);
-                return handle;
-            }
+            _logger.LogDebug("Loaded NDI native library candidate '{Candidate}'.", loadedCandidate);
+            return handle;
         }
 
         _logger.LogDebug("Unable to load NDI native library using NDILib fallback candidates.");
         return nint.Zero;
     }
 
-    private static string[] GetCandidates()
+    internal static string[] GetCandidates()
         => OperatingSystem.IsWindows()
             ? NDILibraryNames.WindowsCandidates
-            : NDILibraryNames.LinuxCandidates;
+            : OperatingSystem.IsMacOS()
+                ? NDILibraryNames.MacCandidates
+                : OperatingSystem.IsAndroid()
+                    ? NDILibraryNames.AndroidCandidates
+                    : NDILibraryNames.LinuxCandidates;
+
+    private static IEnumerable<string> GetInstalledRuntimePaths(IReadOnlyList<string> candidates)
+    {
+        if (!OperatingSystem.IsWindows())
+            yield break;
+        var runtimeDir = Environment.GetEnvironmentVariable("NDI_RUNTIME_DIR_V6");
+        if (string.IsNullOrWhiteSpace(runtimeDir))
+            yield break;
+        foreach (var candidate in candidates)
+            yield return Path.Combine(runtimeDir, SystemFirstNativeLibraryResolver.PlatformFileName(candidate));
+    }
 }

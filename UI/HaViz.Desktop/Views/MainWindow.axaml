@@ -1,0 +1,103 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaViz.Desktop.ViewModels"
+        x:Class="HaViz.Desktop.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="HaViz — visualizer → NDI"
+        Width="600" Height="760" CanResize="True">
+    <ScrollViewer>
+        <StackPanel Margin="14" Spacing="10">
+            <TextBlock Text="NDI output" FontWeight="Bold" />
+            <Grid ColumnDefinitions="Auto,8,*,12,Auto,8,110" RowDefinitions="Auto,8,Auto,8,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="NDI name" VerticalAlignment="Center" />
+                <TextBox Grid.Row="0" Grid.Column="2" Text="{Binding NdiName}" IsEnabled="{Binding !IsEngineRunning}" />
+                <TextBlock Grid.Row="0" Grid.Column="4" Text="FPS" VerticalAlignment="Center" />
+                <NumericUpDown Grid.Row="0" Grid.Column="6" Minimum="10" Maximum="120" FormatString="0"
+                               Value="{Binding OutputFps}" IsEnabled="{Binding !IsEngineRunning}" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Size" VerticalAlignment="Center" />
+                <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <NumericUpDown Minimum="160" Maximum="4096" Increment="16" FormatString="0" Width="130"
+                                   Value="{Binding OutputWidth}" IsEnabled="{Binding !IsEngineRunning}" />
+                    <TextBlock Text="×" VerticalAlignment="Center" />
+                    <NumericUpDown Minimum="120" Maximum="2160" Increment="16" FormatString="0" Width="130"
+                                   Value="{Binding OutputHeight}" IsEnabled="{Binding !IsEngineRunning}" />
+                </StackPanel>
+                <TextBlock Grid.Row="2" Grid.Column="4" Text="Preset s" VerticalAlignment="Center"
+                           ToolTip.Tip="Seconds per preset before rotating" />
+                <NumericUpDown Grid.Row="2" Grid.Column="6" Minimum="5" Maximum="600" FormatString="0"
+                               Value="{Binding PresetDurationSeconds}" IsEnabled="{Binding !IsEngineRunning}" />
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Presets" VerticalAlignment="Center" />
+                <TextBox Grid.Row="4" Grid.Column="2" Text="{Binding PresetDirectory}"
+                         IsEnabled="{Binding !IsEngineRunning}" />
+                <Button Grid.Row="4" Grid.Column="4" Grid.ColumnSpan="3" Content="Browse…"
+                        Click="OnBrowsePresets" IsEnabled="{Binding !IsEngineRunning}" HorizontalAlignment="Stretch" />
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="14">
+                <CheckBox Content="Shuffle presets" IsChecked="{Binding ShufflePresets}"
+                          IsEnabled="{Binding !IsEngineRunning}" />
+                <TextBlock Text="Beat sensitivity" VerticalAlignment="Center" />
+                <Slider Width="140" Minimum="0" Maximum="3" Value="{Binding BeatSensitivity}"
+                        IsEnabled="{Binding !IsEngineRunning}" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <ToggleButton Content="Start / Stop" IsChecked="{Binding IsEngineRunning, Mode=OneWay}"
+                              Command="{Binding ToggleEngineCommand}" />
+                <Button Content="Next preset" Command="{Binding NextPresetCommand}"
+                        IsEnabled="{Binding IsEngineRunning}" />
+            </StackPanel>
+            <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding PresetText}" TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
+
+            <Separator />
+            <TextBlock Text="Player" FontWeight="Bold" />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button Content="Pick music folder…" Click="OnBrowseMusic" />
+                <TextBlock Text="{Binding PlaylistSummary}" VerticalAlignment="Center" Opacity="0.75" />
+            </StackPanel>
+            <TextBlock Text="{Binding CurrentTrackName}" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="⏮" Command="{Binding PreviousTrackCommand}" />
+                <Button Content="Play / Pause" Command="{Binding PlayPauseCommand}" />
+                <Button Content="⏭" Command="{Binding NextTrackCommand}" />
+                <Button Content="Stop" Command="{Binding StopPlaybackCommand}" />
+                <Button Content="{Binding LoopModeLabel}" Command="{Binding CycleLoopModeCommand}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Output" VerticalAlignment="Center" />
+                <ComboBox Width="280" ItemsSource="{Binding OutputDevices}"
+                          SelectedItem="{Binding SelectedOutputDevice}"
+                          ToolTip.Tip="Applies from the next track" />
+                <CheckBox Content="Play on device" IsChecked="{Binding PlayOnDevice}"
+                          ToolTip.Tip="Off: audio goes only to the visualizer and NDI out — the local device stays silent" />
+            </StackPanel>
+            <TextBlock Text="{Binding PlayerStatus}" TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
+
+            <Separator />
+            <TextBlock Text="Line-in capture" FontWeight="Bold" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Input" VerticalAlignment="Center" />
+                <ComboBox Width="280" ItemsSource="{Binding InputDevices}"
+                          SelectedItem="{Binding SelectedInputDevice}"
+                          IsEnabled="{Binding !IsCapturing}" />
+                <ToggleButton Content="Capture" IsChecked="{Binding IsCapturing, Mode=OneWay}"
+                              Command="{Binding ToggleCaptureCommand}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Channels" VerticalAlignment="Center" />
+                <ItemsControl ItemsSource="{Binding InputChannels}" IsEnabled="{Binding !IsCapturing}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ChannelChoice">
+                            <CheckBox Margin="0,0,8,0" Content="{Binding Label}" IsChecked="{Binding IsSelected}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+            <TextBlock Text="{Binding CaptureStatus}" TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
+        </StackPanel>
+    </ScrollViewer>
+</Window>

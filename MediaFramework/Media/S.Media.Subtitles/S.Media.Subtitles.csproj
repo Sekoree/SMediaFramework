@@ -10,4 +10,8 @@
         <ProjectReference Include="../../Subtitles/LibAssLib/LibAssLib.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>libass subtitle rendering for MFPlayer (ASS/SSA and converted text subtitles). Requires libass 0.17.5+ at runtime.</Description>
+    </PropertyGroup>
 </Project>

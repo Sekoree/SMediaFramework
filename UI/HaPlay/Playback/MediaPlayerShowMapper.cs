@@ -45,7 +45,8 @@ public static class MediaPlayerShowMapper
         int? audioStreamIndex = null,
         int canvasFrameRateNum = 30,
         int canvasFrameRateDen = 1,
-        string videoFit = DefaultVideoFit)
+        string videoFit = DefaultVideoFit,
+        bool includeCanvas = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
 
@@ -71,14 +72,20 @@ public static class MediaPlayerShowMapper
                     AudioRoutes = audioRoutes ?? [],
                     Subtitles = MapSubtitles(subtitles, hasVideo),
                     // Deck "Loop" toggle at open time - the framework restarts the clip seamlessly at EOF.
-                    // A loop toggled ON mid-play is honored by the deck's end-of-track poll instead (replay).
+                    // A loop toggled ON mid-play is honored by the deck's end-of-track handler instead (replay).
                     Loop = loop,
+                    // Review M4: the session raises ClipNaturallyEnded (never for loops/operator stops), so
+                    // deck advancement is EVENT-driven from the session dispatcher - precise and independent
+                    // of the 250ms UI poll, which stays only as a fallback end detector.
+                    NotifyNaturalEnd = true,
                     // Full-canvas placement whose ONLY departure from the framework default (Cover) is the fit:
                     // the deck letterboxes rather than crops. Null would fall back to Cover (the reported bug).
                     Placement = hasVideo ? new ShowVideoPlacement(Fit: videoFit) : null,
                 },
             ],
-            Compositions = hasVideo
+            // includeCanvas: a canvas WITHOUT a video clip - the visualizer path for audio-only media
+            // (the clip does not bind it; a held surface layer becomes its content).
+            Compositions = hasVideo || includeCanvas
                 ? [new ShowComposition(
                     PlayerCompositionId, "Player", canvasWidth, canvasHeight,
                     canvasFrameRateNum > 0 ? canvasFrameRateNum : 30,

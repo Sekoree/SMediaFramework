@@ -1,4 +1,5 @@
 using System.Buffers;
+using S.Media.Core.Video.Effects;
 
 namespace S.Media.Compositor;
 
@@ -36,6 +37,11 @@ public sealed class CpuVideoCompositor : IVideoCompositor
     private int _outputByteCount;
     private bool _configured;
     private bool _disposed;
+
+    // Reusable scratch for the layer's resolved CPU effect kernels. Composite (and therefore
+    // DrawLayer) is single-threaded per compositor and the kernels never escape the call, so this
+    // avoids a List + ToArray allocation per layer per frame on the effects path.
+    private IVideoLayerCpuEffect[] _fxScratch = [];
 
     public CpuVideoCompositor(VideoFormat output, CompositorSamplingMode samplingMode = CompositorSamplingMode.Nearest)
     {
@@ -80,6 +86,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         // Clear to transparent black so empty regions stay see-through for downstream consumers.
         Array.Clear(buffer, 0, _outputByteCount);
 
+        var anyLayerDrawn = false;
         for (var i = 0; i < layersBackToFront.Count; i++)
         {
             var layer = layersBackToFront[i];
@@ -88,7 +95,8 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                     $"CpuVideoCompositor layer {i}: only BGRA32 accepted, got {layer.Frame.Format.PixelFormat}.");
             var opacity = Math.Clamp(layer.Opacity, 0f, 1f);
             if (opacity <= 0f) continue;
-            DrawLayer(buffer, layer, opacity);
+            DrawLayer(buffer, layer, opacity, dstUntouched: !anyLayerDrawn);
+            anyLayerDrawn = true;
         }
 
         var plane = new ReadOnlyMemory<byte>(buffer, 0, _outputByteCount);
@@ -102,7 +110,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
             metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied));
     }
 
-    private void DrawLayer(byte[] dst, CompositorLayer layer, float opacity)
+    private void DrawLayer(byte[] dst, CompositorLayer layer, float opacity, bool dstUntouched)
     {
         var src = layer.Frame;
         var srcStride = src.Strides[0];
@@ -137,8 +145,60 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         try { inv = layer.Transform.Invert(); }
         catch (InvalidOperationException) { return; }
 
+        // Layer-effect chain, CPU fallback: run each effect's scalar kernel per pixel. GPU-only
+        // effects (no CPU kernel) are skipped by contract - this backend degrades to pass-through
+        // for them instead of failing the composite.
+        var fxCount = 0;
+        if (layer.Effects is { Count: > 0 } fx)
+        {
+            if (_fxScratch.Length < fx.Count)
+                _fxScratch = new IVideoLayerCpuEffect[fx.Count];
+            foreach (var effect in fx)
+            {
+                if (effect.CpuKernel is { } kernel)
+                    _fxScratch[fxCount++] = kernel;
+            }
+        }
+
+        var fxKernels = fxCount > 0 ? _fxScratch.AsSpan(0, fxCount) : default;
+
         var srcSpan = srcPlane.Span;
         var mode = SamplingMode;
+
+        // Fast path A - pure integer translate + Source + full opacity + premultiplied source:
+        // the layer is a rectangular blit, one row CopyTo per line (the dominant single-layer
+        // scaler/passthrough case; ~40x faster than the generic per-pixel loop). Gated to the
+        // FIRST drawn layer: the generic loop skips zero-alpha source pixels even under Source
+        // blend (destination shows through), while a row copy would overwrite them - identical
+        // over the cleared canvas, a punch-through divergence above earlier layers.
+        if (dstUntouched
+            && fxKernels.IsEmpty
+            && mode == CompositorSamplingMode.Nearest
+            && layer.BlendMode == BlendMode.Source
+            && opacity >= 1f
+            && alphaMode == VideoAlphaMode.Premultiplied
+            && IsIntegerTranslate(layer.Transform, out var translateX, out var translateY))
+        {
+            BlitIntegerTranslate(dst, srcSpan, srcStride, srcW, srcH,
+                translateX, translateY, cropX0, cropY0, cropX1, cropY1, minX, minY, maxX, maxY);
+            return;
+        }
+
+        // Fast path B - nearest sampling without effects: the inverse affine is evaluated once per
+        // row and stepped per pixel (removing 4 muls + 2 adds per pixel), and the crop gate
+        // collapses to a per-row dx interval (each crop condition is linear in dx) instead of a
+        // per-pixel test. Boundary pixels are nudged with the exact per-pixel predicate, so the
+        // drawn REGION matches the generic loop exactly; within it, the incremental sx/sy
+        // accumulation can differ from direct evaluation by one ulp, which may pick the adjacent
+        // source texel at exact texel boundaries on very long rows - visually equivalent, not
+        // guaranteed byte-identical.
+        if (fxKernels.IsEmpty && mode == CompositorSamplingMode.Nearest)
+        {
+            DrawLayerNearestFast(dst, layer, opacity, alphaMode, inv, srcSpan, srcStride, srcW, srcH,
+                cropX0, cropY0, cropX1, cropY1, minX, minY, maxX, maxY);
+            return;
+        }
+
         for (var dy = minY; dy < maxY; dy++)
         {
             // Sample at pixel centers: dx + 0.5, dy + 0.5.
@@ -178,7 +238,14 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                     }
                 }
 
-                NormalizeForPremultipliedBlend(b, g, r, a, opacity, alphaMode,
+                var pixelAlphaMode = alphaMode;
+                if (!fxKernels.IsEmpty)
+                {
+                    ApplyCpuEffects(fxKernels, ref b, ref g, ref r, ref a, alphaMode);
+                    pixelAlphaMode = VideoAlphaMode.Straight;
+                }
+
+                NormalizeForPremultipliedBlend(b, g, r, a, opacity, pixelAlphaMode,
                     out var premulB, out var premulG, out var premulR, out var effA,
                     out var multiplyB, out var multiplyG, out var multiplyR);
                 if (effA <= 0) continue;
@@ -232,6 +299,201 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                 }
             }
         }
+    }
+
+    private static bool IsIntegerTranslate(LayerTransform2D t, out int tx, out int ty)
+    {
+        tx = 0;
+        ty = 0;
+        if (t.M11 != 1f || t.M12 != 0f || t.M21 != 0f || t.M22 != 1f)
+            return false;
+        var fx = MathF.Floor(t.Tx);
+        var fy = MathF.Floor(t.Ty);
+        if (fx != t.Tx || fy != t.Ty)
+            return false;
+        tx = (int)fx;
+        ty = (int)fy;
+        return true;
+    }
+
+    private void BlitIntegerTranslate(
+        byte[] dst, ReadOnlySpan<byte> src, int srcStride, int srcW, int srcH,
+        int tx, int ty, float cropX0, float cropY0, float cropX1, float cropY1,
+        int minX, int minY, int maxX, int maxY)
+    {
+        // Pixel dx samples sxf = dx + 0.5 - tx, inside the crop iff dx >= cropX0 + tx - 0.5 and
+        // dx < cropX1 + tx - 0.5 (strict, matching the generic gate). Same for rows.
+        var dxStart = Math.Max(minX, (int)MathF.Ceiling(cropX0 + tx - 0.5f));
+        var dxEnd = Math.Min(maxX, (int)MathF.Ceiling(cropX1 + tx - 0.5f));
+        var dyStart = Math.Max(minY, (int)MathF.Ceiling(cropY0 + ty - 0.5f));
+        var dyEnd = Math.Min(maxY, (int)MathF.Ceiling(cropY1 + ty - 0.5f));
+        // Clamp to the source rectangle (crop within [0,1] already implies it; belt and braces).
+        dxStart = Math.Max(dxStart, tx);
+        dxEnd = Math.Min(dxEnd, tx + srcW);
+        dyStart = Math.Max(dyStart, ty);
+        dyEnd = Math.Min(dyEnd, ty + srcH);
+        if (dxStart >= dxEnd || dyStart >= dyEnd)
+            return;
+
+        var rowBytes = (dxEnd - dxStart) * 4;
+        for (var dy = dyStart; dy < dyEnd; dy++)
+        {
+            var srcOffset = (dy - ty) * srcStride + (dxStart - tx) * 4;
+            src.Slice(srcOffset, rowBytes).CopyTo(dst.AsSpan(dy * _outputStride + dxStart * 4, rowBytes));
+        }
+    }
+
+    private void DrawLayerNearestFast(
+        byte[] dst, CompositorLayer layer, float opacity, VideoAlphaMode alphaMode,
+        LayerTransform2D inv, ReadOnlySpan<byte> srcSpan, int srcStride, int srcW, int srcH,
+        float cropX0, float cropY0, float cropX1, float cropY1,
+        int minX, int minY, int maxX, int maxY)
+    {
+        var blend = layer.BlendMode;
+        for (var dy = minY; dy < maxY; dy++)
+        {
+            var dyCenter = dy + 0.5f;
+            var rowOffset = dy * _outputStride;
+
+            // Source coords at the row's first pixel center; per-pixel increments are the inverse
+            // affine's dx-derivatives.
+            var sxBase = inv.M11 * (minX + 0.5f) + inv.M12 * dyCenter + inv.Tx;
+            var syBase = inv.M21 * (minX + 0.5f) + inv.M22 * dyCenter + inv.Ty;
+
+            // Crop gate as a dx interval: sxf/syf are linear in dx. Compute conservatively one
+            // pixel wide, then nudge the ends with the exact predicate so boundary rounding can
+            // never differ from the generic per-pixel gate.
+            var start = minX;
+            var end = maxX;
+            if (!IntersectLinearRange(inv.M11, sxBase, cropX0, cropX1, minX, ref start, ref end)
+                || !IntersectLinearRange(inv.M21, syBase, cropY0, cropY1, minX, ref start, ref end))
+                continue;
+            start = Math.Max(minX, start - 1);
+            end = Math.Min(maxX, end + 1);
+            while (start < end && !InCrop(start)) start++;
+            while (end > start && !InCrop(end - 1)) end--;
+            if (start >= end)
+                continue;
+
+            var sx = sxBase + inv.M11 * (start - minX);
+            var sy = syBase + inv.M21 * (start - minX);
+            for (var dx = start; dx < end; dx++, sx += inv.M11, sy += inv.M21)
+            {
+                var sxi = (int)MathF.Floor(sx);
+                var syi = (int)MathF.Floor(sy);
+                if ((uint)sxi >= (uint)srcW || (uint)syi >= (uint)srcH)
+                    continue;
+                var srcIdx = syi * srcStride + sxi * 4;
+                var b = srcSpan[srcIdx + 0];
+                var g = srcSpan[srcIdx + 1];
+                var r = srcSpan[srcIdx + 2];
+                var a = srcSpan[srcIdx + 3];
+
+                NormalizeForPremultipliedBlend(b, g, r, a, opacity, alphaMode,
+                    out var premulB, out var premulG, out var premulR, out var effA,
+                    out var multiplyB, out var multiplyG, out var multiplyR);
+                if (effA <= 0) continue;
+
+                var dstIdx = rowOffset + dx * 4;
+                switch (blend)
+                {
+                    case BlendMode.Source:
+                        dst[dstIdx + 0] = ToByte(premulB);
+                        dst[dstIdx + 1] = ToByte(premulG);
+                        dst[dstIdx + 2] = ToByte(premulR);
+                        dst[dstIdx + 3] = (byte)effA;
+                        break;
+                    case BlendMode.SourceOver:
+                    {
+                        var oneMinusA = 1f - (effA / 255f);
+                        var dB = dst[dstIdx + 0];
+                        var dG = dst[dstIdx + 1];
+                        var dR = dst[dstIdx + 2];
+                        var dA = dst[dstIdx + 3];
+                        dst[dstIdx + 0] = ToByte(premulB + dB * oneMinusA);
+                        dst[dstIdx + 1] = ToByte(premulG + dG * oneMinusA);
+                        dst[dstIdx + 2] = ToByte(premulR + dR * oneMinusA);
+                        dst[dstIdx + 3] = (byte)Math.Clamp((int)(effA + dA * oneMinusA + 0.5f), 0, 255);
+                        break;
+                    }
+                    case BlendMode.Multiply:
+                    {
+                        var dB = dst[dstIdx + 0];
+                        var dG = dst[dstIdx + 1];
+                        var dR = dst[dstIdx + 2];
+                        var mulB = (multiplyB * dB + 127) / 255;
+                        var mulG = (multiplyG * dG + 127) / 255;
+                        var mulR = (multiplyR * dR + 127) / 255;
+                        var w = effA / 255f;
+                        var oneMinusW = 1f - w;
+                        dst[dstIdx + 0] = (byte)Math.Clamp((int)(mulB * w + dB * oneMinusW + 0.5f), 0, 255);
+                        dst[dstIdx + 1] = (byte)Math.Clamp((int)(mulG * w + dG * oneMinusW + 0.5f), 0, 255);
+                        dst[dstIdx + 2] = (byte)Math.Clamp((int)(mulR * w + dR * oneMinusW + 0.5f), 0, 255);
+                        break;
+                    }
+                    default:
+                        throw new NotSupportedException($"BlendMode {blend} not supported.");
+                }
+            }
+
+            bool InCrop(int dx)
+            {
+                var dxCenter = dx + 0.5f;
+                var (sxf, syf) = inv.Apply(dxCenter, dyCenter);
+                return sxf >= cropX0 && sxf < cropX1 && syf >= cropY0 && syf < cropY1;
+            }
+        }
+    }
+
+    /// <summary>Intersects <c>[start, end)</c> with the dx range where <c>a * (dx - minX) + b</c>
+    /// lies in <c>[lo, hi)</c>. Returns false when the row can't intersect at all.</summary>
+    private static bool IntersectLinearRange(float a, float b, float lo, float hi, int minX, ref int start, ref int end)
+    {
+        if (a == 0f)
+            return b >= lo && b < hi;
+
+        float t0 = (lo - b) / a;
+        float t1 = (hi - b) / a;
+        if (a < 0f)
+            (t0, t1) = (t1, t0);
+        var rangeStart = minX + (int)MathF.Floor(t0);
+        var rangeEnd = minX + (int)MathF.Ceiling(t1);
+        start = Math.Max(start, rangeStart);
+        end = Math.Min(end, rangeEnd);
+        return start < end;
+    }
+
+    /// <summary>Runs the layer's CPU effect kernels on one sampled pixel. Kernels see straight
+    /// alpha in [0, 1] (matching the GPU path, where effects run before premultiply), so the
+    /// sample is converted from its source alpha mode first; the outputs are straight bytes.</summary>
+    private static void ApplyCpuEffects(
+        ReadOnlySpan<IVideoLayerCpuEffect> kernels,
+        ref byte b, ref byte g, ref byte r, ref byte a,
+        VideoAlphaMode alphaMode)
+    {
+        var af = alphaMode == VideoAlphaMode.Opaque ? 1f : a / 255f;
+        float rf, gf, bf;
+        if (alphaMode == VideoAlphaMode.Premultiplied && a > 0 && a < 255)
+        {
+            var inv = 1f / a;
+            rf = Math.Min(1f, r * inv);
+            gf = Math.Min(1f, g * inv);
+            bf = Math.Min(1f, b * inv);
+        }
+        else
+        {
+            rf = r / 255f;
+            gf = g / 255f;
+            bf = b / 255f;
+        }
+
+        foreach (var kernel in kernels)
+            kernel.Apply(ref rf, ref gf, ref bf, ref af);
+
+        r = ToByte(Math.Clamp(rf, 0f, 1f) * 255f);
+        g = ToByte(Math.Clamp(gf, 0f, 1f) * 255f);
+        b = ToByte(Math.Clamp(bf, 0f, 1f) * 255f);
+        a = ToByte(Math.Clamp(af, 0f, 1f) * 255f);
     }
 
     private static VideoAlphaMode ResolveAlphaMode(VideoAlphaMode alphaMode) => alphaMode switch

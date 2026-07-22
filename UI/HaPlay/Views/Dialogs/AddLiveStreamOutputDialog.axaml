@@ -1,0 +1,214 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddLiveStreamOutputDialog"
+        x:DataType="vm:AddLiveStreamOutputDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="580" Height="680"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="500" MinHeight="560">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap"
+                   IsVisible="{Binding ValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
+        <TextBox Text="{Binding DisplayName}" />
+
+        <!-- Destinations first: they are what makes a stream a stream. -->
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StreamPushTargetsLabel}" FontWeight="SemiBold"
+                     VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="{x:Static res:Strings.StreamAddPushTargetButton}"
+                  Command="{Binding AddPushTargetCommand}" />
+        </Grid>
+        <ItemsControl ItemsSource="{Binding PushTargets}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:StreamPushTargetRowViewModel">
+              <Border BorderBrush="#22808080" BorderThickness="1" Padding="8" Margin="0,0,0,6">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="110,8,*,8,Auto">
+                    <ComboBox Grid.Column="0" ItemsSource="{Binding Protocols}"
+                              SelectedValue="{Binding Protocol}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                              HorizontalAlignment="Stretch" />
+                    <TextBox Grid.Column="2" Text="{Binding Url}"
+                             PlaceholderText="{x:Static res:Strings.StreamPushUrlWatermark}" />
+                    <Button Grid.Column="4" Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
+                            Command="{Binding $parent[ItemsControl].((vm:AddLiveStreamOutputDialogViewModel)DataContext).RemovePushTargetCommand}"
+                            CommandParameter="{Binding}" />
+                  </Grid>
+                  <TextBox Text="{Binding StreamKey}" PasswordChar="●"
+                           PlaceholderText="{x:Static res:Strings.StreamPushKeyWatermark}" />
+                  <Grid ColumnDefinitions="Auto,8,140" IsVisible="{Binding IsSrt}">
+                    <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StreamSrtLatencyLabel}"
+                               VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="2" Minimum="20" Maximum="8000" Increment="20"
+                                   FormatString="0" Value="{Binding SrtLatencyMilliseconds}" />
+                  </Grid>
+                  <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                             IsVisible="{Binding IsSrt}"
+                             Text="{x:Static res:Strings.StreamSrtLatencyHint}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                   Text="{x:Static res:Strings.StreamRtmpSingleTrackHint}"
+                   IsVisible="{Binding HasRtmpTarget}" />
+
+        <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Padding="0,8,0,0">
+          <StackPanel Spacing="8">
+            <TextBlock Text="{x:Static res:Strings.StreamLocalServerLabel}" FontWeight="SemiBold" />
+            <CheckBox Content="{x:Static res:Strings.StreamLocalServerEnable}" IsChecked="{Binding LocalServerEnabled}" />
+            <StackPanel Spacing="6" IsVisible="{Binding LocalServerEnabled}">
+              <Grid ColumnDefinitions="Auto,8,140">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StreamLocalServerPortLabel}"
+                           VerticalAlignment="Center" />
+                <NumericUpDown Grid.Column="2" Minimum="1" Maximum="65535" FormatString="0"
+                               Value="{Binding LocalServerPort}" />
+              </Grid>
+              <Grid ColumnDefinitions="Auto,8,*">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StreamLocalServerMountLabel}"
+                           VerticalAlignment="Center" />
+                <TextBox Grid.Column="2" Text="{Binding LocalServerMountName}"
+                         PlaceholderText="{x:Static res:Strings.StreamLocalServerMountWatermark}" />
+              </Grid>
+              <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                         Text="{x:Static res:Strings.StreamLocalServerMountHint}" />
+              <CheckBox Content="{x:Static res:Strings.StreamLocalServerTs}" IsChecked="{Binding LocalServerTs}" />
+              <CheckBox Content="{x:Static res:Strings.StreamLocalServerHls}" IsChecked="{Binding LocalServerHls}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Padding="0,8,0,0">
+          <StackPanel Spacing="8">
+            <TextBlock Text="{x:Static res:Strings.FileOutputModeLabel}" FontWeight="SemiBold" />
+            <ComboBox ItemsSource="{Binding OutputModes}"
+                      SelectedValue="{Binding OutputMode}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                      HorizontalAlignment="Stretch" />
+
+            <StackPanel Spacing="8" IsVisible="{Binding ShowVideoSettings}">
+              <TextBlock Text="{x:Static res:Strings.FileOutputVideoCodecLabel}" FontWeight="SemiBold" />
+              <ComboBox ItemsSource="{Binding VideoCodecs}"
+                        SelectedValue="{Binding VideoCodec}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                        HorizontalAlignment="Stretch" />
+
+              <TextBlock Text="{x:Static res:Strings.FileOutputBitrateLabel}" FontWeight="SemiBold" />
+              <NumericUpDown FormatString="0" Minimum="200" Maximum="60000" Increment="500" Value="{Binding VideoBitrateKbps}" />
+
+              <TextBlock Text="{x:Static res:Strings.FileOutputPresetLabel}" FontWeight="SemiBold" />
+              <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding VideoPreset}" HorizontalAlignment="Stretch" />
+
+              <TextBlock Text="{x:Static res:Strings.StreamOutputResolutionLabel}" FontWeight="SemiBold" />
+              <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*,14,Auto,8,120">
+                <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
+                <NumericUpDown Grid.Column="2" Minimum="2" Maximum="7680" Increment="2" FormatString="0"
+                               Value="{Binding ScaleWidth}" />
+                <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
+                <NumericUpDown Grid.Column="6" Minimum="2" Maximum="4320" Increment="2" FormatString="0"
+                               Value="{Binding ScaleHeight}" />
+                <TextBlock Grid.Column="8" Text="FPS" VerticalAlignment="Center" />
+                <NumericUpDown Grid.Column="10" Minimum="1" Maximum="240" Increment="1" FormatString="0"
+                               MinWidth="120" Value="{Binding Fps}" />
+              </Grid>
+              <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                         Text="{x:Static res:Strings.StreamOutputResolutionHint}" />
+
+              <Expander Header="{x:Static res:Strings.StreamAdvancedVideoHeader}">
+                <StackPanel Spacing="8" Margin="8,8,0,0">
+                  <Button Content="{x:Static res:Strings.StreamApplyLowLatencyPresetButton}"
+                          Command="{Binding ApplyLowLatencyPresetCommand}"
+                          IsEnabled="{Binding SupportsH26xAdvancedOptions}"
+                          HorizontalAlignment="Left" />
+
+                  <TextBlock Text="{x:Static res:Strings.StreamVideoBitrateModeLabel}" FontWeight="SemiBold" />
+                  <ComboBox ItemsSource="{Binding VideoBitrateModes}"
+                            SelectedValue="{Binding VideoBitrateMode}"
+                            SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                            HorizontalAlignment="Stretch" />
+
+                  <Grid ColumnDefinitions="*,12,*">
+                    <StackPanel Grid.Column="0" Spacing="4">
+                      <TextBlock Text="{x:Static res:Strings.StreamKeyframeIntervalLabel}" FontWeight="SemiBold" />
+                      <NumericUpDown Minimum="1" Maximum="10" Increment="1" FormatString="0"
+                                     Value="{Binding KeyframeIntervalSeconds}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="4" IsEnabled="{Binding SupportsH26xAdvancedOptions}">
+                      <TextBlock Text="{x:Static res:Strings.StreamMaximumBFramesLabel}" FontWeight="SemiBold" />
+                      <ComboBox ItemsSource="{Binding MaximumBFrameChoices}"
+                                SelectedValue="{Binding VideoMaximumBFrames}"
+                                SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                                HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Grid>
+
+                  <StackPanel Spacing="4" IsVisible="{Binding IsConstantBitrate}">
+                    <TextBlock Text="{x:Static res:Strings.StreamVbvBufferLabel}" FontWeight="SemiBold" />
+                    <NumericUpDown Minimum="100" Maximum="8000" Increment="100" FormatString="0"
+                                   Value="{Binding VideoVbvBufferMilliseconds}" />
+                  </StackPanel>
+
+                  <CheckBox Content="{x:Static res:Strings.StreamLowLatencyTuneLabel}"
+                            IsChecked="{Binding VideoLowLatencyTune}"
+                            IsEnabled="{Binding SupportsH26xAdvancedOptions}" />
+                  <TextBlock Classes="hint" Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                             Text="{x:Static res:Strings.StreamLowLatencyPlaybackHint}" />
+                </StackPanel>
+              </Expander>
+            </StackPanel>
+
+            <StackPanel Spacing="8" IsVisible="{Binding ShowAudioSettings}">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.FileOutputAudioTracksLabel}" FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="{x:Static res:Strings.FileOutputAddTrackButton}"
+                        Command="{Binding AddAudioLegCommand}" />
+              </Grid>
+              <ItemsControl ItemsSource="{Binding AudioLegs}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:AudioLegRowViewModel">
+                    <Border BorderBrush="#22808080" BorderThickness="1" Padding="8" Margin="0,0,0,6">
+                      <StackPanel Spacing="6">
+                        <Grid ColumnDefinitions="*,8,Auto,8,Auto,8,Auto">
+                          <ComboBox Grid.Column="0" ItemsSource="{Binding $parent[ItemsControl].((vm:AddLiveStreamOutputDialogViewModel)DataContext).AudioCodecs}"
+                                    SelectedValue="{Binding Codec}" SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}"
+                                    HorizontalAlignment="Stretch"
+                                    ToolTip.Tip="{x:Static res:Strings.FileOutputAudioCodecLabel}" />
+                          <NumericUpDown Grid.Column="2" Minimum="1" Maximum="16" FormatString="0" Width="110"
+                                         Value="{Binding Channels}"
+                                         ToolTip.Tip="{x:Static res:Strings.FileOutputAudioChannelsLabel}" />
+                          <NumericUpDown Grid.Column="4" Minimum="32" Maximum="1024" Increment="32" FormatString="0" Width="120"
+                                         Value="{Binding BitrateKbps}"
+                                         ToolTip.Tip="{x:Static res:Strings.FileOutputAudioBitrateLabel}" />
+                          <Button Grid.Column="6" Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
+                                  Command="{Binding $parent[ItemsControl].((vm:AddLiveStreamOutputDialogViewModel)DataContext).RemoveAudioLegCommand}"
+                                  CommandParameter="{Binding}" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,8,120">
+                          <TextBox Grid.Column="0" Text="{Binding Name}"
+                                   PlaceholderText="{x:Static res:Strings.FileOutputAudioNameLabel}" />
+                          <TextBox Grid.Column="2" Text="{Binding Language}"
+                                   PlaceholderText="{x:Static res:Strings.FileOutputAudioLanguageLabel}" />
+                        </Grid>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

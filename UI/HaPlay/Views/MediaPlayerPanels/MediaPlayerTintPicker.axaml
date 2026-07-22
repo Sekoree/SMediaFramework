@@ -13,7 +13,7 @@
     <!-- Trigger shows the current tint as a filled dot (an empty ring when none). -->
     <Border Width="14" Height="14" CornerRadius="7"
             Background="{Binding TintAccentBrush}"
-            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" />
+            BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" />
     <Button.Flyout>
       <Flyout Placement="Bottom">
         <StackPanel Spacing="8" Margin="4" MinWidth="188">
@@ -35,7 +35,7 @@
                        content, so a size-less Border collapsed to nothing (colors looked invisible). -->
                   <Panel Width="20" Height="20">
                     <Border Background="{Binding Brush}" CornerRadius="3"
-                            BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" />
+                            BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" />
                     <!-- "None" cell shows an empty-set glyph instead of a color. -->
                     <TextBlock Text="&#x2205;" IsVisible="{Binding IsNone}" Opacity="0.55"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />

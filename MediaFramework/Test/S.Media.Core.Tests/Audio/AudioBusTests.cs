@@ -44,6 +44,21 @@ public sealed class AudioBusTests
     }
 
     [Fact]
+    public void Flush_DiscardsOnlyQueuedSamples_AndBusRemainsUsable()
+    {
+        var bus = new AudioBus(Stereo48k);
+        bus.Submit(Enumerable.Repeat(1f, 64 * 2).ToArray());
+
+        bus.Flush();
+
+        var dst = new float[64 * 2];
+        Assert.Equal(0, bus.ReadInto(dst));
+        bus.Submit(Enumerable.Repeat(2f, dst.Length).ToArray());
+        Assert.Equal(dst.Length, bus.ReadInto(dst));
+        Assert.All(dst, sample => Assert.Equal(2f, sample));
+    }
+
+    [Fact]
     public void IsExhausted_AlwaysFalse()
     {
         var bus = new AudioBus(Stereo48k);

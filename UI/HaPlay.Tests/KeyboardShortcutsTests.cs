@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
+using HaPlay.Models;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -28,7 +29,7 @@ public sealed class KeyboardShortcutsTests
                     .ToList();
 
                 Assert.Contains("Ctrl+N", gestures); // bindings actually resolved to the VM data
-                Assert.Contains("Esc", gestures);
+                Assert.Contains(gestures, gesture => gesture?.Contains("Esc", StringComparison.Ordinal) == true);
                 dialog.Close();
             }, CancellationToken.None);
     }
@@ -62,5 +63,32 @@ public sealed class KeyboardShortcutsTests
         // Clearing restores the full list.
         vm.SearchText = "";
         Assert.True(vm.HasResults);
+    }
+
+    [Theory]
+    [InlineData("Space")]
+    [InlineData("Esc")]
+    [InlineData("Ctrl+Escape")]
+    [InlineData("Shift+F12")]
+    public void CueHotkeyGesture_AcceptsEditorSyntax(string gesture) =>
+        Assert.True(CueHotkeyGesture.IsValid(gesture));
+
+    [Fact]
+    public void CueHotkeyEditor_RejectsConflictsAndCanResetDefaults()
+    {
+        var vm = new KeyboardShortcutsDialogViewModel(new CueHotkeyProfile
+        {
+            Go = "G",
+            Pause = "G",
+        });
+
+        Assert.False(vm.TryBuildCueHotkeys(out _));
+        Assert.Contains("conflicts", vm.ValidationMessage, StringComparison.OrdinalIgnoreCase);
+
+        vm.ResetCueHotkeys();
+        Assert.True(vm.TryBuildCueHotkeys(out var reset));
+        Assert.Equal("Space", reset.Go);
+        Assert.Equal("Esc", reset.StopThenPanic);
+        Assert.Equal("N", reset.NextVisualizerPreset);
     }
 }

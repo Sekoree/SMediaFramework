@@ -10,7 +10,7 @@ public sealed class MediaPlayerRoutingConflictTests
     private static Task DispatchUi(Func<Task> action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(MediaPlayerRoutingConflictTests).Assembly)
-            .Dispatch(action, CancellationToken.None);
+            .DispatchAsync(action, CancellationToken.None);
 
     [Fact]
     public async Task Selecting_video_output_already_selected_on_another_player_can_be_cancelled()

@@ -38,14 +38,10 @@ public sealed class SDL3GLVideoCompositorMultiContextTests
         return (span[o], span[o + 1], span[o + 2]);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Two_compositors_on_one_thread_do_not_corrupt_each_other()
     {
-        if (!SDL3GLVideoCompositor.TryProbe(out var err))
-        {
-            _o.WriteLine("GL unavailable, skipping: " + err);
-            return;
-        }
+        Skip.IfNot(SDL3GLVideoCompositor.TryProbe(out var err), "GL unavailable: " + err);
 
         // Different sizes - like a 1080p mixer/canvas next to a 720p mapping/FX compositor. Same-size
         // contexts can mask the bug because their GL object names line up; mismatched sizes expose it.

@@ -6,6 +6,7 @@ using Avalonia.Media;
 using HaPlay.Models;
 using HaPlay.ViewModels.Dialogs;
 using S.Media.Compositor;
+using S.Media.Core.Video;
 
 namespace HaPlay.Views.Dialogs;
 

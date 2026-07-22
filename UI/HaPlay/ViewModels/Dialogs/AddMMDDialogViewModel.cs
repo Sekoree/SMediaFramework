@@ -16,11 +16,16 @@ namespace HaPlay.ViewModels.Dialogs;
 /// software-rendered preview updates live. The preview renders on a worker at a debounced cadence - the
 /// same renderer playback uses, so what you frame here is what the composition gets.
 /// </summary>
-public sealed partial class AddMMDDialogViewModel : ObservableObject
+public sealed partial class AddMMDDialogViewModel : ObservableObject, IDisposable
 {
     private MMDPlaylistItem? _existing;
     private CancellationTokenSource? _renderCts;
     private int _renderScheduled;
+    // Monotonic render generation (review P3-4): only the NEWEST render may publish its bitmap or
+    // clear the busy flag - an older render that survived its cancellation check must never replace
+    // a newer preview or blank the indicator while the newest render is still in flight.
+    private int _renderGeneration;
+    private bool _disposed;
 
     public string DialogTitle => _existing is null ? Strings.AddMMDDialogTitle : Strings.EditMMDDialogTitle;
 
@@ -190,11 +195,14 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
     /// <summary>Coalesced worker render: at most one in flight; the newest state wins.</summary>
     private void ScheduleRender()
     {
-        if (Interlocked.Exchange(ref _renderScheduled, 1) == 1)
+        if (_disposed || Interlocked.Exchange(ref _renderScheduled, 1) == 1)
             return;
-        _renderCts?.Cancel();
+        var oldCts = _renderCts;
+        oldCts?.Cancel();
+        oldCts?.Dispose();
         _renderCts = new CancellationTokenSource();
         var ct = _renderCts.Token;
+        var generation = Interlocked.Increment(ref _renderGeneration);
         _ = Task.Run(async () =>
         {
             // Small debounce so slider drags coalesce instead of rendering every tick.
@@ -202,11 +210,11 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
             Interlocked.Exchange(ref _renderScheduled, 0);
             if (ct.IsCancellationRequested)
                 return;
-            await RenderPreviewAsync(ct).ConfigureAwait(false);
+            await RenderPreviewAsync(ct, generation).ConfigureAwait(false);
         });
     }
 
-    private async Task RenderPreviewAsync(CancellationToken ct)
+    private async Task RenderPreviewAsync(CancellationToken ct, int generation)
     {
         var model = ModelPath;
         if (string.IsNullOrWhiteSpace(model) || !File.Exists(model))
@@ -246,12 +254,21 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
                 var pixels = frame.Planes[0].ToArray();
                 await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
                 {
+                    // Generation check runs INSIDE the UI-thread publish so an older render whose
+                    // callback was already queued cannot replace a newer preview (review P3-4).
+                    if (_disposed || generation != Volatile.Read(ref _renderGeneration))
+                        return;
                     var bitmap = new WriteableBitmap(
                         new PixelSize(previewWidth, previewHeight), new Avalonia.Vector(96, 96),
                         Avalonia.Platform.PixelFormat.Bgra8888, AlphaFormat.Opaque);
                     using (var locked = bitmap.Lock())
                         System.Runtime.InteropServices.Marshal.Copy(pixels, 0, locked.Address, pixels.Length);
+                    var replaced = PreviewImage;
                     PreviewImage = bitmap;
+                    // The Image control re-measures against the NEW bitmap once the property change
+                    // propagates; the replaced bitmap is no longer referenced by the visual tree after
+                    // this setter, so its native pixel buffer can be released deterministically.
+                    replaced?.Dispose();
                     PreviewDurationSeconds = Math.Max(1, duration);
                     ValidationMessage = null;
                 });
@@ -260,13 +277,39 @@ public sealed partial class AddMMDDialogViewModel : ObservableObject
         catch (Exception ex)
         {
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-                ValidationMessage = Strings.Format(nameof(Strings.MMDPreviewFailedFormat), ex.Message));
+            {
+                if (!_disposed && generation == Volatile.Read(ref _renderGeneration))
+                    ValidationMessage = Strings.Format(nameof(Strings.MMDPreviewFailedFormat), ex.Message);
+            });
         }
         finally
         {
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => IsRendering = false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                // Only the newest render clears the busy flag - overlapping older renders finishing
+                // late must not blank the indicator while the current render is still working.
+                if (generation == Volatile.Read(ref _renderGeneration))
+                    IsRendering = false;
+            });
         }
     }
 
     public void CancelPending() => _renderCts?.Cancel();
+
+    /// <summary>Dialog-close lifetime: cancels/disposes the render CTS and releases the preview
+    /// bitmap's native pixel buffer instead of leaving both to finalization (review P3-4). Must be
+    /// called on the UI thread (the dialog's Closed handler).</summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        Interlocked.Increment(ref _renderGeneration); // invalidate any in-flight render's publish
+        _renderCts?.Cancel();
+        _renderCts?.Dispose();
+        _renderCts = null;
+        var image = PreviewImage;
+        PreviewImage = null;
+        image?.Dispose();
+    }
 }

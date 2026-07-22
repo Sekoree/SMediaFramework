@@ -292,6 +292,12 @@
   <data name="CueTreeNameColumnHeader" xml:space="preserve">
     <value>Name</value>
   </data>
+  <data name="CueTreeStartTriggerColumnHeader" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="CueTreeTargetColumnHeader" xml:space="preserve">
+    <value>Target</value>
+  </data>
   <data name="CueTreeDurationColumnHeader" xml:space="preserve">
     <value>Duration</value>
   </data>
@@ -427,6 +433,15 @@
   <data name="TriggerLabel" xml:space="preserve">
     <value>Trigger</value>
   </data>
+  <data name="StartTriggerLabel" xml:space="preserve">
+    <value>Start trigger</value>
+  </data>
+  <data name="EndTriggerTargetLabel" xml:space="preserve">
+    <value>End trigger target</value>
+  </data>
+  <data name="EndTriggerTargetTooltip" xml:space="preserve">
+    <value>Overrides normal Auto Follow: when this cue ends, fire the specified cue instead of the next cue.</value>
+  </data>
   <data name="PreWaitLabel" xml:space="preserve">
     <value>Pre-wait (ms)</value>
   </data>
@@ -556,26 +571,35 @@
   <data name="AudioTrackTooltip" xml:space="preserve">
     <value>Multi-track source (e.g. MKV with several languages). Picks which audio track this cue plays; Automatic uses the container's default.</value>
   </data>
+  <data name="VideoTrackLabel" xml:space="preserve">
+    <value>Video stream</value>
+  </data>
+  <data name="VideoTrackAutomaticLabel" xml:space="preserve">
+    <value>Automatic (main video)</value>
+  </data>
+  <data name="VideoTrackTooltip" xml:space="preserve">
+    <value>Multi-stream sources: pick which video stream this cue shows. Automatic plays the main video; an embedded thumbnail/cover-art stream can be selected explicitly (e.g. to show a YouTube thumbnail for an audio-only cue).</value>
+  </data>
   <data name="PlaylistContextAudioTrack" xml:space="preserve">
     <value>Audio track</value>
   </data>
   <data name="CueTransportStandbyTooltip" xml:space="preserve">
-    <value>Put the selected cue on standby (Enter)</value>
+    <value>Put the selected cue on standby</value>
   </data>
   <data name="CueTransportGoTooltip" xml:space="preserve">
-    <value>Fire the standby cue (Space)</value>
+    <value>Fire a newly selected cue once; otherwise fire the standby cue</value>
   </data>
   <data name="CueTransportBackTooltip" xml:space="preserve">
-    <value>Move standby back one cue (Backspace)</value>
+    <value>Move standby back one cue</value>
   </data>
   <data name="CueTransportPauseTooltip" xml:space="preserve">
     <value>Pause / resume all running cues</value>
   </data>
   <data name="CueTransportStopTooltip" xml:space="preserve">
-    <value>Stop all running cues</value>
+    <value>Stop all running cues; press the configured Stop hotkey twice quickly to panic</value>
   </data>
   <data name="CueTransportPanicTooltip" xml:space="preserve">
-    <value>Stop everything immediately (Esc)</value>
+    <value>Stop everything immediately</value>
   </data>
   <data name="EditCuesToggleLabel" xml:space="preserve">
     <value>Edit cues</value>
@@ -706,6 +730,15 @@
   <data name="RenumberButton" xml:space="preserve">
     <value>Renumber…</value>
   </data>
+  <data name="ReorganizeCueListButton" xml:space="preserve">
+    <value>Reorganize cue numbers</value>
+  </data>
+  <data name="ReorganizeCueListTooltip" xml:space="preserve">
+    <value>Number root cues 1, 2, 3… and group children hierarchically as 2.1, 2.2, 2.3…</value>
+  </data>
+  <data name="ReorganizedCueListStatusFormat" xml:space="preserve">
+    <value>Reorganized {0} cue number(s).</value>
+  </data>
   <data name="RenumberedStatusFormat" xml:space="preserve">
     <value>Renumbered {0} cue(s).</value>
   </data>
@@ -723,6 +756,9 @@
   </data>
   <data name="UpcomingCuesHeader" xml:space="preserve">
     <value>Upcoming</value>
+  </data>
+  <data name="NowPlayingStartsInFormat" xml:space="preserve">
+    <value>in {0}</value>
   </data>
   <data name="CloseButton" xml:space="preserve">
     <value>Close</value>
@@ -1723,6 +1759,12 @@
   <data name="YouTubePhaseDownloadingAudio" xml:space="preserve">
     <value>Downloading audio stream…</value>
   </data>
+  <data name="YouTubePhaseDownloadingThumbnail" xml:space="preserve">
+    <value>Downloading thumbnail…</value>
+  </data>
+  <data name="YouTubeIncludeThumbnailCheckbox" xml:space="preserve">
+    <value>Also download the thumbnail (embedded as a cover video stream)</value>
+  </data>
   <data name="YouTubePhaseRemuxing" xml:space="preserve">
     <value>Combining into local asset…</value>
   </data>
@@ -2068,6 +2110,48 @@
   <data name="CueKindCommentLabel" xml:space="preserve">
     <value>Comment</value>
   </data>
+  <data name="CueKindJumpLabel" xml:space="preserve">
+    <value>Jump</value>
+  </data>
+  <data name="CueKindVisualizerLabel" xml:space="preserve">
+    <value>Visualizer</value>
+  </data>
+  <data name="AddVisualizerCueButton" xml:space="preserve">
+    <value>+ Visualizer</value>
+  </data>
+  <data name="CueJumpNoTargets" xml:space="preserve">
+    <value>Jump cue has no target - select the jump cue and set a target.</value>
+  </data>
+  <data name="CueJumpTargetMissing" xml:space="preserve">
+    <value>Jump target no longer exists in this list.</value>
+  </data>
+  <data name="CueJumpCycleDetected" xml:space="preserve">
+    <value>Jump execution stopped because its targets form an immediate cycle.</value>
+  </data>
+  <data name="CueEndTargetUnavailable" xml:space="preserve">
+    <value>The end-trigger target is unavailable; normal Auto Follow was not run.</value>
+  </data>
+  <data name="CueNumberDuplicateFormat" xml:space="preserve">
+    <value>Cue number "{0}" is already in use - numbers must be unique.</value>
+  </data>
+  <data name="CueJumpUnknownNumbersFormat" xml:space="preserve">
+    <value>No cue found for number(s): {0}</value>
+  </data>
+  <data name="CueJumpTargetsLabel" xml:space="preserve">
+    <value>Jump to cue number(s)</value>
+  </data>
+  <data name="CueJumpRandomLabel" xml:space="preserve">
+    <value>Pick a random target</value>
+  </data>
+  <data name="CueJumpAvoidRepeatLabel" xml:space="preserve">
+    <value>Avoid picking the previous target when possible</value>
+  </data>
+  <data name="CueJumpFireLabel" xml:space="preserve">
+    <value>Fire target on jump (off = arm as standby only)</value>
+  </data>
+  <data name="AddJumpCueButton" xml:space="preserve">
+    <value>+ Jump</value>
+  </data>
   <data name="CueKindDefaultLabel" xml:space="preserve">
     <value>Cue</value>
   </data>
@@ -2175,6 +2259,9 @@
   </data>
   <data name="CueAddedFromDropStatusFormat" xml:space="preserve">
     <value>Added {0} media cue(s) from drop.</value>
+  </data>
+  <data name="CueFoldersAddedFromDropStatusFormat" xml:space="preserve">
+    <value>Added {0} folder group(s) with {1} media cue(s) from drop.</value>
   </data>
   <data name="CueTriggeredStatusFormat" xml:space="preserve">
     <value>Triggered {0}</value>
@@ -2569,6 +2656,294 @@
   <data name="IoTabOSC" xml:space="preserve">
     <value>OSC</value>
   </data>
+  <data name="IoTabDebug" xml:space="preserve">
+    <value>Debug</value>
+  </data>
+  <data name="AddFileOutputButton" xml:space="preserve">
+    <value>Add file record</value>
+  </data>
+  <data name="OutputKindFileRecordLabel" xml:space="preserve">
+    <value>File record</value>
+  </data>
+  <data name="OutputKindTechnicalFileRecord" xml:space="preserve">
+    <value>FFmpeg encode</value>
+  </data>
+  <data name="OutputSummaryFileRecordFormat" xml:space="preserve">
+    <value>{0} · {1}/{2} · {3} → {4}</value>
+  </data>
+  <data name="RecordArmButton" xml:space="preserve">
+    <value>● Record</value>
+  </data>
+  <data name="RecordDisarmButton" xml:space="preserve">
+    <value>■ Stop recording</value>
+  </data>
+  <data name="RecordArmedBadge" xml:space="preserve">
+    <value>REC</value>
+  </data>
+  <data name="RecordArmFailedFormat" xml:space="preserve">
+    <value>Could not start recording: {0}</value>
+  </data>
+  <data name="AddFileOutputDialogTitle" xml:space="preserve">
+    <value>Add file record output</value>
+  </data>
+  <data name="EditFileOutputDialogTitle" xml:space="preserve">
+    <value>Edit file record output</value>
+  </data>
+  <data name="FileOutputDirectoryLabel" xml:space="preserve">
+    <value>Folder</value>
+  </data>
+  <data name="FileOutputPatternLabel" xml:space="preserve">
+    <value>File name ({timestamp} expands per recording)</value>
+  </data>
+  <data name="FileOutputRecordingModeLabel" xml:space="preserve">
+    <value>Recording timeline</value>
+  </data>
+  <data name="FileOutputRecordingContinuousChoice" xml:space="preserve">
+    <value>Continuous program (black and silence while idle)</value>
+  </data>
+  <data name="FileOutputRecordingContentOnlyChoice" xml:space="preserve">
+    <value>Content only (collapse idle gaps)</value>
+  </data>
+  <data name="FileOutputRecordingModeHint" xml:space="preserve">
+    <value>Continuous program preserves the full Arm-to-Stop duration and requires a fixed video size and frame rate. Content only joins routed media without idle time.</value>
+  </data>
+  <data name="FileOutputContinuousFormatRequired" xml:space="preserve">
+    <value>Continuous video recording requires a non-zero output width, height, and frame rate.</value>
+  </data>
+  <data name="FileOutputRecordingContinuousShort" xml:space="preserve">
+    <value>continuous</value>
+  </data>
+  <data name="FileOutputRecordingContentOnlyShort" xml:space="preserve">
+    <value>content only</value>
+  </data>
+  <data name="FileOutputContainerLabel" xml:space="preserve">
+    <value>Container</value>
+  </data>
+  <data name="FileOutputModeLabel" xml:space="preserve">
+    <value>Streams</value>
+  </data>
+  <data name="FileOutputVideoCodecLabel" xml:space="preserve">
+    <value>Video codec</value>
+  </data>
+  <data name="FileOutputRateControlLabel" xml:space="preserve">
+    <value>Rate control</value>
+  </data>
+  <data name="FileOutputCrfLabel" xml:space="preserve">
+    <value>Quality (CRF)</value>
+  </data>
+  <data name="FileOutputBitrateLabel" xml:space="preserve">
+    <value>Bitrate (kbit/s)</value>
+  </data>
+  <data name="FileOutputPresetLabel" xml:space="preserve">
+    <value>Encoder preset</value>
+  </data>
+  <data name="FileOutputScaleLabel" xml:space="preserve">
+    <value>Scale and frame rate (0 = source)</value>
+  </data>
+  <data name="FileOutputFpsHint" xml:space="preserve">
+    <value>Output frame rate (0 = follow the source).</value>
+  </data>
+  <data name="FileOutputAudioTracksLabel" xml:space="preserve">
+    <value>Audio tracks</value>
+  </data>
+  <data name="FileOutputAddTrackButton" xml:space="preserve">
+    <value>Add track</value>
+  </data>
+  <data name="FileOutputRemoveTrackButton" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="FileOutputAudioCodecLabel" xml:space="preserve">
+    <value>Codec</value>
+  </data>
+  <data name="FileOutputAudioChannelsLabel" xml:space="preserve">
+    <value>Channels</value>
+  </data>
+  <data name="FileOutputAudioBitrateLabel" xml:space="preserve">
+    <value>kbit/s</value>
+  </data>
+  <data name="FileOutputAudioNameLabel" xml:space="preserve">
+    <value>Track name</value>
+  </data>
+  <data name="FileOutputAudioLanguageLabel" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="FileOutputBrowseButton" xml:space="preserve">
+    <value>Browse…</value>
+  </data>
+  <data name="FileOutputValidationHeader" xml:space="preserve">
+    <value>Settings problems:</value>
+  </data>
+  <data name="AddLiveStreamButton" xml:space="preserve">
+    <value>Add live stream</value>
+  </data>
+  <data name="OutputKindLiveStreamLabel" xml:space="preserve">
+    <value>Live stream</value>
+  </data>
+  <data name="OutputKindTechnicalLiveStream" xml:space="preserve">
+    <value>FFmpeg encode + HTTP/RTMP/SRT/RTSP</value>
+  </data>
+  <data name="OutputSummaryLiveStreamFormat" xml:space="preserve">
+    <value>{0} push target(s) · LAN server {1}</value>
+  </data>
+  <data name="GoLiveButton" xml:space="preserve">
+    <value>● Go live</value>
+  </data>
+  <data name="StopStreamButton" xml:space="preserve">
+    <value>■ Stop stream</value>
+  </data>
+  <data name="StreamLiveHealthyFormat" xml:space="preserve">
+    <value>Live · {0} destination(s) connected · {1} sent</value>
+  </data>
+  <data name="StreamLiveConnectingFormat" xml:space="preserve">
+    <value>Live · connecting to {0} destination(s)</value>
+  </data>
+  <data name="StreamLiveDegradedFormat" xml:space="preserve">
+    <value>Live · {0} of {1} destination(s) reconnecting: {2}</value>
+  </data>
+  <data name="StreamLiveStartFailedFormat" xml:space="preserve">
+    <value>Could not start stream: {0}</value>
+  </data>
+  <data name="AddLiveStreamDialogTitle" xml:space="preserve">
+    <value>Add live stream output</value>
+  </data>
+  <data name="EditLiveStreamDialogTitle" xml:space="preserve">
+    <value>Edit live stream output</value>
+  </data>
+  <data name="StreamPushTargetsLabel" xml:space="preserve">
+    <value>Push targets</value>
+  </data>
+  <data name="StreamAddPushTargetButton" xml:space="preserve">
+    <value>Add target</value>
+  </data>
+  <data name="StreamPushUrlWatermark" xml:space="preserve">
+    <value>rtmp://server/app/key · srt://host:port · rtsp://host/mount</value>
+  </data>
+  <data name="StreamLocalServerLabel" xml:space="preserve">
+    <value>Local LAN server</value>
+  </data>
+  <data name="StreamLocalServerEnable" xml:space="preserve">
+    <value>Enable built-in HTTP server</value>
+  </data>
+  <data name="StreamLocalServerPortLabel" xml:space="preserve">
+    <value>Port</value>
+  </data>
+  <data name="StreamLocalServerTs" xml:space="preserve">
+    <value>MPEG-TS stream (/&lt;mount&gt;.ts, VLC/mpv)</value>
+  </data>
+  <data name="StreamLocalServerHls" xml:space="preserve">
+    <value>HLS (/&lt;mount&gt;/hls/live.m3u8, browsers/TVs)</value>
+  </data>
+  <data name="StreamLocalServerMountLabel" xml:space="preserve">
+    <value>Endpoint name</value>
+  </data>
+  <data name="StreamLocalServerMountWatermark" xml:space="preserve">
+    <value>stream</value>
+  </data>
+  <data name="StreamLocalServerMountHint" xml:space="preserve">
+    <value>The URL path segment for this stream. Several streams can share one port under different endpoint names (e.g. /stage.ts, /booth.ts).</value>
+  </data>
+  <data name="StreamPushKeyWatermark" xml:space="preserve">
+    <value>Stream key / auth token (optional — folded into the URL)</value>
+  </data>
+  <data name="StreamSrtLatencyLabel" xml:space="preserve">
+    <value>SRT latency (ms)</value>
+  </data>
+  <data name="StreamSrtLatencyHint" xml:space="preserve">
+    <value>Retransmission window for this network hop. 120 ms is a useful starting point; increase it on high-RTT or lossy links. A latency option already present in the URL takes precedence.</value>
+  </data>
+  <data name="StreamOutputResolutionLabel" xml:space="preserve">
+    <value>Output resolution and frame rate (required)</value>
+  </data>
+  <data name="StreamOutputResolutionHint" xml:space="preserve">
+    <value>A live stream must declare a fixed resolution and frame rate so clients (and the blank keep-alive before media plays) see one unchanging format.</value>
+  </data>
+  <data name="StreamAdvancedVideoHeader" xml:space="preserve">
+    <value>Advanced encoder and latency</value>
+  </data>
+  <data name="StreamApplyLowLatencyPresetButton" xml:space="preserve">
+    <value>Apply low-latency preset</value>
+  </data>
+  <data name="StreamVideoBitrateModeLabel" xml:space="preserve">
+    <value>Bitrate mode</value>
+  </data>
+  <data name="StreamKeyframeIntervalLabel" xml:space="preserve">
+    <value>Keyframe interval (seconds)</value>
+  </data>
+  <data name="StreamMaximumBFramesLabel" xml:space="preserve">
+    <value>Maximum B-frames</value>
+  </data>
+  <data name="StreamVbvBufferLabel" xml:space="preserve">
+    <value>VBV buffer (ms at target bitrate)</value>
+  </data>
+  <data name="StreamLowLatencyTuneLabel" xml:space="preserve">
+    <value>Use encoder zero-latency tune (H.264/H.265)</value>
+  </data>
+  <data name="StreamLowLatencyPlaybackHint" xml:space="preserve">
+    <value>The preset selects CBR, a 1-second GOP, no B-frames, a 500 ms VBV, and zero-latency tuning. These reduce encode/ingest delay, but traditional HLS still buffers several segments; sub-2-second viewing also needs a low-latency server/player protocol such as WebSocket MP4, WebRTC, or LL-HLS.</value>
+  </data>
+  <data name="StreamRtmpSingleTrackHint" xml:space="preserve">
+    <value>An RTMP target limits the stream to one AAC audio track with H.264 video.</value>
+  </data>
+  <data name="VisualizerToggleLabel" xml:space="preserve">
+    <value>VIZ</value>
+  </data>
+  <data name="OutputEffectsHeader" xml:space="preserve">
+    <value>Effects</value>
+  </data>
+  <data name="VisualizerNextPresetTooltip" xml:space="preserve">
+    <value>Next visualizer preset</value>
+  </data>
+  <data name="VisualizerPresetPickerTooltip" xml:space="preserve">
+    <value>Choose the visualizer preset folder (*.milk, scanned recursively)</value>
+  </data>
+  <data name="VisualizerPresetPickerMenuHeader" xml:space="preserve">
+    <value>Choose preset folder…</value>
+  </data>
+  <data name="VisualizerSettingsMenuHeader" xml:space="preserve">
+    <value>Visualizer settings…</value>
+  </data>
+  <data name="VisualizerSettingsDialogTitle" xml:space="preserve">
+    <value>Visualizer settings</value>
+  </data>
+  <data name="VisualizerPresetFolderLabel" xml:space="preserve">
+    <value>Preset folder (*.milk, scanned recursively)</value>
+  </data>
+  <data name="VisualizerPresetFolderPlaceholder" xml:space="preserve">
+    <value>Built-in idle preset only — choose a folder for real presets</value>
+  </data>
+  <data name="VisualizerResolutionHint" xml:space="preserve">
+    <value>0 = match the output (the deck's output preset / driven display). A fixed size renders the visualizer at that resolution regardless of cover art or source video.</value>
+  </data>
+  <data name="VisualizerResMatchOutput" xml:space="preserve">
+    <value>Default (1080p60)</value>
+  </data>
+  <data name="VisualizerResolutionHeader" xml:space="preserve">
+    <value>Render resolution</value>
+  </data>
+  <data name="VisualizerNextPresetMenuHeader" xml:space="preserve">
+    <value>Next preset</value>
+  </data>
+  <data name="HoldImageSetupMenuHeader" xml:space="preserve">
+    <value>Set hold image…</value>
+  </data>
+  <data name="OutputEffectsPickerPlaceholder" xml:space="preserve">
+    <value>Insert effect…</value>
+  </data>
+  <data name="OutputEffectsAddButton" xml:space="preserve">
+    <value>Add</value>
+  </data>
+  <data name="VisualizerToggleTooltip" xml:space="preserve">
+    <value>projectM audio visualizer: renders a Milkdrop-style layer over this deck's composition, reacting to the playing audio. Preset directory comes from the visualizer settings (scripts/build-projectm.sh installs a pack).</value>
+  </data>
+  <data name="PipelineStatsHeader" xml:space="preserve">
+    <value>Pipeline stats</value>
+  </data>
+  <data name="PipelineStatsHint" xml:space="preserve">
+    <value>Live per-stage timings and queues for every active playback pipeline: decode, audio mix, composition, and each video output. Refreshes once per second.</value>
+  </data>
+  <data name="PipelineStatsEmptyHint" xml:space="preserve">
+    <value>Nothing is playing. Start playback on a deck or fire a cue to see decode, mix, composition and output timings here.</value>
+  </data>
   <data name="ExportLayerMenuHeader" xml:space="preserve">
     <value>Export layer…</value>
   </data>
@@ -2781,6 +3156,9 @@
   </data>
   <data name="RemoteApiTokenRequired" xml:space="preserve">
     <value>A token is set: every request must include it via the "X-HaPlay-Api-Key" header (or "Authorization: Bearer"). Copied URLs no longer embed the token - use Copy to grab it for your controller.</value>
+  </data>
+  <data name="RemoteApiOpenLanWarning" xml:space="preserve">
+    <value>Open LAN control: any device on this network can fire cues and change playback (LAN access enabled, no token). Use this only on an isolated, trusted show-control network - or set a token.</value>
   </data>
   <data name="RemoteApiTokenOptional" xml:space="preserve">
     <value>No token: any client that can reach the port can control HaPlay. Set a token to require authentication.</value>
@@ -3360,5 +3738,74 @@
   </data>
   <data name="TextCueFooterHint" xml:space="preserve">
     <value>Colors use #AARRGGBB hex, with alpha first. Set the hold duration on General and position the cue on Video.</value>
+  </data>
+  <data name="EffectsTabLabel" xml:space="preserve">
+    <value>Effects</value>
+  </data>
+  <data name="EffectsTabPlacementHint" xml:space="preserve">
+    <value>Effects apply to the placement selected on the Video tab.</value>
+  </data>
+  <data name="EffectsTabNoPlacementHint" xml:space="preserve">
+    <value>Add and select a video placement on the Video tab to edit its effects.</value>
+  </data>
+  <data name="MappingWarpSectionLabel" xml:space="preserve">
+    <value>Mapping / warp (splitting)</value>
+  </data>
+  <data name="MappingWarpEnableLabel" xml:space="preserve">
+    <value>Enable mapping / warp</value>
+  </data>
+  <data name="ChromaKeySectionLabel" xml:space="preserve">
+    <value>Chroma key</value>
+  </data>
+  <data name="ColorAdjustSectionLabel" xml:space="preserve">
+    <value>Brightness / contrast</value>
+  </data>
+  <data name="ColorAdjustEnableLabel" xml:space="preserve">
+    <value>Enable brightness / contrast</value>
+  </data>
+  <data name="ColorAdjustBrightnessLabel" xml:space="preserve">
+    <value>Brightness</value>
+  </data>
+  <data name="ColorAdjustBrightnessTooltip" xml:space="preserve">
+    <value>Additive offset, -1 to 1 (0 = unchanged)</value>
+  </data>
+  <data name="ColorAdjustContrastLabel" xml:space="preserve">
+    <value>Contrast</value>
+  </data>
+  <data name="ColorAdjustContrastTooltip" xml:space="preserve">
+    <value>Multiplier around mid-gray (1 = unchanged)</value>
+  </data>
+  <data name="ChromaKeyEnableLabel" xml:space="preserve">
+    <value>Chroma key (green screen)</value>
+  </data>
+  <data name="ChromaKeyColorLabel" xml:space="preserve">
+    <value>Key color</value>
+  </data>
+  <data name="ChromaKeyColorTooltip" xml:space="preserve">
+    <value>Key color as #RRGGBB hex</value>
+  </data>
+  <data name="ChromaKeyPresetGreenButton" xml:space="preserve">
+    <value>Green</value>
+  </data>
+  <data name="ChromaKeyPresetBlueButton" xml:space="preserve">
+    <value>Blue</value>
+  </data>
+  <data name="ChromaKeySimilarityLabel" xml:space="preserve">
+    <value>Similarity</value>
+  </data>
+  <data name="ChromaKeySimilarityTooltip" xml:space="preserve">
+    <value>Chroma distance below which a pixel is fully keyed out</value>
+  </data>
+  <data name="ChromaKeySmoothnessLabel" xml:space="preserve">
+    <value>Smoothness</value>
+  </data>
+  <data name="ChromaKeySmoothnessTooltip" xml:space="preserve">
+    <value>Width of the soft alpha ramp at the key boundary</value>
+  </data>
+  <data name="ChromaKeySpillLabel" xml:space="preserve">
+    <value>Spill</value>
+  </data>
+  <data name="ChromaKeySpillTooltip" xml:space="preserve">
+    <value>Desaturates key-colored light bleeding onto the subject</value>
   </data>
 </root>

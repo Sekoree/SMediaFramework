@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Entry/meta package (review P2-5): dependency-only. No assembly ships (IncludeBuildOutput=false;
+         NU5128 is the expected "no lib/ assets" pack warning for that) - consumers get the composed leaf
+         packages. Composition mirrors Doc/Packages.md. -->
+    <PropertyGroup>
+        <IncludeBuildOutput>false</IncludeBuildOutput>
+        <NoWarn>$(NoWarn);NU5128</NoWarn>
+        <Description>Standalone/windowed SDL3 presentation for MFPlayer: SDL3 window/GL presenters plus the SDL3 compositor output path.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
+    </ItemGroup>
+</Project>

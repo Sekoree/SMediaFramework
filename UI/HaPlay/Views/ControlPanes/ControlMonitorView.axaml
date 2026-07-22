@@ -36,7 +36,7 @@
       <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding DeviceFilterText}" PlaceholderText="device" />
     </Grid>
 
-    <Border Grid.Row="1" MinHeight="120" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
+    <Border Grid.Row="1" MinHeight="120" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="0">
       <Grid>
         <TextBlock Text="Arm Control to see MIDI, OSC, script, and runtime activity here."
                    TextWrapping="Wrap"

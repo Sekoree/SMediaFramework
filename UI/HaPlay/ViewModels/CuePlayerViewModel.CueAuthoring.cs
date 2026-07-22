@@ -45,6 +45,7 @@ public partial class CuePlayerViewModel
         node.TriggerMode = SelectedCueList.DefaultTriggerMode;
         if (SelectedCueList.AutoRenumberOnInsert)
             RenumberFlat(SelectedCueList.Nodes, start: 1, step: 1);
+        RefreshCueTargetDisplays();
     }
 
     /// <summary>"+ Media" - cancel-safe: the picker runs FIRST and a cue row is only created per
@@ -195,7 +196,7 @@ public partial class CuePlayerViewModel
         // like any file so the drawer gets exact duration/channels/fps/resolution (and audio-only
         // items correctly drop the Video tab). The item-metadata duration is the fallback.
         var assetPath = YouTubeRuntime.Preparer.AssetPathFor(
-            result.VideoId, result.VideoStreamDescriptor, result.AudioStreamDescriptor);
+            result.VideoId, result.VideoStreamDescriptor, result.AudioStreamDescriptor, result.IncludeThumbnail);
         if (File.Exists(assetPath))
             await ProbeAndAssignDurationAsync(row, assetPath);
         else if (result.DurationSeconds is { } seconds and > 0)
@@ -365,15 +366,30 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanBrowseMediaSource))]
     private async Task BrowseMediaSourceAsync()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } mediaCue)
+        if (SelectedMediaCue is null)
             return;
         var path = await PickMediaFilePathAsync();
         if (!string.IsNullOrWhiteSpace(path))
         {
-            mediaCue.MediaSourceItem = new FilePlaylistItem(path);
-            mediaCue.SourceOrAction = path;
-            mediaCue.Label = Path.GetFileNameWithoutExtension(path);
-            await ProbeAndAssignDurationAsync(mediaCue, path);
+            var targets = SelectedMediaTargets();
+            _isApplyingMultiEdit = true;
+            try
+            {
+                foreach (var mediaCue in targets)
+                {
+                    mediaCue.MediaSourceItem = new FilePlaylistItem(path);
+                    mediaCue.SourceCapabilitiesKnown = false;
+                    mediaCue.SourceOrAction = path;
+                    mediaCue.Label = Path.GetFileNameWithoutExtension(path);
+                }
+            }
+            finally
+            {
+                _isApplyingMultiEdit = false;
+            }
+
+            await Task.WhenAll(targets.Select(cue => ProbeAndAssignDurationAsync(cue, path)));
+            RefreshMultiEditSelectionState();
         }
     }
 
@@ -388,6 +404,7 @@ public partial class CuePlayerViewModel
         {
             if (probe is null)
             {
+                row.SourceCapabilitiesKnown = true;
                 row.DurationMs = 0;
                 row.SourceHasVideo = false;
                 row.SourceHasAudio = false;
@@ -398,10 +415,12 @@ public partial class CuePlayerViewModel
                 row.SourceVideoWidth = 0;
                 row.SourceVideoHeight = 0;
                 row.SetAudioTrackChoices([]);
+                row.SetVideoTrackChoices([]);
                 row.SetSubtitleTrackChoices([]);
                 return;
             }
 
+            row.SourceCapabilitiesKnown = true;
             row.DurationMs = probe.Value.DurationMs ?? 0;
             row.SourceHasVideo = probe.Value.HasVideo;
             row.SourceHasAudio = probe.Value.HasAudio;
@@ -412,11 +431,12 @@ public partial class CuePlayerViewModel
             row.SourceVideoWidth = probe.Value.SourceVideoWidth;
             row.SourceVideoHeight = probe.Value.SourceVideoHeight;
             row.SetAudioTrackChoices(probe.Value.AudioTracks);
+            row.SetVideoTrackChoices(probe.Value.VideoTracks);
             row.SetSubtitleTrackChoices(probe.Value.SubtitleTracks);
         });
     }
 
-    private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
+    private bool CanBrowseMediaSource() => SelectedMediaCue is not null;
 
     /// <summary>Fills the audio-track picker for cues that were loaded from disk (no probe yet).
     /// Stream-table probe only - cheap enough to run on first selection.</summary>
@@ -433,6 +453,16 @@ public partial class CuePlayerViewModel
                 // A Browse-media probe may have filled the list while we were probing; keep its result.
                 if (node.AudioTrackChoices.Count == 0)
                     node.SetAudioTrackChoices(tracks);
+            });
+        }
+
+        if (node.VideoTrackChoices.Count == 0)
+        {
+            var tracks = await CueMediaProbe.TryProbeVideoTracksAsync(file.Path).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (node.VideoTrackChoices.Count == 0)
+                    node.SetVideoTrackChoices(tracks);
             });
         }
 
@@ -495,6 +525,91 @@ public partial class CuePlayerViewModel
         StatusMessage = null;
     }
 
+    /// <summary>Adds a Jump (control-flow) cue after the selection. When a cue is selected it becomes
+    /// the jump's initial target - the natural "loop back to this" gesture: select the section start,
+    /// add a jump at the end, set the jump's trigger to auto-follow/continue, and the section loops.
+    /// Targets are stable cue IDs, so renumbering/auto-reorder never retargets the jump.</summary>
+    [RelayCommand]
+    private void AddJumpCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var target = SelectedCueNode is { } sel && sel.Kind != CueNodeKind.Comment
+                     // With a Group selected, the new Jump is inserted as that Group's first/last child.
+                     // Auto-targeting the same Group would make Group→Jump→Group an immediate cycle.
+                     && !(sel.IsGroup && ReferenceEquals(parent, sel.Children))
+            ? sel
+            : null;
+        var row = new CueNodeViewModel(CueNodeKind.Jump)
+        {
+            Number = NextNumber(parent),
+            Label = target is null
+                ? Strings.CueKindJumpLabel
+                : $"{Strings.CueKindJumpLabel} → {(string.IsNullOrWhiteSpace(target.Number) ? target.Label : target.Number)}",
+            Extra = "Always",
+            SourceOrAction = "fire",
+        };
+        if (target is not null)
+            row.JumpTargetIds.Add(target.Id);
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
+    /// <summary>With a Jump cue selected earlier and any other cue selected NOW: adds the current
+    /// selection to the most recently selected jump's target pool (multi-target/random authoring).</summary>
+    [RelayCommand]
+    private void AddSelectedCueAsJumpTarget()
+    {
+        if (SelectedCueNode is not { } target || target.Kind is CueNodeKind.Group or CueNodeKind.Jump)
+            return;
+        var jump = EnumerateAllCueNodes().LastOrDefault(c => c.Kind == CueNodeKind.Jump);
+        if (jump is null || jump.JumpTargetIds.Contains(target.Id))
+            return;
+        jump.JumpTargetIds.Add(target.Id);
+        RefreshCueTargetDisplays();
+        StatusMessage = Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{jump.Label}: +{CueDisplay(target)}");
+    }
+
+    /// <summary>Adds a Visualizer cue (#26): fire = start (or stop) the projectM layer on a chosen
+    /// composition at a configurable section of the frame. Defaults to the selected composition
+    /// full-canvas; edit placement in the drawer.</summary>
+    [RelayCommand]
+    private void AddVisualizerCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var row = new CueNodeViewModel(CueNodeKind.Visualizer)
+        {
+            Number = NextNumber(parent),
+            Label = Strings.CueKindVisualizerLabel,
+            Extra = "Start",
+            VisualizerRenderWidth = 1920,
+            VisualizerRenderHeight = 1080,
+            VisualizerRenderFps = 60,
+        };
+        // Seed a full-canvas placement on the selected (or first) composition - edit it on the Video tab
+        // exactly like a media cue's placement (#26 v3).
+        var seedComp = SelectedComposition?.Id ?? SelectedCueList?.Compositions.FirstOrDefault()?.Id;
+        if (seedComp is { } compId && compId != Guid.Empty)
+            row.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(new CueVideoPlacement
+            {
+                CompositionId = compId,
+                // Layer 0 like any other first video placement: surface layers always render above
+                // frame-backed media anyway, and LayerIndex only orders surface layers among themselves.
+                LayerIndex = 0,
+            }));
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
     [RelayCommand]
     private void AddCommentCue()
     {
@@ -518,13 +633,111 @@ public partial class CuePlayerViewModel
     {
         if (SelectedCueList is null || SelectedCueNode is null)
             return;
+
+        // Applies to the whole multi-selection. A node whose selected ancestor group is also in
+        // the selection is skipped - removing the group removes it.
+        var targets = EffectiveSelection().ToList();
+        targets.RemoveAll(node => targets.Any(other =>
+            !ReferenceEquals(other, node) && ContainsNode(other.Children, node)));
+
+        // Remove has no confirmation dialog (operators mis-click under pressure), so every removal
+        // is undoable: snapshot the models + original positions before mutating, and offer the
+        // restore through an action toast. Ids are preserved on restore so jump targets re-resolve.
+        var listRef = SelectedCueList;
+        var undo = new List<RemovedCueEntry>();
+        foreach (var node in targets)
+        {
+            if (FindParentCollection(listRef.Nodes, node) is IList<CueNodeViewModel> parentList)
+            {
+                undo.Add(new RemovedCueEntry(
+                    node.ToModel(),
+                    FindParentGroup(listRef.Nodes, node)?.Id,
+                    parentList.IndexOf(node)));
+            }
+        }
+
         var orderedBefore = EnumerateFireableCueOrder().ToList();
         var removedFireable = ResolveFireableCue(SelectedCueNode) ?? SelectedCueNode;
         var removedFireableIndex = orderedBefore.FindIndex(c => ReferenceEquals(c, removedFireable));
-        if (!RemoveNodeRecursive(SelectedCueList.Nodes, SelectedCueNode))
+        var removed = 0;
+        foreach (var node in targets)
+        {
+            if (RemoveNodeRecursive(SelectedCueList.Nodes, node))
+                removed++;
+        }
+        if (removed == 0)
             return;
+        RefreshCueTargetDisplays();
         PruneSelectionToCurrentTree();
         ReconcileTransportAfterTreeMutation(removedFireableIndex);
+        if (removed > 1)
+            StatusMessage = $"Removed {removed} cues.";
+        if (undo.Count > 0)
+        {
+            var message = removed == 1
+                ? $"Removed cue {CueDisplay(targets[0])}."
+                : $"Removed {removed} cues.";
+            ToastCenter.PostAction(message, "Undo", () => RestoreRemovedCues(listRef, undo));
+        }
+    }
+
+    /// <summary>Model + original position of one removed cue, for the undo toast.</summary>
+    private readonly record struct RemovedCueEntry(CueNode Model, Guid? ParentGroupId, int Index);
+
+    private static CueNodeViewModel? FindParentGroup(
+        IEnumerable<CueNodeViewModel> nodes, CueNodeViewModel target)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Children.Contains(target))
+                return node;
+            if (FindParentGroup(node.Children, target) is { } nested)
+                return nested;
+        }
+        return null;
+    }
+
+    private static CueNodeViewModel? FindNodeById(IEnumerable<CueNodeViewModel> nodes, Guid id)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Id == id)
+                return node;
+            if (FindNodeById(node.Children, id) is { } nested)
+                return nested;
+        }
+        return null;
+    }
+
+    /// <summary>Undo for <see cref="RemoveNode"/>: re-inserts the snapshots at their original
+    /// positions (ascending index order rebuilds sibling order exactly). The original parent group
+    /// may itself have been removed since - those cues land at the list root rather than vanishing.</summary>
+    private void RestoreRemovedCues(CueListEditorViewModel list, List<RemovedCueEntry> entries)
+    {
+        var restored = new List<CueNodeViewModel>();
+        foreach (var entry in entries.OrderBy(e => e.Index))
+        {
+            IList<CueNodeViewModel> parent = list.Nodes;
+            if (entry.ParentGroupId is { } groupId
+                && FindNodeById(list.Nodes, groupId) is { IsGroup: true } group)
+                parent = group.Children;
+            var vm = CueNodeViewModel.FromModel(entry.Model, ResolveOutputLine);
+            parent.Insert(Math.Clamp(entry.Index, 0, parent.Count), vm);
+            restored.Add(vm);
+        }
+        if (restored.Count == 0)
+            return;
+
+        if (ReferenceEquals(list, SelectedCueList))
+        {
+            UpdateSelection(restored);
+            RefreshCueTargetDisplays();
+            RefreshRowStatuses();
+            RebuildUpcomingCues();
+            GoCommand.NotifyCanExecuteChanged();
+            BackCommand.NotifyCanExecuteChanged();
+        }
+        StatusMessage = restored.Count == 1 ? "Restored removed cue." : $"Restored {restored.Count} cues.";
     }
 
     private bool CanRemoveNode() => SelectedCueList is not null && SelectedCueNode is not null;

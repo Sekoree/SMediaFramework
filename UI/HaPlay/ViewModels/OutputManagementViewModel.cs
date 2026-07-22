@@ -18,6 +18,7 @@ using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.Audio.PortAudio;
+using S.Media.Routing;
 
 namespace HaPlay.ViewModels;
 
@@ -41,18 +42,127 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <summary>Acquires the real <see cref="IVideoOutput"/> for an output line so a playback engine can render
     /// onto it - the ShowSession cue re-back's video-output seam (mirrors how the cue engine acquires outputs).
     /// MUST be called on the UI thread (realizes the SDL window / NDI sender). Returns null for a non-video line
-    /// or one with no realized runtime.</summary>
+    /// or one with no realized runtime. The line's persisted VIDEO effects wrap the returned output
+    /// (disposed with <see cref="ReleaseVideoOutputForLine"/>).</summary>
     public IVideoOutput? AcquireVideoOutputForLine(Guid lineId)
     {
+        lock (_videoLeaseGate)
+            if (!_videoOutputLeases.Add(lineId))
+                return null;
+
         var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
         if (line is null)
+        {
+            lock (_videoLeaseGate) _videoOutputLeases.Remove(lineId);
             return null;
+        }
+        var raw = AcquireRawVideoOutputForLine(line);
+        if (raw is null)
+        {
+            lock (_videoLeaseGate) _videoOutputLeases.Remove(lineId);
+            return null;
+        }
+
+        try
+        {
+            return WrapVideoEffects(lineId, line.Definition, raw);
+        }
+        catch
+        {
+            // Acquisition is transactional: if effect construction fails, relinquish both the
+            // logical lease and the underlying runtime hold before surfacing the error.
+            ReleaseVideoOutputForLine(lineId);
+            throw;
+        }
+    }
+
+    private IVideoOutput? AcquireRawVideoOutputForLine(OutputLineViewModel line)
+    {
         if (_localPreviews.TryGetValue(line, out var local))
             return local.AcquireForPlayback();
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
                 return ndi.AcquireForPlayback(needsVideo: true, needsAudio: false)?.Video;
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+                return file.AcquireForPlayback(needsVideo: true, needsAudio: false).Video; // null unless armed
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                return stream.AcquireForPlayback(needsVideo: true, needsAudio: false).Video; // null unless live
         return null;
+    }
+
+    // Per-line video effect wrappers handed out by AcquireVideoOutputForLine; the wrapper (and its
+    // effect instances) dispose on release, the wrapped runtime output is released separately.
+    private readonly Lock _videoLeaseGate = new();
+    private readonly HashSet<Guid> _videoOutputLeases = [];
+    private readonly Dictionary<Guid, S.Media.Routing.VideoEffectBusOutput> _videoEffectWrappers = new();
+
+    private IVideoOutput WrapVideoEffects(Guid lineId, OutputDefinition definition, IVideoOutput inner)
+    {
+        var effects = BuildVideoEffects(definition);
+        if (effects.Count == 0)
+            return inner;
+        var wrapper = new S.Media.Routing.VideoEffectBusOutput(inner, effects);
+        try
+        {
+            lock (_videoLeaseGate)
+                _videoEffectWrappers.Add(lineId, wrapper);
+            return wrapper;
+        }
+        catch
+        {
+            wrapper.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Instantiates the line's persisted VIDEO effect chain from the bus registry (unknown
+    /// kinds are skipped with a log line so an old project file never blocks playback).</summary>
+    internal static IReadOnlyList<S.Media.Core.Buses.IVideoBusEffect> BuildVideoEffects(OutputDefinition definition)
+    {
+        List<S.Media.Core.Buses.IVideoBusEffect>? effects = null;
+        foreach (var def in definition.Effects)
+        {
+            if (def.Target != OutputEffectTarget.Video)
+                continue;
+            if (MediaRuntime.Buses.TryCreateVideoEffect(def.Kind, def.ConfigJson, out var effect))
+                (effects ??= []).Add(effect);
+            else
+                Trace.LogWarning("output '{Name}': unknown video effect kind '{Kind}' skipped", definition.DisplayName, def.Kind);
+        }
+
+        return effects ?? (IReadOnlyList<S.Media.Core.Buses.IVideoBusEffect>)[];
+    }
+
+    /// <summary>Instantiates the line's persisted AUDIO effect chain (see <see cref="BuildVideoEffects"/>).</summary>
+    internal static IReadOnlyList<S.Media.Core.Buses.IAudioBusEffect> BuildAudioEffects(OutputDefinition definition)
+    {
+        List<S.Media.Core.Buses.IAudioBusEffect>? effects = null;
+        foreach (var def in definition.Effects)
+        {
+            if (def.Target != OutputEffectTarget.Audio)
+                continue;
+            if (MediaRuntime.Buses.TryCreateAudioEffect(def.Kind, def.ConfigJson, out var effect))
+                (effects ??= []).Add(effect);
+            else
+                Trace.LogWarning("output '{Name}': unknown audio effect kind '{Kind}' skipped", definition.DisplayName, def.Kind);
+        }
+
+        return effects ?? (IReadOnlyList<S.Media.Core.Buses.IAudioBusEffect>)[];
+    }
+
+    /// <summary>Wraps <paramref name="inner"/> in the line's configured audio-effect chain (no-op when the
+    /// line has none). Uses the capability-preserving <c>Wrap</c> so a hardware sink behind effects still
+    /// exposes its clock/stats to the router (review H3). <paramref name="disposeInner"/> hands terminal
+    /// ownership to the wrapper (session-owned device) or keeps the inner borrowed (review H4).</summary>
+    internal IAudioOutput WrapAudioEffectsForLine(Guid lineId, IAudioOutput inner, bool disposeInner = false)
+    {
+        var definition = DefinitionsSnapshot.FirstOrDefault(d => d.Id == lineId);
+        if (definition is null)
+            return inner;
+        var effects = BuildAudioEffects(definition);
+        return effects.Count == 0 ? inner : S.Media.Routing.AudioEffectOutput.Wrap(inner, effects, disposeInner);
     }
 
     /// <summary>Releases a video output acquired via <see cref="AcquireVideoOutputForLine"/> (single-holder, so
@@ -60,6 +170,20 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// thread. No-op for an unknown/non-video line.</summary>
     public void ReleaseVideoOutputForLine(Guid lineId)
     {
+        // Dispose the per-acquire effect wrapper first (its effect instances die here); the wrapped
+        // runtime output is released below and survives for the next acquire.
+        S.Media.Routing.VideoEffectBusOutput? wrapper;
+        lock (_videoLeaseGate)
+        {
+            _videoOutputLeases.Remove(lineId);
+            _videoEffectWrappers.Remove(lineId, out wrapper);
+        }
+        if (wrapper is not null)
+        {
+            try { wrapper.Dispose(); }
+            catch { /* best effort */ }
+        }
+
         var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
         if (line is null)
             return;
@@ -70,7 +194,19 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
+            {
                 ndi.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
+                return;
+            }
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+            {
+                file.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
+                return;
+            }
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                stream.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
     }
 
     /// <summary>Acquires the AUDIO side of an NDI output line's carrier - the SAME sender that carries the
@@ -86,6 +222,12 @@ public partial class OutputManagementViewModel : ViewModelBase
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
                 return ndi.AcquireForPlayback(needsVideo: false, needsAudio: true)?.Audio;
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+                return file.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio; // null unless armed
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                return stream.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio; // null unless live
         return null;
     }
 
@@ -98,15 +240,31 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
         lock (_ndiOutputsGate)
             if (_ndiOutputs.TryGetValue(line, out var ndi))
+            {
                 ndi.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                return;
+            }
+        lock (_fileOutputsGate)
+            if (_fileOutputs.TryGetValue(line, out var file))
+            {
+                file.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                return;
+            }
+        lock (_liveStreamsGate)
+            if (_liveStreams.TryGetValue(line, out var stream))
+                stream.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
     }
 
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NDIOutputPreviewRuntime> _ndiOutputs = new();
     private readonly Dictionary<OutputLineViewModel, PortAudioOutputRuntime> _portAudioOutputs = new();
+    private readonly Dictionary<OutputLineViewModel, FileOutputRuntime> _fileOutputs = new();
+    private readonly Dictionary<OutputLineViewModel, LiveStreamOutputRuntime> _liveStreams = new();
     private readonly Lock _ndiOutputsGate = new();
     private readonly Lock _portAudioOutputsGate = new();
+    private readonly Lock _fileOutputsGate = new();
+    private readonly Lock _liveStreamsGate = new();
 
     /// <summary>
     /// Phase B (§3.6) - set by <c>MainViewModel</c> so the Edit flow can ask whether *any* player is
@@ -180,12 +338,14 @@ public partial class OutputManagementViewModel : ViewModelBase
     public bool HasOutputs => Outputs.Count > 0;
     public bool HasNoOutputs => Outputs.Count == 0;
 
-    /// <summary>AUDIO-02: one-line media-backend availability (e.g. "FFmpeg ✓  PortAudio ✓  NDI ✗ (native
-    /// library not installed)") so a missing optional backend is visible on the I/O workspace, not just in
-    /// the log. Sourced from <see cref="MediaRuntime.ModuleDiagnostics"/>.</summary>
-    public string MediaBackendsSummary =>
-        string.Join("    ", MediaRuntime.ModuleDiagnostics.Select(
-            d => d.Available ? $"{d.Name} ✓" : $"{d.Name} ✗ ({d.Detail})"));
+    /// <summary>AUDIO-02: media-backend availability so a missing optional backend is visible on the
+    /// I/O workspace, not just in the log. One chip per module (review P3-6: the previous single
+    /// wrapping string could break BETWEEN a module name and its checkmark). Sourced from
+    /// <see cref="MediaRuntime.ModuleDiagnostics"/>.</summary>
+    public IReadOnlyList<MediaBackendStatus> MediaBackendStatuses =>
+        MediaRuntime.ModuleDiagnostics
+            .Select(d => new MediaBackendStatus(d.Name, d.Available, d.Available ? null : d.Detail))
+            .ToArray();
 
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" - bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
@@ -219,6 +379,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             IsEnabled = true,
         };
+        Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
         Outputs.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasOutputs));
@@ -228,7 +389,6 @@ public partial class OutputManagementViewModel : ViewModelBase
             SelectedLine ??= Outputs.FirstOrDefault();
             RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         };
-        Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
         RebuildDefinitionsSnapshot();
     }
 
@@ -288,32 +448,30 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Phase B follow-up - raised *before* a line's runtime is torn down so any active playback
-    /// can detach its route to that line first and avoid Submit'ing to a disposed output.
-    /// Subscribers must run synchronously: by the time the event returns, the runtime
-    /// stop / dispose path is about to run.
-    /// </summary>
-    public event EventHandler<OutputLineViewModel>? OutputLineRemoving;
-
-    /// <summary>
-    /// Raised around hot output edits so active players can drop and then re-acquire the line against
-    /// the newly configured runtime. This keeps reconfigure-in-place from leaving routes pointed at a
-    /// disposed PortAudio stream / NDI sender.
+    /// Awaited around output removal/replacement/edit so active players can drop and then, for an edit,
+    /// re-acquire the line against the newly configured runtime. This keeps live routes from retaining a
+    /// disposed PortAudio stream, video presenter, encoder, or NDI sender.
     /// </summary>
     public event Func<OutputLineViewModel, Task>? OutputLineReconfiguringAsync;
 
     public event Func<OutputLineViewModel, Task>? OutputLineReconfiguredAsync;
 
+    /// <summary>Detaches every live playback route before a project load replaces the output-line objects and
+    /// disposes their runtimes. Project restore must await this before <see cref="ReplaceDefinitionsForLoad"/>;
+    /// otherwise an unchanged persisted line id can leave a session holding the disposed pre-load sink.</summary>
+    public async Task PrepareForDefinitionsReplacementAsync()
+    {
+        foreach (var line in Outputs.ToList())
+            await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(true);
+    }
+
     private void Remove(OutputLineViewModel line)
     {
-        // Let sessions unwire their routes first - otherwise the AudioRouter pump keeps pushing chunks
-        // into a PortAudioOutput we're about to Dispose, producing the spammed ObjectDisposedException
-        // observed when the user clicked Remove during active playback.
-        OutputLineRemoving?.Invoke(this, line);
-
         StopLocalPreview(line);
         StopNDIOutput(line);
         StopPortAudioOutput(line);
+        StopFileOutput(line);
+        StopLiveStream(line);
         Outputs.Remove(line);
     }
 
@@ -333,6 +491,9 @@ public partial class OutputManagementViewModel : ViewModelBase
             await StopPlayersUsingLineAsync(line);
         }
 
+        // Cue compositions are not covered by PlaybackUsageProbe. Await the shared hot-detach hook before
+        // Remove disposes the runtime, matching the ordering used by output reconfigure and project restore.
+        await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(true);
         Remove(line);
     }
 
@@ -434,6 +595,12 @@ public partial class OutputManagementViewModel : ViewModelBase
                         break;
                     case LocalVideoOutputDefinition:
                         await StartLocalPreviewAsync(line, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case FileOutputDefinition file:
+                        EnsureFileRuntime(line, file);
+                        break;
+                    case LiveStreamOutputDefinition stream:
+                        EnsureLiveStreamRuntime(line, stream);
                         break;
                 }
                 started++;
@@ -545,7 +712,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 nameof(newDefinition));
 
         if (detachRoutes)
-            await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(false);
+            await RunOnUiThreadAsync(() => RaiseAsync(OutputLineReconfiguringAsync, line)).ConfigureAwait(false);
 
         switch (newDefinition)
         {
@@ -573,19 +740,45 @@ public partial class OutputManagementViewModel : ViewModelBase
                     await rt.ReconfigureAsync(nd, cancellationToken).ConfigureAwait(false);
                 break;
             }
+            case FileOutputDefinition file:
+            {
+                FileOutputRuntime? rt;
+                lock (_fileOutputsGate)
+                    _fileOutputs.TryGetValue(line, out rt);
+                rt?.Reconfigure(file); // applies on the NEXT arm; an armed session keeps its open file
+                break;
+            }
+            case LiveStreamOutputDefinition stream:
+            {
+                LiveStreamOutputRuntime? rt;
+                lock (_liveStreamsGate)
+                    _liveStreams.TryGetValue(line, out rt);
+                rt?.Reconfigure(stream); // applies on the NEXT go-live
+                break;
+            }
             default:
                 throw new NotSupportedException($"Unknown output definition type: {newDefinition.GetType().Name}");
         }
 
-        // Update the line's definition reference so VM consumers (routing checkboxes, KindLabel, Summary)
-        // observe the new values.
-        line.ReplaceDefinition(newDefinition);
+        await RunOnUiThreadAsync(async () =>
+        {
+            // Commit observable VM state and all dependent callbacks as one UI-thread transaction.
+            line.ReplaceDefinition(newDefinition);
+            RaiseTopologyChanged();
+            if (detachRoutes)
+                await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(true);
+        }).ConfigureAwait(false);
+    }
 
-        // A clone-of change is the load-bearing topology change - fire the event so player VMs resync
-        // their routing checkbox list (clones get hidden, parents get exposed).
-        RaiseTopologyChanged();
-        if (detachRoutes)
-            await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(false);
+    private static async Task RunOnUiThreadAsync(Func<Task> action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            await action().ConfigureAwait(true);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(action);
     }
 
     private static async Task RaiseAsync(Func<OutputLineViewModel, Task>? handlers, OutputLineViewModel line)
@@ -607,8 +800,8 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// A local video preview window stopped. <paramref name="userInitiated"/> is <see langword="true"/>
     /// only when the operator closed the OS window (clicked the title-bar X / quit), as opposed to our
     /// own programmatic teardown (Remove, reconfigure, shutdown). A user-closed window means the operator
-    /// is done with that output, so we drop the whole line from the I/O page - which also raises
-    /// <see cref="OutputLineRemoving"/> so any active playback session unwires its route first.
+    /// is done with that output, so we drop the whole line from the I/O page through the same awaited
+    /// detach path as the Remove command.
     /// </summary>
     internal void NotifyLocalPreviewEnded(OutputLineViewModel line, bool userInitiated = false)
     {
@@ -618,18 +811,25 @@ public partial class OutputManagementViewModel : ViewModelBase
         // Removing the line re-enters StopLocalPreview, but _localPreviews no longer holds this line
         // (removed just above) so that path is a no-op for the already-closed window - no double dispose.
         if (userInitiated && Outputs.Contains(line))
-            Remove(line);
+            _ = RemoveLineAsync(line);
     }
 
     internal void NotifyLocalPreviewResized(OutputLineViewModel line, int width, int height)
     {
         if (line.Definition is not LocalVideoOutputDefinition lv
-            || lv.SurfaceMode != VideoSurfaceMode.Windowed
             || width < 320
             || height < 240)
         {
             return;
         }
+
+        // Always retain the live framebuffer/window size for consumers such as the composition layout
+        // editor. Fullscreen dimensions are deliberately transient: persisting them into WindowWidth/
+        // WindowHeight would lose the operator's windowed restore size.
+        line.ReportLiveVideoSize(width, height);
+
+        if (lv.SurfaceMode != VideoSurfaceMode.Windowed)
+            return;
 
         if (lv.WindowWidth == width && lv.WindowHeight == height)
             return;
@@ -721,14 +921,6 @@ public partial class OutputManagementViewModel : ViewModelBase
         rt.ReleaseFromPlayback();
     }
 
-    /// <summary>Forwards optional hold-image size overrides to local preview runtimes.
-    /// Current runtime policy keeps window dimensions stable, so this is presently a no-op.</summary>
-    internal void ApplyHoldImageWindowSize(OutputLineViewModel line, int? width, int? height)
-    {
-        if (_localPreviews.TryGetValue(line, out var rt))
-            rt.ApplyHoldImageWindowSize(width, height);
-    }
-
     private void StopPortAudioOutput(OutputLineViewModel line)
     {
         PortAudioOutputRuntime? rt;
@@ -743,12 +935,12 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Returns the persistent audio output for the line so a playback session can route audio into the
-    /// already-open stream. Returns <c>null</c> if the line isn't an audio output, the runtime
-    /// isn't started yet, or another session already holds it. Callers MUST pair every successful acquire
-    /// with <see cref="ReleasePortAudioForPlayback"/>.
+    /// Returns an isolated producer lease into the line's shared persistent audio output. Multiple
+    /// sessions may acquire the same line concurrently without opening another backend stream.
     /// </summary>
-    internal IAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
+    internal SharedAudioOutputLease? TryAcquirePortAudioForPlayback(
+        OutputLineViewModel line,
+        bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
@@ -760,17 +952,307 @@ public partial class OutputManagementViewModel : ViewModelBase
         return rt.AcquireForPlayback(liveMonitoring);
     }
 
-    /// <summary>Releases the acquirer hold added by <see cref="TryAcquirePortAudioForPlayback"/>.</summary>
-    internal void ReleasePortAudioForPlayback(OutputLineViewModel line)
+    /// <summary>
+    /// Thread-safe line-id lookup for ShowSession audio factories, which run outside the UI thread
+    /// and therefore cannot enumerate the UI-bound <see cref="Outputs"/> collection.
+    /// </summary>
+    internal SharedAudioOutputLease? TryAcquirePortAudioByLineId(Guid lineId, bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
         {
-            if (!_portAudioOutputs.TryGetValue(line, out rt))
+            rt = _portAudioOutputs
+                .FirstOrDefault(pair => pair.Value.Definition.Id == lineId)
+                .Value;
+        }
+
+        return rt?.AcquireForPlayback(liveMonitoring);
+    }
+
+    private void EnsureFileRuntime(OutputLineViewModel line, FileOutputDefinition definition)
+    {
+        lock (_fileOutputsGate)
+        {
+            if (_fileOutputs.ContainsKey(line))
+                return;
+            _fileOutputs[line] = new FileOutputRuntime(definition);
+        }
+    }
+
+    /// <summary>App-shutdown: finalize every armed recording and live stream (flush encoders + write
+    /// trailers, stop the LAN server) so an exit mid-record never leaves a truncated file. Synchronous
+    /// best-effort; safe to call twice.</summary>
+    public void FinishAllRecordingsForShutdown()
+    {
+        List<FileOutputRuntime> runtimes;
+        lock (_fileOutputsGate)
+            runtimes = _fileOutputs.Values.ToList();
+        foreach (var rt in runtimes)
+        {
+            try { rt.Dispose(); }
+            catch { /* best effort */ }
+        }
+
+        List<LiveStreamOutputRuntime> streams;
+        lock (_liveStreamsGate)
+            streams = _liveStreams.Values.ToList();
+        foreach (var rt in streams)
+        {
+            try { rt.Dispose(); }
+            catch { /* best effort */ }
+        }
+    }
+
+    private void StopFileOutput(OutputLineViewModel line)
+    {
+        FileOutputRuntime? rt;
+        lock (_fileOutputsGate)
+        {
+            if (!_fileOutputs.Remove(line, out rt))
                 return;
         }
 
-        rt.ReleaseFromPlayback();
+        try { rt.Dispose(); } // finishes an in-flight recording best-effort (trailer written)
+        catch { /* best effort */ }
+        line.IsRecordArmed = false;
+    }
+
+    /// <summary>
+    /// Arms/disarms the line's encode session: for a file-record line this starts/finishes the file, for
+    /// a live-stream line it goes live / stops the stream. Wrapped in the same reconfigure events an
+    /// Edit uses so a live playback session detaches its routes first and re-acquires afterwards -
+    /// arming mid-show starts capturing/streaming without a restart. Failures (bad folder, missing
+    /// encoder, port in use) surface on the line's health detail.
+    /// </summary>
+    public async Task SetFileRecordArmedAsync(OutputLineViewModel line, bool armed)
+    {
+        FileOutputRuntime? fileRt = null;
+        LiveStreamOutputRuntime? streamRt = null;
+        switch (line.Definition)
+        {
+            case FileOutputDefinition fileDef:
+                lock (_fileOutputsGate)
+                    _fileOutputs.TryGetValue(line, out fileRt);
+                if (fileRt is null)
+                {
+                    EnsureFileRuntime(line, fileDef);
+                    lock (_fileOutputsGate)
+                        _fileOutputs.TryGetValue(line, out fileRt);
+                }
+
+                if (fileRt is null || fileRt.IsArmed == armed)
+                    return;
+                break;
+            case LiveStreamOutputDefinition streamDef:
+                lock (_liveStreamsGate)
+                    _liveStreams.TryGetValue(line, out streamRt);
+                if (streamRt is null)
+                {
+                    EnsureLiveStreamRuntime(line, streamDef);
+                    lock (_liveStreamsGate)
+                        _liveStreams.TryGetValue(line, out streamRt);
+                }
+
+                if (streamRt is null || streamRt.IsLive == armed)
+                    return;
+                break;
+            default:
+                return;
+        }
+
+        await RaiseAsync(OutputLineReconfiguringAsync, line).ConfigureAwait(true);
+        try
+        {
+            if (armed)
+            {
+                if (fileRt is not null)
+                {
+                    fileRt.Arm();
+                    line.RecordFilePath = fileRt.CurrentFilePath;
+                }
+                else if (streamRt is not null)
+                {
+                    streamRt.GoLive();
+                    line.RecordFilePath = FormatStreamUrls(streamRt);
+                }
+
+                line.IsRecordArmed = true;
+                line.HealthDetail = null;
+            }
+            else
+            {
+                if (fileRt is not null)
+                    await fileRt.DisarmAsync().ConfigureAwait(true);
+                else if (streamRt is not null)
+                    await streamRt.StopStreamAsync().ConfigureAwait(true);
+                line.IsRecordArmed = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "record/stream arm failed for '{Name}'", line.Definition.DisplayName);
+            line.IsRecordArmed = fileRt?.IsArmed ?? streamRt?.IsLive ?? false;
+            line.Health = OutputLineHealthState.Error;
+            line.HealthDetail = Strings.Format(nameof(Strings.RecordArmFailedFormat), ex.Message);
+        }
+        finally
+        {
+            await RaiseAsync(OutputLineReconfiguredAsync, line).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>The LAN URLs viewers open, shown in the detail pane while live.</summary>
+    private static string? FormatStreamUrls(LiveStreamOutputRuntime runtime)
+    {
+        var status = runtime.GetStatus();
+        if (status is null || status.LocalServerPort == 0)
+            return null;
+        var hosts = ResolveAdvertisableLanAddresses();
+        var parts = new List<string>(hosts.Count * 2);
+        foreach (var host in hosts)
+        {
+            if (status.TsUrlPath is { } ts)
+                parts.Add($"http://{host}:{status.LocalServerPort}{ts}");
+            if (status.HlsUrlPath is { } hls)
+                parts.Add($"http://{host}:{status.LocalServerPort}{hls}");
+        }
+        return parts.Count > 0 ? string.Join("\n", parts) : null;
+    }
+
+    private static IReadOnlyList<string> ResolveAdvertisableLanAddresses()
+    {
+        try
+        {
+            var addresses = System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName())
+                .Where(address => !System.Net.IPAddress.IsLoopback(address)
+                                  && !address.IsIPv6LinkLocal
+                                  && !address.IsIPv6Multicast)
+                .Select(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                    ? $"[{address}]"
+                    : address.ToString())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (addresses.Length > 0)
+                return addresses;
+        }
+        catch
+        {
+            // DNS/adapter enumeration can fail in a restricted container; retain a usable local URL.
+        }
+
+        return ["127.0.0.1"];
+    }
+
+    private void EnsureLiveStreamRuntime(OutputLineViewModel line, LiveStreamOutputDefinition definition)
+    {
+        lock (_liveStreamsGate)
+        {
+            if (_liveStreams.ContainsKey(line))
+                return;
+            _liveStreams[line] = new LiveStreamOutputRuntime(definition);
+        }
+    }
+
+    private void StopLiveStream(OutputLineViewModel line)
+    {
+        LiveStreamOutputRuntime? rt;
+        lock (_liveStreamsGate)
+        {
+            if (!_liveStreams.Remove(line, out rt))
+                return;
+        }
+
+        try { rt.Dispose(); }
+        catch { /* best effort */ }
+        line.IsRecordArmed = false;
+    }
+
+    /// <summary>Live-stream session status for the debug/health polls (null when not live).</summary>
+    internal S.Media.Stream.Http.LiveStreamStatus? TryGetLiveStreamStatus(OutputLineViewModel line)
+    {
+        LiveStreamOutputRuntime? rt;
+        lock (_liveStreamsGate)
+            _liveStreams.TryGetValue(line, out rt);
+        return rt?.GetStatus();
+    }
+
+    /// <summary>
+    /// Thread-safe acquire of an encode line's audio side by line id (the cue session's audio-output
+    /// factory runs on the SESSION dispatcher, so it must not touch the UI-bound <see cref="Outputs"/>
+    /// collection - this walks only the gated runtime dictionaries). Returns the armed session's
+    /// combined multi-track sink, or null when the line is unknown/disarmed/already held.
+    /// </summary>
+    internal IAudioOutput? TryAcquireEncodeAudioByLineId(Guid lineId)
+    {
+        lock (_fileOutputsGate)
+        {
+            foreach (var (line, rt) in _fileOutputs)
+                if (line.Definition.Id == lineId)
+                    return rt.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio;
+        }
+
+        lock (_liveStreamsGate)
+        {
+            foreach (var (line, rt) in _liveStreams)
+                if (line.Definition.Id == lineId)
+                    return rt.AcquireForPlayback(needsVideo: false, needsAudio: true).Audio;
+        }
+
+        return null;
+    }
+
+    /// <summary>Thread-safe release pair of <see cref="TryAcquireEncodeAudioByLineId"/>.</summary>
+    internal void ReleaseEncodeAudioByLineId(Guid lineId)
+    {
+        lock (_fileOutputsGate)
+        {
+            foreach (var (line, rt) in _fileOutputs)
+                if (line.Definition.Id == lineId)
+                {
+                    rt.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                    return;
+                }
+        }
+
+        lock (_liveStreamsGate)
+        {
+            foreach (var (line, rt) in _liveStreams)
+                if (line.Definition.Id == lineId)
+                {
+                    rt.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+                    return;
+                }
+        }
+    }
+
+    /// <summary>
+    /// Replaces a line's effect-insert list. Runs through <see cref="ReconfigureLineAsync"/> with
+    /// route detach so a LIVE deck/cue rewires and the next acquire builds the new chain (an edit
+    /// mid-show costs the same brief reconnect as any structural output edit).
+    /// </summary>
+    public Task UpdateLineEffectsAsync(OutputLineViewModel line, IReadOnlyList<OutputEffectDefinition> effects) =>
+        ReconfigureLineAsync(line, line.Definition with { Effects = effects.ToArray() });
+
+    /// <summary>The insertable effect kinds for the Effects picker (bus registry enumeration).</summary>
+    public static IReadOnlyList<OutputEffectChoice> AvailableEffectChoices { get; } = BuildEffectChoices();
+
+    private static OutputEffectChoice[] BuildEffectChoices()
+    {
+        var choices = new List<OutputEffectChoice>();
+        foreach (var kind in MediaRuntime.Buses.AudioEffectKinds.Order(StringComparer.OrdinalIgnoreCase))
+            choices.Add(new OutputEffectChoice($"{kind} (audio)", kind, OutputEffectTarget.Audio));
+        foreach (var kind in MediaRuntime.Buses.VideoEffectKinds.Order(StringComparer.OrdinalIgnoreCase))
+            choices.Add(new OutputEffectChoice($"{kind} (video)", kind, OutputEffectTarget.Video));
+        return choices.ToArray();
+    }
+
+    /// <summary>Armed file-record session metrics for the debug/health polls (null when disarmed).</summary>
+    internal S.Media.Encode.FFmpeg.FFmpegEncodeSessionMetrics? TryGetFileRecordMetrics(OutputLineViewModel line)
+    {
+        FileOutputRuntime? rt;
+        lock (_fileOutputsGate)
+            _fileOutputs.TryGetValue(line, out rt);
+        return rt?.GetMetrics();
     }
 
     private void StopNDIOutput(OutputLineViewModel line)
@@ -859,6 +1341,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             PortAudioOutputDefinition pa => await ShowEditPortAudioAsync(owner, pa),
             LocalVideoOutputDefinition lv => await ShowEditLocalVideoAsync(owner, lv),
             NDIOutputDefinition nd => await ShowEditNDIAsync(owner, nd),
+            FileOutputDefinition file => await ShowEditFileOutputAsync(owner, file),
+            LiveStreamOutputDefinition stream => await ShowEditLiveStreamAsync(owner, stream),
             _ => null,
         };
 
@@ -926,6 +1410,24 @@ public partial class OutputManagementViewModel : ViewModelBase
         vm.InitializeExistingOutputNames(ExistingOutputNames(nd.Id));
         var dlg = new AddNDIOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<NDIOutputDefinition?>(owner);
+    }
+
+    private async Task<FileOutputDefinition?> ShowEditFileOutputAsync(Window owner, FileOutputDefinition file)
+    {
+        var vm = new AddFileOutputDialogViewModel();
+        vm.LoadFromExisting(file);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(file.Id));
+        var dlg = new AddFileOutputDialog { DataContext = vm };
+        return await dlg.ShowDialog<FileOutputDefinition?>(owner);
+    }
+
+    private async Task<LiveStreamOutputDefinition?> ShowEditLiveStreamAsync(Window owner, LiveStreamOutputDefinition stream)
+    {
+        var vm = new AddLiveStreamOutputDialogViewModel();
+        vm.LoadFromExisting(stream);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(stream.Id));
+        var dlg = new AddLiveStreamOutputDialog { DataContext = vm };
+        return await dlg.ShowDialog<LiveStreamOutputDefinition?>(owner);
     }
 
     /// <summary>Operator's answer to the "output in use" edit prompt.</summary>
@@ -1110,6 +1612,46 @@ public partial class OutputManagementViewModel : ViewModelBase
     private bool CanAddNDI() => IsNDIAvailable;
 
     [RelayCommand]
+    private async Task AddFileOutputAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var vm = new AddFileOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
+        var dlg = new AddFileOutputDialog { DataContext = vm };
+        var result = await dlg.ShowDialog<FileOutputDefinition?>(owner);
+        if (result is null)
+            return;
+
+        var line = new OutputLineViewModel(result, Remove, this);
+        Outputs.Add(line);
+        EnsureFileRuntime(line, result);
+    }
+
+    [RelayCommand]
+    private async Task AddLiveStreamAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var vm = new AddLiveStreamOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
+        var dlg = new AddLiveStreamOutputDialog { DataContext = vm };
+        var result = await dlg.ShowDialog<LiveStreamOutputDefinition?>(owner);
+        if (result is null)
+            return;
+
+        var line = new OutputLineViewModel(result, Remove, this);
+        Outputs.Add(line);
+        EnsureLiveStreamRuntime(line, result);
+    }
+
+    [RelayCommand]
     private void ClearHealth()
     {
         // The ShowSession health probes read cumulative session counters (composition stats / audio pumps);
@@ -1173,6 +1715,8 @@ public partial class OutputManagementViewModel : ViewModelBase
                 }
             }
 
+            ApplyLiveStreamHealth(line, ref worst, ref detail);
+
             line.Health = worst;
             line.HealthDetail = detail;
             if (anyWired)
@@ -1212,6 +1756,86 @@ public partial class OutputManagementViewModel : ViewModelBase
         AggregateErrorCount = err;
     }
 
+    /// <summary>
+    /// Encode-destination health is independent from route throughput: a cue can submit perfectly
+    /// while an SRT/RTMP destination is reconnecting. Merge both signals instead of allowing the
+    /// playback probe to overwrite a start failure or make a detached network sink look healthy.
+    /// </summary>
+    private void ApplyLiveStreamHealth(
+        OutputLineViewModel line,
+        ref OutputLineHealthState worst,
+        ref string? detail)
+    {
+        if (line.Definition is not LiveStreamOutputDefinition)
+            return;
+
+        LiveStreamOutputRuntime? runtime;
+        lock (_liveStreamsGate)
+            _liveStreams.TryGetValue(line, out runtime);
+        if (runtime is null)
+            return;
+
+        var runtimeState = runtime.GetRuntimeState();
+        OutputLineHealthState state;
+        string? streamDetail;
+        if (!runtimeState.IsLive)
+        {
+            if (string.IsNullOrWhiteSpace(runtimeState.LastError))
+                return;
+            state = OutputLineHealthState.Error;
+            streamDetail = Strings.Format(nameof(Strings.StreamLiveStartFailedFormat), runtimeState.LastError);
+        }
+        else
+        {
+            var sinks = runtimeState.Status?.Encode.Sinks ?? [];
+            var unavailable = sinks.Where(sink => !sink.Healthy).ToArray();
+            if (sinks.Count == 0 || (unavailable.Length > 0 && unavailable.All(sink => sink.Error is null)))
+            {
+                state = OutputLineHealthState.Warning;
+                streamDetail = Strings.Format(nameof(Strings.StreamLiveConnectingFormat), Math.Max(1, sinks.Count));
+            }
+            else if (unavailable.Length > 0)
+            {
+                state = unavailable.Length == sinks.Count
+                    ? OutputLineHealthState.Error
+                    : OutputLineHealthState.Warning;
+                var reason = string.Join("; ", unavailable
+                    .Select(sink => sink.Error)
+                    .Where(error => !string.IsNullOrWhiteSpace(error))
+                    .Distinct(StringComparer.Ordinal));
+                if (reason.Length == 0)
+                    reason = "Destination unavailable.";
+                streamDetail = Strings.Format(
+                    nameof(Strings.StreamLiveDegradedFormat), unavailable.Length, sinks.Count, reason);
+            }
+            else
+            {
+                state = OutputLineHealthState.Healthy;
+                var bytes = sinks.Sum(sink => sink.BytesWritten);
+                streamDetail = Strings.Format(
+                    nameof(Strings.StreamLiveHealthyFormat), sinks.Count, FormatByteCount(bytes));
+            }
+        }
+
+        if (state > worst)
+        {
+            worst = state;
+            detail = streamDetail;
+        }
+        else if (state == worst && !string.IsNullOrWhiteSpace(streamDetail))
+        {
+            detail = string.IsNullOrWhiteSpace(detail) ? streamDetail : $"{detail} · {streamDetail}";
+        }
+    }
+
+    private static string FormatByteCount(long bytes) => bytes switch
+    {
+        >= 1024L * 1024L * 1024L => $"{bytes / (1024d * 1024d * 1024d):0.0} GiB",
+        >= 1024L * 1024L => $"{bytes / (1024d * 1024d):0.0} MiB",
+        >= 1024L => $"{bytes / 1024d:0.0} KiB",
+        _ => $"{Math.Max(0, bytes)} B",
+    };
+
     private static string FormatCueHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
         m.State == OutputLineHealthState.Healthy
             ? $"Cues: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch"
@@ -1238,3 +1862,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             _ => $"audio {m.AudioDropped:N0}/s dropped",
         };
 }
+
+/// <summary>One media module's availability for the I/O header chips (review P3-6). The name and
+/// checkmark render as ONE unbreakable unit; the skip reason lives in the tooltip of an unavailable
+/// module instead of inflating the header line.</summary>
+public sealed record MediaBackendStatus(string Name, bool Available, string? Detail);

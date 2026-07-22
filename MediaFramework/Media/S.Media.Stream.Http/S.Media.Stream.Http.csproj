@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Stream.Http - the LAN half of live streaming: a minimal raw-socket HTTP server that
+         broadcasts the encode session's MPEG-TS bytes to N clients (/stream.ts) and serves the FFmpeg
+         hls muxer's segments (/hls/live.m3u8). Composes with S.Media.Encode.FFmpeg's packet-sink seam;
+         no ASP.NET (AOT-safe, zero framework deps for a couple of GETs). -->
+
+    <PropertyGroup>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <Description>LAN HTTP streaming server (MPEG-TS broadcast + HLS) over the FFmpeg encode session.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Encode.FFmpeg/S.Media.Encode.FFmpeg.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="S.Media.Core" />
+        <Using Include="S.Media.Core.Diagnostics" />
+        <Using Include="S.Media.Encode.FFmpeg" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Stream.Http.Tests" />
+    </ItemGroup>
+
+</Project>

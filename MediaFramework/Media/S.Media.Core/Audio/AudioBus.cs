@@ -27,14 +27,10 @@ namespace S.Media.Core.Audio;
 /// upstream sources exhaust).
 /// </para>
 /// </remarks>
-public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IAudioSource
+public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IAudioSource, IFlushableOutput
 {
     private readonly AudioFormat _format;
-    private readonly int _channels;
-    private readonly float[] _ring;
-    private readonly int _ringMask;
-    private long _writeIndex;
-    private long _readIndex;
+    private readonly FrameAlignedFloatRing _ring;
     private long _overflowFloats;
     private long _underflowFloats;
 
@@ -49,19 +45,20 @@ public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IA
 
         var floatsPerSec = (long)format.SampleRate * format.Channels;
         var requestedFloats = (long)Math.Ceiling(requested.TotalSeconds * floatsPerSec);
-        var capFloats = (int)Math.Max(1024L, Math.Min(requestedFloats, int.MaxValue / 2));
-        var pow2 = 1;
-        while (pow2 < capFloats) pow2 <<= 1;
 
         _format = format;
-        _channels = format.Channels;
-        _ring = new float[pow2];
-        _ringMask = pow2 - 1;
+        _ring = new FrameAlignedFloatRing(format.Channels, requestedFloats);
     }
 
     public AudioFormat Format => _format;
-    public AudioOutputChannelCapabilities ChannelCapabilities => AudioOutputChannelCapabilities.Fixed(_channels);
+    public AudioOutputChannelCapabilities ChannelCapabilities => AudioOutputChannelCapabilities.Fixed(_format.Channels);
     public bool IsExhausted => false;
+
+    /// <summary>Approximate samples-per-channel currently buffered between the producer and consumer.</summary>
+    public int BufferedSamples => _ring.BufferedFrames;
+
+    /// <summary>Maximum samples-per-channel the ring can hold.</summary>
+    public int CapacitySamples => _ring.CapacityFrames;
 
     /// <summary>Total floats dropped by Submit because the ring was full (router buffer too small or downstream stuck).</summary>
     public long OverflowFloats => Volatile.Read(ref _overflowFloats);
@@ -71,58 +68,29 @@ public sealed class AudioBus : IAudioOutput, IAudioOutputChannelCapabilities, IA
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {
-        if ((packedSamples.Length % _channels) != 0)
-            throw new ArgumentException(
-                $"packedSamples.Length {packedSamples.Length} is not a multiple of channel count {_channels}",
-                nameof(packedSamples));
         if (packedSamples.Length == 0) return;
 
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var freeFloats = _ring.Length - (int)(write - read);
-        var toWrite = Math.Min(packedSamples.Length, Math.Max(0, freeFloats));
-
-        if (toWrite > 0)
-        {
-            var startIdx = (int)(write & _ringMask);
-            var firstChunk = Math.Min(toWrite, _ring.Length - startIdx);
-            packedSamples[..firstChunk].CopyTo(_ring.AsSpan(startIdx));
-            if (firstChunk < toWrite)
-                packedSamples.Slice(firstChunk, toWrite - firstChunk).CopyTo(_ring.AsSpan(0));
-            Volatile.Write(ref _writeIndex, write + toWrite);
-        }
-
-        var dropped = packedSamples.Length - toWrite;
+        var written = _ring.Write(packedSamples);
+        var dropped = packedSamples.Length - written;
         if (dropped > 0)
             Interlocked.Add(ref _overflowFloats, dropped);
     }
 
     public int ReadInto(Span<float> destination)
     {
-        if ((destination.Length % _channels) != 0)
-            throw new ArgumentException(
-                $"destination.Length {destination.Length} is not a multiple of channel count {_channels}",
-                nameof(destination));
         if (destination.Length == 0) return 0;
 
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var available = (int)(write - read);
-        var toRead = Math.Min(destination.Length, available);
-
-        if (toRead > 0)
-        {
-            var startIdx = (int)(read & _ringMask);
-            var firstChunk = Math.Min(toRead, _ring.Length - startIdx);
-            _ring.AsSpan(startIdx, firstChunk).CopyTo(destination);
-            if (firstChunk < toRead)
-                _ring.AsSpan(0, toRead - firstChunk).CopyTo(destination[firstChunk..]);
-            Volatile.Write(ref _readIndex, read + toRead);
-        }
-
-        var shortfall = destination.Length - toRead;
+        var read = _ring.Read(destination);
+        var shortfall = destination.Length - read;
         if (shortfall > 0)
             Interlocked.Add(ref _underflowFloats, shortfall);
-        return toRead;
+        return read;
     }
+
+    /// <summary>
+    /// Discards samples queued by this producer without affecting any downstream hardware output.
+    /// This makes a bus safe as one client of a shared physical output: pausing one client cannot
+    /// flush audio submitted by the other clients.
+    /// </summary>
+    public void Flush() => _ring.Clear();
 }

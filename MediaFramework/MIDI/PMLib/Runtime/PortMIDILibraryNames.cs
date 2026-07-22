@@ -11,7 +11,9 @@ public static class PortMIDILibraryNames
     /// <summary>Probe order on Linux.</summary>
     public static readonly string[] LinuxCandidates = ["libportmidi.so.2", "libportmidi.so", "portmidi"];
 
+    /// <summary>Probe order on macOS.</summary>
+    public static readonly string[] MacCandidates = ["libportmidi.2.dylib", "libportmidi.dylib", "portmidi"];
+
     /// <summary>Probe order on Windows (portmidi.dll is found automatically by the OS loader).</summary>
     public static readonly string[] WindowsCandidates = ["portmidi"];
 }
-

@@ -10,6 +10,18 @@ namespace S.Media.Source.MMD.Tests;
 /// </summary>
 public sealed class MMDModuleTests
 {
+    [Fact]
+    public void BulletResolverCandidates_SystemNamesPrecedeStagedApplicationShim()
+    {
+        var candidates = MMDBulletLibraryResolver.GetCandidates().ToArray();
+        var systemIndex = Array.FindIndex(candidates, candidate => !Path.IsPathRooted(candidate));
+        var appIndex = Array.FindIndex(candidates, candidate =>
+            candidate.StartsWith(AppContext.BaseDirectory, StringComparison.Ordinal));
+
+        Assert.True(systemIndex >= 0);
+        Assert.True(appIndex > systemIndex);
+    }
+
     // ---- synthetic fixtures ------------------------------------------------------------------------
 
     /// <summary>Tiny PMX 2.0: 3 vertices (BDEF1 on bone 1), 1 triangle, 1 red material, bones root+child.</summary>

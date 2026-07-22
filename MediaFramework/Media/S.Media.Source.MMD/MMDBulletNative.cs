@@ -12,7 +12,7 @@ namespace S.Media.Source.MMD;
 /// </summary>
 internal static unsafe partial class MMDBulletNative
 {
-    private const string Library = "mmd_bullet";
+    private const string Library = MMDBulletLibraryResolver.ImportName;
 
     /// <summary>ABI version this binding was generated against. MUST equal the shim's <c>MMD_ABI_VERSION</c>
     /// (see <c>mmd_bullet.h</c>) - bumped together on any breaking change to the signatures below (MMD-03).</summary>

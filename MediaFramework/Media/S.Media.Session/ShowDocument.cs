@@ -31,7 +31,11 @@ public sealed record ShowVideoPlacement(
     double CropTop = 0,
     double CropRight = 0,
     double CropBottom = 0,
-    ClipOutputMappingSpec? VideoFx = null);
+    ClipOutputMappingSpec? VideoFx = null,
+    // Optional chroma key ("green screen") for this placement's layer; null = disabled.
+    Compositor.ChromaKeySettings? ChromaKey = null,
+    // Optional brightness/contrast for this placement's layer; null = disabled.
+    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null);
 
 /// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
 /// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).
@@ -109,6 +113,11 @@ public sealed record ShowClipBinding(
     string? SubtitlePath = null,
     IReadOnlyList<ShowSubtitleSelection>? Subtitles = null)
 {
+    /// <summary>Video track selection: <c>null</c> = automatic election (which skips attached
+    /// pictures), <c>-1</c> = no video, otherwise the chosen container stream index. An explicit index
+    /// CAN select an attached-picture stream (embedded thumbnail / cover art).</summary>
+    public int? VideoStreamIndex { get; init; }
+
     public IReadOnlyList<ShowSubtitleSelection> GetSubtitleSelections()
     {
         if (Subtitles is { Count: > 0 })
@@ -245,4 +254,6 @@ public sealed record ShowDocument(
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(ShowDocument))]
+// Standalone root for the geometry-effect registry factory (OutputMappingGeometryEffect.FromJson).
+[JsonSerializable(typeof(ClipOutputMappingSpec))]
 internal partial class ShowDocumentJsonContext : JsonSerializerContext;

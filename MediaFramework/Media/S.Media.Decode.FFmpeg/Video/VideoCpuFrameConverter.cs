@@ -20,6 +20,23 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
     private PixelFormat _dst;
     private bool _disposed;
 
+    // Per-call swscale scratch, reused across Convert calls (the converter is documented
+    // non-reentrant; the router/pump serialize Convert). Nothing here escapes into emitted frames.
+    private readonly byte*[] _srcLines = new byte*[8];
+    private readonly int[] _srcStride = new int[8];
+    private readonly byte*[] _dstLines = new byte*[8];
+    private readonly int[] _dstStride8 = new int[8];
+    // Pin scratch is transient too (both sides are released inside Convert, before the frame is
+    // emitted); slots are reset to default after each dispose/free so the cleanup pass after a
+    // mid-pin failure only ever touches live handles.
+    private readonly MemoryHandle[] _srcPins = new MemoryHandle[PooledFrameRelease.MaxPlaneCount];
+    private readonly GCHandle[] _dstHandles = new GCHandle[PooledFrameRelease.MaxPlaneCount];
+    // Destination plane strides/lengths derive only from (_dst, _width, _height), so they are computed
+    // once per Configure. Every emitted VideoFrame gets its own stride copy via its PooledFrameRelease,
+    // so frames emitted under a previous configuration are unaffected by a reconfigure.
+    private int[] _dstPlaneStrides = [];
+    private int[] _dstPlaneLengths = [];
+
     /// <summary>True when libav can build a scaler for this width/height pair.</summary>
     public static bool CanConvert(PixelFormat src, PixelFormat dst, int width, int height)
     {
@@ -71,6 +88,17 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
         _dst = dst;
         _width = width;
         _height = height;
+
+        var nDst = PixelFormatInfo.PlaneCount(dst);
+        var strides = new int[nDst];
+        var lengths = new int[nDst];
+        for (var i = 0; i < nDst; i++)
+        {
+            strides[i] = PixelFormatInfo.PlaneByteWidth(dst, width, i);
+            lengths[i] = checked(strides[i] * PixelFormatInfo.PlaneHeight(dst, height, i));
+        }
+        _dstPlaneStrides = strides;
+        _dstPlaneLengths = lengths;
     }
 
     /// <summary>
@@ -104,10 +132,12 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
 
         // Pin arbitrary ReadOnlyMemory (managed arrays, pooled blocks, or unmanaged libav planes).
         // Pass-through FFmpeg frames use UnmanagedMemoryManager - GCHandle on arrays would fail.
-        var srcPins = new MemoryHandle[nSrc];
-        var srcLines = new byte*[8];
-        var srcStride = new int[8];
-        Array.Clear(srcStride);
+        // Pin/handle scratch is reused across calls (the converter is non-reentrant, see above); the
+        // dst plane buffers and their exact-length plane/stride arrays travel with the emitted frame
+        // in a PooledFrameRelease because the frame outlives this call.
+        var srcPins = _srcPins;
+        Array.Clear(_srcLines);
+        Array.Clear(_srcStride);
         try
         {
             for (var i = 0; i < nSrc; i++)
@@ -116,68 +146,57 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
                 var p = (byte*)srcPins[i].Pointer;
                 if (p == null)
                     throw new ArgumentException($"plane[{i}] could not be pinned for swscale", nameof(source));
-                srcLines[i] = p;
-                srcStride[i] = source.Strides[i];
+                _srcLines[i] = p;
+                _srcStride[i] = source.Strides[i];
             }
 
-            var dstStrides = new int[nDst];
-            for (var i = 0; i < nDst; i++)
-                dstStrides[i] = PixelFormatInfo.PlaneByteWidth(_dst, _width, i);
-
-            var dstMemories = new ReadOnlyMemory<byte>[nDst];
-            var dstBuffers = new byte[nDst][];
-            for (var i = 0; i < nDst; i++)
-            {
-                var ph = PixelFormatInfo.PlaneHeight(_dst, _height, i);
-                var len = checked(dstStrides[i] * ph);
-                var buf = ArrayPool<byte>.Shared.Rent(len);
-                dstBuffers[i] = buf;
-                dstMemories[i] = buf.AsMemory(0, len);
-            }
-
-            var dstHandles = new GCHandle[nDst];
-            var dstLines = new byte*[8];
-            Array.Clear(dstLines);
+            var lease = PooledFrameRelease.Rent(nDst);
+            var dstHandles = _dstHandles;
+            Array.Clear(_dstLines);
             try
             {
                 for (var i = 0; i < nDst; i++)
                 {
-                    if (!MemoryMarshal.TryGetArray(dstMemories[i], out var seg) || seg.Array is null)
-                        throw new InvalidOperationException("internal: dst plane not array-backed");
-                    dstHandles[i] = GCHandle.Alloc(seg.Array, GCHandleType.Pinned);
-                    dstLines[i] = (byte*)dstHandles[i].AddrOfPinnedObject() + seg.Offset;
+                    var buf = lease.RentPlane(i, _dstPlaneLengths[i], _dstPlaneStrides[i]);
+                    dstHandles[i] = GCHandle.Alloc(buf, GCHandleType.Pinned);
+                    _dstLines[i] = (byte*)dstHandles[i].AddrOfPinnedObject();
                 }
 
-                var dstStrideArr = new int[8];
+                Array.Clear(_dstStride8);
                 for (var i = 0; i < nDst; i++)
-                    dstStrideArr[i] = dstStrides[i];
+                    _dstStride8[i] = _dstPlaneStrides[i];
 
-                var ret = sws_scale(_ctx, srcLines, srcStride, 0, _height, dstLines, dstStrideArr);
+                var ret = sws_scale(_ctx, _srcLines, _srcStride, 0, _height, _dstLines, _dstStride8);
                 if (ret < 0)
                     FFmpegException.ThrowIfError(ret, nameof(sws_scale));
             }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
             finally
             {
-                foreach (var h in dstHandles)
+                for (var i = 0; i < nDst; i++)
                 {
-                    if (h.IsAllocated)
-                        h.Free();
+                    if (dstHandles[i].IsAllocated)
+                        dstHandles[i].Free();
+                    dstHandles[i] = default;
                 }
             }
 
             var fmt = new VideoFormat(_width, _height, _dst, source.Format.FrameRate);
-            return new VideoFrame(source.PresentationTime, fmt, dstMemories, dstStrides,
-                release: DisposableRelease.Wrap(() =>
-                {
-                    foreach (var b in dstBuffers)
-                        ArrayPool<byte>.Shared.Return(b);
-                }),
+            return new VideoFrame(source.PresentationTime, fmt, lease.Planes, lease.Strides,
+                release: lease,
                 metadata: source.Metadata with { ColorTransferHint = hint });
         }
         finally
         {
-            foreach (var h in srcPins)
-                h.Dispose();
+            for (var i = 0; i < nSrc; i++)
+            {
+                srcPins[i].Dispose();
+                srcPins[i] = default;
+            }
         }
     }
 

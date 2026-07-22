@@ -9,6 +9,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Compositor;
+using S.Media.Core.Video.Effects;
 
 namespace S.Media.Session;
 
@@ -67,6 +68,8 @@ public sealed class ClipCompositionRuntime : IDisposable
     private readonly TimeSpan _canvasPeriod;
     private long _nextLayerSequence;
     private long _framesComposited;
+    private readonly TimingAccumulator _pumpTiming = new();
+    private readonly TimingAccumulator _compositeTiming = new();
     private long _framesSubmitted;
     private long _pumpOverruns;
     private long _lastPumpFrameTicks;
@@ -79,6 +82,12 @@ public sealed class ClipCompositionRuntime : IDisposable
     private IPlaybackClock? _master;
     private IPlayhead? _timeline;
     private ITransportTimeline? _transportTimeline;
+    // Active transport-bound clips claim the composition clock for the lifetime of their placed layers.
+    // A composition is still one clock domain: claims for another timeline wait behind the current owner,
+    // then take over when its final claim is released. This lets sequential transport groups reuse one
+    // composition without leaving it permanently slaved to the first group's stopped timeline.
+    private readonly List<TransportTimelineClaim> _transportTimelineClaims = [];
+    private bool _masterOwnedByTransportClaim;
     private MediaClock? _slaveClock;
     private int _driverDisposeState;
     private bool _disposed;
@@ -238,7 +247,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)),
             Volatile.Read(ref _framesBehindMaster),
             _master is not null,
-            layerCount);
+            layerCount,
+            _pumpTiming.Snapshot(),
+            _compositeTiming.Snapshot(),
+            _canvasPeriod);
     }
 
     public void EnsurePumpStarted()
@@ -410,6 +422,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _master = master;
             _timeline = timeline;
             _transportTimeline = null;
+            _masterOwnedByTransportClaim = false;
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
             clockToRetarget = _slaveClock;
@@ -442,6 +455,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _transportTimeline = timeline;
             _timeline = null;
             _master = timeline;
+            _masterOwnedByTransportClaim = false;
             clockToRetarget = _slaveClock;
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
@@ -451,6 +465,131 @@ public sealed class ClipCompositionRuntime : IDisposable
         Trace.LogInformation(
             "ClipCompositionRuntime: composition {Composition} now follows the transport timeline",
             CompositionName);
+    }
+
+    /// <summary>
+    /// Claims this composition's single transport clock domain for an active clip. The first timeline owns the
+    /// domain while any of its claims remain; claims from other groups wait in acquisition order. Disposing the
+    /// returned lease releases this clip's ownership and atomically hands the clock to the next active timeline,
+    /// or returns the composition to free-running mode when no transport-bound layers remain.
+    /// </summary>
+    public IDisposable AcquireTransportTimeline(ITransportTimeline timeline)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        MediaClock? clockToRetarget = null;
+        var becameMaster = false;
+        TransportTimelineClaim claim;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            claim = new TransportTimelineClaim(this, timeline);
+            _transportTimelineClaims.Add(claim);
+
+            if (_master is null)
+            {
+                _transportTimeline = timeline;
+                _timeline = null;
+                _master = timeline;
+                _masterOwnedByTransportClaim = true;
+                clockToRetarget = _slaveClock;
+                becameMaster = true;
+                foreach (var layer in _slots)
+                    layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+            }
+        }
+
+        clockToRetarget?.SetMaster(timeline);
+        if (becameMaster)
+        {
+            Trace.LogInformation(
+                "ClipCompositionRuntime: composition {Composition} now follows an active transport timeline",
+                CompositionName);
+        }
+        return claim;
+    }
+
+    private void ReleaseTransportTimeline(TransportTimelineClaim claim)
+    {
+        MediaClock? clockToRetarget = null;
+        ITransportTimeline? nextTimeline = null;
+        var released = false;
+        var handedOff = false;
+        lock (_gate)
+        {
+            if (!_transportTimelineClaims.Remove(claim) || _disposed)
+                return;
+            if (!_masterOwnedByTransportClaim
+                || !ReferenceEquals(_transportTimeline, claim.Timeline)
+                || _transportTimelineClaims.Any(c => ReferenceEquals(c.Timeline, claim.Timeline)))
+            {
+                return;
+            }
+
+            nextTimeline = _transportTimelineClaims.Count > 0
+                ? _transportTimelineClaims[0].Timeline
+                : null;
+            _transportTimeline = nextTimeline;
+            _timeline = null;
+            _master = nextTimeline;
+            _masterOwnedByTransportClaim = nextTimeline is not null;
+            clockToRetarget = _slaveClock;
+            released = nextTimeline is null;
+            handedOff = nextTimeline is not null;
+        }
+
+        clockToRetarget?.SetMaster(nextTimeline);
+        if (handedOff)
+        {
+            Trace.LogInformation(
+                "ClipCompositionRuntime: composition {Composition} handed its clock to the next active transport timeline",
+                CompositionName);
+        }
+        else if (released)
+        {
+            Trace.LogInformation(
+                "ClipCompositionRuntime: composition {Composition} clock master released (no active transport layers)",
+                CompositionName);
+        }
+    }
+
+    /// <summary>
+    /// Releases the current clock master and any outstanding transport claims so the NEXT clip can re-master
+    /// this composition. The pump keeps running, free-running on its own clock in the meantime, so persistent
+    /// surface layers such as visualizers keep rendering. This is the escape hatch for the
+    /// "one clock domain until rebuilt"
+    /// contract: a PRESERVED composition (kept alive across a document reload) calls this once the outgoing
+    /// clip's group is torn down, so the incoming clip's <see cref="AcquireTransportTimeline"/> takes effect
+    /// instead of being ignored. Active clips normally release their individual claim leases instead.
+    /// </summary>
+    public void ResetClockMaster()
+    {
+        MediaClock? clockToClear;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _master = null;
+            _transportTimeline = null;
+            _timeline = null;
+            _masterOwnedByTransportClaim = false;
+            _transportTimelineClaims.Clear();
+            clockToClear = _slaveClock;
+        }
+
+        clockToClear?.SetMaster(null); // free-run until the next clip masters it
+        Trace.LogInformation(
+            "ClipCompositionRuntime: composition {Composition} clock master released (preserved across reload)",
+            CompositionName);
+    }
+
+    private sealed class TransportTimelineClaim(
+        ClipCompositionRuntime owner,
+        ITransportTimeline timeline) : IDisposable
+    {
+        private ClipCompositionRuntime? _owner = owner;
+        public ITransportTimeline Timeline { get; } = timeline;
+
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.ReleaseTransportTimeline(this);
     }
 
     public LayerSlot AddLayer(
@@ -511,7 +650,13 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// the layer AND disposes the surface (the runtime owns it - mirrors <see cref="LayerSlot"/> handing
     /// its slot back). Throws when <see cref="SupportsSurfaceLayers"/> is false.
     /// </summary>
-    public SurfaceLayerSlot AddSurfaceLayer(IVideoCompositorLayerSurface surface, VideoPlacementSpec placement)
+    /// <param name="ownsSurface">When true (default) the returned slot disposes <paramref name="surface"/>
+    /// on removal. Pass false to add the SAME surface into an ADDITIONAL placement (one visualizer render
+    /// shown in several sections of the canvas): the compositor keys ConfigureGl by surface instance and
+    /// renders it once per layer, so a single surface must be owned by exactly one slot to avoid a
+    /// double dispose. See <c>ShowSessionVisualizerService</c> (#26 multi-placement).</param>
+    public SurfaceLayerSlot AddSurfaceLayer(
+        IVideoCompositorLayerSurface surface, VideoPlacementSpec placement, bool ownsSurface = true)
     {
         ArgumentNullException.ThrowIfNull(surface);
         ArgumentNullException.ThrowIfNull(placement);
@@ -520,7 +665,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var rawSlot = _mixer.AddSurfaceSlot(surface);
-            layer = new SurfaceLayerSlot(this, rawSlot, placement);
+            layer = new SurfaceLayerSlot(this, rawSlot, placement, ownsSurface);
             try
             {
                 layer.ApplyPlacement();
@@ -846,8 +991,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (TryPumpIntegratedMultiWarp(masterPts, snapshot, sw))
             return;
 
+        var compositeStarted = Stopwatch.GetTimestamp();
         if (!_mixer.TryReadNextFrame(masterPts, out var frame))
             return;
+        _compositeTiming.RecordSince(compositeStarted);
         Interlocked.Increment(ref _framesComposited);
 
         var compositionStage = _compositionMappingStage;
@@ -976,6 +1123,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             return false;
 
         IReadOnlyList<VideoFrame> frames;
+        var compositeStarted = Stopwatch.GetTimestamp();
         try
         {
             if (!_mixer.TryReadNextFrames(masterPts, requests, out frames))
@@ -1001,6 +1149,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             return false;
         }
 
+        _compositeTiming.RecordSince(compositeStarted);
         Interlocked.Increment(ref _framesComposited);
         for (var i = 0; i < snapshot.Count; i++)
             SubmitToOutput(snapshot[i], frames[i]);
@@ -1036,6 +1185,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     private void RecordPumpTiming(TimeSpan elapsed, TimeSpan budget)
     {
+        _pumpTiming.Record(elapsed);
         Volatile.Write(ref _lastPumpFrameTicks, elapsed.Ticks);
         UpdateMaxTicks(ref _maxPumpFrameTicks, elapsed.Ticks);
 
@@ -1472,6 +1622,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     public sealed class SurfaceLayerSlot : IPlacedClipLayer
     {
         private readonly ClipCompositionRuntime _owner;
+        private readonly bool _ownsSurface;
         internal VideoCompositorSource.SurfaceSlot RawSlot { get; }
         private VideoPlacementSpec _placement;
         private int _disposed;
@@ -1479,11 +1630,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         internal SurfaceLayerSlot(
             ClipCompositionRuntime owner,
             VideoCompositorSource.SurfaceSlot slot,
-            VideoPlacementSpec placement)
+            VideoPlacementSpec placement,
+            bool ownsSurface = true)
         {
             _owner = owner;
             RawSlot = slot;
             _placement = placement;
+            _ownsSurface = ownsSurface;
             Sequence = Interlocked.Increment(ref owner._nextLayerSequence);
         }
 
@@ -1516,7 +1669,8 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         /// <summary>Resolves the placement to the surface's canvas transform - the same
         /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
-        /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity).</summary>
+        /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity). A
+        /// placement with VideoFx takes the mapping/warp section path, media-layer parity.</summary>
         internal void ApplyPlacement()
         {
             var destRect = new RectNormalized(
@@ -1524,27 +1678,81 @@ public sealed class ClipCompositionRuntime : IDisposable
                 (float)_placement.DestY,
                 (float)(_placement.DestX + _placement.DestWidth),
                 (float)(_placement.DestY + _placement.DestHeight));
+
+            if (_placement.VideoFx is { } videoFx)
+            {
+                ApplyMappedPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
+                return;
+            }
+
             var (transform, _) = PlacementResolver.Resolve(
                 destRect,
                 LayerSlot.MapFit(_placement.Placement),
                 0f, 0f, 0f, 0f,
                 _owner._canvasFormat,
                 _owner._canvasFormat);
+            transform = ApplyPlacementRotation(transform);
 
-            if (_placement.RotationDegrees != 0)
-            {
-                var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
-                var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
-                var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
-                transform = LayerTransform2D.Compose(
-                    LayerTransform2D.Translate(cx, cy),
-                    LayerTransform2D.Compose(
-                        LayerTransform2D.Rotate(rad),
-                        LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
-            }
-
+            RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
+            // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
+            RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
+        }
+
+        /// <summary>Mirror of <see cref="LayerSlot.ApplyGeometryPlacement"/> with the canvas as the
+        /// source: the mapping's sections sample the surface's full-canvas render, so section crops,
+        /// transforms and meshes mean the same thing they do on a media layer.</summary>
+        private void ApplyMappedPlacement(RectNormalized destRect, IVideoLayerGeometryEffect geometry)
+        {
+            var canvas = _owner._canvasFormat;
+            var effectFormat = geometry.ResolveOutputFormat(canvas);
+            var (effectTransform, _) = PlacementResolver.Resolve(
+                destRect,
+                LayerSlot.MapFit(_placement.Placement),
+                0f, 0f, 0f, 0f,
+                effectFormat,
+                canvas);
+            effectTransform = ApplyPlacementRotation(effectTransform);
+
+            var sourceBounds = new RectNormalized(
+                Math.Clamp((float)_placement.CropLeft, 0f, 0.99f),
+                Math.Clamp((float)_placement.CropTop, 0f, 0.99f),
+                1f - Math.Clamp((float)_placement.CropRight, 0f, 0.99f),
+                1f - Math.Clamp((float)_placement.CropBottom, 0f, 0.99f)).Clamped();
+
+            var resolved = geometry.ResolveSections(canvas.Width, canvas.Height, sourceBounds);
+            var sections = new WarpSection[resolved.Count];
+            for (var i = 0; i < resolved.Count; i++)
+            {
+                var section = resolved[i];
+                sections[i] = new WarpSection(
+                    section.SourceCrop,
+                    LayerTransform2D.Compose(effectTransform, section.Transform),
+                    section.Opacity,
+                    section.Mesh is null ? null : LayerSlot.TransformMesh(section.Mesh, effectTransform));
+            }
+
+            RawSlot.MappingSections = sections;
+            RawSlot.Transform = LayerTransform2D.Identity;
+            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
+        }
+
+        private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)
+        {
+            if (_placement.RotationDegrees == 0)
+                return transform;
+
+            var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
+            var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
+            var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
+            return LayerTransform2D.Compose(
+                LayerTransform2D.Translate(cx, cy),
+                LayerTransform2D.Compose(
+                    LayerTransform2D.Rotate(rad),
+                    LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
         }
 
         public void Dispose()
@@ -1552,7 +1760,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             _owner.RemoveSurfaceLayer(this);
-            Surface.Dispose();
+            // A non-owning slot shares its surface with the owning slot (one surface, several placements);
+            // only the owner disposes it, so the shared surface is not torn down while still rendered.
+            if (_ownsSurface)
+                Surface.Dispose();
         }
     }
 
@@ -1649,11 +1860,37 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.SourceCrop = crop;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
+            RawSlot.Effects = BuildLayerEffects(_placement);
         }
 
-        private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx)
+        /// <summary>Color-stage effect chain for this placement. Chroma key runs FIRST (keying must
+        /// see the original colors - a brightness shift would move pixels off the key), then
+        /// brightness/contrast on the survivors. Hosts driving <c>Slot.Effects</c> directly own
+        /// the whole list.</summary>
+        internal static IReadOnlyList<VideoLayerEffect>? BuildLayerEffects(VideoPlacementSpec placement)
         {
-            var effectFormat = OutputMappingResolver.ResolveOutputFormat(videoFx, _source);
+            if (placement is { ChromaKey: null, ColorAdjust: null })
+                return null;
+            var effects = new List<VideoLayerEffect>(2);
+            if (placement.ChromaKey is { } key)
+                effects.Add(S.Media.Compositor.Effects.ChromaKeyVideoEffect.Create(key));
+            if (placement.ColorAdjust is { } adjust)
+                effects.Add(S.Media.Compositor.Effects.BrightnessContrastVideoEffect.Create(adjust));
+            return effects;
+        }
+
+        private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx) =>
+            ApplyGeometryPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
+
+        /// <summary>
+        /// Places a layer through a geometry-stage effect (<see cref="IVideoLayerGeometryEffect"/>):
+        /// the effect resolves its sections in its own output space; the placement's dest-rect/fit
+        /// transform is then composed onto every section (and its mesh) so the existing layout
+        /// controls keep their meaning. The mapping/warp "VideoFx" is the built-in implementation.
+        /// </summary>
+        private void ApplyGeometryPlacement(RectNormalized destRect, IVideoLayerGeometryEffect geometry)
+        {
+            var effectFormat = geometry.ResolveOutputFormat(_source);
             var (effectTransform, _) = PlacementResolver.Resolve(
                 destRect,
                 MapFit(_placement.Placement),
@@ -1672,11 +1909,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 1f - Math.Clamp((float)_placement.CropRight, 0f, 0.99f),
                 1f - Math.Clamp((float)_placement.CropBottom, 0f, 0.99f)).Clamped();
 
-            var resolved = OutputMappingResolver.Resolve(
-                videoFx,
-                _source.Width,
-                _source.Height,
-                sourceBounds);
+            var resolved = geometry.ResolveSections(_source.Width, _source.Height, sourceBounds);
 
             var sections = new WarpSection[resolved.Count];
             for (var i = 0; i < resolved.Count; i++)
@@ -1695,6 +1928,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.SourceCrop = RectNormalized.Full;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
+            RawSlot.Effects = BuildLayerEffects(_placement);
         }
 
         private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)
@@ -1712,7 +1946,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                     LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
         }
 
-        private static WarpMesh TransformMesh(WarpMesh mesh, LayerTransform2D transform)
+        internal static WarpMesh TransformMesh(WarpMesh mesh, LayerTransform2D transform)
         {
             var points = new System.Numerics.Vector2[mesh.Points.Length];
             for (var i = 0; i < points.Length; i++)
@@ -1752,7 +1986,10 @@ public readonly record struct ClipCompositionRuntimeStats(
     TimeSpan MaxPumpFrameTime,
     long FramesBehindMaster,
     bool ClockMastered,
-    int LayerCount = 0);
+    int LayerCount = 0,
+    TimingSnapshot PumpTiming = default,
+    TimingSnapshot CompositeTiming = default,
+    TimeSpan CanvasPeriod = default);
 
 public readonly record struct ClipCompositionDriftWarning(
     string CompositionId,

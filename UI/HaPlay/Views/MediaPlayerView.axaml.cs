@@ -13,7 +13,14 @@ namespace HaPlay.Views;
 
 public partial class MediaPlayerView : UserControl
 {
-    private const double CompactWidthThreshold = 500;
+    // The transport row's natural width is ~830px (Prev/Play/HOLD/▾/VIZ/▾/Next + Mute/volume/dB/
+    // Playback/Stop). The old 500px threshold left a wide band - INCLUDING the 960×640 default
+    // window - where the centered row overflowed and clipped the panic-path controls (review P2-10).
+    // Compact (<900) hides the dB label / jump box and shrinks the volume slider; tight (<560) also
+    // drops the VIZ group, config dropdowns and playback options so the core transport always fits
+    // down to the 720px MinWidth window. MediaPlayerTransportLayoutTests asserts these budgets.
+    private const double CompactWidthThreshold = 900;
+    private const double TightWidthThreshold = 560;
 
     public MediaPlayerView()
     {
@@ -40,11 +47,16 @@ public partial class MediaPlayerView : UserControl
 
     private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
     {
-        var isCompact = e.NewSize.Width < CompactWidthThreshold;
-        if (isCompact && !Classes.Contains("compact"))
-            Classes.Add("compact");
-        else if (!isCompact && Classes.Contains("compact"))
-            Classes.Remove("compact");
+        SetClass("compact", e.NewSize.Width < CompactWidthThreshold);
+        SetClass("tight", e.NewSize.Width < TightWidthThreshold);
+    }
+
+    private void SetClass(string name, bool present)
+    {
+        if (present && !Classes.Contains(name))
+            Classes.Add(name);
+        else if (!present && Classes.Contains(name))
+            Classes.Remove(name);
     }
 
     private void OnPlaylistDragOver(object? sender, DragEventArgs e)
@@ -165,6 +177,15 @@ public partial class MediaPlayerView : UserControl
         dialog.Show(owner);
     }
 
+    private void OnVisualizerSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm
+            || TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+        var dialog = new Dialogs.VisualizerSettingsDialog { DataContext = vm };
+        dialog.Show(owner);
+    }
+
     private void OnPlayerNameDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is TextBox tb)
@@ -216,6 +237,17 @@ public partial class MediaPlayerView : UserControl
     {
         if (DataContext is MediaPlayerViewModel vm)
             vm.ToggleMiddleTimeDisplay();
+    }
+
+    /// <summary>Keeps the VM's playlist multi-selection in sync so the context-menu actions
+    /// (Move up/down, Remove) apply to every highlighted row, mirroring the cue tree.</summary>
+    private void OnPlaylistSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        _ = e;
+        if (DataContext is not MediaPlayerViewModel vm || sender is not ListBox listBox)
+            return;
+        vm.UpdatePlaylistSelection(
+            listBox.SelectedItems?.OfType<PlaylistItem>().ToList() ?? []);
     }
 
     private void OnPlaylistItemDoubleTapped(object? sender, TappedEventArgs e)

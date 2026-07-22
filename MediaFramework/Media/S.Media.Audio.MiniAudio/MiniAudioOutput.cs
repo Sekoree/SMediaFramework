@@ -19,12 +19,9 @@ public sealed unsafe class MiniAudioOutput :
     private readonly AudioFormat _format;
     private readonly string? _deviceId;
     private readonly uint _periodSizeFrames;
-    private readonly float[] _ringBuffer;
-    private readonly int _ringMask;
+    private readonly FrameAlignedFloatRing _ring;
     private readonly Lock _deviceLifecycleGate = new();
 
-    private long _writeIndex;
-    private long _readIndex;
     private long _playedSamples;
     private long _droppedSamples;
     private long _underrunSamples;
@@ -53,12 +50,8 @@ public sealed unsafe class MiniAudioOutput :
         _deviceId = string.IsNullOrWhiteSpace(deviceId) ? null : deviceId;
         _periodSizeFrames = (uint)framesPerBuffer;
 
-        var capacityFloats = ringCapacityFrames * format.Channels;
-        var rounded = 1;
-        while (rounded < capacityFloats) rounded <<= 1;
-        _ringBuffer = new float[rounded];
-        _ringMask = rounded - 1;
-        TargetQueueSamples = rounded / 2 / format.Channels;
+        _ring = new FrameAlignedFloatRing(format.Channels, (long)ringCapacityFrames * format.Channels);
+        TargetQueueSamples = _ring.CapacityFrames / 2;
     }
 
     public AudioFormat Format => _format;
@@ -72,9 +65,9 @@ public sealed unsafe class MiniAudioOutput :
 
     public long PlayedSamples => Volatile.Read(ref _playedSamples);
 
-    public int QueuedSamples => (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _format.Channels);
+    public int QueuedSamples => _ring.BufferedFrames;
 
-    public int CapacitySamples => _ringBuffer.Length / _format.Channels;
+    public int CapacitySamples => _ring.CapacityFrames;
 
     public long DroppedSamples => Volatile.Read(ref _droppedSamples);
 
@@ -190,8 +183,7 @@ public sealed unsafe class MiniAudioOutput :
                     _selfHandle.Free();
                 Volatile.Write(ref _isRunning, false);
                 Volatile.Write(ref _deviceStoppedAfterFlush, 0);
-                Volatile.Write(ref _writeIndex, 0);
-                Volatile.Write(ref _readIndex, 0);
+                _ring.Clear();
             }
 
             MiniAudioException.ThrowIfError(stopResult, "ma_device_stop(playback)");
@@ -209,20 +201,7 @@ public sealed unsafe class MiniAudioOutput :
                 $"packedSamples.Length {packedSamples.Length} is not a multiple of channel count {_format.Channels}",
                 nameof(packedSamples));
 
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var freeFloats = _ringBuffer.Length - (int)(write - read);
-        var toWrite = Math.Min(packedSamples.Length, freeFloats);
-
-        if (toWrite > 0)
-        {
-            var startIdx = (int)(write & _ringMask);
-            var firstChunk = Math.Min(toWrite, _ringBuffer.Length - startIdx);
-            packedSamples[..firstChunk].CopyTo(_ringBuffer.AsSpan(startIdx));
-            if (firstChunk < toWrite)
-                packedSamples.Slice(firstChunk, toWrite - firstChunk).CopyTo(_ringBuffer.AsSpan(0));
-            Volatile.Write(ref _writeIndex, write + toWrite);
-        }
+        var toWrite = _ring.Write(packedSamples);
 
         var dropped = packedSamples.Length - toWrite;
         if (dropped > 0)
@@ -280,8 +259,7 @@ public sealed unsafe class MiniAudioOutput :
         {
             if (_disposed || !Volatile.Read(ref _isRunning) || _device == nint.Zero) return;
             MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStop(_device), "ma_device_stop(playback flush)");
-            Volatile.Write(ref _writeIndex, 0);
-            Volatile.Write(ref _readIndex, 0);
+            _ring.Clear();
             Interlocked.Exchange(ref _underrunSamples, 0);
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
             Volatile.Write(ref _deviceStoppedAfterFlush, 1);
@@ -289,22 +267,7 @@ public sealed unsafe class MiniAudioOutput :
         }
     }
 
-    internal int TryDrainForTest(Span<float> destination)
-    {
-        var read = Volatile.Read(ref _readIndex);
-        var write = Volatile.Read(ref _writeIndex);
-        var available = (int)(write - read);
-        var toRead = Math.Min(destination.Length, available);
-        if (toRead == 0) return 0;
-
-        var startIdx = (int)(read & _ringMask);
-        var firstChunk = Math.Min(toRead, _ringBuffer.Length - startIdx);
-        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(destination);
-        if (firstChunk < toRead)
-            _ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(destination[firstChunk..]);
-        Volatile.Write(ref _readIndex, read + toRead);
-        return toRead;
-    }
+    internal int TryDrainForTest(Span<float> destination) => _ring.Read(destination);
 
     private void EnsureDeviceRunningAfterFlush()
     {
@@ -346,20 +309,7 @@ public sealed unsafe class MiniAudioOutput :
             }
 
             var output = new Span<float>(outputBuffer, totalFloats);
-            var read = Volatile.Read(ref self._readIndex);
-            var write = Volatile.Read(ref self._writeIndex);
-            var available = (int)(write - read);
-            var toRead = Math.Min(totalFloats, available);
-
-            if (toRead > 0)
-            {
-                var startIdx = (int)(read & self._ringMask);
-                var firstChunk = Math.Min(toRead, self._ringBuffer.Length - startIdx);
-                self._ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(output);
-                if (firstChunk < toRead)
-                    self._ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(output[firstChunk..]);
-                Volatile.Write(ref self._readIndex, read + toRead);
-            }
+            var toRead = self._ring.Read(output);
 
             if (toRead < totalFloats)
             {
@@ -369,7 +319,12 @@ public sealed unsafe class MiniAudioOutput :
                     Interlocked.Add(ref self._underrunSamples, underrunFrames);
             }
 
-            Interlocked.Add(ref self._playedSamples, frameCount);
+            // Count only CONSUMED frames, matching PortAudioOutput: _playedSamples drives
+            // ElapsedSinceStart (the A/V master clock when this output paces playback), and
+            // counting underrun silence as played skipped the clock forward past the submitted
+            // content on every dropout - permanent lip-sync drift on the miniaudio backend.
+            if (toRead > 0)
+                Interlocked.Add(ref self._playedSamples, toRead / self._format.Channels);
         }
         catch (Exception ex)
         {

@@ -1,0 +1,205 @@
+using S.Media.Core.Buses;
+using Xunit;
+
+namespace S.Media.Session.Tests;
+
+/// <summary>Phase 4 session integration: audio taps ride along on fired clips; metadata publishes on fire.</summary>
+public sealed class BusIntegrationTests
+{
+    private static ShowDocument OneAudioCue(string mediaPath = "fake://song") => new(
+        Version: 1,
+        Cues: [new CueDefinition("cue1", 1, "One")],
+        Clips: [new ShowClipBinding("cue1", mediaPath)],
+        Compositions: [],
+        Routes: []);
+
+    private sealed class CountingTap : IAudioOutput
+    {
+        private long _samples;
+        public AudioFormat Format { get; } = new(48_000, 2);
+        public long Samples => Volatile.Read(ref _samples);
+        public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Add(ref _samples, packedSamples.Length);
+    }
+
+    private sealed class ForwardingRateAdapter(IAudioOutput inner, AudioFormat routerFormat)
+        : IAudioOutput, IDisposable
+    {
+        public bool Disposed { get; private set; }
+        public AudioFormat Format => routerFormat;
+        public void Submit(ReadOnlySpan<float> packedSamples) => inner.Submit(packedSamples);
+        public void Dispose() => Disposed = true;
+    }
+
+    private sealed class RecordingSink : IBusMetadataSink
+    {
+        public readonly List<MediaItemMetadata> Items = [];
+        public void OnItemMetadata(MediaItemMetadata metadata)
+        {
+            lock (Items) Items.Add(metadata);
+        }
+
+        public void OnFrameStats(in FrameStatsMetadata stats) { }
+    }
+
+    [Fact]
+    public async Task RegisteredAudioTap_ReceivesSamplesFromAFiredClip()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 2048));
+        session.LoadDocument(OneAudioCue());
+
+        var tap = new CountingTap();
+        await session.RegisterAudioTapAsync(tap);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue1"));
+
+        // The router pumps chunks on its own thread; poll briefly for the tap to see audio.
+        for (var i = 0; i < 100 && tap.Samples == 0; i++)
+            await Task.Delay(20);
+        Assert.True(tap.Samples > 0, "tap received no audio from the fired clip");
+
+        await session.StopAsync(fade: false);
+    }
+
+    [Fact]
+    public async Task FixedRateTap_IsAdaptedToAClipWithADifferentNativeRate()
+    {
+        ForwardingRateAdapter? adapter = null;
+        var registry = MediaRegistry.Build(builder => builder
+            .AddDecoder(new FakeAudioDecoderProvider(chunks: 2048, sampleRate: 44_100))
+            .SetResamplingOutputFactory((inner, routerFormat) =>
+                adapter = new ForwardingRateAdapter(inner, routerFormat)));
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneAudioCue());
+
+        var tap = new CountingTap(); // fixed 48 kHz, like projectM
+        var tapId = await session.RegisterAudioTapAsync(tap);
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue1"));
+
+        for (var i = 0; i < 100 && tap.Samples == 0; i++)
+            await Task.Delay(20);
+
+        Assert.NotNull(adapter);
+        Assert.Equal(new AudioFormat(44_100, 2), adapter.Format);
+        Assert.True(tap.Samples > 0, "the adapted tap received no audio from the 44.1 kHz clip");
+
+        await session.UnregisterAudioTapAsync(tapId);
+        Assert.True(adapter.Disposed, "unregister must release the session-owned rate adapter");
+        await session.StopAsync(fade: false);
+    }
+
+    [Fact]
+    public async Task UnregisteredTap_IsExcludedFromLaterFires()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 2048));
+        session.LoadDocument(OneAudioCue());
+
+        var tap = new CountingTap();
+        var id = await session.RegisterAudioTapAsync(tap);
+        await session.UnregisterAudioTapAsync(id);
+
+        await session.FireCueAsync("cue1");
+        await Task.Delay(200);
+        Assert.Equal(0, tap.Samples);
+
+        await session.StopAsync(fade: false);
+    }
+
+    [Fact]
+    public async Task Fire_PublishesItemMetadata_WithFilenameFallbackTitle()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        session.LoadDocument(OneAudioCue("fake://tracks/my-song.flac"));
+
+        var sink = new RecordingSink();
+        session.MetadataHub.Attach(sink);
+
+        await session.FireCueAsync("cue1");
+
+        MediaItemMetadata? published;
+        lock (sink.Items) published = sink.Items.FirstOrDefault();
+        Assert.NotNull(published);
+        Assert.Equal("my-song", published.Title);
+        Assert.Equal("fake://tracks/my-song.flac", published.SourceUri);
+        Assert.Equal("my-song", session.MetadataHub.CurrentItem?.Title);
+    }
+
+    [Fact]
+    public async Task Fire_RichMetadataProbe_RefinesTheFallback()
+    {
+        var probed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            metadataProbe: _ =>
+            {
+                probed.TrySetResult();
+                return new MediaItemMetadata("Real Title", "Real Artist", "Real Album");
+            });
+        session.LoadDocument(OneAudioCue());
+
+        await session.FireCueAsync("cue1");
+        await probed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The probe publishes asynchronously right after it runs; poll briefly.
+        for (var i = 0; i < 100 && session.MetadataHub.CurrentItem?.Artist is null; i++)
+            await Task.Delay(10);
+
+        Assert.Equal("Real Title", session.MetadataHub.CurrentItem?.Title);
+        Assert.Equal("Real Artist", session.MetadataHub.CurrentItem?.Artist);
+    }
+
+    [Fact]
+    public async Task SlowOldMetadataProbe_CannotOverwriteNewerItem()
+    {
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondProbed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(chunks: 2048),
+            metadataProbe: path =>
+            {
+                if (path.EndsWith("first.flac", StringComparison.Ordinal))
+                {
+                    firstEntered.TrySetResult();
+                    releaseFirst.Task.GetAwaiter().GetResult();
+                    return new MediaItemMetadata("Stale First", "Old Artist");
+                }
+
+                secondProbed.TrySetResult();
+                return new MediaItemMetadata("Current Second", "New Artist");
+            });
+        session.LoadDocument(new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("first", 1, "First"),
+                new CueDefinition("second", 2, "Second"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("first", "fake://tracks/first.flac"),
+                new ShowClipBinding("second", "fake://tracks/second.flac"),
+            ],
+            Compositions: [],
+            Routes: []));
+
+        try
+        {
+            await session.FireCueAsync("first");
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await session.FireCueAsync("second");
+            Assert.Equal("second", session.MetadataHub.CurrentItem?.Title);
+
+            releaseFirst.TrySetResult();
+            await secondProbed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var i = 0; i < 100 && session.MetadataHub.CurrentItem?.Artist != "New Artist"; i++)
+                await Task.Delay(10);
+
+            Assert.Equal("Current Second", session.MetadataHub.CurrentItem?.Title);
+            Assert.Equal("New Artist", session.MetadataHub.CurrentItem?.Artist);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
+    }
+}

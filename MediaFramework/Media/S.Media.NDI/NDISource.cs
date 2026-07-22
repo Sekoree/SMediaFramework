@@ -40,13 +40,16 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     private readonly object _videoPtsLock = new();
     private readonly int _maxQueuedVideoFrames;
 
-    private AudioFormatSnapshot? _audioState;
+    private NDIAudioJitterBuffer? _audioState;
     private VideoFormat _videoFormat;
     private PixelFormat[] _videoNative = [];
     private TimeSpan _videoPtsStep = TimeSpan.FromMilliseconds(33);
     private TimeSpan _nextVideoPts;
     private TimeSpan _videoRebaseBasePts;
     private TimeSpan _lastResolvedVideoPts;
+    // Bumped (under _videoPtsLock) by every RebaseVideoToLatest so a frame whose PTS was resolved
+    // before a rebase is not enqueued after it - see ProcessVideoFrame.
+    private long _videoTimelineGeneration;
     private long _videoNDITimingOriginTicks;
     private bool _videoNDITimingOriginSet;
     private bool _hasLastResolvedVideoPts;
@@ -360,15 +363,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         var keepFrames = Math.Max(0, (int)(keep.TotalSeconds * snap.Format.SampleRate));
         var keepFloats = checked(keepFrames * snap.Channels);
 
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var buffered = (int)(write - read);
-        if (buffered <= keepFloats) return;
-
-        Volatile.Write(ref snap.ReadIndex, read + (buffered - keepFloats));
-        // Keep Primed when enough samples remain so Play/Prefill can read immediately - clearing Primed
-        // forces another 50 ms holdback and causes PortAudio underruns on the first chunk.
-        Volatile.Write(ref snap.Primed, keepFloats >= snap.MinBufferedFloats ? 1 : 0);
+        snap.RebaseToLatest(keepFloats);
     }
 
     public void RebaseVideoToLatest(TimeSpan nextPresentationTime = default)
@@ -378,6 +373,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
             nextPresentationTime = TimeSpan.Zero;
         lock (_videoPtsLock)
         {
+            _videoTimelineGeneration++;
             while (_videoQueue.TryDequeue(out var frame))
                 frame.Dispose();
             _nextVideoPts = nextPresentationTime;
@@ -399,26 +395,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         var snap = Volatile.Read(ref _audioState);
         if (snap is null) return 0;
 
-        var channels = snap.Channels;
-        if (dst.Length % channels != 0)
-            throw new ArgumentException(
-                $"dst length {dst.Length} is not a multiple of channel count {channels}", nameof(dst));
-
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var available = (int)(write - read);
-        var primed = Volatile.Read(ref snap.Primed) != 0;
-        var toRead = NDIAudioReceiver.ComputeReadCount(dst.Length, available, snap.MinBufferedFloats, ref primed);
-        Volatile.Write(ref snap.Primed, primed ? 1 : 0);
-        if (toRead == 0) return 0;
-
-        var startIdx = (int)(read & snap.RingMask);
-        var firstChunk = Math.Min(toRead, snap.RingBuffer.Length - startIdx);
-        snap.RingBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
-        if (firstChunk < toRead)
-            snap.RingBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
-        Volatile.Write(ref snap.ReadIndex, read + toRead);
-        return toRead;
+        return snap.ReadInto(dst);
     }
 
     private bool TryReadNextVideoFrame(out VideoFrame frame)
@@ -524,7 +501,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         {
             if (audioPin.IsAllocated) audioPin.Free();
             Trace.LogDebug(
-                "CaptureLoop: exiting (audioOverflow={AudioOverflow}, videoOverflow={VideoOverflow}, videoUnpackDrops={VideoDrops}, videoFrames={VideoFrames})",
+                "CaptureLoop: exiting (audioOverflowFloats={AudioOverflow}, videoOverflowFrames={VideoOverflow}, videoUnpackDrops={VideoDrops}, videoFrames={VideoFrames})",
                 Volatile.Read(ref _audioOverflowFloats),
                 Interlocked.Read(ref _videoOverflowFrames),
                 Interlocked.Read(ref _videoUnpackDrops),
@@ -574,38 +551,64 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
 
     private void ProcessVideoFrame(in NDIVideoFrameV2 video)
     {
+        // Only the capture thread calls this; _videoPtsLock exists to guard the PTS timeline state
+        // against RebaseVideoToLatest from player threads. The multi-MB unpack copy therefore runs
+        // OUTSIDE the lock so a concurrent rebase is never stalled behind a frame copy. The generation
+        // check on re-entry drops a frame whose PTS was resolved before a rebase - the same outcome as
+        // the old wide lock, where such a frame was enqueued and then drained by the rebase.
+        TimeSpan pts;
+        long generation;
         lock (_videoPtsLock)
         {
-            var pts = ResolveVideoPresentationTime(in video);
-            if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
+            pts = ResolveVideoPresentationTime(in video);
+            generation = _videoTimelineGeneration;
+        }
+
+        if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
+        {
+            // Log (and sample luma) BEFORE handing the frame to the queue - a consumer may dequeue and
+            // dispose it the moment it lands, and its pooled backing can be recycled immediately after.
+            var unpacked = Interlocked.Increment(ref _videoFramesUnpacked);
+            if (unpacked <= 3 && Trace.IsEnabled(LogLevel.Information))
             {
-                EnsureVideoFormat(vf.Format);
-                EnqueueVideoFrame(vf);
-                var unpacked = Interlocked.Increment(ref _videoFramesUnpacked);
-                if (unpacked <= 3 && Trace.IsEnabled(LogLevel.Information))
+                var avgLuma = NDIVideoFrameUnpack.SampleAveragePackedLuma(vf);
+                Trace.LogInformation(
+                    "NDISource: unpacked video frame #{N} fourCC={FourCc} native={NativeW}x{NativeH} stride={NativeStride} → {FmtW}x{FmtH} {FmtPf} avgLuma={AvgLuma:F1} range={Range} pts={Pts}",
+                    unpacked, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes,
+                    vf.Format.Width, vf.Format.Height, vf.Format.PixelFormat, avgLuma, vf.ColorRange,
+                    vf.PresentationTime);
+            }
+
+            var stale = false;
+            lock (_videoPtsLock)
+            {
+                if (generation == _videoTimelineGeneration)
                 {
-                    var avgLuma = NDIVideoFrameUnpack.SampleAveragePackedLuma(vf);
-                    Trace.LogInformation(
-                        "NDISource: unpacked video frame #{N} fourCC={FourCc} native={NativeW}x{NativeH} stride={NativeStride} → {FmtW}x{FmtH} {FmtPf} avgLuma={AvgLuma:F1} range={Range} pts={Pts}",
-                        unpacked, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes,
-                        vf.Format.Width, vf.Format.Height, vf.Format.PixelFormat, avgLuma, vf.ColorRange,
-                        vf.PresentationTime);
+                    EnsureVideoFormat(vf.Format);
+                    EnqueueVideoFrame(vf);
+                }
+                else
+                {
+                    stale = true;
                 }
             }
-            else
+
+            if (stale)
+                vf.Dispose();
+        }
+        else
+        {
+            var drops = Interlocked.Increment(ref _videoUnpackDrops);
+            if (drops <= 8)
             {
-                var drops = Interlocked.Increment(ref _videoUnpackDrops);
-                if (drops <= 8)
-                {
-                    Trace.LogWarning(
-                        "NDISource: dropped video frame (unpack failed) #{Drop} fourCC={FourCc} xres={Xres} yres={Yres} lineStride={Stride} pData={HasData}",
-                        drops, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes, video.PData != nint.Zero);
-                }
+                Trace.LogWarning(
+                    "NDISource: dropped video frame (unpack failed) #{Drop} fourCC={FourCc} xres={Xres} yres={Yres} lineStride={Stride} pData={HasData}",
+                    drops, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes, video.PData != nint.Zero);
             }
         }
     }
 
-    private AudioFormatSnapshot EnsureAudioFormat(int sampleRate, int channels)
+    private NDIAudioJitterBuffer EnsureAudioFormat(int sampleRate, int channels)
     {
         var existing = Volatile.Read(ref _audioState);
         if (existing is not null
@@ -616,7 +619,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         var capacityFrames = Math.Max(MinAudioCapacityFrames, (int)(_audioCapacityDuration.TotalSeconds * sampleRate));
         var minBufferedFrames = NDIAudioReceiver.ComputeMinBufferedFrames(
             _audioMinBufferedDuration, sampleRate, capacityFrames);
-        var snap = new AudioFormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
+        var snap = new NDIAudioJitterBuffer(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
         Volatile.Write(ref _audioState, snap);
         Trace.LogInformation(
             "NDISource: audio format {Format} capacity={CapacityFrames}f minBuffered={MinBufferedFrames}f",
@@ -626,38 +629,9 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         return snap;
     }
 
-    private void EnqueueAudioSamples(AudioFormatSnapshot snap, ReadOnlySpan<float> src)
+    private void EnqueueAudioSamples(NDIAudioJitterBuffer snap, ReadOnlySpan<float> src)
     {
-        var capacity = snap.UsableFloats;
-        if (capacity <= 0) return;
-
-        var dropped = 0;
-        if (src.Length > capacity)
-        {
-            dropped += src.Length - capacity;
-            src = src[^capacity..];
-        }
-
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var buffered = (int)(write - read);
-        var free = capacity - buffered;
-        if (src.Length > free)
-        {
-            var dropOld = src.Length - free;
-            read += dropOld;
-            dropped += dropOld;
-            Volatile.Write(ref snap.ReadIndex, read);
-            Volatile.Write(ref snap.Primed, 0);
-        }
-
-        var startIdx = (int)(write & snap.RingMask);
-        var firstChunk = Math.Min(src.Length, snap.RingBuffer.Length - startIdx);
-        src[..firstChunk].CopyTo(snap.RingBuffer.AsSpan(startIdx));
-        if (firstChunk < src.Length)
-            src[firstChunk..].CopyTo(snap.RingBuffer.AsSpan(0));
-        Volatile.Write(ref snap.WriteIndex, write + src.Length);
-
+        var dropped = snap.Enqueue(src);
         if (dropped > 0)
             Interlocked.Add(ref _audioOverflowFloats, dropped);
     }
@@ -779,7 +753,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
                 _faultEx ??= ex;
             },
             Trace);
-        timing?.SetOutcome($"state={State} audioOverflow={AudioOverflowFloats} videoOverflow={VideoOverflowFrames}");
+        timing?.SetOutcome($"state={State} audioOverflowFloats={AudioOverflowFloats} videoOverflowFrames={VideoOverflowFrames}");
     }
 
     private sealed class AudioSourceAdapter(NDISource owner) : IAudioSource, IDisposable
@@ -843,29 +817,4 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         public void Dispose() => owner.Dispose();
     }
 
-    private sealed class AudioFormatSnapshot
-    {
-        public readonly AudioFormat Format;
-        public readonly int Channels;
-        public readonly float[] RingBuffer;
-        public readonly int RingMask;
-        public readonly int UsableFloats;
-        public readonly int MinBufferedFloats;
-        public int Primed;
-        public long WriteIndex;
-        public long ReadIndex;
-
-        public AudioFormatSnapshot(AudioFormat format, int capacityFrames, int minBufferedFrames)
-        {
-            Format = format;
-            Channels = format.Channels;
-            var capFloats = capacityFrames * format.Channels;
-            var rounded = 1;
-            while (rounded < capFloats) rounded <<= 1;
-            RingBuffer = new float[rounded];
-            RingMask = rounded - 1;
-            UsableFloats = rounded - (rounded % Channels);
-            MinBufferedFloats = checked(minBufferedFrames * format.Channels);
-        }
-    }
 }

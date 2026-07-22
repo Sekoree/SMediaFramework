@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Playback;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
@@ -22,6 +23,360 @@ public partial class MediaPlayerViewModel
     private static readonly ILogger ShowLog = MediaDiagnostics.CreateLogger("HaPlay.MediaPlayer.ShowSession");
 
     private ShowSession? _playerShowSession;
+
+    /// <summary>The deck's headless session for the Debug-stats poll (null while no session is built).
+    /// Read-only, lock-free consumers only - see <see cref="ShowSession.GetActiveClipPipelineMetrics"/>.</summary>
+    internal ShowSession? PipelineStatsSession => _playerShowSession;
+
+    // --- projectM visualizer (Phase 5): a session-held full-canvas GL layer fed by the deck's audio ---
+
+    /// <summary>Latched "VIZ" toggle: while on (and libprojectM-4 is present), a projectM layer covers
+    /// the deck's composition, audio-reactive to whatever the deck plays. Survives track changes (the
+    /// open path re-applies it after each document swap, like HOLD).</summary>
+    [ObservableProperty]
+    private bool _visualizerEnabled;
+
+    /// <summary>Preset directory for the visualizer (*.milk, scanned recursively). Persisted
+    /// per-machine (AppSettings, set via the VIZ ▾ picker); defaults to the dev build's fetched pack.</summary>
+    [ObservableProperty]
+    private string? _visualizerPresetDirectory;
+
+    partial void OnVisualizerPresetDirectoryChanged(string? value)
+    {
+        _ = value;
+        // Live re-apply: a new folder replaces the running surface (fresh preset scan).
+        if (VisualizerEnabled)
+            _ = ApplyShowSessionVisualizerAsync();
+    }
+
+    /// <summary>Visualizer render width (0 = follow the canvas / output preset). Persisted per-machine.</summary>
+    [ObservableProperty]
+    private int _visualizerWidth;
+
+    /// <summary>Visualizer render height (0 = follow the canvas / output preset).</summary>
+    [ObservableProperty]
+    private int _visualizerHeight;
+
+    /// <summary>Visualizer target FPS (0 = follow the canvas rate).</summary>
+    [ObservableProperty]
+    private int _visualizerFps;
+
+    /// <summary>Loads one coherent settings snapshot for each newly-created deck. This avoids repeated
+    /// disk reads while ensuring decks created later in the same process see settings changed by an
+    /// earlier deck instead of inheriting a launch-time static snapshot.</summary>
+    private void InitializeVisualizerSettings()
+    {
+        var settings = Models.AppSettings.Load();
+        VisualizerPresetDirectory =
+            settings.VisualizerPresetDirectory is { Length: > 0 } saved && Directory.Exists(saved)
+                ? saved
+                : DefaultPresetDirectory();
+        VisualizerWidth = settings.VisualizerWidth;
+        VisualizerHeight = settings.VisualizerHeight;
+        VisualizerFps = settings.VisualizerFps;
+    }
+
+    /// <summary>A human summary of the visualizer resolution for the settings UI. Zero (older settings
+    /// files) resolves to the real default, so the label says so instead of the old "Match output" lie.</summary>
+    public string VisualizerResolutionLabel =>
+        VisualizerWidth > 0 && VisualizerHeight > 0
+            ? $"{VisualizerWidth}×{VisualizerHeight}" + (VisualizerFps > 0 ? $" @ {VisualizerFps} fps" : "")
+            : "Default (1920×1080 @ 60 fps)";
+
+    /// <summary>VIZ ▾: applies (and persists) the visualizer render resolution + fps. 0/0 = follow the
+    /// deck's normal canvas sizing. Re-applies a live visualizer (reopens when it owns the canvas).</summary>
+    internal void SetVisualizerResolution(int width, int height, int fps)
+    {
+        VisualizerWidth = Math.Max(0, width);
+        VisualizerHeight = Math.Max(0, height);
+        VisualizerFps = Math.Max(0, fps);
+        OnPropertyChanged(nameof(VisualizerResolutionLabel));
+        PersistVisualizerSettings();
+
+        if (VisualizerEnabled)
+            _ = ApplyShowSessionVisualizerAsync();
+    }
+
+    /// <summary>The visualizer's fixed render size + rate (explicit setting, else 1080p60 as the default).
+    /// Also drives the deck canvas while VIZ owns it, so every track's canvas is identical - the invariant
+    /// that lets one visualizer run across track changes.</summary>
+    private (int Width, int Height, int Fps) ResolveVisualizerRenderSize() =>
+        (VisualizerWidth > 0 ? VisualizerWidth : 1920,
+         VisualizerHeight > 0 ? VisualizerHeight : 1080,
+         VisualizerFps > 0 ? VisualizerFps : 60);
+
+    /// <summary>VIZ ▾: pick the preset folder (persisted per-machine, re-applies a live visualizer).</summary>
+    internal void SetVisualizerPresetDirectory(string path)
+    {
+        VisualizerPresetDirectory = path;
+        PersistVisualizerSettings();
+    }
+
+    /// <summary>Persists the deck's visualizer settings OFF the UI thread - Save() does synchronous
+    /// disk I/O (temp-file write + atomic move, with retry sleeps) that must never stall the UI.</summary>
+    private void PersistVisualizerSettings()
+    {
+        var dir = VisualizerPresetDirectory;
+        var (w, h, fps) = (VisualizerWidth, VisualizerHeight, VisualizerFps);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                Models.AppSettings.Update(settings =>
+                {
+                    settings.VisualizerPresetDirectory = dir;
+                    settings.VisualizerWidth = w;
+                    settings.VisualizerHeight = h;
+                    settings.VisualizerFps = fps;
+                });
+            }
+            catch (Exception ex)
+            {
+                ShowLog.LogWarning(ex, "visualizer settings not persisted");
+            }
+        });
+    }
+
+    public bool IsVisualizerAvailable => RuntimeModules.IsProjectMAvailable;
+
+    public string? VisualizerUnavailableReason => RuntimeModules.ProjectMUnavailableReason;
+
+    public string VisualizerTooltip => RuntimeModules.IsProjectMAvailable
+        ? Resources.Strings.VisualizerToggleTooltip
+        : RuntimeModules.ProjectMUnavailableReason ?? Resources.Strings.VisualizerToggleTooltip;
+
+    // The attached source, kept ONLY for the next-preset request (the session owns its lifetime).
+    private S.Media.Visualizer.ProjectM.ProjectMVisualSource? _visualizerSource;
+
+    // The current open has the visualizer owning a FIXED canvas (any video/cover-art base layer swapped
+    // out, audio drives the viz). Toggling VIZ reopens in place when this must flip: ON → make the canvas
+    // viz-owned; OFF → restore the native content. This is what "restart on enable/disable, continuous
+    // while on" hangs off of. Set at open, read by the toggle handler.
+    private bool _playerShowVizOwnsCanvas;
+
+    partial void OnVisualizerEnabledChanged(bool value)
+    {
+        _ = value;
+        // Attach/detach and source disposal are serialized by _visualizerApplyGate. Disposing here used to
+        // race an in-flight enable and synchronously joined the native renderer on the Avalonia dispatcher.
+        _ = ApplyShowSessionVisualizerAsync();
+    }
+
+    [CommunityToolkit.Mvvm.Input.RelayCommand]
+    private void NextVisualizerPreset() => _visualizerSource?.RequestNextPreset();
+
+    private static string? DefaultPresetDirectory()
+    {
+        // scripts/build-projectm.sh installs a preset pack under its install root (…/<rid>/presets).
+        // Prefer the explicit env override's sibling, else the auto-discovered dev build; a plain
+        // system install has no obvious preset home, so leave it unset there.
+        var libDir = Environment.GetEnvironmentVariable(ProjectMLib.Runtime.ProjectMLibraryResolver.EnvironmentOverride);
+        if (!string.IsNullOrWhiteSpace(libDir) && Directory.Exists(libDir))
+        {
+            var root = Path.GetDirectoryName(libDir.TrimEnd(Path.DirectorySeparatorChar));
+            var presets = root is null ? null : Path.Combine(root, "presets");
+            if (presets is not null && Directory.Exists(presets))
+                return presets;
+        }
+
+        if (ProjectMLib.Runtime.ProjectMLibraryResolver.TryFindDevBuildRoot() is { } devRoot)
+        {
+            var presets = Path.Combine(devRoot, "presets");
+            if (Directory.Exists(presets))
+                return presets;
+        }
+
+        return null;
+    }
+
+    /// <summary>Applies the VIZ toggle to the RUNNING session: attaches (or removes) the projectM layer
+    /// + audio tap on the deck's composition. Safe/idempotent; a failure just clears the toggle with a
+    /// log line (no crash when a preset dir is bogus or the compositor fell back to CPU).</summary>
+    // Serializes visualizer applies: a rapid toggle / preset-change / resolution-change (or a
+    // reopen's re-apply racing a manual toggle) must not stack overlapping reopens or attach twice.
+    private readonly SemaphoreSlim _visualizerReconcileGate = new(1, 1);
+    private readonly SemaphoreSlim _visualizerApplyGate = new(1, 1);
+
+    internal async Task ApplyShowSessionVisualizerAsync()
+    {
+        if (Volatile.Read(ref _disposeStarted) != 0 || _playerShowSession is null)
+            return;
+
+        await _visualizerReconcileGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (Volatile.Read(ref _disposeStarted) != 0 || _playerShowSession is null)
+                return;
+
+            // Never hold _visualizerApplyGate while reopening: OpenOrReload owns _playbackArc and its completion
+            // re-attaches the visualizer. The former visualizer-gate -> playback-arc order inverted the normal
+            // track-open playback-arc -> visualizer-gate order and could deadlock both operations permanently.
+            // Re-check after every reopen so a toggle/settings change made during that async rebuild wins.
+            while (VisualizerCanvasNeedsReopen())
+                await ReopenInPlacePreservingPositionAsync().ConfigureAwait(true);
+
+            await ApplyShowSessionVisualizerUnderGateAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _visualizerReconcileGate.Release();
+        }
+    }
+
+    private async Task ApplyShowSessionVisualizerUnderGateAsync()
+    {
+        if (Volatile.Read(ref _disposeStarted) != 0 || _playerShowSession is null)
+            return;
+        await _visualizerApplyGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await ApplyShowSessionVisualizerCoreAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _visualizerApplyGate.Release();
+        }
+    }
+
+    private async Task ApplyShowSessionVisualizerCoreAsync()
+    {
+        if (_playerShowSession is not { } session)
+            return;
+        try
+        {
+            if (!VisualizerEnabled)
+            {
+                ClearVisualizerWarning();
+                await session.SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, null)
+                    .ConfigureAwait(true);
+                _visualizerSource?.Dispose();
+                _visualizerSource = null;
+                return;
+            }
+
+            if (!RuntimeModules.IsProjectMAvailable)
+            {
+                ShowLog.LogWarning("visualizer unavailable: {Reason}", RuntimeModules.ProjectMUnavailableReason);
+                SetVisualizerWarning($"Visualizer unavailable: {RuntimeModules.ProjectMUnavailableReason}");
+                VisualizerEnabled = false;
+                return;
+            }
+
+            var presetDir = VisualizerPresetDirectory;
+            // Count the presets off-thread (a large pack stats thousands of files - never on the
+            // dispatcher). The count feeds the status banner so the operator can verify their folder.
+            var presetCount = presetDir is { Length: > 0 } && Directory.Exists(presetDir)
+                ? await Task.Run(() =>
+                {
+                    try { return Directory.EnumerateFiles(presetDir, "*.milk", SearchOption.AllDirectories).Count(); }
+                    catch { return 0; }
+                }).ConfigureAwait(true)
+                : 0;
+
+            // PERSISTENT source: reuse the running one across track changes (that's the continuity - its
+            // renderer thread never stops); recreate only when its settings changed (resolution/fps/preset
+            // dir) - the documented "restarts on settings change" boundary.
+            var (renderW, renderH, renderFps) = ResolveVisualizerRenderSize();
+            if (_visualizerSource is { } running
+                && (running.Options.RenderWidth != renderW
+                    || running.Options.RenderHeight != renderH
+                    || running.Options.Fps != renderFps
+                    || !string.Equals(running.Options.PresetDirectory, presetDir, StringComparison.Ordinal)))
+            {
+                await session.SetCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId, null)
+                    .ConfigureAwait(true);
+                running.Dispose();
+                _visualizerSource = null;
+            }
+
+            var source = _visualizerSource ?? new S.Media.Visualizer.ProjectM.ProjectMVisualSource(
+                renderW, renderH, new S.Media.Core.Video.Rational(renderFps > 0 ? renderFps : 30, 1),
+                new S.Media.Visualizer.ProjectM.ProjectMOptions
+                {
+                    PresetDirectory = presetDir,
+                    RenderWidth = renderW,
+                    RenderHeight = renderH,
+                    Fps = renderFps,
+                    Shuffle = true,
+                });
+            // disposeSourceOnRemove: false - the DECK owns this source's lifetime (VIZ-off / settings
+            // change / deck teardown), so the per-track document reload only unhooks it and this method
+            // re-attaches the SAME source to the fresh composition: the visuals continue mid-stream.
+            var attached = await session
+                .SetCompositionVisualizerAsync(
+                    MediaPlayerShowMapper.PlayerCompositionId, source, disposeSourceOnRemove: false)
+                .ConfigureAwait(true);
+            if (!attached)
+            {
+                // Keep the source alive (its renderer keeps running) - the next successful open attaches it.
+                _visualizerSource = source;
+                ShowLog.LogWarning("visualizer not attached: no active canvas/GL composition");
+                // Enabling VIZ during audio-only playback that was OPENED without it: the canvas only
+                // exists when the open declared it - a replay picks it up.
+                SetVisualizerWarning(
+                    "Visualizer will start with the next track: press ▶ (or restart the current item) so the canvas is created.");
+            }
+            else
+            {
+                _visualizerSource = source;
+                if (presetCount <= 0)
+                    SetVisualizerWarning(
+                        "Visualizer running with the built-in idle preset only - pick a *.milk preset folder via the VIZ ▾ button.");
+                else
+                    SetVisualizerWarning($"Visualizer: {presetCount} presets loaded from {Path.GetFileName(presetDir!.TrimEnd(Path.DirectorySeparatorChar))}.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowLog.LogWarning(ex, "visualizer apply failed");
+            SetVisualizerWarning($"Visualizer failed: {ex.Message}");
+        }
+    }
+
+    private bool VisualizerCanvasNeedsReopen()
+    {
+        if (!ShowSessionActive || !IsMediaLoaded || IsLiveSource)
+            return false;
+
+        // Only file/YouTube playback can swap its base video for the fixed visualizer canvas. MMD and
+        // live-input pipelines keep their native canvas and must not enter an endless reopen cycle.
+        var canOwnCanvas = _currentPlaylistItem is FilePlaylistItem or YouTubePlaylistItem
+                           || (_currentPlaylistItem is null && !string.IsNullOrWhiteSpace(MediaFilePath));
+        var wantsVisualizerCanvas = canOwnCanvas && VisualizerEnabled && IsVisualizerAvailable;
+        if (wantsVisualizerCanvas != _playerShowVizOwnsCanvas)
+            return true;
+        if (!wantsVisualizerCanvas)
+            return false;
+
+        var (width, height, fps) = ResolveVisualizerRenderSize();
+        return _playerShowCanvas != (width, height) || _playerShowCanvasFrameRate != (fps, 1);
+    }
+
+    /// <summary>Reopens the current item in place, preserving the play position. Used by the VIZ toggle
+    /// to flip the canvas between viz-owned and native content. The live Duration/CurrentPosition reset
+    /// during the close, so the seek uses snapshots taken BEFORE the reopen (a live-Duration gate would
+    /// see 0 and skip the seek, replaying from the start).</summary>
+    private async Task ReopenInPlacePreservingPositionAsync()
+    {
+        var resumePosition = CurrentPosition;
+        var knownDuration = Duration;
+        await OpenOrReloadAsync().ConfigureAwait(true);
+        if (resumePosition > TimeSpan.FromSeconds(1)
+            && (knownDuration <= TimeSpan.Zero || resumePosition < knownDuration))
+        {
+            await ShowSessionSeekAsync(resumePosition).ConfigureAwait(true); // SeekAsync clamps
+        }
+    }
+
+    private const string VisualizerWarningPrefix = "Visualizer";
+
+    private void SetVisualizerWarning(string message) => StatusMessage = message;
+
+    private void ClearVisualizerWarning()
+    {
+        if (StatusMessage is not null && StatusMessage.StartsWith(VisualizerWarningPrefix, StringComparison.Ordinal))
+            StatusMessage = null;
+    }
     // Per-composition video outputs the deck drives, tagged with the OUTPUT LINE they belong to so each gets a
     // STABLE composition-output id (CompositionOutputId) - required for hot add/remove of a single line on a
     // live composition (index-based ids would shift when a line is added/removed).
@@ -33,11 +388,6 @@ public partial class MediaPlayerViewModel
     // on stop/switch - the audio analogue of _playerVideoOutputs / _playerAcquiredLines.
     private readonly Dictionary<string, IAudioOutput> _playerNDIAudioOutputs = new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredAudioLines = new();
-    // PortAudio route device id → the LINE's configured sample rate, so the audio-output factory can fall back
-    // to opening a device at its own rate (behind an egress resampler) when it rejects the clip's mix rate.
-    // Concurrent: written on the UI thread (route building), read on the session thread (the factory).
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _playerPaDeviceRates =
-        new(StringComparer.Ordinal);
     private DispatcherTimer? _playerShowPoll;
     // Consecutive poll ticks that observed the clip stopped-while-playing. A coordinated seek transiently
     // pauses the clip, so the deck only treats "not running" as end-of-track once it PERSISTS across ticks.
@@ -48,6 +398,7 @@ public partial class MediaPlayerViewModel
     // The current show's composition canvas size (set at open) - the HOLD image renders at this size so the
     // top layer covers the canvas exactly.
     private (int Width, int Height) _playerShowCanvas = (1920, 1080);
+    private (int Num, int Den) _playerShowCanvasFrameRate = (30, 1);
     // Whether the current source opened with a video composition (the file probe / live stream selection at
     // open) - drives the SourceKindLabel readout.
     private bool _playerShowHasVideo;
@@ -60,6 +411,11 @@ public partial class MediaPlayerViewModel
     /// retry and return true.</summary>
     private async Task<bool> TryOpenViaShowSessionAsync(PlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
     {
+        // Every open installs a fresh, unclaimed play generation FIRST. End observations carry this
+        // generation through any await, so a song-N poll that resumes after song N+1 opened cannot claim
+        // N+1's advance. The claimed bit also arbitrates the event and poll paths atomically.
+        BeginNaturalEndGeneration(ref _naturalEndGenerationState);
+
         // Resolve the registry URI + whether there's a video composition. Files probe for a video stream;
         // live inputs map to their option-carrying ndi:/padev: descriptor URIs.
         string mediaPath;
@@ -101,6 +457,35 @@ public partial class MediaPlayerViewModel
                 return false;
         }
 
+        // Visualizer owns the canvas: when VIZ is on it fills the frame, so swap out ANY base video layer
+        // (cover art OR a real video file/stream) and play the track audio-only - its audio drives the
+        // visualizer and still reaches the speakers, and the cover art/tags still flow to the metadata hub.
+        // This makes the visualizer work over video, and keeps the canvas identical across every track (the
+        // invariant the continuous-across-tracks behaviour depends on). Scoped to file/YouTube media; live
+        // capture (NDI/PortAudio) and MMD keep their own pipeline.
+        if (hasVideo && VisualizerEnabled && IsVisualizerAvailable
+            && item is FilePlaylistItem or YouTubePlaylistItem)
+        {
+            hasVideo = false;
+        }
+
+        // A visualizer-owned canvas has one fixed shape across file/YouTube tracks. When the output set is
+        // still compatible, preserve that live composition (and its output leases + projectM surface) while
+        // only the audio clip changes. This is the no-black-frame path; toggle/settings/size changes still
+        // rebuild normally and therefore remain explicit visualizer restart boundaries.
+        var resolvedVisualizerSize = ResolveVisualizerRenderSize();
+        var selectedLineIds = lines.Select(line => line.Definition.Id).ToHashSet();
+        var preserveVisualizerComposition =
+            ShowSessionActive
+            && VisualizerEnabled
+            && IsVisualizerAvailable
+            && _playerShowVizOwnsCanvas
+            && _visualizerSource is not null
+            && _playerShowCanvas == (resolvedVisualizerSize.Width, resolvedVisualizerSize.Height)
+            && _playerShowCanvasFrameRate == (resolvedVisualizerSize.Fps, 1)
+            && _playerAcquiredLines.All(selectedLineIds.Contains)
+            && _playerVideoOutputs.ContainsKey(MediaPlayerShowMapper.PlayerCompositionId);
+
         try
         {
             _playerShowSession ??= new ShowSession(
@@ -121,7 +506,31 @@ public partial class MediaPlayerViewModel
                 // carrier audio is borrowed (held via _playerAcquiredAudioLines, released on stop) so the session
                 // never disposes it; only a per-fire resampler wrapper (when the carrier rate ≠ the clip rate) is
                 // session-owned. Pure lookup - the carrier was acquired on the UI thread during open.
-                audioOutputFactory: (deviceId, format) => BuildDeckAudioLease(deviceId, format));
+                audioOutputFactory: (deviceId, format) => BuildDeckAudioLease(deviceId, format),
+                // Effect buses (Phase 4): tags + cover art for the metadata hub (visualizers/overlays).
+                metadataProbe: S.Media.Decode.FFmpeg.MediaTagProbe.TryRead);
+
+            // Review M4: event-driven advancement (primary; the 250ms poll stays as fallback with a shared
+            // advance-once gate). Raised on the SESSION dispatcher - never for loops or operator stops -
+            // so end detection no longer depends on UI poll heuristics. Subscribed once per session.
+            if (!_naturalEndHooked)
+            {
+                _naturalEndHooked = true;
+                var hookedSession = _playerShowSession;
+                hookedSession.ClipNaturallyEnded += cueId =>
+                {
+                    if (!string.Equals(cueId, MediaPlayerShowMapper.PlayerCueId, StringComparison.Ordinal))
+                        return;
+                    var generationAtRaise = ReadNaturalEndGeneration(ref _naturalEndGenerationState);
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (ReferenceEquals(_playerShowSession, hookedSession))
+                        {
+                            _ = HandleShowSessionNaturalEndAsync("event", generationAtRaise);
+                        }
+                    });
+                };
+            }
 
             // Switching from a currently-playing source: stop its poll and clip FIRST so the old clip releases its
             // audio DEVICE and borrowed video leases before we re-acquire and fire the new source. Without this the
@@ -134,21 +543,22 @@ public partial class MediaPlayerViewModel
                 try { await _playerShowSession.StopAsync(fade: false).ConfigureAwait(true); }
                 catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession stop before source switch"); }
 
-                // NXT-20: detach the still-attached outputs from the LIVE composition BEFORE the release/
-                // re-acquire block below. The composition pump outlives the clip; releasing a line first
-                // reconfigures its sink (idle slate) while the old composition is still submitting canvas
-                // frames into it - the same format-mismatch flood ShowSessionStopAsync guards against.
-                var attachedLines = await Dispatcher.UIThread.InvokeAsync(() => _playerAcquiredLines.ToList());
-                foreach (var held in attachedLines)
+                // A preserved visualizer composition keeps pumping the same visual stream to the same output
+                // leases between tracks. Other opens still detach before release/re-acquire (NXT-20 ordering).
+                if (!preserveVisualizerComposition)
                 {
-                    try
+                    var attachedLines = await Dispatcher.UIThread.InvokeAsync(() => _playerAcquiredLines.ToList());
+                    foreach (var held in attachedLines)
                     {
-                        await _playerShowSession.RemoveCompositionOutputAsync(
-                            MediaPlayerShowMapper.PlayerCompositionId, CompositionOutputId(held)).ConfigureAwait(true);
-                    }
-                    catch (Exception ex)
-                    {
-                        ShowLog.LogWarning(ex, "MediaPlayer: ShowSession detach output on source switch");
+                        try
+                        {
+                            await _playerShowSession.RemoveCompositionOutputAsync(
+                                MediaPlayerShowMapper.PlayerCompositionId, CompositionOutputId(held)).ConfigureAwait(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            ShowLog.LogWarning(ex, "MediaPlayer: ShowSession detach output on source switch");
+                        }
                     }
                 }
             }
@@ -159,36 +569,72 @@ public partial class MediaPlayerViewModel
             IReadOnlyList<ShowClipAudioRoute> audioRoutes = [];
             var canvas = (Width: 1920, Height: 1080);
             var canvasFps = (Num: 30, Den: 1);
+            var canvasDeclared = false;
+            var vizOwnsCanvasResult = false;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
-                foreach (var held in _playerAcquiredLines)
-                    _outputs.ReleaseVideoOutputForLine(held);
-                _playerAcquiredLines.Clear();
-
-                var outputs = new List<(Guid LineId, IVideoOutput Output)>();
-                var resolutions = new List<(int Width, int Height)>();
-                if (hasVideo)
+                if (!preserveVisualizerComposition)
                 {
-                    foreach (var line in lines)
+                    foreach (var held in _playerAcquiredLines)
+                        _outputs.ReleaseVideoOutputForLine(held);
+                    _playerAcquiredLines.Clear();
+                }
+
+                var outputs = preserveVisualizerComposition
+                              && _playerVideoOutputs.TryGetValue(
+                                  MediaPlayerShowMapper.PlayerCompositionId, out var preservedOutputs)
+                    ? preservedOutputs.ToList()
+                    : new List<(Guid LineId, IVideoOutput Output)>();
+                var resolutions = new List<(int Width, int Height)>();
+                // The visualizer needs the canvas + video lines even for audio-only media (its surface
+                // becomes the canvas content); a plain audio open keeps skipping them.
+                var wantsCanvas = hasVideo || (VisualizerEnabled && IsVisualizerAvailable);
+                if (wantsCanvas)
+                {
+                    if (!preserveVisualizerComposition)
                     {
-                        if (_outputs.AcquireVideoOutputForLine(line.Definition.Id) is not { } o)
-                            continue;
-                        outputs.Add((line.Definition.Id, o));
-                        _playerAcquiredLines.Add(line.Definition.Id);
-                        if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
-                            resolutions.Add((rw, rh));
+                        foreach (var line in lines)
+                        {
+                            if (_outputs.AcquireVideoOutputForLine(line.Definition.Id) is not { } o)
+                                continue;
+                            outputs.Add((line.Definition.Id, o));
+                            _playerAcquiredLines.Add(line.Definition.Id);
+                            if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
+                                resolutions.Add((rw, rh));
+                        }
                     }
                     // Media-player sizing: the compositor is AUTOSIZED to the source (AsSource) - or to the chosen
                     // fixed preset - and the OUTPUT letterboxes into each display. This replaces the old
                     // "canvas = largest output resolution + Cover fit", which cropped differing-aspect media to
                     // cover the screen. A live input with no known raster still falls back to the driven outputs.
-                    var resolved = ResolveDeckCanvas(
-                        OutputPreset, SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight(),
-                        srcWidth, srcHeight, srcFpsNum, srcFpsDen, resolutions);
-                    canvas = (resolved.Width, resolved.Height);
-                    canvasFps = (resolved.FpsNum, resolved.FpsDen);
+                    // When VIZ is on it already suppressed the base video layer (hasVideo == false), so the
+                    // visualizer owns the canvas at its own FIXED resolution.
+                    var sizeFromSource = hasVideo;
+                    var vizOwnsCanvas = !sizeFromSource && VisualizerEnabled && IsVisualizerAvailable;
+                    if (vizOwnsCanvas)
+                    {
+                        // Fixed visualizer canvas (1080p60 default, tunable). Matching visualizer-on track
+                        // changes preserve this runtime; a size/settings/toggle change rebuilds it.
+                        var (vw, vh, vf) = ResolveVisualizerRenderSize();
+                        canvas = (vw, vh);
+                        canvasFps = (vf, 1);
+                    }
+                    else
+                    {
+                        var resolved = ResolveDeckCanvas(
+                            OutputPreset, SanitizedCustomOutputWidth(), SanitizedCustomOutputHeight(),
+                            sizeFromSource ? srcWidth : 0, sizeFromSource ? srcHeight : 0,
+                            sizeFromSource ? srcFpsNum : 0, sizeFromSource ? srcFpsDen : 0, resolutions);
+                        canvas = (resolved.Width, resolved.Height);
+                        canvasFps = (resolved.FpsNum, resolved.FpsDen);
+                    }
+
+                    canvasDeclared = true;
+                    // Remembered so the VIZ toggle knows whether the canvas is viz-owned (reopen to flip).
+                    vizOwnsCanvasResult = vizOwnsCanvas;
                 }
+
                 _playerVideoOutputs = new Dictionary<string, List<(Guid, IVideoOutput)>>(StringComparer.Ordinal)
                 {
                     [MediaPlayerShowMapper.PlayerCompositionId] = outputs,
@@ -203,11 +649,20 @@ public partial class MediaPlayerViewModel
                 _playerNDIAudioOutputs.Clear();
                 foreach (var line in lines)
                 {
-                    if (line.Definition is not NDIOutputDefinition nd || nd.StreamMode == NDIOutputStreamMode.VideoOnly)
+                    // Carrier-audio lines: NDI senders and ARMED file-record sessions both expose a
+                    // borrowed audio sink keyed by a stable device id the routes below resolve.
+                    var carrierKey = line.Definition switch
+                    {
+                        NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly =>
+                            NDIAudioDeviceId(line.Definition.Id),
+                        FileOutputDefinition or LiveStreamOutputDefinition => FileAudioDeviceId(line.Definition.Id),
+                        _ => null,
+                    };
+                    if (carrierKey is null)
                         continue;
                     if (_outputs.AcquireAudioOutputForLine(line.Definition.Id) is not { } audio)
                         continue;
-                    _playerNDIAudioOutputs[NDIAudioDeviceId(line.Definition.Id)] = audio;
+                    _playerNDIAudioOutputs[carrierKey] = audio;
                     _playerAcquiredAudioLines.Add(line.Definition.Id);
                 }
 
@@ -230,13 +685,19 @@ public partial class MediaPlayerViewModel
                     // The compositor runs at the source (or preset) rate, not a hardcoded 30 - so 50/60 fps
                     // content is composited frame-for-frame instead of being decimated to 30.
                     canvasFrameRateNum: canvasFps.Num,
-                    canvasFrameRateDen: canvasFps.Den)).ConfigureAwait(true);
+                    canvasFrameRateDen: canvasFps.Den,
+                    // VIZ on an audio-only track: declare the canvas anyway so the visualizer surface
+                    // has something to render onto (the clip itself stays audio-only).
+                    includeCanvas: canvasDeclared),
+                preserveMatchingCompositions: preserveVisualizerComposition).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
             var openedSnapshot = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
 
             _playerShowCanvas = canvas; // the HOLD top-layer renders at this canvas size
+            _playerShowCanvasFrameRate = canvasFps;
             _playerShowHasVideo = hasVideo;
+            _playerShowVizOwnsCanvas = vizOwnsCanvasResult;
 
             // UI thread: flip the deck into the playing state (observable-property writes).
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -266,9 +727,24 @@ public partial class MediaPlayerViewModel
                 UpdateNoOutputWarning(); // opened with no output routed → play to nothing + warn
                 // HOLD survives track changes: the new document replaced the composition (and with it the
                 // hold top-layer), so re-cover the fresh canvas when the toggle is on.
-                if (HoldFallbackVideo)
+                if (HoldFallbackVideo && !preserveVisualizerComposition)
                     _ = ApplyShowSessionHoldImageAsync();
             });
+
+            // Visualizer re-attach (continuous mode): the reload rebuilt the composition, unhooking the
+            // visualizer's surface + tap - but NOT the source: the deck owns it (disposeSourceOnRemove:
+            // false) and its offscreen renderer kept running through the swap. Re-attaching the SAME
+            // source gives the fresh composition a blit surface that picks the stream up mid-flow, so the
+            // visuals are continuous across the track change. The session query guards against
+            // double-attach in case a future path ever carries the slot over.
+            if (VisualizerEnabled || _visualizerSource is not null)
+            {
+                var alreadyAttached = await _playerShowSession
+                    .HasCompositionVisualizerAsync(MediaPlayerShowMapper.PlayerCompositionId).ConfigureAwait(true);
+                if (!alreadyAttached || !VisualizerEnabled)
+                    await ApplyShowSessionVisualizerUnderGateAsync().ConfigureAwait(true);
+            }
+
             ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
             return true;
         }
@@ -359,16 +835,19 @@ public partial class MediaPlayerViewModel
                 _lineHealthPrevVideoLate, outputLineId, stats.PumpOverruns);
         }
 
-        // Audio: reverse-map the line to the device id the deck routes to - PortAudio lines by their backend
-        // device, NDI lines by their carrier-audio key - and sum the active clip's pump chunks for it.
+        // Audio: reverse-map the line to the stable app-owned carrier id the deck routes to and sum
+        // the active clip's pump chunks for it.
         long audioEnqueued = 0;
         long audioDropped = 0;
         var deviceId = _outputs.DefinitionsSnapshot
                 .OfType<PortAudioOutputDefinition>()
-                .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId
-            ?? (_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(outputLineId))
+                .Any(d => d.Id == outputLineId)
+            ? OutputAudioRouteDeviceIds.PortAudio(outputLineId)
+            : (_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(outputLineId))
                 ? NDIAudioDeviceId(outputLineId)
-                : null);
+                : _playerNDIAudioOutputs.ContainsKey(FileAudioDeviceId(outputLineId))
+                    ? FileAudioDeviceId(outputLineId)
+                    : null);
         if (deviceId is not null
             && session.TryGetActiveAudioPumpStats(deviceId, out var audio)
             && audio.Enqueued > 0)
@@ -392,9 +871,8 @@ public partial class MediaPlayerViewModel
     /// map + effective gain) instead of the default device - the core parity fix for the flipped default.
     /// Runs on the UI thread (reads deck observable state).</summary>
     /// <remarks>One device route per selected audio line with a full per-cell gain matrix + the compound
-    /// (master × per-output) gain. PortAudio lines route to their backend device; audio-capable NDI lines route
-    /// to their carrier's audio side (its device id resolves through <see cref="BuildNDIAudioLease"/>, populated
-    /// on open).</remarks>
+    /// (master × per-output) gain. PortAudio lines route to the configured line's shared mixer; audio-capable
+    /// NDI lines route to their carrier's audio side.</remarks>
     private IReadOnlyList<ShowClipAudioRoute> BuildDeckShowAudioRoutes(IReadOnlyList<OutputLineViewModel> lines)
     {
         var routes = new List<ShowClipAudioRoute>();
@@ -413,20 +891,28 @@ public partial class MediaPlayerViewModel
             var matrix = declaredCells.Count == 0 ? new[] { 0, 1 } : null; // unsized grid → stereo default
             int? matrixOutputs = declaredCells.Count == 0 ? null : declaredCells.Max(c => c.OutputChannel) + 1;
 
-            ShowClipAudioRoute Route(string? deviceId, float gain, int? sampleRate) => new(
-                deviceId, matrix, gain, sampleRate)
+            ShowClipAudioRoute Route(
+                string? deviceId,
+                float gain,
+                int? sampleRate,
+                int[]? channelMatrixOverride = null,
+                int? outputChannelsOverride = null) => new(
+                deviceId, channelMatrixOverride ?? matrix, gain, sampleRate)
             {
                 MatrixCells = gainCells,
-                MatrixOutputChannels = matrixOutputs,
+                MatrixOutputChannels = outputChannelsOverride ?? matrixOutputs,
             };
 
             switch (line.Definition)
             {
                 case PortAudioOutputDefinition pa:
-                    if (pa.EffectiveAudioBackendDeviceId is { } paDevice)
-                        _playerPaDeviceRates[paDevice] = pa.SampleRate; // factory rate-fallback lookup
-                    routes.Add(Route(pa.EffectiveAudioBackendDeviceId, CompoundEnvelope(binding),
-                        pa.SampleRate > 0 ? pa.SampleRate : null));
+                    int[]? fullWidthDefaultMatrix = null;
+                    if (declaredCells.Count == 0)
+                        fullWidthDefaultMatrix = BuildDefaultHardwareChannelMatrix(pa.ChannelCount);
+                    routes.Add(Route(OutputAudioRouteDeviceIds.PortAudio(line.Definition.Id), CompoundEnvelope(binding),
+                        pa.SampleRate > 0 ? pa.SampleRate : null,
+                        channelMatrixOverride: fullWidthDefaultMatrix,
+                        outputChannelsOverride: pa.ChannelCount));
                     break;
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly:
                     // Only route to an NDI line whose carrier audio was acquired on open; the device id maps back
@@ -436,6 +922,13 @@ public partial class MediaPlayerViewModel
                         routes.Add(Route(ndiDeviceId, CompoundEnvelope(binding),
                             nd.AudioSampleRate > 0 ? nd.AudioSampleRate : null));
                     break;
+                case FileOutputDefinition or LiveStreamOutputDefinition:
+                    // Armed encode line (recording or live stream): its primary encode track was acquired
+                    // on open like an NDI carrier.
+                    var fileDeviceId = FileAudioDeviceId(line.Definition.Id);
+                    if (_playerNDIAudioOutputs.ContainsKey(fileDeviceId))
+                        routes.Add(Route(fileDeviceId, CompoundEnvelope(binding), sampleRate: null));
+                    break;
             }
         }
         return routes;
@@ -444,7 +937,19 @@ public partial class MediaPlayerViewModel
     /// <summary>Stable route device id for an NDI line's carrier audio - the key shared by
     /// <see cref="BuildDeckShowAudioRoutes"/> (emits it), the <c>_playerNDIAudioOutputs</c> map (populated on
     /// open), and <see cref="BuildNDIAudioLease"/> (resolves it in the audio-output factory).</summary>
-    private static string NDIAudioDeviceId(Guid lineId) => $"ndi-audio:{lineId}";
+    private static string NDIAudioDeviceId(Guid lineId) => OutputAudioRouteDeviceIds.Ndi(lineId);
+
+    /// <summary>Stable route device id for an armed file-record line's primary encode track - same
+    /// carrier-audio pattern as <see cref="NDIAudioDeviceId"/> (emitted by the routes, resolved by the
+    /// audio-output factory via the borrowed-carrier map).</summary>
+    private static string FileAudioDeviceId(Guid lineId) => OutputAudioRouteDeviceIds.Encode(lineId);
+
+    /// <summary>Maps a route device id back to its output LINE (for the line's audio-effect inserts):
+    /// app-owned carrier ids encode their output-line id directly. Null for ordinary backend routes.</summary>
+    private Guid? TryResolveLineIdForAudioDevice(string deviceId)
+    {
+        return OutputAudioRouteDeviceIds.TryParseLineId(deviceId, out var lineId) ? lineId : null;
+    }
 
     /// <summary>Stable composition-output id for a driven output line - shared by the video-output factory (fire
     /// path) and hot add/remove, so a single line's composition output is attached/detached by a fixed id
@@ -460,7 +965,15 @@ public partial class MediaPlayerViewModel
     {
         if (BuildDeckAudioLeaseCore(deviceId, format) is not { } lease)
             return null;
-        var tap = MeteringAudioOutput.Wrap(lease.Output);
+        // Line audio effects (Phase 4/5 inserts) run before the meter so the VU shows the processed
+        // signal. Ownership (review H4): for a SESSION-OWNED terminal (DisposeOutputOnRuntimeDispose)
+        // the wrapper chain is disposal-transparent - session disposes meter → effects → device. For a
+        // BORROWED carrier the session never disposes the chain, so the Release hook retires the
+        // wrappers itself (the effect wrapper holds disposeInner:false and stops at the carrier).
+        var effectWrapped = TryResolveLineIdForAudioDevice(deviceId) is { } effectLineId
+            ? _outputs.WrapAudioEffectsForLine(effectLineId, lease.Output, disposeInner: lease.DisposeOutputOnRuntimeDispose)
+            : lease.Output;
+        var tap = MeteringAudioOutput.Wrap(effectWrapped);
         RegisterMeterTap(tap);
         return lease with
         {
@@ -468,19 +981,50 @@ public partial class MediaPlayerViewModel
             Release = () =>
             {
                 UnregisterMeterTap(tap);
+                if (!lease.DisposeOutputOnRuntimeDispose && !ReferenceEquals(effectWrapped, lease.Output))
+                {
+                    // Borrowed terminal WITH effects: retire OUR wrappers - meter → effect chain, which
+                    // holds disposeInner:false and stops at the carrier. Without effects the meter is a
+                    // stateless shell and must NOT be disposed (it is disposal-transparent and would
+                    // reach the borrowed carrier).
+                    try { tap.Dispose(); }
+                    catch { /* best effort */ }
+                }
+
                 lease.Release?.Invoke();
             },
         };
     }
 
     /// <summary>The audio-output factory body. NDI route device ids resolve to the borrowed carrier audio held
-    /// since open (wrapped in a per-fire resampler only when the carrier's format differs). Every other device id
-    /// is a PortAudio route: the deck creates it here so a device that rejects the clip's mix rate (a fixed-rate
-    /// JACK graph, mismatched hardware) can be opened at the LINE's configured rate behind an egress resampler -
-    /// without this, routing a device to an already-playing clip whose mix rate the device can't open simply
-    /// failed (the mid-play "route → no output" bug). Safe on the session thread.</summary>
+    /// since open (wrapped in a per-fire resampler only when the carrier's format differs). PortAudio line ids
+    /// resolve to isolated inputs on the already-open shared line runtime. Unrecognized ids remain ordinary
+    /// backend routes. Safe on the session thread.</summary>
     private ClipAudioOutputLease? BuildDeckAudioLeaseCore(string deviceId, AudioFormat format)
     {
+        if (OutputAudioRouteDeviceIds.TryParsePortAudio(deviceId, out var lineId))
+        {
+            if (_outputs.TryAcquirePortAudioByLineId(lineId, liveMonitoring: true) is not { } sharedLease)
+                return null;
+
+            var sharedInput = sharedLease.Output;
+            if (sharedInput.Format.SampleRate == format.SampleRate && sharedInput.Format.Channels == format.Channels)
+                return new ClipAudioOutputLease(
+                    sharedInput,
+                    DisposeOutputOnRuntimeDispose: false,
+                    Release: sharedLease.Dispose);
+
+            var adapted = ResamplingAudioOutput.Wrap(sharedInput, format);
+            return new ClipAudioOutputLease(
+                adapted,
+                DisposeOutputOnRuntimeDispose: false,
+                Release: () =>
+                {
+                    try { (adapted as IDisposable)?.Dispose(); }
+                    finally { sharedLease.Dispose(); }
+                });
+        }
+
         if (_playerNDIAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
         {
             if (carrierAudio.Format.SampleRate == format.SampleRate && carrierAudio.Format.Channels == format.Channels)
@@ -495,28 +1039,9 @@ public partial class MediaPlayerViewModel
         if (MediaRuntime.Registry.AudioBackends.FirstOrDefault() is not { } backend)
             return null; // no backend - let the session report the failure its own way
 
-        try
-        {
-            // The common case: the device accepts the clip's mix rate directly (session-owned output).
-            return new ClipAudioOutputLease(backend.CreateOutput(deviceId, format), DisposeOutputOnRuntimeDispose: true);
-        }
-        catch
-        {
-            // The device rejected the clip's mix rate. Open it at ITS rate (the line's configured rate, else
-            // the device default) and egress-resample the router format into it. The session owns the wrapper;
-            // the created device is released via the lease hook (ResamplingAudioOutput never owns its inner).
-            var deviceRate = _playerPaDeviceRates.GetValueOrDefault(deviceId, 0);
-            if (deviceRate <= 0)
-                deviceRate = (int)Math.Round(backend.EnumerateOutputDevices()
-                    .FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))?.DefaultSampleRate ?? 0);
-            if (deviceRate <= 0 || deviceRate == format.SampleRate)
-                throw; // no viable alternative rate - surface the real open failure
-            var device = backend.CreateOutput(deviceId, new AudioFormat(deviceRate, format.Channels));
-            return new ClipAudioOutputLease(
-                ResamplingAudioOutput.Wrap(device, format),
-                DisposeOutputOnRuntimeDispose: true,
-                Release: () => (device as IDisposable)?.Dispose());
-        }
+        return new ClipAudioOutputLease(
+            backend.CreateOutput(deviceId, format),
+            DisposeOutputOnRuntimeDispose: true);
     }
 
     /// <summary>Pure: the deck's composition-canvas size = the LARGEST driven output resolution (by pixel area),
@@ -592,6 +1117,19 @@ public partial class MediaPlayerViewModel
         Array.Fill(matrix, -1); // ChannelMap.Silence
         foreach (var c in audible)
             matrix[c.Output] = c.Input;
+        return matrix;
+    }
+
+    /// <summary>Default stereo identity widened to the configured hardware output count. Every trailing
+    /// channel is explicit silence so a shared multi-channel interface never receives an automatic upmix.</summary>
+    internal static int[] BuildDefaultHardwareChannelMatrix(int outputChannels)
+    {
+        if (outputChannels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(outputChannels));
+        var matrix = new int[outputChannels];
+        Array.Fill(matrix, -1);
+        for (var channel = 0; channel < Math.Min(2, matrix.Length); channel++)
+            matrix[channel] = channel;
         return matrix;
     }
 
@@ -676,12 +1214,18 @@ public partial class MediaPlayerViewModel
             }
         }
 
-        // NDI audio: hold the carrier audio for an audio-capable NDI line so the rebuild's route can reach it.
-        if (line.Definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly }
-            && !_playerNDIAudioOutputs.ContainsKey(NDIAudioDeviceId(lineId))
+        // Carrier audio (NDI sender / armed file-record session): hold it so the rebuild's route can reach it.
+        var hotCarrierKey = line.Definition switch
+        {
+            NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly } => NDIAudioDeviceId(lineId),
+            FileOutputDefinition or LiveStreamOutputDefinition => FileAudioDeviceId(lineId),
+            _ => null,
+        };
+        if (hotCarrierKey is not null
+            && !_playerNDIAudioOutputs.ContainsKey(hotCarrierKey)
             && _outputs.AcquireAudioOutputForLine(lineId) is { } audio)
         {
-            _playerNDIAudioOutputs[NDIAudioDeviceId(lineId)] = audio;
+            _playerNDIAudioOutputs[hotCarrierKey] = audio;
             _playerAcquiredAudioLines.Add(lineId);
         }
 
@@ -710,8 +1254,10 @@ public partial class MediaPlayerViewModel
             _playerAcquiredLines.Remove(lineId);
         }
 
-        // 2) Drop the NDI carrier from the audio map so the rebuild excludes its route (don't release it yet).
-        var hadNDIAudio = _playerNDIAudioOutputs.Remove(NDIAudioDeviceId(lineId));
+        // 2) Drop the carrier (NDI / file-record) from the audio map so the rebuild excludes its route
+        //    (don't release it yet).
+        var hadNDIAudio = _playerNDIAudioOutputs.Remove(NDIAudioDeviceId(lineId))
+                          | _playerNDIAudioOutputs.Remove(FileAudioDeviceId(lineId));
         if (hadNDIAudio)
             _playerAcquiredAudioLines.Remove(lineId);
 
@@ -751,7 +1297,7 @@ public partial class MediaPlayerViewModel
     /// ShowSession: the image renders letterboxed at the composition canvas size and is held in the top-most
     /// full-canvas layer (<see cref="ShowSession.SetCompositionTestPatternAsync"/> - the same held-top-layer
     /// mechanism the calibration grid uses), so every fanned-out output shows it while audio keeps playing.
-    /// This is the ShowSession replacement for the engine's <c>LogoFallbackVideoOutput</c> hold: under the
+    /// This is the ShowSession replacement for the removed legacy per-frame logo-output hold: under the
     /// flipped default the engine session is null, so the old wiring made the HOLD button a silent no-op
     /// during playback. Audio-only media has no composition (returns false harmlessly) - the idle slate
     /// covers that case (see <c>SyncIdleSlate</c>). UI thread (reads deck observable state).</summary>
@@ -829,11 +1375,11 @@ public partial class MediaPlayerViewModel
                 _outputs.ReleaseVideoOutputForLine(held);
             _playerAcquiredLines.Clear();
             _playerVideoOutputs = new(StringComparer.Ordinal);
+            _playerShowVizOwnsCanvas = false;
             foreach (var held in _playerAcquiredAudioLines)
                 _outputs.ReleaseAudioOutputForLine(held);
             _playerAcquiredAudioLines.Clear();
             _playerNDIAudioOutputs.Clear();
-            _playerPaDeviceRates.Clear();
             ShowSessionActive = false;
             IsPlaying = false;
             IsMediaLoaded = false;
@@ -863,10 +1409,13 @@ public partial class MediaPlayerViewModel
     {
         if (_playerShowSession is null || !ShowSessionActive)
             return;
+        // Capture BEFORE SnapshotAsync: that await may straddle an event-driven auto-advance and the next
+        // track's open. The returned stopped snapshot still belongs to this observed generation.
+        var generationAtPollStart = ReadNaturalEndGeneration(ref _naturalEndGenerationState);
         try
         {
             PollAudioMeters();
-            var snap = (await _playerShowSession.SnapshotAsync().ConfigureAwait(true))
+            var snap = _playerShowSession.Snapshot()
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
             if (snap is null)
                 return;
@@ -904,22 +1453,70 @@ public partial class MediaPlayerViewModel
                     snap.TimelineGeneration, ref _showSessionLastTimelineGeneration,
                     ref _showSessionEndConfirmTicks))
             {
-                StopShowSessionPoll();
-                // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches
-                // this branch (the clip's Loop flag restarts it seamlessly inside the session); this
-                // replay covers loop toggled ON mid-play, when the running clip predates the flag.
-                if (IsLooping && AutoAdvancePlaylist && _currentPlaylistItem is { } current)
-                    await PlayPlaylistItemAsync(current).ConfigureAwait(true);
-                else if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
-                    await PlayPlaylistItemAsync(next).ConfigureAwait(true);
-                else
-                    await ShowSessionStopAsync().ConfigureAwait(true);
+                await HandleShowSessionNaturalEndAsync("poll", generationAtPollStart).ConfigureAwait(true);
             }
         }
         catch (Exception ex)
         {
             ShowLog.LogTrace("MediaPlayer: ShowSession poll: {Message}", ex.Message);
         }
+    }
+
+    // One packed atomic state shared by the event path (primary) and poll path (fallback): generation in
+    // the upper bits, claimed in bit 0. A new open advances the generation and clears claimed in ONE CAS;
+    // an end observation can claim only the exact generation it observed. This matters even though both
+    // continuations return to the UI thread: SnapshotAsync can outlive a whole track-change await.
+    private long _naturalEndGenerationState;
+    private bool _naturalEndHooked; // ClipNaturallyEnded subscribed once per player session
+
+    /// <summary>The ONE natural-end/advance entry (review M4). Primary trigger: the session's
+    /// ClipNaturallyEnded event (precise, raised by the end-of-clip machinery, never for loops or
+    /// operator stops). Fallback: the poll's confirmed-stopped heuristic. Idempotent per track.</summary>
+    private async Task HandleShowSessionNaturalEndAsync(string source, int observedGeneration)
+    {
+        if (!ShowSessionActive
+            || !TryClaimNaturalEndGeneration(ref _naturalEndGenerationState, observedGeneration))
+            return;
+        ShowLog.LogDebug(
+            "MediaPlayer: natural end via {Source} for generation {Generation} - advancing",
+            source, observedGeneration);
+        StopShowSessionPoll();
+        // Loop-current wins over playlist auto-advance. A loop active at OPEN time never reaches this
+        // (the clip's Loop flag restarts it seamlessly inside the session); this replay covers loop
+        // toggled ON mid-play, when the running clip predates the flag.
+        if (IsLooping && AutoAdvancePlaylist && _currentPlaylistItem is { } current)
+            await PlayPlaylistItemAsync(current).ConfigureAwait(true);
+        else if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
+            await PlayPlaylistItemAsync(next).ConfigureAwait(true);
+        else
+            await ShowSessionStopAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Starts an unclaimed generation. Packed with the claim bit so opening a new track and
+    /// re-arming end handling is atomic with respect to stale event/poll continuations.</summary>
+    internal static int BeginNaturalEndGeneration(ref long state)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref state);
+            var nextGeneration = checked((int)(current >> 1) + 1);
+            var next = (long)nextGeneration << 1; // low bit clear = not yet handled
+            if (Interlocked.CompareExchange(ref state, next, current) == current)
+                return nextGeneration;
+        }
+    }
+
+    internal static int ReadNaturalEndGeneration(ref long state) =>
+        (int)(Volatile.Read(ref state) >> 1);
+
+    /// <summary>Claims end handling exactly once, and only while <paramref name="observedGeneration"/>
+    /// remains the current track. A stale song-N observation cannot claim song N+1.</summary>
+    internal static bool TryClaimNaturalEndGeneration(ref long state, int observedGeneration)
+    {
+        if (observedGeneration < 0)
+            return false;
+        var expected = (long)observedGeneration << 1;
+        return Interlocked.CompareExchange(ref state, expected | 1L, expected) == expected;
     }
 
     /// <summary>Pure end-of-track decision for the deck poll. A coordinated seek transiently pauses the clip

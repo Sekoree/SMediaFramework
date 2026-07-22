@@ -10,6 +10,8 @@ public enum ManagedOutputKind
     NDI,
     SDLOpenGlVideo,
     AvaloniaOpenGlVideo,
+    FileRecord,
+    LiveStream,
 }
 
 public enum VideoOutputEngine
@@ -46,15 +48,51 @@ public enum LocalVideoFit
     Stretch,
 }
 
+/// <summary>Which sink of a line an effect wraps.</summary>
+public enum OutputEffectTarget
+{
+    Audio,
+    Video,
+}
+
+/// <summary>One persisted effect insert on an output line (kind resolved via the bus registry).</summary>
+public sealed record OutputEffectDefinition(
+    string Kind,
+    OutputEffectTarget Target,
+    string? ConfigJson = null)
+{
+    /// <summary>Row label for the Effects list ("gain (audio) {…}" when configured).</summary>
+    [JsonIgnore]
+    public string DisplayLabel =>
+        $"{Kind} ({(Target == OutputEffectTarget.Audio ? "audio" : "video")})"
+        + (string.IsNullOrWhiteSpace(ConfigJson) ? "" : $" {ConfigJson}");
+}
+
+/// <summary>Picker row for the Effects insert combo (registry kind + which sink it wraps).</summary>
+public sealed record OutputEffectChoice(string Label, string Kind, OutputEffectTarget Target)
+{
+    public override string ToString() => Label;
+}
+
 /// <summary>User-defined output entry (playback wiring consumes this later).</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(PortAudioOutputDefinition), typeDiscriminator: "portAudio")]
 [JsonDerivedType(typeof(LocalVideoOutputDefinition), typeDiscriminator: "localVideo")]
 [JsonDerivedType(typeof(NDIOutputDefinition), typeDiscriminator: "ndi")]
+[JsonDerivedType(typeof(FileOutputDefinition), typeDiscriminator: "fileRecord")]
+[JsonDerivedType(typeof(LiveStreamOutputDefinition), typeDiscriminator: "liveStream")]
 public abstract record OutputDefinition(Guid Id, string DisplayName)
 {
     [JsonIgnore]
     public abstract ManagedOutputKind Kind { get; }
+
+    /// <summary>
+    /// Effect-bus inserts on this line, applied in order when playback acquires the output (audio
+    /// effects wrap the audio sink, video effects wrap the video sink). Kinds come from the bus
+    /// registry (<c>MediaRuntime.Buses</c>); <see cref="OutputEffectDefinition.ConfigJson"/> is the
+    /// kind's opaque config blob. Absent in older project files (deserializes empty).
+    /// </summary>
+    public IReadOnlyList<OutputEffectDefinition> Effects { get; init; } = [];
 
     /// <summary>
     /// Operator-given name (UI rewrite P2, plan §5): the single naming truth shown wherever this
@@ -128,6 +166,124 @@ public sealed record LocalVideoOutputDefinition(
     [JsonIgnore]
     public override ManagedOutputKind Kind =>
         Engine == VideoOutputEngine.SDLOpenGl ? ManagedOutputKind.SDLOpenGlVideo : ManagedOutputKind.AvaloniaOpenGlVideo;
+}
+
+/// <summary>One audio track of an encode output (persisted). Channels 0 = stereo default.</summary>
+public sealed record EncodeAudioLegDefinition(
+    string Codec = "Aac",
+    long BitrateBps = 0,
+    int Channels = 2,
+    int SampleRate = 0,
+    string? Name = null,
+    string? Language = null);
+
+/// <summary>
+/// Persisted encode settings shared by the file-record output and (Phase 3) the live-stream output.
+/// Codec/container names are stored as strings so a project file survives enum growth in the encode
+/// module; the runtime maps them with TryParse and falls back to defaults on unknown values.
+/// </summary>
+public sealed record EncodeSettingsDefinition(
+    string Container = "Mp4",
+    string OutputMode = "VideoAndAudio",
+    string VideoCodec = "H264",
+    long VideoBitrateBps = 0,
+    int? VideoCrf = 23,
+    string? VideoPreset = "veryfast",
+    int GopSize = 0,
+    int ScaleWidth = 0,
+    int ScaleHeight = 0,
+    // Declared output frame rate (0 = follow the source). Locked recordings and live streams pin this
+    // so the encoded output never renegotiates mid-session. Absent in pre-Fps project files (0 = source).
+    int Fps = 0)
+{
+    public IReadOnlyList<EncodeAudioLegDefinition> AudioLegs { get; init; } = [new EncodeAudioLegDefinition()];
+
+    /// <summary>"Average" (legacy/default) or "Constant". String-backed for project compatibility.</summary>
+    public string VideoBitrateMode { get; init; } = "Average";
+
+    /// <summary>Maximum B-frames (null = encoder default, 0 = disabled).</summary>
+    public int? VideoMaxBFrames { get; init; }
+
+    /// <summary>VBV capacity expressed as duration at the selected bitrate (0 = encoder default).</summary>
+    public int VideoVbvBufferMilliseconds { get; init; } = 1000;
+
+    /// <summary>Apply the H.264/H.265 encoder's zero-latency tune.</summary>
+    public bool VideoLowLatencyTune { get; init; }
+}
+
+/// <summary>Record-to-file output line. The runtime is armed/disarmed explicitly (a recording is an
+/// operator action, not a side effect of the line existing).</summary>
+public sealed record FileOutputDefinition(
+    Guid Id,
+    string DisplayName,
+    string DirectoryPath,
+    // File name pattern; "{timestamp}" expands to yyyyMMdd_HHmmss_fff at arm time. The runtime also
+    // reserves the final name atomically and adds a suffix on collision, so re-arming never overwrites.
+    string FileNamePattern = "recording_{timestamp}",
+    EncodeSettingsDefinition? Encode = null) : OutputDefinition(Id, DisplayName)
+{
+    public const string ContentOnlyRecordingMode = "ContentOnly";
+    public const string ContinuousProgramRecordingMode = "ContinuousProgram";
+
+    [JsonIgnore]
+    public override ManagedOutputKind Kind => ManagedOutputKind.FileRecord;
+
+    [JsonIgnore]
+    public EncodeSettingsDefinition EffectiveEncode => Encode ?? new EncodeSettingsDefinition();
+
+    /// <summary>
+    /// Recording-clock policy. Null is the legacy project shape and remains content-only so opening an
+    /// existing show never silently changes its file duration or introduces a fixed-format requirement.
+    /// New outputs explicitly persist <see cref="ContinuousProgramRecordingMode"/> by default.
+    /// </summary>
+    public string? RecordingMode { get; init; }
+
+    [JsonIgnore]
+    public string EffectiveRecordingMode =>
+        string.Equals(RecordingMode, ContinuousProgramRecordingMode, StringComparison.OrdinalIgnoreCase)
+            ? ContinuousProgramRecordingMode
+            : ContentOnlyRecordingMode;
+
+    [JsonIgnore]
+    public bool RecordsContinuousProgram => EffectiveRecordingMode == ContinuousProgramRecordingMode;
+}
+
+/// <summary>One push destination of a live-stream output (persisted). Protocol stored as string
+/// ("Rtmp"/"Srt"/"Rtsp") for the same enum-growth resilience as the codec names. <see cref="StreamKey"/>
+/// is the ingest key/auth token folded into the URL per protocol when the server needs one (may be blank).</summary>
+public sealed record StreamPushTargetDefinition(string Protocol = "Rtmp", string Url = "", string? StreamKey = null)
+{
+    /// <summary>SRT retransmission latency in milliseconds (null = libsrt default / URL option).</summary>
+    public int? SrtLatencyMilliseconds { get; init; }
+}
+
+/// <summary>The built-in LAN server's persisted settings. <see cref="MountName"/> is the URL path segment
+/// (e.g. "stage" → <c>/stage.ts</c>) so several streams can share one server on the same port.</summary>
+public sealed record LocalStreamServerDefinition(
+    bool Enabled = true,
+    int Port = 8620,
+    bool EnableTs = true,
+    bool EnableHls = true,
+    string MountName = "stream");
+
+/// <summary>Live-stream output line: shared encode settings + N push targets + optional LAN server.
+/// Like the file record, streaming is explicitly started/stopped by the operator ("go live").</summary>
+public sealed record LiveStreamOutputDefinition(
+    Guid Id,
+    string DisplayName,
+    EncodeSettingsDefinition? Encode = null,
+    LocalStreamServerDefinition? LocalServer = null) : OutputDefinition(Id, DisplayName)
+{
+    public IReadOnlyList<StreamPushTargetDefinition> PushTargets { get; init; } = [];
+
+    [JsonIgnore]
+    public override ManagedOutputKind Kind => ManagedOutputKind.LiveStream;
+
+    [JsonIgnore]
+    public EncodeSettingsDefinition EffectiveEncode => Encode ?? new EncodeSettingsDefinition(Container: "MpegTs");
+
+    [JsonIgnore]
+    public LocalStreamServerDefinition EffectiveLocalServer => LocalServer ?? new LocalStreamServerDefinition();
 }
 
 public sealed record NDIOutputDefinition(

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Media/S.Media.Encode.FFmpeg/S.Media.Encode.FFmpeg.csproj" />
+    <!-- Decode side only to VERIFY round-trips - the encode module itself never references it. -->
+    <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="S.Media.Core" />
+    <Using Include="S.Media.Core.Audio" />
+    <Using Include="S.Media.Core.Video" />
+    <Using Include="S.Media.Encode.FFmpeg" />
+  </ItemGroup>
+
+</Project>

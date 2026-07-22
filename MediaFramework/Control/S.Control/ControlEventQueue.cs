@@ -42,7 +42,7 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
 
     private readonly Lock _gate = new();
     private readonly LinkedList<ControlEventQueueItem> _fifo = new();
-    private readonly Dictionary<string, LinkedListNode<ControlEventQueueItem>> _coalesceIndex = new(StringComparer.Ordinal);
+    private readonly Dictionary<CoalesceKey, LinkedListNode<ControlEventQueueItem>> _coalesceIndex = new();
     private readonly SemaphoreSlim _available = new(0);
 
     private int _pendingCount;
@@ -149,26 +149,50 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
             ct => _session.TickPeriodicAsync(utcNow, ct),
             cancellationToken);
 
+    /// <summary>Which continuous-control family a <see cref="CoalesceKey"/> identifies.</summary>
+    private enum CoalesceKind : byte
+    {
+        MidiCc,
+        Scalar,
+        MsgControlChange,
+        MsgPitchBend,
+        MsgChannelAftertouch,
+        MsgPolyAftertouch,
+    }
+
+    /// <summary>
+    /// Identity of an absolute continuous control for full-queue coalescing. A value-type key so the
+    /// (per-event) key derivation allocates nothing under a MIDI/meter flood - the previous string keys
+    /// interpolated per enqueue. <see cref="Origin"/> is only meaningful for <see cref="CoalesceKind.Scalar"/>;
+    /// <see cref="Channel"/>/<see cref="Controller"/> carry channel/controller-or-note for the MIDI kinds
+    /// (-1 when the payload field was null, mirroring the old string keys' empty segment).
+    /// </summary>
+    private readonly record struct CoalesceKey(CoalesceKind Kind, Guid Source, Guid Origin, int Channel, int Controller);
+
     /// <summary>
     /// Coalesce key for an event, or null when the event must be preserved (button/note edges, transport,
     /// program change, OSC, device/layer/health lifecycle, text, blob). Only absolute continuous controls,
     /// where solely the newest value matters, are coalescable - and coalescing only ever happens under
     /// pressure (see the type remarks), so relative encoders survive normal load.
     /// </summary>
-    private static string? CoalesceKeyFor(ControlEvent evt) => evt switch
+    private static CoalesceKey? CoalesceKeyFor(ControlEvent evt) => evt switch
     {
-        MIDIControlEvent cc => $"m.cc:{cc.SourceNodeId:N}:{cc.Channel}:{cc.Controller}",
-        ScalarControlEvent s => $"m.scalar:{s.SourceNodeId:N}:{s.OriginId:N}",
+        MIDIControlEvent cc => new CoalesceKey(CoalesceKind.MidiCc, cc.SourceNodeId, default, cc.Channel, cc.Controller),
+        ScalarControlEvent s => new CoalesceKey(CoalesceKind.Scalar, s.SourceNodeId, s.OriginId, 0, 0),
         MIDIMessageControlEvent { Message: { } msg } m => ContinuousMessageKey(m.SourceNodeId, msg),
         _ => null,
     };
 
-    private static string? ContinuousMessageKey(Guid source, ControlMIDIMessagePayload msg) => msg.MessageType switch
+    private static CoalesceKey? ContinuousMessageKey(Guid source, ControlMIDIMessagePayload msg) => msg.MessageType switch
     {
-        ControlMIDIMessageType.ControlChange => $"m.msg.cc:{source:N}:{msg.Channel}:{msg.Controller}",
-        ControlMIDIMessageType.PitchBend => $"m.msg.pb:{source:N}:{msg.Channel}",
-        ControlMIDIMessageType.ChannelAftertouch => $"m.msg.cat:{source:N}:{msg.Channel}",
-        ControlMIDIMessageType.PolyphonicAftertouch => $"m.msg.pat:{source:N}:{msg.Channel}:{msg.Note}",
+        ControlMIDIMessageType.ControlChange =>
+            new CoalesceKey(CoalesceKind.MsgControlChange, source, default, msg.Channel ?? -1, msg.Controller ?? -1),
+        ControlMIDIMessageType.PitchBend =>
+            new CoalesceKey(CoalesceKind.MsgPitchBend, source, default, msg.Channel ?? -1, 0),
+        ControlMIDIMessageType.ChannelAftertouch =>
+            new CoalesceKey(CoalesceKind.MsgChannelAftertouch, source, default, msg.Channel ?? -1, 0),
+        ControlMIDIMessageType.PolyphonicAftertouch =>
+            new CoalesceKey(CoalesceKind.MsgPolyAftertouch, source, default, msg.Channel ?? -1, msg.Note ?? -1),
         _ => null,
     };
 
@@ -176,7 +200,7 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
         string operationName,
         Func<CancellationToken, ValueTask<ControlScriptRuntimeSessionResult>> operation,
         CancellationToken cancellationToken,
-        string? coalesceKey = null)
+        CoalesceKey? coalesceKey = null)
     {
         ArgumentNullException.ThrowIfNull(operation);
 
@@ -209,7 +233,7 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
                 IndexIfContinuous(coalesceKey, node);
                 releasePermit = true; // one item added → one permit (permit count == fifo count invariant)
             }
-            else if (coalesceKey is not null && _coalesceIndex.TryGetValue(coalesceKey, out var existing))
+            else if (coalesceKey is { } ck && _coalesceIndex.TryGetValue(ck, out var existing))
             {
                 // Full + continuous with a pending value for this control: coalesce onto it (keep the
                 // newest value at the existing FIFO slot). Count unchanged → no permit change.
@@ -265,10 +289,10 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
         return new ValueTask<ControlScriptRuntimeSessionResult>(completion.Task);
     }
 
-    private void IndexIfContinuous(string? coalesceKey, LinkedListNode<ControlEventQueueItem> node)
+    private void IndexIfContinuous(CoalesceKey? coalesceKey, LinkedListNode<ControlEventQueueItem> node)
     {
-        if (coalesceKey is not null)
-            _coalesceIndex[coalesceKey] = node; // most-recent pending node for this control
+        if (coalesceKey is { } key)
+            _coalesceIndex[key] = node; // most-recent pending node for this control
     }
 
     /// <summary>Removes one item to make room: the oldest continuous (coalescable) item when any exists -
@@ -481,5 +505,5 @@ public sealed class ControlEventQueue : IControlScriptDispatcher, IAsyncDisposab
         Func<CancellationToken, ValueTask<ControlScriptRuntimeSessionResult>> Operation,
         TaskCompletionSource<ControlScriptRuntimeSessionResult> Completion,
         CancellationToken CancellationToken,
-        string? CoalesceKey);
+        CoalesceKey? CoalesceKey);
 }

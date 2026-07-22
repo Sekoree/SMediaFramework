@@ -1059,42 +1059,17 @@ public readonly partial struct ChannelMap
         if (src.Length < total || dst.Length < total)
             return false;
 
-        if (ch == 3)
+        if (ch is 3 or 5 or 6 or 7)
         {
-            if (!Avx2.IsSupported)
-                return false;
-
-            var idx = Vector256.Create(
-                routing[0], routing[1], routing[2],
-                3, 4, 5, 6, 7);
-            var gain3 = Vector256.Create(uniformGain);
-            fixed (float* pSrc = src)
-            fixed (float* pDst = dst)
+            // Odd widths don't fill a hardware vector. The previous "SIMD" kernels here
+            // round-tripped every frame through a stack pad (four copies per frame) and
+            // benchmarked SLOWER than scalar (6ch permutation: 9.9 us vs ~2 us per 480-frame
+            // chunk) - a tight hoisted gather loop is the honest fast path for these shapes.
+            for (var s = 0; s < samplesPerChannel; s++)
             {
-                var pad = stackalloc float[8];
-                for (var s = 0; s < samplesPerChannel; s++)
-                {
-                    var off = s * 3;
-                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 12);
-                    pad[3] = 0;
-                    pad[4] = 0;
-                    pad[5] = 0;
-                    pad[6] = 0;
-                    pad[7] = 0;
-                    var v = Avx.LoadVector256(pad);
-                    var p = Avx2.PermuteVar8x32(v, idx);
-                    var pM = Avx.Multiply(p, gain3);
-                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 12);
-                    pad[3] = 0;
-                    pad[4] = 0;
-                    pad[5] = 0;
-                    pad[6] = 0;
-                    pad[7] = 0;
-                    var acc = Avx.LoadVector256(pad);
-                    var sum = Avx.Add(acc, pM);
-                    Avx.Store(pad, sum);
-                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 12);
-                }
+                var off = s * ch;
+                for (var c = 0; c < ch; c++)
+                    dst[off + c] += src[off + routing[c]] * uniformGain;
             }
 
             return true;
@@ -1121,111 +1096,6 @@ public readonly partial struct ChannelMap
                 }
             }
 #pragma warning restore CA1857
-
-            return true;
-        }
-
-        if (ch == 5)
-        {
-            if (!Avx2.IsSupported)
-                return false;
-
-            var idx = Vector256.Create(
-                routing[0], routing[1], routing[2], routing[3], routing[4],
-                5, 6, 7);
-            var gain5 = Vector256.Create(uniformGain);
-            fixed (float* pSrc = src)
-            fixed (float* pDst = dst)
-            {
-                var pad = stackalloc float[8];
-                for (var s = 0; s < samplesPerChannel; s++)
-                {
-                    var off = s * 5;
-                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 20);
-                    pad[5] = 0;
-                    pad[6] = 0;
-                    pad[7] = 0;
-                    var v = Avx.LoadVector256(pad);
-                    var p = Avx2.PermuteVar8x32(v, idx);
-                    var pM = Avx.Multiply(p, gain5);
-                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 20);
-                    pad[5] = 0;
-                    pad[6] = 0;
-                    pad[7] = 0;
-                    var acc = Avx.LoadVector256(pad);
-                    var sum = Avx.Add(acc, pM);
-                    Avx.Store(pad, sum);
-                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 20);
-                }
-            }
-
-            return true;
-        }
-
-        if (ch == 6)
-        {
-            if (!Avx2.IsSupported)
-                return false;
-
-            var idx = Vector256.Create(
-                routing[0], routing[1], routing[2], routing[3],
-                routing[4], routing[5], 6, 7);
-            var gain6 = Vector256.Create(uniformGain);
-            fixed (float* pSrc = src)
-            fixed (float* pDst = dst)
-            {
-                var pad = stackalloc float[8];
-                pad[6] = 0;
-                pad[7] = 0;
-                for (var s = 0; s < samplesPerChannel; s++)
-                {
-                    var off = s * 6;
-                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 24);
-                    var v = Avx.LoadVector256(pad);
-                    var p = Avx2.PermuteVar8x32(v, idx);
-                    var pM = Avx.Multiply(p, gain6);
-                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 24);
-                    pad[6] = 0;
-                    pad[7] = 0;
-                    var acc = Avx.LoadVector256(pad);
-                    var sum = Avx.Add(acc, pM);
-                    Avx.Store(pad, sum);
-                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 24);
-                }
-            }
-
-            return true;
-        }
-
-        if (ch == 7)
-        {
-            if (!Avx2.IsSupported)
-                return false;
-
-            var idx = Vector256.Create(
-                routing[0], routing[1], routing[2], routing[3],
-                routing[4], routing[5], routing[6], 7);
-            var gain7 = Vector256.Create(uniformGain);
-            fixed (float* pSrc = src)
-            fixed (float* pDst = dst)
-            {
-                var pad = stackalloc float[8];
-                for (var s = 0; s < samplesPerChannel; s++)
-                {
-                    var off = s * 7;
-                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 28);
-                    pad[7] = 0;
-                    var v = Avx.LoadVector256(pad);
-                    var p = Avx2.PermuteVar8x32(v, idx);
-                    var pM = Avx.Multiply(p, gain7);
-                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 28);
-                    pad[7] = 0;
-                    var acc = Avx.LoadVector256(pad);
-                    var sum = Avx.Add(acc, pM);
-                    Avx.Store(pad, sum);
-                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 28);
-                }
-            }
 
             return true;
         }
@@ -1790,8 +1660,21 @@ public readonly partial struct ChannelMap
         return true;
     }
 
+    // Per-vector pair shuffles. These were scalar stack-pad round-trips (copy out, permute with a
+    // scalar loop, copy back - the perf review's "fake SIMD": the stereo-swap route benchmarked 9x
+    // slower than stereo-identity). Constant-index Vector128/256/512.Shuffle JITs to real shuffle
+    // instructions; exotic widths keep the portable pad fallback.
+
     private static Vector<float> StereoSwapAdjacentChannels(Vector<float> v)
     {
+        if (Vector<float>.Count == 8)
+            return Vector256.Shuffle(v.AsVector256(), Vector256.Create(1, 0, 3, 2, 5, 4, 7, 6)).AsVector();
+        if (Vector<float>.Count == 4)
+            return Vector128.Shuffle(v.AsVector128(), Vector128.Create(1, 0, 3, 2)).AsVector();
+        if (Vector<float>.Count == 16)
+            return Vector512.Shuffle(v.AsVector512(),
+                Vector512.Create(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14)).AsVector();
+
         Span<float> buf = stackalloc float[Vector<float>.Count];
         v.CopyTo(buf);
         for (var j = 0; j < Vector<float>.Count; j += 2)
@@ -1802,28 +1685,36 @@ public readonly partial struct ChannelMap
 
     private static Vector<float> StereoDupLeftAdjacent(Vector<float> v)
     {
+        if (Vector<float>.Count == 8)
+            return Vector256.Shuffle(v.AsVector256(), Vector256.Create(0, 0, 2, 2, 4, 4, 6, 6)).AsVector();
+        if (Vector<float>.Count == 4)
+            return Vector128.Shuffle(v.AsVector128(), Vector128.Create(0, 0, 2, 2)).AsVector();
+        if (Vector<float>.Count == 16)
+            return Vector512.Shuffle(v.AsVector512(),
+                Vector512.Create(0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14)).AsVector();
+
         Span<float> buf = stackalloc float[Vector<float>.Count];
         v.CopyTo(buf);
         for (var j = 0; j < Vector<float>.Count; j += 2)
-        {
-            var L = buf[j];
-            buf[j] = L;
-            buf[j + 1] = L;
-        }
+            buf[j + 1] = buf[j];
 
         return MemoryMarshal.Cast<float, Vector<float>>(buf)[0];
     }
 
     private static Vector<float> StereoDupRightAdjacent(Vector<float> v)
     {
+        if (Vector<float>.Count == 8)
+            return Vector256.Shuffle(v.AsVector256(), Vector256.Create(1, 1, 3, 3, 5, 5, 7, 7)).AsVector();
+        if (Vector<float>.Count == 4)
+            return Vector128.Shuffle(v.AsVector128(), Vector128.Create(1, 1, 3, 3)).AsVector();
+        if (Vector<float>.Count == 16)
+            return Vector512.Shuffle(v.AsVector512(),
+                Vector512.Create(1, 1, 3, 3, 5, 5, 7, 7, 9, 9, 11, 11, 13, 13, 15, 15)).AsVector();
+
         Span<float> buf = stackalloc float[Vector<float>.Count];
         v.CopyTo(buf);
         for (var j = 0; j < Vector<float>.Count; j += 2)
-        {
-            var R = buf[j + 1];
-            buf[j] = R;
-            buf[j + 1] = R;
-        }
+            buf[j] = buf[j + 1];
 
         return MemoryMarshal.Cast<float, Vector<float>>(buf)[0];
     }

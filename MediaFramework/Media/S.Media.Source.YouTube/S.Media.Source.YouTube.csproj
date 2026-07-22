@@ -28,4 +28,8 @@
         <Using Include="S.Media.Core.Registry" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>YouTube media source for MFPlayer: stream/caption selection and download via YoutubeExplode.</Description>
+    </PropertyGroup>
 </Project>

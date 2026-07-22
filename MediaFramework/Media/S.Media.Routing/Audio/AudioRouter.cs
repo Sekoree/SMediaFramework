@@ -134,6 +134,11 @@ public sealed partial class AudioRouter : IDisposable
     public bool CompletedNaturally { get; private set; }
     public long ChunksProduced => Volatile.Read(ref _chunksProduced);
 
+    /// <summary>Timing of one full mix cycle (source reads + matrix mix + pump commits) on the router thread.</summary>
+    public TimingSnapshot MixTiming => _mixTiming.Snapshot();
+
+    private readonly TimingAccumulator _mixTiming = new();
+
     /// <summary>
     /// When <c>true</c> (default), reaching natural end-of-stream flushes every output so smoke tools
     /// and one-shot hosts leave the device silent promptly. Hosts that share a <em>persistent</em>
@@ -286,6 +291,39 @@ public sealed partial class AudioRouter : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// When enabled, each subsequently registered non-master output is wrapped via
+    /// <see cref="AdaptiveRateWrapper"/> (wired from the media registry / FFmpeg module).
+    /// Call before adding secondary outputs (NDI, file record, etc.).
+    /// </summary>
+    public void EnableAdaptiveRateOnNonMasterOutputs(int maxRateDeltaHz = 3)
+    {
+        if (AdaptiveRateWrapper is null)
+            throw new InvalidOperationException(
+                "EnableAdaptiveRateOnNonMasterOutputs requires AdaptiveRateWrapper to be set (wire it from the media registry / FFmpeg module).");
+        if (maxRateDeltaHz < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxRateDeltaHz));
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _wrapAdaptiveRateOnNonMasterOutputs = true;
+            _adaptiveRateMaxDeltaHz = maxRateDeltaHz;
+        }
+    }
+
+    /// <summary>Snapshot of registered output ids. Allocates a fresh array per call (same as
+    /// <see cref="SourceIds"/>/<see cref="OutputIds"/>) - for HUD/status polling, sample at a low
+    /// rate and reuse the snapshot rather than calling per frame.</summary>
+    public IReadOnlyList<string> GetRegisteredOutputIds()
+    {
+        lock (_gate)
+            return _state.Outputs.Keys.ToArray();
+    }
+
+    /// <summary>
+    /// Register an output. <paramref name="id"/> defaults to an auto-generated value
+    /// (<c>__auto_sink_1</c>, …) - pass an explicit ID to make route definitions self-documenting.
+    /// </summary>
     /// <param name="pumpCapacityChunks">
     /// Bounded depth of this output's background chunk queue (see remarks on
     /// <see cref="AudioRouter"/>). <c>null</c> uses the router constructor default
@@ -320,35 +358,6 @@ public sealed partial class AudioRouter : IDisposable
     /// knob via its <c>outputPumpCapacityChunks</c> parameter.
     /// </para>
     /// </remarks>
-    /// <summary>
-    /// When enabled, each subsequently registered non-master output is wrapped via
-    /// <see cref="AdaptiveRateWrapper"/> (wired from the media registry / FFmpeg module).
-    /// Call before adding secondary outputs (NDI, file record, etc.).
-    /// </summary>
-    public void EnableAdaptiveRateOnNonMasterOutputs(int maxRateDeltaHz = 3)
-    {
-        if (AdaptiveRateWrapper is null)
-            throw new InvalidOperationException(
-                "EnableAdaptiveRateOnNonMasterOutputs requires AdaptiveRateWrapper to be set (wire it from the media registry / FFmpeg module).");
-        if (maxRateDeltaHz < 0)
-            throw new ArgumentOutOfRangeException(nameof(maxRateDeltaHz));
-        lock (_gate)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            _wrapAdaptiveRateOnNonMasterOutputs = true;
-            _adaptiveRateMaxDeltaHz = maxRateDeltaHz;
-        }
-    }
-
-    /// <summary>Snapshot of registered output ids. Allocates a fresh array per call (same as
-    /// <see cref="SourceIds"/>/<see cref="OutputIds"/>) - for HUD/status polling, sample at a low
-    /// rate and reuse the snapshot rather than calling per frame.</summary>
-    public IReadOnlyList<string> GetRegisteredOutputIds()
-    {
-        lock (_gate)
-            return _state.Outputs.Keys.ToArray();
-    }
-
     public string AddOutput(IAudioOutput output, string? id = null, int? pumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -1439,6 +1448,7 @@ public sealed partial class AudioRouter : IDisposable
                 // replace the whole RouterState atomically; this loop sees a
                 // consistent view per chunk.
                 var snapshot = Volatile.Read(ref _state);
+                var mixStarted = Stopwatch.GetTimestamp();
 
                 // Only consume sources that have at least one route this chunk. Registering a source must
                 // NOT drain it - a cue/soundboard can load a clip before routing/firing it (otherwise the
@@ -1479,8 +1489,19 @@ public sealed partial class AudioRouter : IDisposable
                 foreach (var (_, output) in snapshot.Outputs)
                     Array.Clear(output.Pump.WorkingBuffer);
 
-                foreach (var resolved in snapshot.Routes)
+                // Mix through the cached plan: single routes take the existing ApplyRoute path;
+                // co-routed single-cell (matrix) routes were fused into one dense pass per
+                // (source, output) pair. The plan rebuilds only when the route array changes.
+                EnsureMixPlan(snapshot.Routes);
+                foreach (var entry in _mixPlan)
                 {
+                    if (entry.Fused is { } group)
+                    {
+                        ApplyFusedMatrixGroup(group, _chunkSamples);
+                        continue;
+                    }
+
+                    var resolved = entry.Single!;
                     var route = resolved.Route;
                     var src = resolved.Source;
                     var output = resolved.Output;
@@ -1506,6 +1527,7 @@ public sealed partial class AudioRouter : IDisposable
                 foreach (var (id, output) in snapshot.Outputs)
                     output.Pump.Commit(applyBackpressure: primaryPumpId is not null && id == primaryPumpId);
 
+                _mixTiming.RecordSince(mixStarted);
                 Interlocked.Increment(ref _chunksProduced);
                 if (!loggedFirstChunk)
                 {
@@ -1616,63 +1638,15 @@ public sealed partial class AudioRouter : IDisposable
         // Both ends silent - nothing to mix in.
         if (fromGain == 0f && toGain == 0f) return;
 
-        // Steady-state: same gain at both ends, take the constant-gain fast path.
+        // Steady-state: same gain at both ends, take the constant-gain fast path. The SIMD dispatch
+        // lives in ONE place - ChannelMap.TryAccumulateAnyInterleaved - so this path and ApplyAdditive
+        // can never drift (they had: six shapes were SIMD at gain 1.0 but scalar at other gains, and
+        // unity-gain routes probed the chain twice).
         if (fromGain == toGain)
         {
-            if (ChannelMap.TryAccumulateStereoFullSilenceStereoInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoIdentityInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoDupSingleChannelInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoSilenceOrZeroDupInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateMonoSilenceOrZeroDupInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateMonoDupStereoInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateMonoDupNInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoDuplexWideInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoDuplexWideSwappedInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoToNInterleavedSwapped(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulateStereoToNInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulatePackedIdentityInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
-            if (ChannelMap.TryAccumulatePackedPermutationInterleaved(src, srcChannels,
-                    dst, dstChannels, map, samplesPerChannel, fromGain))
-                return;
-
             if (fromGain == 1.0f)
             {
+                // ApplyAdditive runs the same shared chain (once) before its scalar fallback.
                 if (profileRoutes)
                 {
                     var t0 = Stopwatch.GetTimestamp();
@@ -1683,6 +1657,10 @@ public sealed partial class AudioRouter : IDisposable
                     map.ApplyAdditive(src, srcChannels, dst, samplesPerChannel);
                 return;
             }
+
+            if (ChannelMap.TryAccumulateAnyInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
 
             long tUniform = 0;
             if (profileRoutes)
@@ -1745,7 +1723,8 @@ public sealed partial class AudioRouter : IDisposable
 
     private sealed record ResolvedRoute(AudioRoute Route, SourceEntry Source, OutputEntry Output);
 
-    /// <summary>Snapshot of pump throughput/lifetime stats.</summary>
+    /// <summary>Snapshot of pump throughput/lifetime stats. <see cref="Dropped"/> counts pressure drops
+    /// (the output could not keep up); host-initiated flushes are counted in <see cref="Abandoned"/>.</summary>
     public readonly record struct OutputPumpStats(long Enqueued, long Processed, long Dropped, int PumpCapacityChunks)
     {
         /// <summary>
@@ -1753,6 +1732,13 @@ public sealed partial class AudioRouter : IDisposable
         /// In that state the pump intentionally leaks its queue/CTS to avoid use-after-dispose.
         /// </summary>
         public bool IsStuck { get; init; }
+
+        /// <summary>
+        /// Chunks discarded by a host-initiated flush (Pause / <see cref="AudioRouter.FlushOutputBuffers"/> /
+        /// <see cref="AudioRouter.RemoveOutput"/>). Deliberate discards, not pressure - they never raise
+        /// <see cref="AudioRouter.PumpPressure"/> and are excluded from <see cref="Dropped"/>.
+        /// </summary>
+        public long Abandoned { get; init; }
     }
 
     /// <summary>

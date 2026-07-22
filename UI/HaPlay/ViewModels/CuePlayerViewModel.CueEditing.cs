@@ -32,9 +32,21 @@ public partial class CuePlayerViewModel
         var result = await dialog.ShowDialog<Dialogs.RenameCueDialogResult?>(owner);
         if (result is null) return;
 
+        // Unique cue numbers (#27): number-based references (jump targets) need unambiguous numbers,
+        // so a rename that would duplicate an existing number anywhere in the list is rejected.
+        if (!string.IsNullOrWhiteSpace(result.Number)
+            && EnumerateAllCueNodes().Any(c => !ReferenceEquals(c, SelectedCueNode)
+                && string.Equals(c.Number?.Trim(), result.Number.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            StatusMessage = Strings.Format(nameof(Strings.CueNumberDuplicateFormat), result.Number.Trim());
+            return;
+        }
+
         var oldDisplay = CueDisplay(SelectedCueNode);
         SelectedCueNode.Number = result.Number;
         SelectedCueNode.Label = result.Label;
+        RefreshCueTargetDisplays();
+        OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         StatusMessage = Strings.Format(nameof(Strings.RenamedCueStatusFormat), oldDisplay, CueDisplay(SelectedCueNode));
     }
 
@@ -91,16 +103,61 @@ public partial class CuePlayerViewModel
     private void MoveSelectedCue(int delta)
     {
         if (SelectedCueNode is null || SelectedCueList is null) return;
-        if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
-            return;
-        var idx = parent.IndexOf(SelectedCueNode);
-        var next = idx + delta;
-        if (next < 0 || next >= parent.Count) return;
-        var node = SelectedCueNode;
-        parent.RemoveAt(idx);
-        parent.Insert(next, node);
-        SelectedCueNode = node;
+
+        // Applies to the whole multi-selection: each selected row shifts one slot within its own
+        // parent. A contiguous block keeps its relative order and piles up at the boundary
+        // instead of wrapping (the operator gets to feel the edge, same as single-select).
+        var primary = SelectedCueNode;
+        var entries = new List<(IList<CueNodeViewModel> Parent, int Index, CueNodeViewModel Node)>();
+        foreach (var node in EffectiveSelection())
+        {
+            if (FindParentCollection(SelectedCueList.Nodes, node) is IList<CueNodeViewModel> parent)
+                entries.Add((parent, parent.IndexOf(node), node));
+        }
+        if (entries.Count == 0) return;
+
+        var moved = false;
+        foreach (var group in entries.GroupBy(e => e.Parent))
+        {
+            var parent = group.Key;
+            if (delta < 0)
+            {
+                var blockedTop = 0;
+                foreach (var entry in group.OrderBy(e => e.Index))
+                {
+                    var idx = parent.IndexOf(entry.Node);
+                    if (idx <= blockedTop)
+                    {
+                        blockedTop = idx + 1;
+                        continue;
+                    }
+                    parent.RemoveAt(idx);
+                    parent.Insert(idx - 1, entry.Node);
+                    moved = true;
+                }
+            }
+            else
+            {
+                var blockedBottom = parent.Count - 1;
+                foreach (var entry in group.OrderByDescending(e => e.Index))
+                {
+                    var idx = parent.IndexOf(entry.Node);
+                    if (idx >= blockedBottom)
+                    {
+                        blockedBottom = idx - 1;
+                        continue;
+                    }
+                    parent.RemoveAt(idx);
+                    parent.Insert(idx + 1, entry.Node);
+                    moved = true;
+                }
+            }
+        }
+
+        if (!moved) return;
+        SelectedCueNode = primary;
         MaybeRenumberAfterStructureChange();
+        RefreshCueTargetDisplays();
         SuggestPreRollRefresh();
     }
 
@@ -157,6 +214,7 @@ public partial class CuePlayerViewModel
         destinationParent.Insert(destinationIndex, node);
         SelectedCueNode = node;
         MaybeRenumberAfterStructureChange();
+        RefreshCueTargetDisplays();
         SuggestPreRollRefresh();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
@@ -184,28 +242,44 @@ public partial class CuePlayerViewModel
         return false;
     }
 
-    /// <summary>Deep-copy the selected cue with a fresh id and insert immediately after the
-    /// original. Routes, placements, and group-children all clone. Bound to Ctrl+D.</summary>
+    /// <summary>Deep-copy every selected cue with fresh ids, inserting each copy immediately after
+    /// its original. Routes, placements, and group-children all clone. Bound to Ctrl+D. The clones
+    /// become the new selection.</summary>
     [RelayCommand(CanExecute = nameof(CanDuplicateSelectedCue))]
     private void DuplicateSelectedCue()
     {
         if (SelectedCueNode is null || SelectedCueList is null) return;
-        if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
-            return;
 
-        // Deep-copy via the model layer. `ToModel()` projects through fresh `.Select(...).ToList()`
-        // collections for routes / placements / children, so the snapshot doesn't share list
-        // references with the original VM. `CloneCueNodeWithNewIds` then rotates ids (a `with` on
-        // a record only does a shallow copy - we'd otherwise share AudioRoutes / VideoPlacements
-        // lists between original and copy). `FromModel` rebuilds fresh VM collections from the
-        // cloned snapshot, so no list reference is shared with the original cue.
-        var snapshot = SelectedCueNode.ToModel();
-        var copy = CloneCueNodeWithNewIds(snapshot);
-        var copyVm = CueNodeViewModel.FromModel(copy, ResolveOutputLine);
+        // Applies to the whole multi-selection; a node whose selected ancestor group is also in
+        // the selection is skipped (cloning the group already clones it).
+        var targets = EffectiveSelection().ToList();
+        targets.RemoveAll(node => targets.Any(other =>
+            !ReferenceEquals(other, node) && ContainsNode(other.Children, node)));
 
-        var idx = parent.IndexOf(SelectedCueNode);
-        parent.Insert(idx + 1, copyVm);
-        SelectedCueNode = copyVm;
+        var clones = new List<CueNodeViewModel>();
+        foreach (var node in OrderInTreeOrder(targets))
+        {
+            if (FindParentCollection(SelectedCueList.Nodes, node) is not IList<CueNodeViewModel> parent)
+                continue;
+
+            // Deep-copy via the model layer. `ToModel()` projects through fresh `.Select(...).ToList()`
+            // collections for routes / placements / children, so the snapshot doesn't share list
+            // references with the original VM. `CloneCueNodeWithNewIds` then rotates ids (a `with` on
+            // a record only does a shallow copy - we'd otherwise share AudioRoutes / VideoPlacements
+            // lists between original and copy). `FromModel` rebuilds fresh VM collections from the
+            // cloned snapshot, so no list reference is shared with the original cue.
+            var snapshot = node.ToModel();
+            var copy = CloneCueNodeWithNewIds(snapshot);
+            var copyVm = CueNodeViewModel.FromModel(copy, ResolveOutputLine);
+            parent.Insert(parent.IndexOf(node) + 1, copyVm);
+            clones.Add(copyVm);
+        }
+
+        if (clones.Count == 0) return;
+        UpdateSelection(clones);
+        RefreshCueTargetDisplays();
+        if (clones.Count > 1)
+            StatusMessage = $"Duplicated {clones.Count} cues.";
     }
 
     private bool CanDuplicateSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
@@ -277,10 +351,23 @@ public partial class CuePlayerViewModel
                 break;
         }
 
+        RefreshCueTargetDisplays();
         StatusMessage = Strings.Format(nameof(Strings.RenumberedStatusFormat), renumbered);
     }
 
     private bool CanRenumber() => SelectedCueList is not null && SelectedCueList.Nodes.Count > 0;
+
+    /// <summary>One-click canonical numbering: root rows become 1, 2, 3… and each nested group receives
+    /// hierarchical child numbers such as 2.1, 2.2 and 2.3. Stable-ID cue links remain unchanged.</summary>
+    [RelayCommand(CanExecute = nameof(CanRenumber))]
+    private void ReorganizeCueList()
+    {
+        if (SelectedCueList is null)
+            return;
+        var renumbered = RenumberSubtree(SelectedCueList.Nodes, start: 1, step: 1, recurseIntoGroups: true);
+        RefreshCueTargetDisplays();
+        StatusMessage = Strings.Format(nameof(Strings.ReorganizedCueListStatusFormat), renumbered);
+    }
 
     /// <summary>Renumbers the rows in <paramref name="nodes"/> in tree order. When
     /// <paramref name="recurseIntoGroups"/> is true, group children get sub-numbers
@@ -339,19 +426,19 @@ public partial class CuePlayerViewModel
     [RelayCommand(CanExecute = nameof(CanAssignSelectedActionEndpoint))]
     private void AssignSelectedActionEndpoint()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Action } actionCue || SelectedActionEndpoint is null)
+        if (SelectedActionCue is not { } actionCue || SelectedActionEndpoint is null)
             return;
         actionCue.EndpointIdText = SelectedActionEndpoint.Id.ToString();
         OnPropertyChanged(nameof(SelectedActionEndpointSummary));
     }
 
     private bool CanAssignSelectedActionEndpoint() =>
-        SelectedCueNode?.Kind == CueNodeKind.Action && SelectedActionEndpoint is not null;
+        SelectedActionCue is not null && SelectedActionEndpoint is not null;
 
     [RelayCommand(CanExecute = nameof(CanEditActionCue))]
     private async Task EditActionCueAsync()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Action } cue)
+        if (SelectedActionCue is not { } cue)
             return;
 
         var owner = TryGetMainWindow();
@@ -383,5 +470,5 @@ public partial class CuePlayerViewModel
         StatusMessage = Strings.Format(nameof(Strings.UpdatedActionCueStatusFormat), CueDisplay(cue));
     }
 
-    private bool CanEditActionCue() => SelectedCueNode?.Kind == CueNodeKind.Action;
+    private bool CanEditActionCue() => SelectedActionCue is not null;
 }

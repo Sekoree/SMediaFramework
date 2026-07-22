@@ -55,13 +55,14 @@ internal sealed class DialogStatePersister
 
     private static void SaveSnapshot(string id, DialogSizeSnapshot snap)
     {
-        AppSettings settings;
         lock (_settingsGate)
         {
-            settings = _settings ??= AppSettings.Load();
-            settings.DialogSizes[id] = snap;
+            // Keep the read cache coherent AND persist via the merge-safe write path (review H5: saving
+            // the cached whole object clobbered other writers' fields with stale values).
+            (_settings ??= AppSettings.Load()).DialogSizes[id] = snap;
         }
-        settings.Save();
+
+        AppSettings.Update(settings => settings.DialogSizes[id] = snap);
     }
 
     private void OnOpened(object? sender, System.EventArgs e)

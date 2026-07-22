@@ -12,7 +12,7 @@ public sealed class ShowDocumentValidationException(IReadOnlyList<string> errors
 
 /// <summary>
 /// Validates a <see cref="ShowDocument"/>'s referential and semantic invariants before it is loaded (NXT-12):
-/// supported version, unique cue ids/numbers, single clip per cue, references that resolve, acyclic
+/// supported version and cue fault policies, unique cue ids/numbers, single clip per cue, references that resolve, acyclic
 /// auto-continue chains (NXT-07), and sane composition dimensions/rates. <see cref="Validate"/> returns every
 /// problem found; <see cref="ThrowIfInvalid"/> throws a <see cref="ShowDocumentValidationException"/> when any
 /// exist. Pure and allocation-light so it is cheap to run on every load.
@@ -44,6 +44,10 @@ public static class ShowDocumentValidator
                 errors.Add($"cue '{cue.Id}' has an empty label.");
             if (!cueNumbers.Add(cue.Number))
                 errors.Add($"duplicate cue number {cue.Number} - GO uses the number as its cursor, so it must be unique.");
+            if (!CueFaultPolicySupport.IsSupported(cue.FaultPolicy))
+                errors.Add(
+                    $"cue '{cue.Id}' uses unsupported fault policy {CueFaultPolicySupport.Display(cue.FaultPolicy)}; "
+                    + $"this runtime supports only {CueFaultPolicy.StopShow} and {CueFaultPolicy.Continue}.");
         }
 
         // Compositions: unique ids, positive dimensions and frame rate.
@@ -85,6 +89,8 @@ public static class ShowDocumentValidator
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative fade-out.");
             if (clip.LayerIndex < 0)
                 errors.Add($"the clip for cue '{clip.CueId}' has a negative layer index {clip.LayerIndex}.");
+            if (clip.VideoStreamIndex is { } vsi && vsi < -1)
+                errors.Add($"clip '{clip.CueId}': VideoStreamIndex {vsi} is invalid (null = automatic, -1 = disabled, >= 0 = stream index).");
             if (clip.AudioStreamIndex is { } asi && asi < -1)
                 errors.Add($"the clip for cue '{clip.CueId}' has an audio stream index {asi} below -1 (use -1 for none, null for auto).");
             foreach (var sub in clip.GetSubtitleSelections())

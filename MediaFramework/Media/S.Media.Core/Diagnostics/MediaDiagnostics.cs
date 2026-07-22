@@ -100,6 +100,21 @@ public static class MediaDiagnostics
     public static double ElapsedMillisecondsSince(long startTimestamp) =>
         Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
 
+    /// <summary>
+    /// Lock-free once-per-interval gate for throttled warning logs. <paramref name="ticksSlot"/> is a
+    /// caller-owned field holding the <see cref="Stopwatch.GetTimestamp"/> of the last accepted update
+    /// (0 = never). Returns <c>true</c> when at least <paramref name="interval"/> elapsed since the last
+    /// accepted update AND this caller won the CAS - exactly one concurrent caller per interval logs.
+    /// </summary>
+    public static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
+    }
+
     public static void LogTrace(string message, params object?[] args)
     {
         if (_logger is { } log)

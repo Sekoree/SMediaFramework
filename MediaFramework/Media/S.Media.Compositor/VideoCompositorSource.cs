@@ -70,6 +70,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
         _compositor = compositor;
         _disposeCompositorOnDispose = disposeCompositorOnDispose;
+        // This source streams composites continuously, so trade one frame of output latency for
+        // an async (non-stalling) GPU readback when the backend supports it.
+        if (compositor is IPipelinedReadbackVideoCompositor pipelined)
+            pipelined.PipelinedSingleOutputReadback = true;
         _output = output;
         _native = [output.PixelFormat];
         _ptsStep = DerivePeriod(output.FrameRate);
@@ -440,6 +444,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     {
         var opacity = slot.Opacity;
         var blendMode = slot.BlendMode;
+        var effects = slot.Effects;
         var mapping = slot.MappingSections;
         if (mapping is not null)
         {
@@ -453,6 +458,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 {
                     SourceCrop = section.SourceCrop,
                     Mesh = section.Mesh,
+                    Effects = effects,
                 });
             }
 
@@ -462,6 +468,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         _layerScratch.Add(new CompositorLayer(frame, slot.Transform, opacity, blendMode)
         {
             SourceCrop = slot.SourceCrop,
+            Effects = effects,
         });
     }
 
@@ -476,6 +483,8 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private readonly Lock _gate = new();
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private float _opacity = 1f;
+        private IReadOnlyList<VideoLayerEffect>? _effects;
+        private IReadOnlyList<WarpSection>? _mappingSections;
 
         internal SurfaceSlot(string id, IVideoCompositorLayerSurface surface)
         {
@@ -500,10 +509,30 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             set { lock (_gate) _opacity = Math.Clamp(value, 0f, 1f); }
         }
 
+        /// <summary>Optional per-layer effect chain (e.g. chroma key) applied to the surface's
+        /// rendered output. Null = none (the surface paints the canvas directly). Live-editable
+        /// like <see cref="Opacity"/>; swap the whole list to change parameters.</summary>
+        public IReadOnlyList<VideoLayerEffect>? Effects
+        {
+            get { lock (_gate) return _effects; }
+            set { lock (_gate) _effects = value; }
+        }
+
+        /// <summary>
+        /// Optional per-slot section mapping (media-layer parity): each section samples the
+        /// surface's full-canvas render and places/warps it independently; <see cref="Transform"/>
+        /// is ignored while set. Null keeps the direct single-transform path.
+        /// </summary>
+        public IReadOnlyList<WarpSection>? MappingSections
+        {
+            get { lock (_gate) return _mappingSections; }
+            set { lock (_gate) _mappingSections = value; }
+        }
+
         /// <summary>Atomic placement snapshot for the composite thread.</summary>
         internal CompositorSurfaceLayer Placement
         {
-            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity); }
+            get { lock (_gate) return new CompositorSurfaceLayer(Surface, _transform, _opacity, _effects, _mappingSections); }
         }
     }
 
@@ -521,6 +550,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private BlendMode _blendMode = BlendMode.SourceOver;
         private RectNormalized _sourceCrop = RectNormalized.Full;
         private IReadOnlyList<WarpSection>? _mappingSections;
+        private IReadOnlyList<VideoLayerEffect>? _effects;
         private bool _closed;
 
         internal Slot(string id, IReadOnlyList<PixelFormat> accepted)
@@ -561,6 +591,15 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             get { lock (_gate) return _sourceCrop; }
             set { lock (_gate) _sourceCrop = value; }
+        }
+
+        /// <summary>Optional per-layer effect chain (e.g. chroma key) applied to this slot's
+        /// layer(s). Null = none. Live-editable; read on every Composite like <see cref="Opacity"/>.
+        /// Swap the whole list to change parameters (instances are immutable).</summary>
+        public IReadOnlyList<VideoLayerEffect>? Effects
+        {
+            get { lock (_gate) return _effects; }
+            set { lock (_gate) _effects = value; }
         }
 
         /// <summary>

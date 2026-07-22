@@ -26,6 +26,7 @@ internal sealed class VoicePlayer
     private IArmedClip? _previewClip;
     private IReadOnlyList<IAudioOutput> _previewOutputs = [];
     private CancellationTokenSource? _previewCts;
+    private PreviewMonitor? _previewMonitor;
     // Soundboard voices (task #10): polyphonic one-shots, each a fresh MediaPlayer on an output, keyed by a
     // host id (the GUI's soundboard tile). Owned by the dispatcher.
     private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
@@ -36,6 +37,9 @@ internal sealed class VoicePlayer
 
     private sealed record VoiceHandle(
         IArmedClip Clip, IReadOnlyList<IAudioOutput> Outputs, string OutputId, CancellationTokenSource Cts);
+
+    private sealed record PreviewMonitor(
+        string CueId, S.Media.Players.MediaPlayer Player, CancellationToken CancellationToken);
 
     // Lock-free query view (NXT-16 residue): the current voices (id + player), republished on the dispatcher
     // whenever a voice commits or releases, so the soundboard's 200 ms progress poll and the is-playing query
@@ -136,7 +140,8 @@ internal sealed class VoicePlayer
                 armed.Start();
                 _previewClip = armed;
                 _previewOutputs = outputs;
-                StartPreviewEndMonitor(cueId, player, s.Cts.Token);
+                _previewMonitor = new PreviewMonitor(cueId, player, s.Cts.Token);
+                _session.NotifyCompletionWorkAvailable();
                 return true;
             }
             catch
@@ -159,6 +164,7 @@ internal sealed class VoicePlayer
         // off-dispatcher. A cancelled CTS with no timer holds no unmanaged state, so GC reclaims it.
         _previewCts?.Cancel();
         _previewCts = null;
+        _previewMonitor = null;
         var clip = _previewClip;
         var outputs = _previewOutputs;
         _previewClip = null;
@@ -167,49 +173,6 @@ internal sealed class VoicePlayer
             await clip.ReleaseAsync().ConfigureAwait(false);
         foreach (var output in outputs)
             (output as IDisposable)?.Dispose();
-    }
-
-    /// <summary>Watches the preview clip; when it ends on its own (ran, then stopped) it releases it and raises
-    /// <see cref="PreviewEnded"/>. Cancelled by <see cref="ReleasePreviewAsync"/> (an explicit stop / replace),
-    /// which exits without raising the event. Marshals each check onto the dispatcher.</summary>
-    private void StartPreviewEndMonitor(string cueId, S.Media.Players.MediaPlayer player, CancellationToken ct)
-    {
-        using (ExecutionContext.SuppressFlow())
-        {
-            _ = Task.Run(
-                async () =>
-                {
-                    try
-                    {
-                        while (!ct.IsCancellationRequested)
-                        {
-                            await Task.Delay(ShowSession.EndMonitorPollInterval, ct).ConfigureAwait(false);
-                            var ended = await _session.InvokeAsync<bool>(() =>
-                                Task.FromResult(
-                                    !ReferenceEquals(_previewClip?.Player, player)          // replaced/stopped → exit
-                                    || (!player.IsRunning && player.Position > TimeSpan.Zero))) // ran, then ended
-                                .ConfigureAwait(false);
-                            if (!ended)
-                                continue;
-                            await _session.InvokeAsync(async () =>
-                            {
-                                if (ReferenceEquals(_previewClip?.Player, player)) // still ours ⇒ natural end
-                                {
-                                    await ReleasePreviewAsync().ConfigureAwait(false);
-                                    PreviewEnded?.Invoke(cueId);
-                                }
-                            }).ConfigureAwait(false);
-                            return;
-                        }
-                    }
-                    catch (OperationCanceledException) { }
-                    catch
-                    {
-                        // best-effort - a preview-monitor hiccup must never crash the session
-                    }
-                },
-                ct);
-        }
     }
 
     // --- soundboard voices ----------------------------------------------------------------------------
@@ -298,7 +261,7 @@ internal sealed class VoicePlayer
                 // The claim CTS becomes the running voice's CTS (cancels the end monitor on release).
                 _voices[voiceId] = new VoiceHandle(armed, outputs, outputId, cts);
                 PublishVoiceViews();
-                StartVoiceEndMonitor(voiceId, player, cts.Token);
+                _session.NotifyCompletionWorkAvailable();
             }
             catch
             {
@@ -354,7 +317,7 @@ internal sealed class VoicePlayer
     /// <summary>Per-voice playhead (id, position, duration) for every currently-playing soundboard voice - a
     /// lock-free view read (NXT-16 residue): the 200 ms soundboard poll must never queue behind the dispatcher.
     /// Player position/duration reads are thread-safe (the transport snapshot reads them the same way).</summary>
-    public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync()
+    public IReadOnlyList<VoiceProgress> GetVoiceProgress()
     {
         var views = _voiceViews; // single volatile read of the published view
         var snaps = new VoiceProgress[views.Length];
@@ -365,8 +328,11 @@ internal sealed class VoicePlayer
             catch { /* concurrent teardown - zeros for this tick */ }
             snaps[i] = new VoiceProgress(views[i].Id, pos, dur);
         }
-        return Task.FromResult<IReadOnlyList<VoiceProgress>>(snaps);
+        return snaps;
     }
+
+    public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync() =>
+        Task.FromResult(GetVoiceProgress());
 
     /// <summary>Releases the preview and every voice (running or still opening) - the session's disposal
     /// teardown. Call on the dispatcher (disposal runs there directly, not through InvokeAsync).</summary>
@@ -400,43 +366,38 @@ internal sealed class VoicePlayer
             (output as IDisposable)?.Dispose();
     }
 
-    /// <summary>Watches a voice; on natural end releases it + raises <see cref="VoiceEnded"/> (the keyed
-    /// counterpart of the preview end-monitor).</summary>
-    private void StartVoiceEndMonitor(string voiceId, S.Media.Players.MediaPlayer player, CancellationToken ct)
+    /// <summary>Reconciles preview and voice natural ends in the session's single completion-monitor tick.
+    /// Call on the session dispatcher.</summary>
+    public async ValueTask<bool> PollCompletionsAsync()
     {
-        using (ExecutionContext.SuppressFlow())
+        if (_previewMonitor is { } preview)
         {
-            _ = Task.Run(
-                async () =>
-                {
-                    try
-                    {
-                        while (!ct.IsCancellationRequested)
-                        {
-                            await Task.Delay(ShowSession.EndMonitorPollInterval, ct).ConfigureAwait(false);
-                            var ended = await _session.InvokeAsync<bool>(() =>
-                                Task.FromResult(
-                                    !_voices.TryGetValue(voiceId, out var cur) || !ReferenceEquals(cur.Clip.Player, player)
-                                    || (!player.IsRunning && player.Position > TimeSpan.Zero)))
-                                .ConfigureAwait(false);
-                            if (!ended)
-                                continue;
-                            await _session.InvokeAsync(async () =>
-                            {
-                                if (_voices.TryGetValue(voiceId, out var cur) && ReferenceEquals(cur.Clip.Player, player))
-                                {
-                                    await ReleaseVoiceAsync(voiceId).ConfigureAwait(false);
-                                    VoiceEnded?.Invoke(voiceId);
-                                }
-                            }).ConfigureAwait(false);
-                            return;
-                        }
-                    }
-                    catch (OperationCanceledException) { }
-                    catch { /* best-effort - a voice-monitor hiccup must never crash the session */ }
-                },
-                ct);
+            if (preview.CancellationToken.IsCancellationRequested
+                || !ReferenceEquals(_previewClip?.Player, preview.Player))
+            {
+                _previewMonitor = null;
+            }
+            else if (!preview.Player.IsRunning && preview.Player.Position > TimeSpan.Zero)
+            {
+                var cueId = preview.CueId;
+                await ReleasePreviewAsync().ConfigureAwait(false);
+                PreviewEnded?.Invoke(cueId);
+            }
         }
+
+        foreach (var (voiceId, handle) in _voices.ToArray())
+        {
+            if (handle.Cts.IsCancellationRequested)
+                continue;
+            var player = handle.Clip.Player;
+            if (player.IsRunning || player.Position <= TimeSpan.Zero)
+                continue;
+
+            await ReleaseVoiceAsync(voiceId).ConfigureAwait(false);
+            VoiceEnded?.Invoke(voiceId);
+        }
+
+        return _previewMonitor is not null || _voices.Count > 0;
     }
 
     /// <summary>Ramps a voice's gain to 0 over <paramref name="duration"/> then releases it (fade-out) - a

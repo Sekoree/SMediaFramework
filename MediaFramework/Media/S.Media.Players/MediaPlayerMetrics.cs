@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 
 namespace S.Media.Players;
@@ -21,14 +22,18 @@ public sealed record VideoPlayerMetricsSnapshot(
     long DecodedCount,
     long DisplayedCount,
     long DroppedLate,
-    long DroppedDrain);
+    long DroppedDrain,
+    TimingSnapshot DecodeTiming,
+    int QueueDepth,
+    int QueueCapacity);
 
 public sealed record AudioRouterMetricsSnapshot(
     long ChunksProduced,
     long TotalEnqueued,
     long TotalProcessed,
     long TotalDropped,
-    int OutputCount);
+    int OutputCount,
+    TimingSnapshot MixTiming);
 
 public sealed record VideoOutputPumpMetricsEntry(
     string OutputId,

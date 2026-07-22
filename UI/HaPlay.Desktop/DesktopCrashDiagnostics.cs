@@ -53,6 +53,43 @@ internal static class DesktopCrashDiagnostics
             _firstChanceEnabled);
     }
 
+    /// <summary>Appends a free-form diagnostic report (heading + optional body) to the crash log. Used by
+    /// the UI-hang watchdog to persist its findings alongside crash records, so a freeze leaves a durable
+    /// trail in the same file even when nothing throws.</summary>
+    public static void AppendReport(string heading, string body)
+    {
+        WriteSync(heading);
+        if (!string.IsNullOrEmpty(body))
+            WriteSync(body);
+    }
+
+    /// <summary>Copies the current rolling and crash logs beside a captured dump. The snapshot names
+    /// share the dump stem, so later rolling retention can never separate incident context from stacks.</summary>
+    public static void PinLogsBeside(string dumpPath)
+    {
+        var stem = Path.Combine(
+            Path.GetDirectoryName(dumpPath) ?? ".",
+            Path.GetFileNameWithoutExtension(dumpPath));
+        CopyOpenFileSnapshot(_rollingLogFilePath, stem + ".run.log");
+        CopyOpenFileSnapshot(_crashFilePath, stem + ".crash.log");
+    }
+
+    private static void CopyOpenFileSnapshot(string? source, string destination)
+    {
+        if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+            return;
+        try
+        {
+            using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.Read);
+            input.CopyTo(output);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "could not pin incident log {Source} beside dump {DumpLog}", source, destination);
+        }
+    }
+
     public static void RecordFatalException(string source, Exception exception)
     {
         EnsureCrashFile();

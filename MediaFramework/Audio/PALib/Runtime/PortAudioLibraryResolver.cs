@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using S.Media.NativeInterop;
 
 namespace PALib.Runtime;
 
@@ -43,21 +44,28 @@ public static class PortAudioLibraryResolver
         if (!string.Equals(libraryName, PortAudioLibraryNames.Default, StringComparison.Ordinal))
             return nint.Zero;
 
-        foreach (var candidate in GetCandidates())
+        var candidates = GetCandidates();
+        if (SystemFirstNativeLibraryResolver.TryLoad(
+                assembly,
+                searchPath,
+                candidates,
+                installedPaths: null,
+                SystemFirstNativeLibraryResolver.AppLocalPaths(candidates),
+                out var handle,
+                out var loadedCandidate))
         {
-            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out var handle))
-            {
-                _logger.LogDebug("Loaded PortAudio native library candidate '{Candidate}'.", candidate);
-                return handle;
-            }
+            _logger.LogDebug("Loaded PortAudio native library candidate '{Candidate}'.", loadedCandidate);
+            return handle;
         }
 
         _logger.LogDebug("Unable to load PortAudio using PALib fallback candidates.");
         return nint.Zero;
     }
 
-    private static string[] GetCandidates()
+    internal static string[] GetCandidates()
         => OperatingSystem.IsWindows()
             ? PortAudioLibraryNames.WindowsCandidates
-            : PortAudioLibraryNames.LinuxCandidates;
+            : OperatingSystem.IsMacOS()
+                ? PortAudioLibraryNames.MacCandidates
+                : PortAudioLibraryNames.LinuxCandidates;
 }

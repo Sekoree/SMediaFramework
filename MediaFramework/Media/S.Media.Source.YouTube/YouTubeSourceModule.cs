@@ -44,8 +44,10 @@ public sealed class YouTubeDecoderProvider(YouTubePreparer preparer) : IMediaDec
     {
         if (!YouTubeSourceUri.TryParse(uri, out _, out var selection))
             return 0.0;
-        if (kind == MediaKind.Video && !selection.IncludeVideo)
-            return 0.0; // audio-only selection has no video track to offer
+        // An audio-only selection has no video track to offer - UNLESS the thumbnail is embedded,
+        // which the asset carries as an attached-picture video stream (placeable like MP3 cover art).
+        if (kind == MediaKind.Video && !selection.IncludeVideo && !selection.IncludeThumbnail)
+            return 0.0;
         return uri.StartsWith(YouTubeSourceUri.Scheme, StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.9;
     }
 
@@ -75,7 +77,8 @@ public sealed class YouTubeDecoderProvider(YouTubePreparer preparer) : IMediaDec
         var path = _preparer.AssetPathFor(
             videoId,
             selection.IncludeVideo ? selection.Video : null,
-            selection.Audio);
+            selection.Audio,
+            selection.IncludeThumbnail);
         if (!File.Exists(path))
             throw new InvalidOperationException(
                 $"YouTube source '{videoId}' is not prepared for this stream selection - download/cache it " +

@@ -1802,6 +1802,40 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task RefreshX32CommandCacheValues_ReplacesOnlyChangedUnfilteredRows()
+    {
+        var x32Id = Guid.NewGuid();
+        var config = new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = x32Id,
+                    Name = "X32",
+                    ProfileId = "behringer.x32.osc",
+                    Protocol = ControlDeviceProtocol.OSC,
+                    Binding = new ControlDeviceBindingConfig { Alias = "x32" },
+                },
+            ],
+        };
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(config);
+        var unchanged = vm.X32CommandRows.Single(row => row.CommandName == "Main Stereo Fader");
+        var changedEvents = 0;
+        vm.X32CommandRows.CollectionChanged += (_, _) => changedEvents++;
+        var cache = new ControlValueCache();
+        cache.SetNumber("x32", "/ch/01/mix/fader", 0.5, ControlValueCacheSource.Incoming);
+
+        vm.RefreshX32CommandCacheValues(cache);
+
+        Assert.Contains(vm.X32CommandRows, row =>
+            row.CommandName == "Ch 01 Fader" && row.CacheValue.StartsWith("0.5", StringComparison.Ordinal));
+        Assert.Same(unchanged, vm.X32CommandRows.Single(row => row.CommandName == "Main Stereo Fader"));
+        Assert.Equal(1, changedEvents);
+    }
+
+    [Fact]
     public void ApplyMonitorFilters_FiltersByDirectionProtocolAndDevice()
     {
         var xtouchId = Guid.NewGuid();

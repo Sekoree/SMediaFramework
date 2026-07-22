@@ -81,13 +81,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     /// </summary>
     private readonly PassThroughDescriptorArena _passThroughArena = new();
 
-    /// <remarks>Caches FFmpeg swscale pointer/strides - do not reorder across concurrent calls (<see cref="TryReadNextFrame"/> is single-threaded).</remarks>
-    private readonly byte*[] _swScaleSrcLines = new byte*[8];
-
-    private readonly int[] _swScaleSrcStride = new int[8];
-    private readonly byte*[] _swScaleDstLines = new byte*[8];
-
-    private readonly int[] _swScaleDstStride = new int[8];
+    /// <summary>Shared sws-to-pooled-VideoFrame emit paths (owns the swscale pointer/stride scratch;
+    /// <see cref="TryReadNextFrame"/> is single-threaded).</summary>
+    private readonly SwsFrameEmitter _swsEmitter = new();
 
     public VideoFormat Format { get; private set; }
     public string CodecName { get; private set; } = "";
@@ -521,7 +517,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowReadWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowReadLogTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowReadLogTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -534,14 +530,6 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             _framesEmitted);
     }
 
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 
     private void FeedDecoder()
     {
@@ -792,150 +780,10 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (_swsCtx == null)
             throw new InvalidOperationException("swscale is not configured - SelectOutputFormat must run before decoding.");
 
-        var width = Format.Width;
-        var height = Format.Height;
-        var bytesPerPixel = BytesPerPackedPixel(_outPixelFormat);
-        if (bytesPerPixel == 0)
-        {
-            if (_outPixelFormat is PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.I420)
-                return BuildConvertedPlanarFrame(work, pts, meta);
-            throw new NotSupportedException(
-                $"sws conversion to {_outPixelFormat} is not implemented - use BGRA32, NV12, I420, or a packed RGB layout.");
-        }
-
-        var stride = width * bytesPerPixel;
-        var contiguous = stride * height;
-        var rented = ArrayPool<byte>.Shared.Rent(contiguous);
-        var dstMem = rented.AsMemory(0, contiguous);
-
-        _swScaleSrcLines[0] = work->data[0];
-        _swScaleSrcLines[1] = work->data[1];
-        _swScaleSrcLines[2] = work->data[2];
-        _swScaleSrcLines[3] = work->data[3];
-        _swScaleSrcLines[4] = work->data[4];
-        _swScaleSrcLines[5] = work->data[5];
-        _swScaleSrcLines[6] = work->data[6];
-        _swScaleSrcLines[7] = work->data[7];
-        _swScaleSrcStride[0] = work->linesize[0];
-        _swScaleSrcStride[1] = work->linesize[1];
-        _swScaleSrcStride[2] = work->linesize[2];
-        _swScaleSrcStride[3] = work->linesize[3];
-        _swScaleSrcStride[4] = work->linesize[4];
-        _swScaleSrcStride[5] = work->linesize[5];
-        _swScaleSrcStride[6] = work->linesize[6];
-        _swScaleSrcStride[7] = work->linesize[7];
-
-        fixed (byte* dstPtr = dstMem.Span)
-        {
-            _swScaleDstLines[0] = dstPtr;
-            _swScaleDstLines[1] = null;
-            _swScaleDstLines[2] = null;
-            _swScaleDstLines[3] = null;
-            _swScaleDstLines[4] = null;
-            _swScaleDstLines[5] = null;
-            _swScaleDstLines[6] = null;
-            _swScaleDstLines[7] = null;
-
-            Array.Clear(_swScaleDstStride);
-            _swScaleDstStride[0] = stride;
-
-            var ret = sws_scale(_swsCtx, _swScaleSrcLines, _swScaleSrcStride, 0, height, _swScaleDstLines,
-                _swScaleDstStride);
-            if (ret < 0) FFmpegException.ThrowIfError(ret, nameof(sws_scale));
-        }
-
-        byte[] pooled = rented;
-        return new VideoFrame(pts, Format, dstMem, stride,
-            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(pooled)),
-            metadata: meta);
-    }
-
-    private VideoFrame BuildConvertedPlanarFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
-    {
-        var width = Format.Width;
-        var height = Format.Height;
-        var n = PixelFormatInfo.PlaneCount(_outPixelFormat);
-
-        _swScaleSrcLines[0] = work->data[0];
-        _swScaleSrcLines[1] = work->data[1];
-        _swScaleSrcLines[2] = work->data[2];
-        _swScaleSrcLines[3] = work->data[3];
-        _swScaleSrcLines[4] = work->data[4];
-        _swScaleSrcLines[5] = work->data[5];
-        _swScaleSrcLines[6] = work->data[6];
-        _swScaleSrcLines[7] = work->data[7];
-        _swScaleSrcStride[0] = work->linesize[0];
-        _swScaleSrcStride[1] = work->linesize[1];
-        _swScaleSrcStride[2] = work->linesize[2];
-        _swScaleSrcStride[3] = work->linesize[3];
-        _swScaleSrcStride[4] = work->linesize[4];
-        _swScaleSrcStride[5] = work->linesize[5];
-        _swScaleSrcStride[6] = work->linesize[6];
-        _swScaleSrcStride[7] = work->linesize[7];
-
-        var strides = new int[n];
-        for (var i = 0; i < n; i++)
-            strides[i] = PixelFormatInfo.PlaneByteWidth(_outPixelFormat, width, i);
-
-        var buffers = new byte[n][];
-        // Pinning scratch is transient (freed before return), so keep it on the stack - only the plane
-        // count's worth (n ≤ 4 for any planar output). `allocated` tracks how many were pinned so a
-        // mid-loop Rent failure frees exactly those.
-        Span<GCHandle> handles = stackalloc GCHandle[n];
-        var allocated = 0;
-        try
-        {
-            for (var i = 0; i < n; i++)
-            {
-                var len = PixelFormatInfo.PlanePitchBufferLength(_outPixelFormat, width, height, i, strides[i]);
-                buffers[i] = ArrayPool<byte>.Shared.Rent(len);
-                handles[i] = GCHandle.Alloc(buffers[i], GCHandleType.Pinned);
-                allocated = i + 1;
-            }
-
-            for (var i = 0; i < n; i++)
-                _swScaleDstLines[i] = (byte*)handles[i].AddrOfPinnedObject();
-            for (var i = n; i < 8; i++)
-                _swScaleDstLines[i] = null;
-
-            Array.Clear(_swScaleDstStride);
-            for (var i = 0; i < n; i++)
-                _swScaleDstStride[i] = strides[i];
-
-            var ret = sws_scale(_swsCtx, _swScaleSrcLines, _swScaleSrcStride, 0, height, _swScaleDstLines,
-                _swScaleDstStride);
-            if (ret < 0) FFmpegException.ThrowIfError(ret, nameof(sws_scale));
-        }
-        catch
-        {
-            for (var i = 0; i < allocated; i++)
-                handles[i].Free();
-            foreach (var b in buffers)
-            {
-                if (b is not null)
-                    ArrayPool<byte>.Shared.Return(b);
-            }
-            throw;
-        }
-
-        for (var i = 0; i < n; i++)
-            handles[i].Free();
-
-        var memories = new ReadOnlyMemory<byte>[n];
-        for (var i = 0; i < n; i++)
-        {
-            var len = PixelFormatInfo.PlanePitchBufferLength(_outPixelFormat, width, height, i, strides[i]);
-            memories[i] = buffers[i].AsMemory(0, len);
-        }
-
-        var captured = buffers;
-        return new VideoFrame(pts, Format, memories, strides,
-            release: DisposableRelease.Wrap(() =>
-            {
-                foreach (var b in captured)
-                    ArrayPool<byte>.Shared.Return(b);
-            }),
-            metadata: meta);
+        // srcSliceHeight == Format.Height here: this decoder never rounds the output dimensions away
+        // from the source (the shared demux's odd-dimension attached-pic path passes the true source
+        // height instead).
+        return _swsEmitter.BuildConvertedFrame(_swsCtx, work, Format, _outPixelFormat, Format.Height, pts, meta);
     }
 
     private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)

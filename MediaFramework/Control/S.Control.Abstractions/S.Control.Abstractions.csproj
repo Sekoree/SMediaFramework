@@ -6,4 +6,8 @@
         <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Contracts for MFPlayer show control (device/binding/script abstractions). Low-level; reference S.Media.Control or S.Control instead unless you implement a control backend.</Description>
+    </PropertyGroup>
 </Project>

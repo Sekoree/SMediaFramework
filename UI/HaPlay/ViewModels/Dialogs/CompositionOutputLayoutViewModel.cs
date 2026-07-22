@@ -202,6 +202,19 @@ public sealed partial class CompositionOutputLayoutViewModel : ViewModelBase
 
     [ObservableProperty] private OutputLayoutItemViewModel? _selectedItem;
 
+    /// <summary>Refreshes a local output's raster from its live window without rebuilding the editor or
+    /// disturbing the source slice the operator is arranging.</summary>
+    public void UpdateOutputResolution(Guid outputLineId, int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+            return;
+        var item = Items.FirstOrDefault(candidate => candidate.OutputLineId == outputLineId);
+        if (item is null)
+            return;
+        item.OutputWidth = width;
+        item.OutputHeight = height;
+    }
+
     /// <summary>Builds the editor from a composition's output bindings, reading each binding's current source
     /// slice. Unmapped outputs default to their reported output raster size and are laid out left-to-right.</summary>
     public static CompositionOutputLayoutViewModel Build(

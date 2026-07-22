@@ -32,9 +32,30 @@
         <TextBlock Text="{x:Static res:Strings.OutputManagementHeader}" FontSize="22" FontWeight="SemiBold" />
         <TextBlock Classes="hint"
                    Text="{x:Static res:Strings.OutputManagementHint}" />
-        <!-- AUDIO-02: which media backends registered, and why any optional one was skipped. -->
-        <TextBlock Classes="hint" FontFamily="monospace" Opacity="0.55"
-                   Text="{Binding MediaBackendsSummary}" />
+        <!-- AUDIO-02: which media backends registered (chip per module so a wrap can never split a
+             name from its checkmark - review P3-6); a skipped module's reason is in its tooltip. -->
+        <ItemsControl ItemsSource="{Binding MediaBackendStatuses}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:MediaBackendStatus">
+              <Border Classes="Chip" Margin="0,2,6,2" ToolTip.Tip="{Binding Detail}">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" />
+                  <TextBlock Text="✓" FontSize="11" VerticalAlignment="Center"
+                             Foreground="{DynamicResource StateHealthy}"
+                             IsVisible="{Binding Available}" />
+                  <TextBlock Text="✗" FontSize="11" VerticalAlignment="Center"
+                             Foreground="{DynamicResource StatusErrorFg}"
+                             IsVisible="{Binding !Available}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
       </StackPanel>
       <!-- §8.1 aggregate health chip - recolors when any line is warn/error. -->
       <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="0"
@@ -50,6 +71,10 @@
         <Button Content="{x:Static res:Strings.AddNDIButton}"
                 Command="{Binding AddNDICommand}"
                 IsVisible="{Binding IsNDIAvailable}" />
+        <Button Content="{x:Static res:Strings.AddFileOutputButton}"
+                Command="{Binding AddFileOutputCommand}" />
+        <Button Content="{x:Static res:Strings.AddLiveStreamButton}"
+                Command="{Binding AddLiveStreamCommand}" />
       </StackPanel>
     </Grid>
 
@@ -122,9 +147,52 @@
                     <Button Content="{x:Static res:Strings.WindowedPreviewMenuHeader}"
                             Command="{Binding WindowedPreviewCommand}"
                             IsVisible="{Binding IsLocalVideo}" />
+                    <Button Content="{Binding RecordToggleLabel}"
+                            Command="{Binding ToggleRecordCommand}"
+                            IsVisible="{Binding IsArmableOutput}" />
                     <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
                     <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
                   </StackPanel>
+
+                  <!-- Record status: current file while armed -->
+                  <TextBlock FontFamily="Consolas,monospace" FontSize="12" Opacity="0.8"
+                             Text="{Binding RecordFilePath}"
+                             IsVisible="{Binding IsRecordArmed}" />
+
+                  <!-- Effect inserts (Phase 4/5): per-line audio/video bus effects, applied when
+                       playback (re)acquires the line. Editing mid-show reconnects the route briefly. -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="{x:Static res:Strings.OutputEffectsHeader}" FontWeight="SemiBold" />
+                      <ItemsControl ItemsSource="{Binding Effects}" IsVisible="{Binding HasEffects}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Grid ColumnDefinitions="*,8,Auto" Margin="0,0,0,4">
+                              <TextBlock Grid.Column="0" FontFamily="Consolas,monospace" FontSize="12"
+                                         VerticalAlignment="Center" Text="{Binding DisplayLabel}" />
+                              <Button Grid.Column="2" FontSize="11" Padding="6,2"
+                                      Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
+                                      Command="{Binding $parent[ItemsControl].((vm:OutputLineViewModel)DataContext).RemoveEffectCommand}"
+                                      CommandParameter="{Binding}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <Grid ColumnDefinitions="*,8,Auto,8,Auto">
+                        <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding AvailableEffectChoices}"
+                                  SelectedItem="{Binding SelectedEffectChoice}"
+                                  PlaceholderText="{x:Static res:Strings.OutputEffectsPickerPlaceholder}" />
+                        <NumericUpDown Grid.Column="2" Width="120" FormatString="0.0" Increment="1"
+                                       Minimum="-60" Maximum="12"
+                                       Value="{Binding EffectGainDbInput}"
+                                       IsVisible="{Binding SelectedEffectIsGain}"
+                                       ToolTip.Tip="dB" />
+                        <Button Grid.Column="4" Content="{x:Static res:Strings.OutputEffectsAddButton}"
+                                Command="{Binding AddEffectCommand}" />
+                      </Grid>
+                    </StackPanel>
+                  </Border>
 
                   <!-- Live stats card (plan §5): health + delivery counters + 60 s throughput. -->
                   <Border Classes="card">

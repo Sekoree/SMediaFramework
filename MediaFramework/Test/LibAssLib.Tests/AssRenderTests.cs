@@ -1,9 +1,22 @@
 using System.Text;
+using LibAssLib.Runtime;
 
 namespace LibAssLib.Tests;
 
 public class AssRenderTests
 {
+    [Fact]
+    public void ResolverCandidates_SystemNamesPrecedeApplicationFallbacks()
+    {
+        var candidates = LibAssLibraryResolver.GetCandidates().ToArray();
+        var systemIndex = Array.FindIndex(candidates, candidate => !Path.IsPathRooted(candidate));
+        var appIndex = Array.FindIndex(candidates, candidate =>
+            candidate.StartsWith(AppContext.BaseDirectory, StringComparison.Ordinal));
+
+        Assert.True(systemIndex >= 0);
+        Assert.True(appIndex > systemIndex);
+    }
+
     // A minimal but complete ASS document: one white "Hello libass" dialogue showing 1–5 s, authored at 640×360.
     private const string MinimalAss =
         "[Script Info]\n" +

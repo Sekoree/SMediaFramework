@@ -11,4 +11,8 @@
         <ProjectReference Include="../../Control/S.Control.Abstractions/S.Control.Abstractions.csproj" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Inbound native plugin host for MFPlayer: load C-ABI plugins (sources, layer surfaces) into a managed host.</Description>
+    </PropertyGroup>
 </Project>

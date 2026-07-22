@@ -1,0 +1,107 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Live audio-visualizer NDI bridge: captures a live PortAudio input, feeds the selected channels into
+         projectM, composites the GL surface to a CPU frame, and sends it out as an NDI video source at a
+         user-chosen resolution/framerate. Interactive console tool (host API/device/channel/preset/res/fps/
+         NDI-name prompts, save/load config, live HUD with connection count + input meter + gain control).
+         Needs native PortAudio, libprojectM-4, SDL3, and libndi plus a GL-capable display (or Xvfb).
+
+         The libprojectM-4 native is built on demand (scripts/build-projectm.sh, first build only) and bundled
+         into the output so the tool is self-contained. projectM is LGPL-2.1 and linked dynamically (dlopen),
+         never statically embedded. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+        <AssemblyName>NDIVisualizer</AssemblyName>
+        <RootNamespace>S.Media.Tools.NDIVisualizer</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Bundle the preset/texture packs next to the executable so a deployed copy is
+             self-contained (the packs are arch-independent; linux-x64 is the staging source).
+             Runtime resolution prefers this app-local copy over the repo dev tree. -->
+        <None Include="../../../External/projectm/linux-x64/presets/**"
+              LinkBase="presets" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+        <None Include="../../../External/projectm/linux-x64/textures/**"
+              LinkBase="textures" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Visualizer.ProjectM/S.Media.Visualizer.ProjectM.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+    <!-- ============================ libprojectM-4 native: build-on-demand + bundle ============================
+         scripts/build-projectm.sh installs to External/projectm/<rid>/lib (the same dev-build dir the
+         ProjectMLib resolver already probes). We build it once when it is missing, then copy the shared object
+         next to the executable so a copied/published tool finds it app-local. Set SkipProjectMNativeBuild=true
+         to opt out (e.g. when MFP_PROJECTM_LIB or a system libprojectM-4 is used instead). Windows relies on the
+         env override / a prebuilt bundle - the build script is bash. -->
+    <PropertyGroup>
+        <RepoRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '..', '..', '..'))</RepoRoot>
+        <_PmArch Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString())' == 'Arm64'">arm64</_PmArch>
+        <_PmArch Condition="'$(_PmArch)' == ''">x64</_PmArch>
+        <_PmOs Condition="$([MSBuild]::IsOSPlatform('OSX'))">osx</_PmOs>
+        <_PmOs Condition="$([MSBuild]::IsOSPlatform('Linux'))">linux</_PmOs>
+        <_PmOs Condition="$([MSBuild]::IsOSPlatform('Windows'))">win</_PmOs>
+        <ProjectMRid>$(_PmOs)-$(_PmArch)</ProjectMRid>
+        <ProjectMInstallDir>$(RepoRoot)External/projectm/$(ProjectMRid)</ProjectMInstallDir>
+    </PropertyGroup>
+
+    <Target Name="EnsureProjectMNative"
+            Condition="'$(SkipProjectMNativeBuild)' != 'true' and !$([MSBuild]::IsOSPlatform('Windows'))">
+        <ItemGroup>
+            <_PmBuiltLib Include="$(ProjectMInstallDir)/lib/libprojectM-4.so*" />
+            <_PmBuiltLib Include="$(ProjectMInstallDir)/lib64/libprojectM-4.so*" />
+        </ItemGroup>
+        <Message Importance="high" Condition="'@(_PmBuiltLib)' == ''"
+                 Text="NDIVisualizer: libprojectM-4 not found - building it via scripts/build-projectm.sh (first build only; this can take a few minutes and needs cmake + a C++ toolchain)..." />
+        <!-- IgnoreStandardErrorWarningFormat: the projectM C++ build emits its own compiler warnings
+             (e.g. vendored SOIL2 stb_image); don't let MSBuild reattribute them to this project. -->
+        <Exec Condition="'@(_PmBuiltLib)' == ''"
+              Command="bash &quot;$(RepoRoot)scripts/build-projectm.sh&quot;"
+              WorkingDirectory="$(RepoRoot)"
+              IgnoreStandardErrorWarningFormat="true" />
+    </Target>
+
+    <!-- Copy the native next to the exe for `dotnet build` / `dotnet run`. -->
+    <Target Name="BundleProjectMNative"
+            AfterTargets="Build"
+            DependsOnTargets="EnsureProjectMNative"
+            Condition="'$(SkipProjectMNativeBuild)' != 'true' and !$([MSBuild]::IsOSPlatform('Windows'))">
+        <ItemGroup>
+            <_PmNative Include="$(ProjectMInstallDir)/lib/libprojectM-4.so*" />
+            <_PmNative Include="$(ProjectMInstallDir)/lib64/libprojectM-4.so*" />
+        </ItemGroup>
+        <Copy Condition="'@(_PmNative)' != ''"
+              SourceFiles="@(_PmNative)"
+              DestinationFolder="$(OutDir)"
+              SkipUnchangedFiles="true" />
+        <Warning Condition="'@(_PmNative)' == ''"
+                 Text="NDIVisualizer: libprojectM-4 not found under $(ProjectMInstallDir); the tool will rely on MFP_PROJECTM_LIB or a system install at runtime." />
+    </Target>
+
+    <!-- And into the publish output for `dotnet publish`. -->
+    <Target Name="PublishProjectMNative"
+            BeforeTargets="ComputeFilesToPublish"
+            DependsOnTargets="EnsureProjectMNative"
+            Condition="'$(SkipProjectMNativeBuild)' != 'true' and !$([MSBuild]::IsOSPlatform('Windows'))">
+        <ItemGroup>
+            <_PmNative Include="$(ProjectMInstallDir)/lib/libprojectM-4.so*" />
+            <_PmNative Include="$(ProjectMInstallDir)/lib64/libprojectM-4.so*" />
+            <ResolvedFileToPublish Include="@(_PmNative)">
+                <RelativePath>%(Filename)%(Extension)</RelativePath>
+                <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+            </ResolvedFileToPublish>
+        </ItemGroup>
+    </Target>
+
+</Project>

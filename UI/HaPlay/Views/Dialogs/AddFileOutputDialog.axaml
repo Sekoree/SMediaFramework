@@ -1,0 +1,135 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddFileOutputDialog"
+        x:DataType="vm:AddFileOutputDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="560" Height="700"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="480" MinHeight="520">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap"
+                   IsVisible="{Binding ValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
+        <TextBox Text="{Binding DisplayName}" />
+
+        <TextBlock Text="{x:Static res:Strings.FileOutputDirectoryLabel}" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,8,Auto">
+          <TextBox Grid.Column="0" Text="{Binding DirectoryPath}" />
+          <Button Grid.Column="2" Content="{x:Static res:Strings.FileOutputBrowseButton}" Click="BrowseClick" />
+        </Grid>
+
+        <TextBlock Text="{x:Static res:Strings.FileOutputPatternLabel}" FontWeight="SemiBold" />
+        <TextBox Text="{Binding FileNamePattern}" />
+
+        <TextBlock Text="{x:Static res:Strings.FileOutputRecordingModeLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding RecordingModes}" SelectedValue="{Binding RecordingMode}"
+                  SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
+        <TextBlock Text="{x:Static res:Strings.FileOutputRecordingModeHint}" Opacity="0.72"
+                   FontSize="12" TextWrapping="Wrap" />
+
+        <Grid ColumnDefinitions="*,14,*">
+          <StackPanel Grid.Column="0" Spacing="6">
+            <TextBlock Text="{x:Static res:Strings.FileOutputContainerLabel}" FontWeight="SemiBold" />
+            <ComboBox ItemsSource="{Binding Containers}" SelectedValue="{Binding Container}"
+                      SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Spacing="6">
+            <TextBlock Text="{x:Static res:Strings.FileOutputModeLabel}" FontWeight="SemiBold" />
+            <ComboBox ItemsSource="{Binding OutputModes}" SelectedValue="{Binding OutputMode}"
+                      SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
+          </StackPanel>
+        </Grid>
+
+        <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Padding="0,8,0,0"
+                IsVisible="{Binding ShowVideoSettings}">
+          <StackPanel Spacing="8">
+            <TextBlock Text="{x:Static res:Strings.FileOutputVideoCodecLabel}" FontWeight="SemiBold" />
+            <ComboBox ItemsSource="{Binding VideoCodecs}" SelectedValue="{Binding VideoCodec}"
+                      SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch" />
+
+            <TextBlock Text="{x:Static res:Strings.FileOutputRateControlLabel}" FontWeight="SemiBold" />
+            <StackPanel Orientation="Horizontal" Spacing="14">
+              <RadioButton Content="{x:Static res:Strings.FileOutputCrfLabel}" IsChecked="{Binding UseCrf, Mode=OneWay}"
+                           Click="CrfModeClick" GroupName="rate" />
+              <RadioButton Content="{x:Static res:Strings.FileOutputBitrateLabel}" IsChecked="{Binding UseBitrate}"
+                           GroupName="rate" />
+            </StackPanel>
+            <NumericUpDown FormatString="0" Minimum="0" Maximum="51" Value="{Binding VideoCrf}"
+                           IsVisible="{Binding UseCrf}" />
+            <NumericUpDown FormatString="0" Minimum="100" Maximum="200000" Increment="500" Value="{Binding VideoBitrateKbps}"
+                           IsVisible="{Binding UseBitrate}" />
+
+            <TextBlock Text="{x:Static res:Strings.FileOutputPresetLabel}" FontWeight="SemiBold" />
+            <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding VideoPreset}" HorizontalAlignment="Stretch" />
+
+            <TextBlock Text="{x:Static res:Strings.FileOutputScaleLabel}" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*,14,Auto,8,90">
+              <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="2" Minimum="0" Maximum="7680" Increment="2" FormatString="0"
+                             Value="{Binding ScaleWidth}" />
+              <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="6" Minimum="0" Maximum="4320" Increment="2" FormatString="0"
+                             Value="{Binding ScaleHeight}" />
+              <TextBlock Grid.Column="8" Text="FPS" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="10" Minimum="0" Maximum="240" Increment="1" FormatString="0"
+                             Value="{Binding Fps}" ToolTip.Tip="{x:Static res:Strings.FileOutputFpsHint}" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Padding="0,8,0,0"
+                IsVisible="{Binding ShowAudioSettings}">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.FileOutputAudioTracksLabel}" FontWeight="SemiBold"
+                         VerticalAlignment="Center" />
+              <Button Grid.Column="1" Content="{x:Static res:Strings.FileOutputAddTrackButton}"
+                      Command="{Binding AddAudioLegCommand}" />
+            </Grid>
+            <ItemsControl ItemsSource="{Binding AudioLegs}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:AudioLegRowViewModel">
+                  <Border BorderBrush="#22808080" BorderThickness="1" Padding="8" Margin="0,0,0,6">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="*,8,Auto,8,Auto,8,Auto">
+                        <ComboBox Grid.Column="0" ItemsSource="{Binding AudioCodecs}" SelectedValue="{Binding Codec}"
+                                  SelectedValueBinding="{Binding Value, DataType=vm:EncodeChoice}" HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="{x:Static res:Strings.FileOutputAudioCodecLabel}" />
+                        <NumericUpDown Grid.Column="2" Minimum="1" Maximum="16" FormatString="0" Width="110"
+                                       Value="{Binding Channels}"
+                                       ToolTip.Tip="{x:Static res:Strings.FileOutputAudioChannelsLabel}" />
+                        <NumericUpDown Grid.Column="4" Minimum="32" Maximum="1024" Increment="32" FormatString="0" Width="120"
+                                       Value="{Binding BitrateKbps}"
+                                       ToolTip.Tip="{x:Static res:Strings.FileOutputAudioBitrateLabel}" />
+                        <Button Grid.Column="6" Content="{x:Static res:Strings.FileOutputRemoveTrackButton}"
+                                Command="{Binding $parent[ItemsControl].((vm:AddFileOutputDialogViewModel)DataContext).RemoveAudioLegCommand}"
+                                CommandParameter="{Binding}" />
+                      </Grid>
+                      <Grid ColumnDefinitions="*,8,120">
+                        <TextBox Grid.Column="0" Text="{Binding Name}"
+                                 PlaceholderText="{x:Static res:Strings.FileOutputAudioNameLabel}" />
+                        <TextBox Grid.Column="2" Text="{Binding Language}"
+                                 PlaceholderText="{x:Static res:Strings.FileOutputAudioLanguageLabel}" />
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

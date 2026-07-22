@@ -53,7 +53,9 @@ public sealed class VideoPlayer : IDisposable
     private readonly IMediaClock _clock;
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
     private readonly object _queueGate = new();
-    private SemaphoreSlim _slotsAvailable;
+    // Never dispose/recreate mid-flight: a clock tick may already be inside a dequeue loop
+    // after its IsRunning check (see DrainQueue).
+    private readonly SemaphoreSlim _slotsAvailable;
     private readonly int _queueCapacity;
     private readonly TimeSpan _decodePollInterval;
     private readonly VideoPresentationMode _presentationMode;
@@ -166,6 +168,14 @@ public sealed class VideoPlayer : IDisposable
     public long DroppedLate => Volatile.Read(ref _droppedLate);
     /// <summary>Frames dropped on Stop/Pause/Seek (queue drain) before they could be displayed.</summary>
     public long DroppedDrain => Volatile.Read(ref _droppedQueueDrain);
+
+    /// <summary>Timing of successful <see cref="IVideoSource.TryReadNextFrame"/> calls on the decode thread.</summary>
+    public TimingSnapshot DecodeTiming => _decodeTiming.Snapshot();
+
+    /// <summary>Presentation-queue capacity (companion to <see cref="QueuedFrameCount"/> for depth gauges).</summary>
+    public int QueueCapacity => _queueCapacity;
+
+    private readonly TimingAccumulator _decodeTiming = new();
 
     /// <summary>
     /// A frame whose PTS is more than this far behind the playhead is
@@ -498,17 +508,19 @@ public sealed class VideoPlayer : IDisposable
                     return;
                 }
 
-                var readStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+                var logSlowRead = Trace.IsEnabled(LogLevel.Warning);
+                var readStarted = Stopwatch.GetTimestamp();
                 if (!_source.TryReadNextFrame(out var frame))
                 {
-                    if (readStarted != 0)
+                    if (logSlowRead)
                         MaybeLogSlowDecodeRead(readStarted, gotFrame: false);
                     // Live source not ready (or end-of-stream lag). Brief sleep
                     // so we don't spin; cancellation is honoured promptly.
                     if (token.WaitHandle.WaitOne(_decodePollInterval)) return;
                     continue;
                 }
-                if (readStarted != 0)
+                _decodeTiming.RecordSince(readStarted);
+                if (logSlowRead)
                     MaybeLogSlowDecodeRead(readStarted, gotFrame: true);
 
                 Interlocked.Increment(ref _decoded);
@@ -992,7 +1004,7 @@ public sealed class VideoPlayer : IDisposable
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowDecodeReadWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowDecodeReadWarningTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowDecodeReadWarningTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -1009,7 +1021,7 @@ public sealed class VideoPlayer : IDisposable
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowQueueSlotWaitWarningMs ||
-            !TryUpdateThrottle(ref _lastQueueSlotWaitWarningTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastQueueSlotWaitWarningTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -1025,7 +1037,7 @@ public sealed class VideoPlayer : IDisposable
     {
         var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
         if (elapsedMs < SlowOutputSubmitWarningMs ||
-            !TryUpdateThrottle(ref _lastSlowOutputSubmitWarningTicks, TimeSpan.FromSeconds(2)))
+            !MediaDiagnostics.TryUpdateThrottle(ref _lastSlowOutputSubmitWarningTicks, TimeSpan.FromSeconds(2)))
             return;
 
         Trace.LogWarning(
@@ -1038,14 +1050,6 @@ public sealed class VideoPlayer : IDisposable
             Volatile.Read(ref _droppedLate));
     }
 
-    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
-    {
-        var now = Stopwatch.GetTimestamp();
-        var prev = Volatile.Read(ref ticksSlot);
-        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
-            return false;
-        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
-    }
 
     private void ReleaseHeldFrame()
     {

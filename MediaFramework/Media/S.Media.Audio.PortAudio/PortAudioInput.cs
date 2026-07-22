@@ -25,11 +25,8 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     private readonly int _deviceIndex;
     private readonly double _suggestedLatency;
     private readonly nuint _framesPerBuffer;
-    private readonly float[] _ringBuffer;
-    private readonly int _ringMask;
+    private readonly FrameAlignedFloatRing _ring;
 
-    private long _writeIndex;
-    private long _readIndex;
     private long _samplesEmitted;
     private long _overflowSamples;
     private int _callbackFaulted;
@@ -56,25 +53,16 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
             throw new ArgumentException(
                 $"dst length {dst.Length} is not a multiple of channel count {_format.Channels}", nameof(dst));
 
-        var read = Volatile.Read(ref _readIndex);
-        var write = Volatile.Read(ref _writeIndex);
-        var available = (int)(write - read);
-        var toRead = Math.Min(dst.Length, available);
+        var toRead = _ring.Read(dst);
         if (toRead == 0) return 0;
 
-        var startIdx = (int)(read & _ringMask);
-        var firstChunk = Math.Min(toRead, _ringBuffer.Length - startIdx);
-        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
-        if (firstChunk < toRead)
-            _ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
-        Volatile.Write(ref _readIndex, read + toRead);
         _samplesEmitted += toRead / _format.Channels;
         return toRead;
     }
 
     /// <summary>Approximate samples-per-channel currently sitting in the ring buffer.</summary>
-    public int AvailableSamples => (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _format.Channels);
-    public int CapacitySamples => _ringBuffer.Length / _format.Channels;
+    public int AvailableSamples => _ring.BufferedFrames;
+    public int CapacitySamples => _ring.CapacityFrames;
     /// <summary>Samples dropped by the callback because the ring buffer was full.</summary>
     public long OverflowSamples => Volatile.Read(ref _overflowSamples);
 
@@ -95,14 +83,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
 
         var keepFrames = Math.Max(0, (int)(keepBuffered.TotalSeconds * _format.SampleRate));
         var keepFloats = checked(keepFrames * _format.Channels);
-
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var buffered = (int)(write - read);
-        if (buffered <= keepFloats) return;
-
-        var skip = buffered - keepFloats;
-        Volatile.Write(ref _readIndex, read + skip);
+        _ring.DropOldestKeepingFloats(keepFloats);
     }
 
     /// <summary>Non-zero if the native stream callback caught an exception.</summary>
@@ -168,11 +149,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
         _format = format;
         _framesPerBuffer = (nuint)framesPerBuffer;
 
-        var capacityFloats = ringCapacityFrames * format.Channels;
-        var rounded = 1;
-        while (rounded < capacityFloats) rounded <<= 1;
-        _ringBuffer = new float[rounded];
-        _ringMask = rounded - 1;
+        _ring = new FrameAlignedFloatRing(format.Channels, (long)ringCapacityFrames * format.Channels);
 
         PortAudioRuntime.Acquire();
         try
@@ -251,8 +228,8 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
             Volatile.Write(ref _isRunning, true);
             Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f",
                 _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
-                _ringBuffer.Length / _format.Channels);
-            timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ringBuffer.Length / _format.Channels}");
+                _ring.CapacityFrames);
+            timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ring.CapacityFrames}");
         }
     }
 
@@ -322,22 +299,19 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
                 $"destination length {destination.Length} must equal samplesPerChannel × channels ({totalFloats})",
                 nameof(destination));
 
-        var read = Volatile.Read(ref _readIndex);
-        var write = Volatile.Read(ref _writeIndex);
-        var available = (int)(write - read);
-        if (available < totalFloats)
+        if (_ring.BufferedFloats < totalFloats)
         {
             frame = default;
             return false;
         }
 
-        var dst = destination.Span;
-        var startIdx = (int)(read & _ringMask);
-        var firstChunk = Math.Min(totalFloats, _ringBuffer.Length - startIdx);
-        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
-        if (firstChunk < totalFloats)
-            _ringBuffer.AsSpan(0, totalFloats - firstChunk).CopyTo(dst[firstChunk..]);
-        Volatile.Write(ref _readIndex, read + totalFloats);
+        // All-or-nothing: the availability check above makes a short read possible only when a
+        // concurrent RebaseToLatest discarded the backlog mid-copy - treat that as "no frame yet".
+        if (_ring.Read(destination.Span) != totalFloats)
+        {
+            frame = default;
+            return false;
+        }
 
         var pts = TimeSpan.FromSeconds((double)_samplesEmitted / _format.SampleRate);
         _samplesEmitted += samplesPerChannel;
@@ -371,20 +345,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
             var totalFloats = (int)frames * self._format.Channels;
             var input = new ReadOnlySpan<float>((float*)inputBuffer, totalFloats);
 
-            var write = Volatile.Read(ref self._writeIndex);
-            var read = Volatile.Read(ref self._readIndex);
-            var freeFloats = self._ringBuffer.Length - (int)(write - read);
-            var toWrite = Math.Min(totalFloats, freeFloats);
-
-            if (toWrite > 0)
-            {
-                var startIdx = (int)(write & self._ringMask);
-                var firstChunk = Math.Min(toWrite, self._ringBuffer.Length - startIdx);
-                input[..firstChunk].CopyTo(self._ringBuffer.AsSpan(startIdx));
-                if (firstChunk < toWrite)
-                    input.Slice(firstChunk, toWrite - firstChunk).CopyTo(self._ringBuffer.AsSpan(0));
-                Volatile.Write(ref self._writeIndex, write + toWrite);
-            }
+            var toWrite = self._ring.Write(input);
 
             if (toWrite < totalFloats)
                 Interlocked.Add(ref self._overflowSamples, totalFloats - toWrite);

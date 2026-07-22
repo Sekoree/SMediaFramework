@@ -13,6 +13,11 @@
         <!-- S.Media.Subtitles is the primary managed wrapper for LibAssLib (next/ name). -->
         <InternalsVisibleTo Include="S.Media.Subtitles" />
         <InternalsVisibleTo Include="LibAssLib.Tests" />
+        <Compile Include="../../Shared/SystemFirstNativeLibraryResolver.cs" Link="Runtime/SystemFirstNativeLibraryResolver.cs" />
     </ItemGroup>
 
+
+    <PropertyGroup>
+        <Description>Low-level P/Invoke binding for libass. Most applications should reference S.Media.Subtitles instead.</Description>
+    </PropertyGroup>
 </Project>

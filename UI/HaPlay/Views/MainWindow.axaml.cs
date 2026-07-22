@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using HaPlay.ViewModels;
 
@@ -17,6 +18,12 @@ public partial class MainWindow : Window
     private double _lastNormalHeight;
     private PixelPoint _lastNormalPosition;
     private bool _hasNormalSample;
+    private WindowStateSnapshot? _preparedWindowState;
+
+    // Native window frames are slightly larger than Avalonia's logical client size. Keeping this
+    // margin inside the working area prevents the right-hand title-bar buttons from landing beyond
+    // a monitor edge, especially with fractional display scaling.
+    private const int WindowFrameSafetyMarginPixels = 32;
 
     public MainWindow()
     {
@@ -31,6 +38,24 @@ public partial class MainWindow : Window
         // IObserver, which is more ceremony than this needs).
         PropertyChanged += OnAvaloniaPropertyChanged;
         PositionChanged += (_, _) => OnGeometryChanged();
+    }
+
+    /// <summary>Applies saved client geometry before Show creates the platform window. Screen-aware
+    /// clamping still happens in <see cref="OnOpened"/>, once Avalonia exposes the monitor list.</summary>
+    internal void PrepareInitialWindowState(WindowStateSnapshot? snapshot)
+    {
+        _preparedWindowState = snapshot;
+        if (snapshot is null)
+            return;
+
+        if (snapshot.Width > 200 && snapshot.Height > 150)
+        {
+            Width = Math.Max(MinWidth, snapshot.Width);
+            Height = Math.Max(MinHeight, snapshot.Height);
+        }
+
+        if (snapshot.IsMaximized)
+            WindowState = WindowState.Maximized;
     }
 
     private void OnAvaloniaPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -50,7 +75,7 @@ public partial class MainWindow : Window
         // Offer to restore a crashed session (best-effort; runs after the window is up so it can show a modal).
         _ = vm.CheckForRecoverableSessionAsync();
 
-        var snap = vm.GetSavedWindowState();
+        var snap = _preparedWindowState ?? vm.GetSavedWindowState();
         if (snap is null)
         {
             CaptureNormalSample();
@@ -58,47 +83,82 @@ public partial class MainWindow : Window
         }
 
         var candidate = new PixelPoint(snap.X, snap.Y);
-        var workingArea = FindWorkingArea(candidate) ?? Screens?.Primary?.WorkingArea;
+        var screen = FindScreen(candidate) ?? Screens?.Primary;
+        var workingArea = screen?.WorkingArea;
+        var scaling = Math.Max(0.1, screen?.Scaling ?? 1.0);
 
         // Size first - Width/Height on a non-maximized window are the un-maximized values.
         if (snap.Width > 200 && snap.Height > 150)
         {
             Width = workingArea is { } area
-                ? Math.Clamp(snap.Width, MinWidth, Math.Max(MinWidth, area.Width))
+                ? ClampWindowDimension(snap.Width, MinWidth, area.Width, scaling)
                 : snap.Width;
             Height = workingArea is { } area2
-                ? Math.Clamp(snap.Height, MinHeight, Math.Max(MinHeight, area2.Height))
+                ? ClampWindowDimension(snap.Height, MinHeight, area2.Height, scaling)
                 : snap.Height;
         }
 
-        // Position: only honor when the point lands within a visible screen. Otherwise let the platform
-        // pick (typically center of primary monitor).
-        if (FindWorkingArea(candidate) is not null)
-        {
-            Position = candidate;
-        }
-        else if (workingArea is { } area)
-        {
-            Position = new PixelPoint(
-                area.X + Math.Max(0, (area.Width - (int)Width) / 2),
-                area.Y + Math.Max(0, (area.Height - (int)Height) / 2));
-        }
+        // Clamp the complete window, not just its top-left point. The old point-only validation let a
+        // valid saved X place the right edge (and native Close button) beyond the monitor working area.
+        if (workingArea is { } visibleArea)
+            Position = ClampWindowPosition(candidate, visibleArea, scaling, Width, Height);
 
         if (snap.IsMaximized)
             WindowState = WindowState.Maximized;
 
         CaptureNormalSample();
+
+        // Re-check after the compositor has produced a frame: at this point the platform backend has
+        // final DPI and native-frame metrics. This is intentionally position-only, so there is no
+        // visible resize after launch.
+        RequestAnimationFrame(_ => Dispatcher.UIThread.Post(
+            EnsureNormalWindowIsVisible,
+            DispatcherPriority.Loaded));
     }
 
-    private PixelRect? FindWorkingArea(PixelPoint point)
+    private Screen? FindScreen(PixelPoint point)
     {
         if (Screens is null) return null;
         foreach (var s in Screens.All)
         {
             if (s.Bounds.Contains(point))
-                return s.WorkingArea;
+                return s;
         }
         return null;
+    }
+
+    private static double ClampWindowDimension(double requestedDip, double minimumDip,
+        int workingAreaPixels, double scaling)
+    {
+        var availableDip = Math.Max(minimumDip,
+            (workingAreaPixels - WindowFrameSafetyMarginPixels) / Math.Max(0.1, scaling));
+        return Math.Clamp(requestedDip, minimumDip, availableDip);
+    }
+
+    internal static PixelPoint ClampWindowPosition(PixelPoint requested, PixelRect workingArea,
+        double scaling, double clientWidthDip, double clientHeightDip)
+    {
+        scaling = Math.Max(0.1, scaling);
+        var frameWidth = (int)Math.Ceiling(Math.Max(1, clientWidthDip) * scaling)
+                         + WindowFrameSafetyMarginPixels;
+        var frameHeight = (int)Math.Ceiling(Math.Max(1, clientHeightDip) * scaling)
+                          + WindowFrameSafetyMarginPixels;
+        var maximumX = Math.Max(workingArea.X, workingArea.X + workingArea.Width - frameWidth);
+        var maximumY = Math.Max(workingArea.Y, workingArea.Y + workingArea.Height - frameHeight);
+        return new PixelPoint(
+            Math.Clamp(requested.X, workingArea.X, maximumX),
+            Math.Clamp(requested.Y, workingArea.Y, maximumY));
+    }
+
+    private void EnsureNormalWindowIsVisible()
+    {
+        if (WindowState != WindowState.Normal)
+            return;
+        var screen = FindScreen(Position) ?? Screens?.Primary;
+        if (screen is null)
+            return;
+        Position = ClampWindowPosition(Position, screen.WorkingArea, screen.Scaling, Width, Height);
+        CaptureNormalSample();
     }
 
     private void OnGeometryChanged()

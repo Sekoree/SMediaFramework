@@ -1,0 +1,711 @@
+using System.Net.Sockets;
+using System.Net;
+using System.Text;
+using Xunit;
+
+namespace S.Media.Stream.Http.Tests;
+
+/// <summary>
+/// End-to-end LAN streaming: synthetic frames/PCM through a <see cref="LiveStreamSession"/> with the
+/// local server enabled, verified over a REAL TCP connection (TS sync bytes / HLS playlist) - no push
+/// servers needed. URL-push coverage is option-validation only (network targets are out of CI scope).
+/// </summary>
+public sealed class LiveStreamSessionTests
+{
+    private static VideoFrame MakeBgraFrame(int width, int height, int index, Rational fps)
+    {
+        var stride = width * 4;
+        var bytes = new byte[stride * height];
+        for (var i = 0; i < bytes.Length; i += 4)
+        {
+            bytes[i] = (byte)(index * 8 & 0xFF);
+            bytes[i + 3] = 255;
+        }
+
+        return new VideoFrame(
+            TimeSpan.FromTicks(TimeSpan.TicksPerSecond * index * fps.Denominator / fps.Numerator),
+            new VideoFormat(width, height, PixelFormat.Bgra32, fps),
+            [bytes],
+            [stride]);
+    }
+
+    private static LiveStreamOptions VideoOnlyOptions(LocalServerOptions server) => new()
+    {
+        Encode = new EncodeSessionOptions
+        {
+            Container = EncodeContainer.MpegTs,
+            OutputMode = EncodeOutputMode.VideoOnly,
+            // Streaming requires an explicit locked output resolution + fps.
+            Video = new VideoEncodeOptions
+            {
+                Codec = EncodeVideoCodec.H264, Crf = 35, Preset = "ultrafast", GopSize = 10,
+                ScaleWidth = 128, ScaleHeight = 96, Fps = 30,
+            },
+        },
+        LocalServer = server,
+    };
+
+    private static string Mount(LocalServerOptions server) => server.MountName;
+
+    private static bool EncodersAvailable(LiveStreamOptions options) => options.Validate().Count == 0;
+
+    private static async Task PumpFramesAsync(LiveStreamSession session, int count)
+    {
+        var fps = new Rational(30, 1);
+        session.VideoSink!.Configure(new VideoFormat(128, 96, PixelFormat.Bgra32, fps));
+        for (var i = 0; i < count; i++)
+        {
+            session.VideoSink.Submit(MakeBgraFrame(128, 96, i, fps));
+            await Task.Delay(5); // let the encode worker + sink drain threads interleave like live playback
+        }
+    }
+
+    private static async Task<byte[]> HttpGetRawAsync(int port, string path, int maxBytes, TimeSpan timeout)
+        => await HttpRequestRawAsync(port, path, "GET", maxBytes, timeout);
+
+    private static async Task<byte[]> HttpRequestRawAsync(
+        int port, string path, string method, int maxBytes, TimeSpan timeout)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port);
+        var stream = client.GetStream();
+        var request = Encoding.ASCII.GetBytes(
+            $"{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        await stream.WriteAsync(request);
+
+        var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            while (buffer.Length < maxBytes)
+            {
+                var read = await stream.ReadAsync(chunk, cts.Token);
+                if (read == 0)
+                    break;
+                buffer.Write(chunk, 0, read);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // timeout reached with whatever we have - the TS stream is endless by design
+        }
+
+        return buffer.ToArray();
+    }
+
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < deadline)
+            await Task.Delay(15);
+        return condition();
+    }
+
+    private static (string Headers, byte[] Body) SplitResponse(byte[] raw)
+    {
+        var text = Encoding.ASCII.GetString(raw);
+        var idx = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        Assert.True(idx > 0, "no HTTP header terminator in response");
+        return (text[..idx], raw[(idx + 4)..]);
+    }
+
+    [Fact]
+    public async Task TsStream_ServesSyncBytePacketsToTcpClient()
+    {
+        var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        var pump = PumpFramesAsync(session, 90);
+
+        // Give the encoder a head start so a keyframe join point exists before the client connects.
+        await Task.Delay(400);
+        var raw = await HttpGetRawAsync(session.LocalServerPort, "/stream.ts", 64 * 1024, TimeSpan.FromSeconds(8));
+        await pump;
+
+        var (headers, body) = SplitResponse(raw);
+        Assert.Contains("200 OK", headers);
+        Assert.Contains("video/mp2t", headers);
+        Assert.True(body.Length >= 188 * 4, $"expected several TS packets, got {body.Length} bytes");
+        // MPEG-TS: 0x47 sync byte every 188 bytes; joining at a mux packet boundary means offset 0 aligns.
+        for (var i = 0; i + 188 <= 188 * 4; i += 188)
+            Assert.Equal(0x47, body[i]);
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public async Task Hls_PlaylistAppearsAndListsSegments()
+    {
+        var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: false, EnableHls: true));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        // 150 frames @30fps = 5 s of content = at least two 2 s segments.
+        await PumpFramesAsync(session, 150);
+
+        // The hls muxer writes the playlist when the first segment completes; poll briefly while live.
+        string playlist = "";
+        string headers = "";
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            var raw = await HttpGetRawAsync(session.LocalServerPort, "/stream/hls/live.m3u8", 64 * 1024, TimeSpan.FromSeconds(4));
+            (headers, var body) = SplitResponse(raw);
+            playlist = Encoding.UTF8.GetString(body);
+            if (headers.Contains("200 OK") && playlist.Contains("seg_"))
+                break;
+            await Task.Delay(250);
+        }
+
+        Assert.Contains("200 OK", headers);
+        Assert.Contains("application/vnd.apple.mpegurl", headers);
+        Assert.Contains("#EXTM3U", playlist);
+        Assert.Contains("seg_", playlist);
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public async Task StatusPage_ReportsRoutes()
+    {
+        var options = VideoOnlyOptions(new LocalServerOptions(Port: 0));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        var raw = await HttpGetRawAsync(session.LocalServerPort, "/", 8192, TimeSpan.FromSeconds(3));
+        var (headers, body) = SplitResponse(raw);
+
+        Assert.Contains("200 OK", headers);
+        var text = Encoding.UTF8.GetString(body);
+        Assert.Contains("/stream.ts", text);
+        Assert.Contains("/stream/hls/live.m3u8", text);
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public async Task UnknownRoute_Returns404_AndTraversalIsRejected()
+    {
+        var options = VideoOnlyOptions(new LocalServerOptions(Port: 0));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+
+        var raw = await HttpGetRawAsync(session.LocalServerPort, "/nope", 8192, TimeSpan.FromSeconds(3));
+        Assert.Contains("404", SplitResponse(raw).Headers);
+
+        var traversal = await HttpGetRawAsync(session.LocalServerPort, "/stream/hls/..%2fsecrets.ts", 8192, TimeSpan.FromSeconds(3));
+        Assert.Contains("404", SplitResponse(traversal).Headers);
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public void Validate_RtmpConstraints_AreEnforcedAcrossDestinations()
+    {
+        var options = new LiveStreamOptions
+        {
+            Encode = new EncodeSessionOptions
+            {
+                Container = EncodeContainer.MpegTs,
+                Video = new VideoEncodeOptions { Codec = EncodeVideoCodec.Hevc },
+                AudioLegs = [new AudioLegOptions(), new AudioLegOptions { Codec = EncodeAudioCodec.Opus }],
+            },
+            PushTargets = [new PushTarget(PushProtocol.Rtmp, "rtmp://live.example/app/key")],
+        };
+
+        var errors = options.Validate(probeEncoders: false);
+        Assert.Contains(errors, e => e.Contains("H.264"));
+        Assert.Contains(errors, e => e.Contains("single audio track"));
+    }
+
+    [Fact]
+    public void Validate_RequiresAtLeastOneDestination_AndSchemeMatch()
+    {
+        var none = new LiveStreamOptions();
+        Assert.Contains(none.Validate(probeEncoders: false), e => e.Contains("no destination"));
+
+        var badScheme = new LiveStreamOptions
+        {
+            PushTargets = [new PushTarget(PushProtocol.Srt, "rtmp://wrong")],
+        };
+        Assert.Contains(badScheme.Validate(probeEncoders: false), e => e.Contains("srt://"));
+
+        var unusableLocal = new LiveStreamOptions
+        {
+            LocalServer = new LocalServerOptions(70_000, EnableTs: false, EnableHls: false),
+        };
+        var localErrors = unusableLocal.Validate(probeEncoders: false);
+        Assert.Contains(localErrors, e => e.Contains("neither MPEG-TS nor HLS"));
+        Assert.Contains(localErrors, e => e.Contains("port"));
+    }
+
+    [Fact]
+    public async Task AudioOnlyStream_GoesLiveFromKeepAliveSilence_WithoutMedia()
+    {
+        // Audio-only stream, NOTHING pumped: the keep-alive must still drive silence so a client
+        // connecting before any track plays sees a running TS stream (not a stalled one).
+        var options = new LiveStreamOptions
+        {
+            Encode = new EncodeSessionOptions
+            {
+                Container = EncodeContainer.MpegTs,
+                OutputMode = EncodeOutputMode.AudioOnly,
+                AudioLegs = [new AudioLegOptions { Codec = EncodeAudioCodec.Aac, Channels = 2 }],
+            },
+            LocalServer = new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false),
+        };
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        await Task.Delay(500); // let the keep-alive prime a keyframe/PAT before the client joins
+        var raw = await HttpGetRawAsync(session.LocalServerPort, "/stream.ts", 32 * 1024, TimeSpan.FromSeconds(6));
+
+        var (headers, body) = SplitResponse(raw);
+        Assert.Contains("200 OK", headers);
+        Assert.Contains("video/mp2t", headers);
+        Assert.True(body.Length >= 188 * 4, $"expected TS packets from keep-alive silence, got {body.Length} bytes");
+        Assert.Equal(0x47, body[0]);
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public async Task AcquiredButIdleRoutes_KeepSendingBlackAndSilence()
+    {
+        // This is the HaPlay go-live sequence: the output leases are acquired as soon as the line is
+        // attached to the composition, before any cue actually submits a frame or PCM. Acquisition must
+        // not suppress filler, otherwise an SRT provider sees a packetless source and disconnects it.
+        var options = new LiveStreamOptions
+        {
+            Encode = new EncodeSessionOptions
+            {
+                Container = EncodeContainer.MpegTs,
+                OutputMode = EncodeOutputMode.VideoAndAudio,
+                Video = new VideoEncodeOptions
+                {
+                    Codec = EncodeVideoCodec.H264, Crf = 35, Preset = "ultrafast", GopSize = 10,
+                    ScaleWidth = 128, ScaleHeight = 96, Fps = 30,
+                },
+                AudioLegs =
+                [
+                    new AudioLegOptions { Codec = EncodeAudioCodec.Aac, Channels = 2, Name = "Program" },
+                    new AudioLegOptions { Codec = EncodeAudioCodec.Aac, Channels = 2, Name = "Aux" },
+                ],
+            },
+            LocalServer = new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false),
+        };
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        session.SetPlaybackActive(videoActive: true, audioActive: true); // leases only; submit nothing
+        Assert.True(await WaitUntilAsync(
+            () => session.GetStatus().Encode.VideoFramesSubmitted >= 5,
+            TimeSpan.FromSeconds(3)));
+        var before = session.GetStatus().Encode;
+        await Task.Delay(350);
+        var after = session.GetStatus().Encode;
+
+        Assert.True(after.VideoFramesSubmitted > before.VideoFramesSubmitted,
+            "acquiring an idle route incorrectly stopped black video filler");
+        Assert.True(after.Sinks[0].BytesWritten > before.Sinks[0].BytesWritten,
+            "acquiring idle routes incorrectly stopped the multiplexed black/silence stream");
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public async Task FillerYieldsToRealFrames_ThenResumesWhenAnAcquiredRouteFallsSilent()
+    {
+        var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        session.SetPlaybackActive(videoActive: true, audioActive: false);
+        session.VideoSink!.Submit(MakeBgraFrame(128, 96, 1, new Rational(30, 1)));
+        var afterRealFrame = session.GetStatus().Encode.VideoFramesSubmitted;
+
+        // The activity grace prevents black flashes between slightly-jittery real frames.
+        await Task.Delay(120);
+        Assert.Equal(afterRealFrame, session.GetStatus().Encode.VideoFramesSubmitted);
+
+        Assert.True(await WaitUntilAsync(
+            () => session.GetStatus().Encode.VideoFramesSubmitted > afterRealFrame,
+            TimeSpan.FromSeconds(2)),
+            "black filler did not resume after an acquired route stopped submitting real frames");
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public async Task LiveCarrier_EncodesRepeatedMediaTimestampFramesAtWallClockRate()
+    {
+        // A stopped ShowSession leaves its composition pump alive so the now-empty canvas can carry
+        // black. Its source timeline is paused, therefore every canvas frame has the SAME media PTS.
+        // Live output must schedule those arrivals on the carrier clock instead of collapsing them as
+        // duplicate source frames (which used to leave only AAC flowing until the SRT peer timed out).
+        var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        session.SetPlaybackActive(videoActive: true, audioActive: false);
+        Assert.True(await WaitUntilAsync(
+            () => session.GetStatus().Encode.VideoFramesEncoded >= 3,
+            TimeSpan.FromSeconds(3)));
+
+        var before = session.GetStatus().Encode.VideoFramesEncoded;
+        var fps = new Rational(30, 1);
+        for (var i = 0; i < 18; i++)
+        {
+            // Deliberately keep index/PTS at zero while changing neither the route nor its activity.
+            session.VideoSink!.Submit(MakeBgraFrame(128, 96, 0, fps));
+            await Task.Delay(34);
+        }
+
+        // Stay inside the 250 ms idle grace: a broken implementation could otherwise make this pass
+        // later by resuming the separate black filler after the repeated-real-frame input has ended.
+        await Task.Delay(75);
+        Assert.True(session.GetStatus().Encode.VideoFramesEncoded >= before + 12,
+            "live carrier stopped encoding when the active composition's media PTS froze");
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public void PushTarget_ResolveUrl_FoldsStreamKeyPerProtocol()
+    {
+        // RTMP: key becomes the final path segment (classic ingest pattern), trailing slash tolerated.
+        Assert.Equal("rtmp://live.twitch.tv/app/live_123",
+            new PushTarget(PushProtocol.Rtmp, "rtmp://live.twitch.tv/app", "live_123").ResolveUrl());
+        Assert.Equal("rtmp://live.twitch.tv/app/live_123",
+            new PushTarget(PushProtocol.Rtmp, "rtmp://live.twitch.tv/app/", "live_123").ResolveUrl());
+
+        // SRT: key becomes streamid, url-encoded, appended to any existing query.
+        Assert.Equal("srt://host:9000?streamid=abc%2Fdef",
+            new PushTarget(PushProtocol.Srt, "srt://host:9000", "abc/def").ResolveUrl());
+        Assert.Equal("srt://host:9000?latency=200&streamid=key",
+            new PushTarget(PushProtocol.Srt, "srt://host:9000?latency=200", "key").ResolveUrl());
+        Assert.Equal("srt://host:9000?latency=120000",
+            new PushTarget(PushProtocol.Srt, "srt://host:9000")
+            {
+                SrtLatencyMilliseconds = 120,
+            }.ResolveUrl());
+        Assert.Equal("srt://host:9000?latency=120000&streamid=key",
+            new PushTarget(PushProtocol.Srt, "srt://host:9000", "key")
+            {
+                SrtLatencyMilliseconds = 120,
+            }.ResolveUrl());
+        // An expert-supplied URL option wins over the convenience field.
+        Assert.Equal("srt://host:9000?latency=350000",
+            new PushTarget(PushProtocol.Srt, "srt://host:9000?latency=350000")
+            {
+                SrtLatencyMilliseconds = 120,
+            }.ResolveUrl());
+
+        // No key: URL passes through untouched.
+        Assert.Equal("rtmp://host/app/inline_key",
+            new PushTarget(PushProtocol.Rtmp, "rtmp://host/app/inline_key").ResolveUrl());
+        Assert.Equal("rtmp://host/app",
+            new PushTarget(PushProtocol.Rtmp, "rtmp://host/app", "   ").ResolveUrl());
+    }
+
+    [Fact]
+    public void PushTarget_SafeDisplayName_RedactsSrtQueryValues()
+    {
+        var target = new PushTarget(
+            PushProtocol.Srt,
+            "srt://example.test:9000?streamid=private-token&passphrase=private-pass&latency=200000");
+
+        var display = target.SafeDisplayName();
+
+        Assert.Equal("srt://example.test:9000/?streamid=…&passphrase=…&latency=…", display);
+        Assert.DoesNotContain("private-token", display);
+        Assert.DoesNotContain("private-pass", display);
+        Assert.DoesNotContain("200000", display);
+    }
+
+    [Fact]
+    public void Validate_LiveStream_RequiresExplicitResolutionAndFps()
+    {
+        // Video without a locked resolution/fps is rejected: clients can't follow a renegotiating stream.
+        var sourceFollowing = new LiveStreamOptions
+        {
+            Encode = new EncodeSessionOptions
+            {
+                Container = EncodeContainer.MpegTs,
+                OutputMode = EncodeOutputMode.VideoOnly,
+                Video = new VideoEncodeOptions { Codec = EncodeVideoCodec.H264 },
+            },
+            LocalServer = new LocalServerOptions(Port: 0),
+        };
+        var errors = sourceFollowing.Validate(probeEncoders: false);
+        Assert.Contains(errors, e => e.Contains("output resolution"));
+        Assert.Contains(errors, e => e.Contains("frame rate"));
+
+        // With both set, those two constraints clear.
+        var locked = sourceFollowing with
+        {
+            Encode = sourceFollowing.Encode with
+            {
+                Video = new VideoEncodeOptions
+                {
+                    Codec = EncodeVideoCodec.H264, ScaleWidth = 640, ScaleHeight = 360, Fps = 30,
+                },
+            },
+        };
+        var lockedErrors = locked.Validate(probeEncoders: false);
+        Assert.DoesNotContain(lockedErrors, e => e.Contains("output resolution"));
+        Assert.DoesNotContain(lockedErrors, e => e.Contains("frame rate"));
+    }
+
+    [Fact]
+    public async Task LocalServer_SharesOneFixedPortAcrossNamedMounts()
+    {
+        // Sharing only applies to an EXPLICIT fixed port (ephemeral port-0 servers are never pooled).
+        // Pick a fixed high port; if something else already holds it, skip rather than flake in CI.
+        const int fixedPort = 28643;
+        var first = VideoOnlyOptions(new LocalServerOptions(fixedPort, EnableTs: true, EnableHls: false, MountName: "stage"));
+        if (!EncodersAvailable(first))
+            return;
+
+        LiveStreamSession stage;
+        try
+        {
+            stage = LiveStreamSession.Start(first);
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            return; // port busy on this host - not our failure to assert
+        }
+
+        try
+        {
+            Assert.Equal(fixedPort, stage.LocalServerPort);
+            Assert.Equal("stage", Mount(first.LocalServer!));
+
+            // A second session on the SAME fixed port under a different mount reuses the one server.
+            var secondOpts = VideoOnlyOptions(new LocalServerOptions(fixedPort, EnableTs: true, EnableHls: false, MountName: "booth"));
+            using var booth = LiveStreamSession.Start(secondOpts);
+            Assert.Equal(fixedPort, booth.LocalServerPort);
+
+            // The shared status page lists BOTH mounts on the one port.
+            var raw = await HttpGetRawAsync(fixedPort, "/", 8192, TimeSpan.FromSeconds(3));
+            var text = Encoding.UTF8.GetString(SplitResponse(raw).Body);
+            Assert.Contains("/stage.ts", text);
+            Assert.Contains("/booth.ts", text);
+
+            // Client counts belong to the addressed mount, not the shared listener. Keep one TS
+            // request open and verify it does not make the other output look occupied.
+            using var viewer = new TcpClient();
+            await viewer.ConnectAsync("127.0.0.1", fixedPort);
+            await viewer.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
+                "GET /stage.ts HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"));
+            Assert.True(await WaitUntilAsync(
+                () => stage.GetStatus().LocalServerClients == 1,
+                TimeSpan.FromSeconds(3)));
+            Assert.Equal(0, booth.GetStatus().LocalServerClients);
+
+            await booth.StopAsync();
+        }
+        finally
+        {
+            await stage.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task LocalServer_RejectsDuplicateMountNameOnSamePort()
+    {
+        const int fixedPort = 28644;
+        var opts = VideoOnlyOptions(new LocalServerOptions(fixedPort, EnableTs: true, EnableHls: false, MountName: "dup"));
+        if (!EncodersAvailable(opts))
+            return;
+
+        LiveStreamSession first;
+        try
+        {
+            first = LiveStreamSession.Start(opts);
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            return;
+        }
+
+        try
+        {
+            // Same port, same mount name → the endpoint is already claimed.
+            var ex = Assert.Throws<InvalidOperationException>(() => LiveStreamSession.Start(opts));
+            Assert.Contains("already served", ex.Message);
+        }
+        finally
+        {
+            await first.StopAsync();
+        }
+    }
+
+    [Fact]
+    public void TsFanOutBuffer_JoinsAtKeyframeBoundary_AndEvictsSlowClients()
+    {
+        var buffer = new TsFanOutBuffer();
+
+        // Packet 1 (non-key), packet 2 (KEY), packet 3 (non-key).
+        buffer.OnBytes(new byte[] { 1, 1, 1 });
+        buffer.OnPacketBoundary(videoKeyframe: false);
+        buffer.OnBytes(new byte[] { 2, 2, 2 });
+        buffer.OnPacketBoundary(videoKeyframe: true); // key packet occupied [3,6) → join offset 3
+        buffer.OnBytes(new byte[] { 3, 3, 3 });
+        buffer.OnPacketBoundary(videoKeyframe: false);
+
+        var reader = buffer.Register(out var registration);
+        Assert.True(reader.TryRead(out var first));
+        Assert.Equal(new byte[] { 2, 2, 2 }, first); // history starts AT the keyframe packet
+        Assert.True(reader.TryRead(out var second));
+        Assert.Equal(new byte[] { 3, 3, 3 }, second);
+        buffer.Unregister(registration);
+
+        // Slow client: never reads → channel fills → evicted on overflow.
+        buffer.Register(out _);
+        for (var i = 0; i < 400; i++)
+            buffer.OnBytes(new byte[] { 9 });
+        Assert.Equal(0, buffer.ClientCount);
+        Assert.Equal(1, buffer.EvictedClients);
+    }
+
+    [Fact]
+    public void TsFanOutBuffer_HistoryLargerThanClientQueue_IsDeliveredWithoutPrefixTailGap()
+    {
+        var buffer = new TsFanOutBuffer();
+        buffer.OnBytes(new byte[] { 0 });
+        buffer.OnPacketBoundary(videoKeyframe: false);
+        buffer.OnBytes(new byte[] { 1 });
+        buffer.OnPacketBoundary(videoKeyframe: true);
+        for (var i = 2; i <= 300; i++)
+            buffer.OnBytes(new[] { (byte)(i & 0xff) });
+
+        var reader = buffer.Register(out var registration);
+        Assert.True(reader.TryRead(out var history));
+        Assert.Equal(300, history.Length);
+        for (var i = 1; i <= 300; i++)
+            Assert.Equal((byte)(i & 0xff), history[i - 1]);
+        Assert.False(reader.TryRead(out _));
+        buffer.Unregister(registration);
+    }
+
+    [Fact]
+    public void TsFanOutBuffer_LongGopCannotGrowRollingHistoryWithoutBound()
+    {
+        var buffer = new TsFanOutBuffer(rollingCapacityBytes: 8);
+
+        buffer.OnBytes(new byte[] { 0, 0 });
+        buffer.OnPacketBoundary(videoKeyframe: false);
+        buffer.OnBytes(new byte[] { 1, 1 });
+        buffer.OnPacketBoundary(videoKeyframe: true);
+
+        // No later keyframe: the old implementation stopped evicting when it reached the keyframe
+        // chunk, retaining every subsequent byte for the rest of the stream.
+        for (var i = 0; i < 20; i++)
+            buffer.OnBytes(new byte[] { 2, 2 });
+
+        Assert.InRange(buffer.BufferedBytes, 1, 8);
+        var reader = buffer.Register(out var registration);
+        Assert.False(reader.TryRead(out _)); // wait for a fresh keyframe rather than serve a broken GOP
+        buffer.Unregister(registration);
+    }
+
+    [Fact]
+    public async Task TsFanOutBuffer_PrimesHistoryOutsideProducerLock_AndPreservesLiveOrder()
+    {
+        var snapshotCaptured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMaterialization = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var buffer = new TsFanOutBuffer(
+            historySnapshotCaptured: () =>
+            {
+                snapshotCaptured.TrySetResult();
+                releaseMaterialization.Task.GetAwaiter().GetResult();
+            });
+        for (var i = 0; i < 300; i++)
+            buffer.OnBytes(new[] { (byte)(i & 0xff) });
+
+        object? registration = null;
+        var registerTask = Task.Run(() => buffer.Register(out registration));
+        try
+        {
+            await snapshotCaptured.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // The registration hook is blocked after taking its history snapshot. A producer write must still
+            // complete and later appear after the history rather than blocking on the history coalescing work.
+            var liveWrite = Task.Run(() => buffer.OnBytes(new byte[] { 0xfe }));
+            await liveWrite.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseMaterialization.TrySetResult();
+        }
+
+        var reader = await registerTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(reader.TryRead(out var history));
+        Assert.Equal(300, history.Length);
+        Assert.True(reader.TryRead(out var live));
+        Assert.Equal(new byte[] { 0xfe }, live);
+        buffer.Unregister(registration!);
+    }
+
+    [Fact]
+    public async Task Http_UsesCanonicalMount_AndImplementsHeadAndMethodSemantics()
+    {
+        var options = VideoOnlyOptions(new LocalServerOptions(
+            Port: 0, EnableTs: true, EnableHls: false, MountName: " My Stream!? "));
+        if (!EncodersAvailable(options))
+            return;
+
+        using var session = LiveStreamSession.Start(options);
+        Assert.Equal("mystream", session.MountName);
+        Assert.Equal("/mystream.ts", session.GetStatus().TsUrlPath);
+
+        var head = SplitResponse(await HttpRequestRawAsync(
+            session.LocalServerPort, "/status", "HEAD", 8_192, TimeSpan.FromSeconds(3)));
+        Assert.Contains("200 OK", head.Headers);
+        Assert.Contains("Content-Length:", head.Headers);
+        Assert.Empty(head.Body);
+
+        var post = SplitResponse(await HttpRequestRawAsync(
+            session.LocalServerPort, "/status", "POST", 8_192, TimeSpan.FromSeconds(3)));
+        Assert.Contains("405 Method Not Allowed", post.Headers);
+        Assert.Contains("Allow: GET, HEAD", post.Headers);
+        Assert.Contains("GET and HEAD only", Encoding.UTF8.GetString(post.Body));
+
+        await session.StopAsync();
+    }
+
+    [Fact]
+    public void HttpServer_RejectsReusingPortWithDifferentBindAddress()
+    {
+        const int fixedPort = 28645;
+        HttpMediaServer.MountHandle first;
+        try
+        {
+            first = HttpMediaServer.AcquireMount(
+                fixedPort, "loopback", new TsFanOutBuffer(), null, IPAddress.Loopback);
+        }
+        catch (SocketException)
+        {
+            return; // fixed test port is occupied on this host
+        }
+
+        using (first)
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => HttpMediaServer.AcquireMount(
+                fixedPort, "all-interfaces", new TsFanOutBuffer(), null, IPAddress.Any));
+            Assert.Contains("already bound", ex.Message);
+        }
+    }
+}

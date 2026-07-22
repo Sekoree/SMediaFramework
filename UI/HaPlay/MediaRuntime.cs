@@ -22,7 +22,7 @@ internal static class MediaRuntime
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.MediaRuntime");
     private static readonly object Gate = new();
     private static readonly List<ModuleDiagnostic> _moduleDiagnostics = [];
-    private static MediaHost? _host;
+    private static volatile MediaHost? _host;
     private static S.Abi.MediaPluginDirectory? _plugins;
     private static S.Media.Compositor.ICompositorRegistry _compositorSurfaces =
         new S.Media.Compositor.CompositorRegistryBuilder().Build();
@@ -61,12 +61,12 @@ internal static class MediaRuntime
                 if (_host is null && _shutdown)
                 {
                     // A late poll/timer touched the registry AFTER Shutdown() released the native runtimes -
-                    // rebuilding resurrects PortAudio/NDI holds that will now leak (nothing disposes the fresh
-                    // host). Rebuild anyway so a straggling teardown path can't crash the exit, but make the
-                    // ordering bug loud: fix the caller to stop before MediaRuntime.Shutdown().
-                    Trace.LogError("MediaRuntime: Registry accessed AFTER Shutdown() - rebuilding a fresh host "
-                                   + "(native runtime holds will leak). Stop the caller before shutdown.");
-                    System.Diagnostics.Debug.Assert(false, "MediaRuntime.Registry accessed after Shutdown()");
+                    // never resurrect PortAudio/NDI holds that no later owner would dispose. This is an ordering
+                    // bug: stop the caller before MediaRuntime.Shutdown().
+                    Trace.LogError("MediaRuntime: Registry accessed after Shutdown(). Stop the caller before shutdown.");
+                    throw new ObjectDisposedException(
+                        nameof(MediaRuntime),
+                        "The media registry has been shut down and cannot be initialized again in this process.");
                 }
 
                 return _host ??= Build();
@@ -77,6 +77,68 @@ internal static class MediaRuntime
     /// <summary>The built registry. Lazily built on first access (idempotent + thread-safe), so anything that
     /// resolves backends/decoders works whether or not <see cref="Initialize"/> ran first (tests, dialogs).</summary>
     public static IMediaRegistry Registry => Host.Registry;
+
+    /// <summary>Effect-bus capabilities (Phase 4/5): audio/video effect kinds + audio-visual sources
+    /// the UI's insertion menus enumerate. Built once; projectM registers only when its native lib is
+    /// present (same graceful gate as NDI).</summary>
+    public static S.Media.Core.Buses.IBusRegistry Buses
+    {
+        get
+        {
+            _ = Host; // plugins (and module probes) load during the host build - deterministic, not
+                      // dependent on which static the UI happens to touch first (review M2)
+            return BusesLazy.Value;
+        }
+    }
+
+    private static readonly Lazy<S.Media.Core.Buses.IBusRegistry> BusesLazy = new(
+        static () => S.Media.Core.Buses.BusRegistryBuilder.Build(b =>
+        {
+            b.AddAudioEffect("gain", static config => S.Media.Routing.GainAudioEffect.FromJson(config));
+            b.AddVideoEffect("grayscale", static _ => new S.Media.Routing.GrayscaleVideoEffect());
+            // Color-stage layer effects register on BOTH stages of the unified catalog: as
+            // compositor layer effects (GPU, per cue placement) and - through the CPU-kernel
+            // bridge - as output bus effects insertable per output line in the I/O workspace.
+            b.AddLayerEffect("chroma-key", static config =>
+                S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config));
+            b.AddVideoEffect("chroma-key", static config => new S.Media.Routing.LayerEffectVideoBusAdapter(
+                [S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config)]));
+            b.AddLayerEffect("brightness-contrast", static config =>
+                S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson(config));
+            b.AddVideoEffect("brightness-contrast", static config => new S.Media.Routing.LayerEffectVideoBusAdapter(
+                [S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson(config)]));
+            // Geometry stage: the built-in mapping/warp registers from a serialized
+            // ClipOutputMappingSpec config (cue placements wire it directly via typed specs;
+            // this kind exists for plugins/remote surfaces enumerating the catalog).
+            b.AddGeometryEffect("mapping", static config =>
+                S.Media.Session.OutputMappingGeometryEffect.FromJson(config));
+            if (RuntimeModules.IsProjectMAvailable)
+            {
+                S.Media.Visualizer.ProjectM.ProjectMModule.Register(b);
+                // Continuous mode: give every visualizer source its own offscreen GL context factory so
+                // projectM renders on a dedicated thread, surviving composition rebuilds (track changes)
+                // and keeping preset loads off the composition pump/dispatcher. If context creation fails,
+                // the frame-blit surface detects the failed renderer and falls back to compositor-context
+                // rendering on the compositor's GL thread.
+                S.Media.Visualizer.ProjectM.ProjectMVisualSource.OffscreenGlContextFactory =
+                    S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
+            }
+
+            // Plugin audio effects register LAST (same rule as the media registries: a plugin extends but
+            // never silently pre-empts a built-in kind - AddAudioEffect throws on a duplicate kind).
+            if (_plugins is { } plugins)
+            {
+                try
+                {
+                    plugins.RegisterInto(buses: b);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "MediaRuntime: plugin bus-effect registration failed - continuing");
+                }
+            }
+        }),
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static bool IsInitialized => _host is not null;
 
@@ -94,14 +156,24 @@ internal static class MediaRuntime
     }
 
     /// <summary>Eagerly builds the registry at startup (for deterministic timing/logging). Idempotent.</summary>
-    public static void Initialize() => _ = Host;
+    public static void Initialize()
+    {
+        _ = Host;
+        // Visualizer creation does not necessarily touch the optional bus-effect registry first. Configure
+        // continuous projectM rendering at application startup as well, so a deck visualizer always owns its
+        // offscreen renderer and can survive preserved composition/song swaps.
+        if (RuntimeModules.IsProjectMAvailable)
+        {
+            S.Media.Visualizer.ProjectM.ProjectMVisualSource.OffscreenGlContextFactory =
+                S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
+        }
+    }
 
     /// <summary>
     /// Disposes the owning host at app shutdown, releasing the modules' native runtime holds deterministically
     /// (NXT-05 - without this the process-wide registry was never disposed and <c>Pa_Terminate</c>/NDI release
     /// never ran). Idempotent and thread-safe; call <em>after</em> sessions/engines that borrow the registry have
-    /// been torn down. A subsequent <see cref="Registry"/> access would rebuild a fresh host, so only call this on
-    /// the way out.
+    /// been torn down. A subsequent <see cref="Registry"/> access throws, so only call this on the way out.
     /// </summary>
     public static void Shutdown()
     {
@@ -110,7 +182,7 @@ internal static class MediaRuntime
         {
             host = _host;
             _host = null;
-            _shutdown = true; // a later Registry access is an ordering bug - the getter asserts + logs it
+            _shutdown = true; // a later Registry access is an ordering bug - the getter logs + throws
         }
 
         if (host is null)
@@ -156,7 +228,7 @@ internal static class MediaRuntime
         }
 
         lock (Gate)
-            _moduleDiagnostics.Clear(); // fresh per build (a post-shutdown rebuild re-probes)
+            _moduleDiagnostics.Clear();
 
         var surfaceBuilder = new S.Media.Compositor.CompositorRegistryBuilder();
         var host = MediaHost.Build(b =>

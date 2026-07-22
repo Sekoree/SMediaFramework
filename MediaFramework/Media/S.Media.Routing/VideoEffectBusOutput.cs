@@ -1,0 +1,154 @@
+using S.Media.Core.Buses;
+
+namespace S.Media.Routing;
+
+/// <summary>
+/// Inserts an <see cref="IVideoBusEffect"/> chain in front of any <see cref="IVideoOutput"/>. Wrap the
+/// REAL output with this and register the wrapper on the router; when the router pumps the branch
+/// (the default), <see cref="Submit"/> - and therefore the chain - runs on the pump's drain thread,
+/// never the clock path. Capability mixins forward to the inner output (same pattern as
+/// <see cref="VideoOutputPump"/>) so Pause/Stop/idle semantics are unchanged. The wrapper owns its
+/// effects; inner-output ownership follows the usual router registration flags.
+/// </summary>
+public sealed class VideoEffectBusOutput :
+    IVideoOutput, IVideoOutputQueueControl, IVideoOutputCooperativeAbort, IVideoOutputD3D11GlBorrowSetup, IDisposable
+{
+    private readonly IVideoOutput _inner;
+    private readonly bool _disposeInner;
+    private IVideoBusEffect[] _effects;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<IVideoBusEffect> _retired = new();
+    private VideoFormat _configuredFormat;
+    private bool _configured;
+    private bool _disposed;
+
+    public VideoEffectBusOutput(IVideoOutput inner, IReadOnlyList<IVideoBusEffect> effects, bool disposeInnerOnDispose = false)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        ArgumentNullException.ThrowIfNull(effects);
+        _effects = effects.ToArray();
+        _disposeInner = disposeInnerOnDispose;
+    }
+
+    public IVideoOutput InnerOutput => _inner;
+
+    /// <summary>The current chain snapshot (for UI listing).</summary>
+    public IReadOnlyList<IVideoBusEffect> Effects => Volatile.Read(ref _effects);
+
+    /// <summary>Replaces the chain atomically (new effects are configured first when the output already
+    /// runs). Removed effects enter a retire queue drained by the processing thread after the swap, so
+    /// a Process racing the swap can finish on the old array safely.</summary>
+    public void SetEffects(IReadOnlyList<IVideoBusEffect> effects)
+    {
+        ArgumentNullException.ThrowIfNull(effects);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var next = effects.ToArray();
+        if (_configured)
+        {
+            foreach (var effect in next)
+                effect.Configure(_configuredFormat);
+        }
+
+        var previous = Interlocked.Exchange(ref _effects, next);
+        // Retire on the processing (pump drain) thread's next Submit - never here, where a Process may
+        // still be running on the old array (review M5).
+        foreach (var old in previous)
+        {
+            if (!next.Contains(old))
+                _retired.Enqueue(old);
+        }
+    }
+
+    private void DrainRetired()
+    {
+        while (_retired.TryDequeue(out var old))
+            MediaDiagnostics.SwallowDisposeErrors(old.Dispose, "VideoEffectBusOutput: retired effect");
+    }
+
+    public VideoFormat Format => _inner.Format;
+
+    public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _inner.AcceptedPixelFormats;
+
+    public void Configure(VideoFormat format)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _inner.Configure(format);
+        _configuredFormat = format;
+        _configured = true;
+        foreach (var effect in Volatile.Read(ref _effects))
+            effect.Configure(format);
+    }
+
+    public void Submit(VideoFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (_disposed)
+        {
+            frame.Dispose();
+            return;
+        }
+
+        // The single processing (pump drain) thread: retired effects are out of use by now.
+        DrainRetired();
+        var effects = Volatile.Read(ref _effects);
+        var working = frame;
+        if (effects.Length > 0 && IsCpuBacked(frame))
+        {
+            try
+            {
+                // Router fan-out views may share their plane backing with sibling outputs. The effect
+                // contract explicitly permits in-place mutation, so establish branch-local ownership
+                // once before the chain (copy-on-write at the mutability boundary).
+                working = VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                frame.Dispose();
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning(
+                    $"VideoEffectBusOutput: could not isolate CPU frame; effects skipped to protect sibling outputs ({ex.Message})");
+                _inner.Submit(frame);
+                return;
+            }
+        }
+
+        foreach (var effect in effects)
+        {
+            try
+            {
+                working = effect.Process(working, working.PresentationTime);
+            }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning($"VideoEffectBusOutput: effect {effect.GetType().Name} failed - frame passed through unprocessed ({ex.Message})");
+            }
+        }
+
+        _inner.Submit(working);
+    }
+
+    private static bool IsCpuBacked(VideoFrame frame) => frame.HardwareBacking is null;
+
+    // --- capability forwarding (mirrors VideoOutputPump) ---------------------
+
+    public void AbandonQueuedFrames() => (_inner as IVideoOutputQueueControl)?.AbandonQueuedFrames();
+
+    public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        (_inner as IVideoOutputQueueControl)?.WaitForIdle(timeout, cancellationToken) ?? true;
+
+    public void RequestSubmitAbort() => (_inner as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
+
+    public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource) =>
+        (_inner as IVideoOutputD3D11GlBorrowSetup)?.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        DrainRetired();
+        var effects = Interlocked.Exchange(ref _effects, []);
+        foreach (var effect in effects)
+            MediaDiagnostics.SwallowDisposeErrors(effect.Dispose, "VideoEffectBusOutput.Dispose: effect");
+        if (_disposeInner && _inner is IDisposable d)
+            MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "VideoEffectBusOutput.Dispose: inner output");
+    }
+}

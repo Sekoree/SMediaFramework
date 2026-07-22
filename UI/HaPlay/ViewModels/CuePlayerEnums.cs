@@ -21,6 +21,8 @@ public enum CueNodeKind
     Media,
     Action,
     Comment,
+    Jump,
+    Visualizer,
 }
 
 public enum CueRowStatus

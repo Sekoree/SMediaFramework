@@ -50,10 +50,15 @@ public partial class App : Application
         {
             Trace.LogDebug("App lifetime: classic desktop");
             var mainVm = new MainViewModel();
-            desktop.MainWindow = new MainWindow
+            var mainWindow = new MainWindow
             {
                 DataContext = mainVm
             };
+            // Apply the saved client size before the native window is created. Restoring Width/Height
+            // only from Window.Opened can leave Linux window-manager decorations (including Close)
+            // at the initial X11/Wayland frame size until the user manually resizes the window.
+            mainWindow.PrepareInitialWindowState(mainVm.GetSavedWindowState());
+            desktop.MainWindow = mainWindow;
             // At shutdown, tear down the ShowSession cue re-back first, then dispose the media host so the
             // modules' native runtime holds are released deterministically (NXT-05 - sessions that borrow the
             // registry must go first; the host is the last thing out). Teardown belongs on Exit: doing it during

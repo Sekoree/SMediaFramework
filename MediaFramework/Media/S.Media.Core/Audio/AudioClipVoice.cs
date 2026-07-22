@@ -82,6 +82,12 @@ public sealed class AudioClipVoice : IAudioSource, IDisposable
         if (framesRequested == 0)
             return 0;
 
+        // Segmented processing (perf review: the old per-sample-frame loop re-fetched the clip
+        // span and re-checked exhaustion 48k times/s per voice). Each pass handles the largest
+        // contiguous run bounded by the request, the clip end, and - while a fade is active - the
+        // ramp: ramping frames stay scalar (gain changes per frame), settled frames take one
+        // vectorized gain-multiply over the whole run. Output is identical to the per-frame loop.
+        var src = _interleaved.Span;
         var writtenFrames = 0;
         while (writtenFrames < framesRequested && !IsExhausted)
         {
@@ -109,15 +115,42 @@ public sealed class AudioClipVoice : IAudioSource, IDisposable
                 break;
             }
 
-            var src = _interleaved.Span;
+            var frames = Math.Min(framesRequested - writtenFrames, _clip.SamplesPerChannel - _cursorFrames);
             var srcBase = _cursorFrames * _channels;
             var dstBase = writtenFrames * _channels;
-            for (var ch = 0; ch < _channels; ch++)
-                dst[dstBase + ch] = src[srcBase + ch] * _gain;
 
-            AdvanceGainRamp();
-            _cursorFrames++;
-            writtenFrames++;
+            if (_rampSamplesRemaining > 0)
+            {
+                frames = Math.Min(frames, _rampSamplesRemaining);
+                for (var f = 0; f < frames; f++)
+                {
+                    var sb = srcBase + f * _channels;
+                    var db = dstBase + f * _channels;
+                    for (var ch = 0; ch < _channels; ch++)
+                        dst[db + ch] = src[sb + ch] * _gain;
+                    AdvanceGainRamp();
+                }
+            }
+            else
+            {
+                var count = frames * _channels;
+                var srcSeg = src.Slice(srcBase, count);
+                var dstSeg = dst.Slice(dstBase, count);
+                var gain = _gain;
+                var i = 0;
+                if (System.Numerics.Vector.IsHardwareAccelerated && count >= System.Numerics.Vector<float>.Count)
+                {
+                    var gainVec = new System.Numerics.Vector<float>(gain);
+                    for (; i <= count - System.Numerics.Vector<float>.Count; i += System.Numerics.Vector<float>.Count)
+                        (new System.Numerics.Vector<float>(srcSeg.Slice(i)) * gainVec).CopyTo(dstSeg.Slice(i));
+                }
+
+                for (; i < count; i++)
+                    dstSeg[i] = srcSeg[i] * gain;
+            }
+
+            _cursorFrames += frames;
+            writtenFrames += frames;
         }
 
         if (_releasing && _gain <= 0f)

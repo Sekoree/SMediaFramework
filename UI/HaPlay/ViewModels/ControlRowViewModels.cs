@@ -23,6 +23,7 @@ public sealed class ControlMonitorEntryViewModel
 {
     public ControlMonitorEntryViewModel(ControlMonitorRecord record)
     {
+        Id = record.Id;
         Time = record.TimestampUtc.ToLocalTime().ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
         Direction = record.Direction.ToString();
         Protocol = record.Protocol.ToString();
@@ -30,6 +31,8 @@ public sealed class ControlMonitorEntryViewModel
         IsError = record.Direction == ControlMonitorDirection.Error || record.Result == ControlMonitorResult.Failed;
         Summary = BuildSummary(record);
     }
+
+    public Guid Id { get; }
 
     public string Time { get; }
 

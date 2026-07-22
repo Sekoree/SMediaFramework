@@ -22,6 +22,25 @@ public partial class OutputLineViewModel : ViewModelBase
 
     public OutputDefinition Definition { get; private set; }
 
+    /// <summary>The most recent pixel size reported by a live local-video window. Unlike the persisted
+    /// WindowWidth/WindowHeight this also represents fullscreen size without destroying the windowed
+    /// restore dimensions.</summary>
+    public int? LiveVideoWidth { get; private set; }
+
+    public int? LiveVideoHeight { get; private set; }
+
+    internal void ReportLiveVideoSize(int width, int height)
+    {
+        if (width <= 0 || height <= 0
+            || (LiveVideoWidth == width && LiveVideoHeight == height))
+            return;
+
+        LiveVideoWidth = width;
+        LiveVideoHeight = height;
+        OnPropertyChanged(nameof(LiveVideoWidth));
+        OnPropertyChanged(nameof(LiveVideoHeight));
+    }
+
     /// <summary>Phase A - swaps the definition in place after the runtime is reconfigured (§9.6).
     /// Notifies derived UI bindings (kind label / summary / VM-derived booleans) so the line refreshes.
     /// Only the management VM calls this; everything else treats <see cref="Definition"/> as read-only.</summary>
@@ -37,6 +56,12 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsNotLocalVideo));
         OnPropertyChanged(nameof(IsNDI));
         OnPropertyChanged(nameof(IsNotNDI));
+        OnPropertyChanged(nameof(IsFileRecord));
+        OnPropertyChanged(nameof(IsLiveStream));
+        OnPropertyChanged(nameof(IsArmableOutput));
+        OnPropertyChanged(nameof(RecordToggleLabel));
+        OnPropertyChanged(nameof(Effects));
+        OnPropertyChanged(nameof(HasEffects));
         OnPropertyChanged(nameof(IsClone));
         OnPropertyChanged(nameof(SupportsMediaPlayerRouting));
         OnPropertyChanged(nameof(IndentMargin));
@@ -77,6 +102,108 @@ public partial class OutputLineViewModel : ViewModelBase
     public bool IsNDI => Definition is NDIOutputDefinition;
 
     public bool IsNotNDI => Definition is not NDIOutputDefinition;
+
+    public bool IsFileRecord => Definition is FileOutputDefinition;
+
+    public bool IsLiveStream => Definition is LiveStreamOutputDefinition;
+
+    /// <summary>True for the armable encode kinds (file record / live stream) - shows the toggle button.</summary>
+    public bool IsArmableOutput => IsFileRecord || IsLiveStream;
+
+    /// <summary>True while the line's encode session is armed (recording a file / streaming live).
+    /// Set by <see cref="OutputManagementViewModel"/> after arm/disarm completes.</summary>
+    [ObservableProperty]
+    private bool _isRecordArmed;
+
+    /// <summary>The armed session's destination - the recording file path, or the LAN URLs while live.</summary>
+    [ObservableProperty]
+    private string? _recordFilePath;
+
+    // --- effect inserts (Phase 4/5): kind picker + per-line chain, applied on next acquire ---------
+
+    /// <summary>The line's persisted effect chain (audio + video inserts, in order).</summary>
+    public IReadOnlyList<OutputEffectDefinition> Effects => Definition.Effects;
+
+    public bool HasEffects => Definition.Effects.Count > 0;
+
+    /// <summary>Registry-enumerated kinds for the picker.</summary>
+    public IReadOnlyList<OutputEffectChoice> AvailableEffectChoices => OutputManagementViewModel.AvailableEffectChoices;
+
+    [ObservableProperty]
+    private OutputEffectChoice? _selectedEffectChoice;
+
+    /// <summary>dB value composed into the config blob when adding a "gain" insert.</summary>
+    [ObservableProperty]
+    private double _effectGainDbInput;
+
+    public bool SelectedEffectIsGain =>
+        SelectedEffectChoice is { Kind: "gain", Target: OutputEffectTarget.Audio };
+
+    partial void OnSelectedEffectChoiceChanged(OutputEffectChoice? value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(SelectedEffectIsGain));
+        AddEffectCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAddEffect))]
+    private async Task AddEffect()
+    {
+        if (_host is null || SelectedEffectChoice is not { } choice)
+            return;
+        var config = SelectedEffectIsGain && Math.Abs(EffectGainDbInput) > 0.001
+            ? $"{{\"gainDb\": {EffectGainDbInput.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}"
+            : null;
+        var next = Definition.Effects
+            .Append(new OutputEffectDefinition(choice.Kind, choice.Target, config))
+            .ToArray();
+        await _host.UpdateLineEffectsAsync(this, next);
+        NotifyEffectsChanged();
+    }
+
+    private bool CanAddEffect() => _host is not null && SelectedEffectChoice is not null;
+
+    [RelayCommand]
+    private async Task RemoveEffect(OutputEffectDefinition effect)
+    {
+        if (_host is null)
+            return;
+        var next = Definition.Effects.ToList();
+        var index = next.FindIndex(candidate => ReferenceEquals(candidate, effect));
+        if (index < 0)
+            index = next.FindIndex(candidate => candidate == effect);
+        if (index < 0)
+            return;
+        next.RemoveAt(index);
+        await _host.UpdateLineEffectsAsync(this, next);
+        NotifyEffectsChanged();
+    }
+
+    private void NotifyEffectsChanged()
+    {
+        OnPropertyChanged(nameof(Effects));
+        OnPropertyChanged(nameof(HasEffects));
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleRecord))]
+    private Task ToggleRecord() =>
+        _host?.SetFileRecordArmedAsync(this, !IsRecordArmed) ?? Task.CompletedTask;
+
+    private bool CanToggleRecord() => IsArmableOutput && _host is not null;
+
+    public string RecordToggleLabel => (IsLiveStream, IsRecordArmed) switch
+    {
+        (true, true) => Strings.StopStreamButton,
+        (true, false) => Strings.GoLiveButton,
+        (false, true) => Strings.RecordDisarmButton,
+        _ => Strings.RecordArmButton,
+    };
+
+    partial void OnIsRecordArmedChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(RecordToggleLabel));
+    }
 
     /// <summary>True when this line is a clone of another local-video line (§3.4).</summary>
     public bool IsClone =>
@@ -234,6 +361,8 @@ public partial class OutputLineViewModel : ViewModelBase
         ManagedOutputKind.NDI => Strings.OutputKindNDIProgramLabel,
         ManagedOutputKind.SDLOpenGlVideo => Strings.EngineStandaloneWindowLabel,
         ManagedOutputKind.AvaloniaOpenGlVideo => Strings.EngineInAppPreviewLabel,
+        ManagedOutputKind.FileRecord => Strings.OutputKindFileRecordLabel,
+        ManagedOutputKind.LiveStream => Strings.OutputKindLiveStreamLabel,
         _ => Definition.Kind.ToString(),
     };
 
@@ -243,11 +372,13 @@ public partial class OutputLineViewModel : ViewModelBase
         NDIOutputDefinition => Strings.OutputKindTechnicalNDI,
         LocalVideoOutputDefinition { Engine: VideoOutputEngine.SDLOpenGl } => Strings.OutputKindTechnicalSDLOpenGl,
         LocalVideoOutputDefinition => Strings.OutputKindTechnicalAvaloniaOpenGl,
+        FileOutputDefinition => Strings.OutputKindTechnicalFileRecord,
+        LiveStreamOutputDefinition => Strings.OutputKindTechnicalLiveStream,
         _ => Definition.Kind.ToString(),
     };
 
     public string Summary => Definition switch
-        {
+    {
         PortAudioOutputDefinition p =>
             Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.EffectiveAudioBackendName),
         LocalVideoOutputDefinition v =>
@@ -267,6 +398,21 @@ public partial class OutputLineViewModel : ViewModelBase
             _ =>
                 Strings.Format(nameof(Strings.OutputSummaryNDIVideoAudioFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
         },
+        FileOutputDefinition f =>
+            Strings.Format(
+                nameof(Strings.OutputSummaryFileRecordFormat),
+                f.EffectiveEncode.Container,
+                f.EffectiveEncode.VideoCodec,
+                f.EffectiveEncode.AudioLegs.Count > 0 ? f.EffectiveEncode.AudioLegs[0].Codec : "-",
+                f.RecordsContinuousProgram
+                    ? Strings.FileOutputRecordingContinuousShort
+                    : Strings.FileOutputRecordingContentOnlyShort,
+                f.DirectoryPath),
+        LiveStreamOutputDefinition s =>
+            Strings.Format(
+                nameof(Strings.OutputSummaryLiveStreamFormat),
+                s.PushTargets.Count,
+                s.EffectiveLocalServer.Enabled ? $":{s.EffectiveLocalServer.Port}" : "off"),
         _ => Definition.DisplayName,
     };
 

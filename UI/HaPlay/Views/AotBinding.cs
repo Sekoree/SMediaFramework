@@ -181,7 +181,14 @@ internal static class AotBinding
     {
         TSource? source = null;
 
-        void Update() => control.Text = source is null ? null : get(source);
+        void Update()
+        {
+            var value = source is null ? null : get(source);
+            control.Text = value;
+            // Tree columns intentionally ellipsize instead of forcing the whole grid wider. Mirror the full
+            // value into a tooltip so long jump targets, cue names and trigger descriptions remain inspectable.
+            ToolTip.SetTip(control, string.IsNullOrWhiteSpace(value) ? null : value);
+        }
 
         void OnSourceChanged(object? _, PropertyChangedEventArgs e)
         {

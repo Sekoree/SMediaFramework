@@ -151,6 +151,7 @@ public sealed class LayerHandle
         var resolved = LayerConfigResolver.ResolveAt(config, transitions, masterTime);
         Slot.Opacity = resolved.Opacity;
         Slot.BlendMode = resolved.Blend;
+        Slot.Effects = config.Effects;
         Slot.Transform = LayerConfigResolver.ResolveTransform(config, transitions, masterTime, src.Format, canvasFormat);
 
         VideoFrame pending;
@@ -195,6 +196,7 @@ public sealed class LayerHandle
         var resolved = LayerConfigResolver.ResolveAt(config, transitions, masterTime);
         Slot.Opacity = resolved.Opacity;
         Slot.BlendMode = resolved.Blend;
+        Slot.Effects = config.Effects;
         // Re-resolve transform against the displayed frame's source size so animated scale/position keep
         // moving while the underlying frame is held.
         Slot.Transform = LayerConfigResolver.ResolveTransform(config, transitions, masterTime, _displayedSrcFormat, canvasFormat);

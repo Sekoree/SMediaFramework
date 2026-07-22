@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using LibAssLib.Runtime;
 
 namespace LibAssLib;
 
@@ -12,7 +13,7 @@ namespace LibAssLib;
 /// </summary>
 public static unsafe partial class LibAssNative
 {
-    private const string Library = "ass";
+    private const string Library = LibAssLibraryResolver.ImportName;
 
     // --- ASS_Library -----------------------------------------------------------------------------
 

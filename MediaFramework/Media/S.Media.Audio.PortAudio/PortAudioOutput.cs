@@ -27,11 +27,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     private readonly int _maxOutputChannels;
     private readonly double _suggestedLatency;
     private readonly nuint _framesPerBuffer;
-    private readonly float[] _ringBuffer;
-    private readonly int _ringMask;
+    private readonly FrameAlignedFloatRing _ring;
 
-    private long _writeIndex;
-    private long _readIndex;
     private long _playedSamples;
     private long _droppedSamples;
     private long _underrunSamples;
@@ -82,8 +79,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// <summary>Total frames (samples per channel) PortAudio has already played from this output. Monotonic across Stop/Start.</summary>
     public long PlayedSamples => Volatile.Read(ref _playedSamples);
     /// <summary>Approximate samples-per-channel currently sitting in the ring buffer.</summary>
-    public int QueuedSamples => (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _format.Channels);
-    public int CapacitySamples => _ringBuffer.Length / _format.Channels;
+    public int QueuedSamples => _ring.BufferedFrames;
+    public int CapacitySamples => _ring.CapacityFrames;
     /// <summary>Samples dropped on Submit because the ring buffer was full.</summary>
     public long DroppedSamples => Volatile.Read(ref _droppedSamples);
     /// <summary>Samples zeroed by the callback because the ring was empty.</summary>
@@ -177,10 +174,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 QueuedSamples, TargetQueueSamples, Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples),
                 ElapsedSinceStart, StreamActive);
             Native.Pa_AbortStream(_stream);
-            // Reset ring positions so the queue starts empty; _playedSamples is preserved
+            // Reset the ring so the queue starts empty; _playedSamples is preserved
             // (lifetime stat) but _playbackEpochSamples re-anchors IPlaybackClock to zero.
-            Volatile.Write(ref _writeIndex, 0);
-            Volatile.Write(ref _readIndex, 0);
+            _ring.Clear();
             Interlocked.Exchange(ref _underrunSamples, 0);
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
             Volatile.Write(ref _streamSmoothCalibrated, 0);
@@ -214,12 +210,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         _format = format;
         _framesPerBuffer = (nuint)framesPerBuffer;
 
-        var capacityFloats = ringCapacityFrames * format.Channels;
-        var rounded = 1;
-        while (rounded < capacityFloats) rounded <<= 1;
-        _ringBuffer = new float[rounded];
-        _ringMask = rounded - 1;
-        TargetQueueSamples = rounded / 2 / format.Channels;
+        _ring = new FrameAlignedFloatRing(format.Channels, (long)ringCapacityFrames * format.Channels);
+        TargetQueueSamples = _ring.CapacityFrames / 2;
 
         PortAudioRuntime.Acquire();
         try
@@ -310,8 +302,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             Volatile.Write(ref _isRunning, true);
             Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f targetQueue={TargetFrames}f",
                 _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
-                _ringBuffer.Length / _format.Channels, TargetQueueSamples);
-            timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ringBuffer.Length / _format.Channels} target={TargetQueueSamples}");
+                _ring.CapacityFrames, TargetQueueSamples);
+            timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ring.CapacityFrames} target={TargetQueueSamples}");
         }
     }
 
@@ -343,8 +335,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 Volatile.Write(ref _isRunning, false);
                 Volatile.Write(ref _streamSmoothCalibrated, 0);
                 Volatile.Write(ref _streamStoppedAfterFlush, 0);
-                Volatile.Write(ref _writeIndex, 0);
-                Volatile.Write(ref _readIndex, 0);
+                _ring.Clear();
             }
             timing?.SetOutcome($"device={_deviceIndex} played={Volatile.Read(ref _playedSamples)} underrun={Volatile.Read(ref _underrunSamples)} dropped={Volatile.Read(ref _droppedSamples)}");
         }
@@ -368,20 +359,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 $"packedSamples.Length {packedSamples.Length} is not a multiple of channel count {_format.Channels}",
                 nameof(packedSamples));
 
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var freeFloats = _ringBuffer.Length - (int)(write - read);
-        var toWrite = Math.Min(packedSamples.Length, freeFloats);
-
-        if (toWrite > 0)
-        {
-            var startIdx = (int)(write & _ringMask);
-            var firstChunk = Math.Min(toWrite, _ringBuffer.Length - startIdx);
-            packedSamples[..firstChunk].CopyTo(_ringBuffer.AsSpan(startIdx));
-            if (firstChunk < toWrite)
-                packedSamples.Slice(firstChunk, toWrite - firstChunk).CopyTo(_ringBuffer.AsSpan(0));
-            Volatile.Write(ref _writeIndex, write + toWrite);
-        }
+        var toWrite = _ring.Write(packedSamples);
 
         var dropped = packedSamples.Length - toWrite;
         if (dropped > 0)
@@ -514,22 +492,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// out of the ring buffer (bypassing the audio callback path).
     /// Used to verify wraparound and ring-buffer accounting without a real device.
     /// </summary>
-    internal int TryDrainForTest(Span<float> dst)
-    {
-        var read = Volatile.Read(ref _readIndex);
-        var write = Volatile.Read(ref _writeIndex);
-        var available = (int)(write - read);
-        var toRead = Math.Min(dst.Length, available);
-        if (toRead == 0) return 0;
-
-        var startIdx = (int)(read & _ringMask);
-        var firstChunk = Math.Min(toRead, _ringBuffer.Length - startIdx);
-        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
-        if (firstChunk < toRead)
-            _ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
-        Volatile.Write(ref _readIndex, read + toRead);
-        return toRead;
-    }
+    internal int TryDrainForTest(Span<float> dst) => _ring.Read(dst);
 
     private void EnsureStreamRunningAfterFlush()
     {
@@ -580,19 +543,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             var totalFloats = (int)frames * self._format.Channels;
             var output = new Span<float>((float*)outputBuffer, totalFloats);
 
-            var read = Volatile.Read(ref self._readIndex);
-            var write = Volatile.Read(ref self._writeIndex);
-            var available = (int)(write - read);
-            var toRead = Math.Min(totalFloats, available);
+            var toRead = self._ring.Read(output);
 
             if (toRead > 0)
             {
-                var startIdx = (int)(read & self._ringMask);
-                var firstChunk = Math.Min(toRead, self._ringBuffer.Length - startIdx);
-                self._ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(output);
-                if (firstChunk < toRead)
-                    self._ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(output[firstChunk..]);
-                Volatile.Write(ref self._readIndex, read + toRead);
                 // _playedSamples is the lifetime per-channel frame counter
                 // (preserved across Stop/Start) - separate from the ring read
                 // pointer, which may reset on Stop or Flush.

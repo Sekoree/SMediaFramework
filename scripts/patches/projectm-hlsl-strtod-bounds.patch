@@ -1,0 +1,47 @@
+Bound the HLSL number tokenizer's iss_strtod() to the numeric literal instead of strlen()-ing the
+entire remaining shader buffer. The tokenizer is length-bounded (m_bufferEnd) and its buffer is not
+guaranteed NUL-terminated at the scan point, so the unbounded copy over-read past the end into an
+unmapped page - an intermittent SIGSEGV in HLSLTokenizer::ScanNumber while loading otherwise-valid
+Milkdrop presets (heap-layout dependent). Applied by scripts/build-projectm.sh.
+
+--- a/vendor/hlslparser/src/Engine.cpp
++++ b/vendor/hlslparser/src/Engine.cpp
+@@ -66,8 +66,28 @@
+ 
+ static inline double iss_strtod(const char * in, char ** end) {
+     char * in_var = const_cast<char *>(in);
++    // Bound the parse to the numeric literal. std::istringstream(in) copies the ENTIRE remaining
++    // buffer via strlen(in) just to read one number; the tokenizer buffer is bounded by length and is
++    // not guaranteed NUL-terminated at the scan point, so that over-reads past the end into an unmapped
++    // page - an intermittent, heap-layout-dependent SIGSEGV while loading otherwise-valid Milkdrop
++    // presets (HLSLTokenizer::ScanNumber). Copy only the leading float-literal characters (a real
++    // literal is always followed by a separator within a few bytes) into a small NUL-terminated
++    // scratch buffer, then parse that. Applied by scripts/build-projectm.sh.
++    char scratch[64];
++    size_t n = 0;
++    while (n + 1 < sizeof(scratch)) {
++        char c = in[n];
++        if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
++            scratch[n] = c;
++            ++n;
++        } else {
++            break;
++        }
++    }
++    scratch[n] = '\0';
++
+     double df;
+-    std::istringstream iss(in);
++    std::istringstream iss(scratch);
+     iss.imbue(std::locale("C"));
+     iss >> df;
+     if(iss.fail()) {
+@@ -75,7 +95,7 @@
+         return 0.0;
+     }
+     if(iss.eof()) {
+-        *end = in_var + strlen(in);
++        *end = in_var + n;
+         return df;
+     }
+ 

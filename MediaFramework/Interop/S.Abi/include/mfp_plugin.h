@@ -125,7 +125,9 @@ typedef enum MfpCapability {
     MFP_CAP_VIDEO_OUTPUT    = 1u << 3,
     MFP_CAP_LAYER_SURFACE   = 1u << 4,
     MFP_CAP_SUBTITLE        = 1u << 5,
-    MFP_CAP_CONTROL_DECODER = 1u << 6
+    MFP_CAP_CONTROL_DECODER = 1u << 6,
+    MFP_CAP_AUDIO_EFFECT    = 1u << 7,   /* an insertable audio bus effect (per-kind factory) */
+    MFP_CAP_VIDEO_EFFECT    = 1u << 8    /* an insertable video bus effect (per-kind factory) */
 } MfpCapability;
 
 /* ------------------------------------------------------------------ formats ------------------- */
@@ -434,6 +436,53 @@ typedef struct MfpControlDecoderVTable {
     void (*destroy)(void* self);
 } MfpControlDecoderVTable;
 
+/* Audio bus effect ↔ IAudioBusEffect - one in-place processing stage hosted by an output insert or
+ * send/return bus. REAL-TIME CONTRACT: `process` runs on the audio pull/pump path - bounded work per
+ * chunk, no allocation, no locking, no host reentry (the general RT rules above apply). The host never
+ * invokes two methods of the same instance concurrently. */
+typedef struct MfpAudioEffectVTable {
+    MFP_STRUCT_HEADER;
+    /* Called once before the first process and again when the host reconfigures. Sample format is
+     * always f32 interleaved (MfpAudioFormat.sample_format = 0). */
+    int  (*configure)(void* effect, const MfpAudioFormat* format);
+    /* Process `count` interleaved floats IN PLACE. `frame_position` is the running per-channel sample
+     * count since the insert started (for LFOs/automation). */
+    int  (*process)(void* effect, float* interleaved, int32_t count, int64_t frame_position);
+    void (*destroy)(void* effect);
+} MfpAudioEffectVTable;
+
+/* Audio-effect FACTORY, registered per `kind` (e.g. "acme.compressor") - the same shape as the layer-
+ * surface factory: `create` builds one effect instance from the host's opaque per-insert JSON config
+ * (may be NULL), instances use the shared `effect_vtable`. Slow setup belongs in create/configure,
+ * never in process. → instance or NULL (set_last_error first). */
+typedef struct MfpAudioEffectFactoryVTable {
+    MFP_STRUCT_HEADER;
+    void* (*create)(void* self, const char* config_json);
+    const MfpAudioEffectVTable* effect_vtable;               /* vtable for instances `create` returns */
+    void  (*destroy)(void* self);                            /* destroy the factory itself */
+} MfpAudioEffectFactoryVTable;
+
+/* Video bus effect ↔ IVideoBusEffect - one processing stage on an output's pump drain thread (off the
+ * clock path). V1 CONTRACT: CPU frames only, mutated IN PLACE - the host passes an MfpVideoFrame whose
+ * CPU planes are writable for the duration of the call; the plugin must not retain the pointers.
+ * Hardware-backed frames (dmabuf/D3D11/GL) bypass plugin effects unchanged in v1. The host never
+ * invokes two methods of the same instance concurrently. */
+typedef struct MfpVideoEffectVTable {
+    MFP_STRUCT_HEADER;
+    int  (*configure)(void* effect, const MfpVideoFormat* format);
+    /* Mutate the frame's CPU planes in place. `pts_ticks` is the presentation time in 100-ns ticks. */
+    int  (*process)(void* effect, const MfpVideoFrame* frame, int64_t pts_ticks);
+    void (*destroy)(void* effect);
+} MfpVideoEffectVTable;
+
+/* Video-effect FACTORY, registered per `kind` - identical shape to the audio-effect factory. */
+typedef struct MfpVideoEffectFactoryVTable {
+    MFP_STRUCT_HEADER;
+    void* (*create)(void* self, const char* config_json);
+    const MfpVideoEffectVTable* effect_vtable;
+    void  (*destroy)(void* self);
+} MfpVideoEffectFactoryVTable;
+
 /* ============================================================== registration + entry point ===== */
 
 /* The host hands this in; the plugin registers each capability through it. `ctx` is opaque host state
@@ -448,6 +497,8 @@ typedef struct MfpRegistrar {
     int (*add_layer_surface)(void* ctx, const char* kind, const MfpLayerSurfaceFactoryVTable* vt, void* self);
     int (*add_subtitle_provider)(void* ctx, const char* ext, const MfpSubtitleProviderVTable* vt, void* self);
     int (*add_control_decoder)(void* ctx, const char* id, const MfpControlDecoderVTable* vt, void* self);
+    int (*add_audio_effect)(void* ctx, const char* kind, const MfpAudioEffectFactoryVTable* vt, void* self);
+    int (*add_video_effect)(void* ctx, const char* kind, const MfpVideoEffectFactoryVTable* vt, void* self);
     /* … append-only … */
 } MfpRegistrar;
 

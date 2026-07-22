@@ -12,13 +12,40 @@ sealed class Program
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
+    // Resolved log destination (set by ConfigureLogging), reused by the UI-hang watchdog for its dumps.
+    private static string _logDirectory = Path.Combine(Directory.GetCurrentDirectory(), "logs");
+    private static bool _safeSoftwareUi;
+
     [STAThread]
     public static void Main(string[] args)
     {
         try
         {
+            _safeSoftwareUi = HasArg(args, "--safe-ui")
+                              || IsTruthy(Environment.GetEnvironmentVariable("HAPLAY_SAFE_UI"));
+            // Playback switches are parsed OUTSIDE logging configuration so `--media-log off` cannot
+            // short-circuit them, and BEFORE MainViewModel exists so the CLI override wins over the
+            // persisted preference (review P2-8). The success log follows once logging is configured.
+            var uyvyPassthroughApplied = PlaybackVideoPipeline.ApplyCliStartupOptions(args);
             ConfigureLogging(args);
-            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+            if (uyvyPassthroughApplied)
+                MediaDiagnostics.LogInformation(
+                    "HaPlay: live video using native pixel format (UYVY passthrough when source delivers UYVY)");
+
+            var app = BuildAvaloniaApp();
+
+            // UI-hang watchdog: skip under the CI smoke gate (the app self-exits after one frame, which
+            // would read as a stall). AfterSetup runs on the UI thread with the dispatcher ready, so the
+            // heartbeat timer binds correctly. Chained here (not inside BuildAvaloniaApp) so the visual
+            // designer, which also calls BuildAvaloniaApp, never arms it.
+            var smoke = Environment.GetEnvironmentVariable("HAPLAY_SMOKE");
+            if (string.IsNullOrEmpty(smoke))
+            {
+                var threshold = UiHangWatchdog.ResolveThreshold(GetArg(args, "--ui-hang-timeout"));
+                app = app.AfterSetup(_ => UiHangWatchdog.Install(_logDirectory, threshold));
+            }
+
+            app.StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
         {
@@ -31,6 +58,23 @@ sealed class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            // OverlayPopups: render tooltips/menus INSIDE the window instead of as separate native X11
+            // popup windows. Two captured UI-hang dumps show the freeze surface exactly there: closing a
+            // tooltip's popup disposes a dedicated GLX render target, and that dispose synchronously waits
+            // on a glXSwapBuffers-stalled render thread (2026-07-12 review, incident
+            // remediation 1). Overlay popups never create that native render target, removing the wait.
+            // HAPLAY_OVERLAY_POPUPS=0 opts back into native popups (A/B for chrome/layout side effects -
+            // e.g. a caption-button glitch - at the cost of re-exposing the tooltip-close freeze).
+            .With(new X11PlatformOptions
+            {
+                OverlayPopups = Environment.GetEnvironmentVariable("HAPLAY_OVERLAY_POPUPS") != "0",
+                // Show-safe Linux mode: keep Avalonia out of the GLX driver failure domain. projectM/
+                // output GL can continue on their dedicated threads while window close/measure/paint uses
+                // the software renderer and cannot synchronously wait on a wedged GL swap.
+                RenderingMode = _safeSoftwareUi
+                    ? [X11RenderingMode.Software]
+                    : [X11RenderingMode.Glx, X11RenderingMode.Software],
+            })
             .WithInterFont()
             .LogToTrace();
 
@@ -59,6 +103,7 @@ sealed class Program
         {
             var crashDir = GetArg(args, "--media-log-dir")
                            ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
+            _logDirectory = crashDir;
             DesktopCrashDiagnostics.Install(crashDir, rollingLogFilePath: null, args);
             Console.WriteLine("HaPlay.Desktop logging disabled via --media-log off");
             return;
@@ -67,6 +112,7 @@ sealed class Program
         var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Trace);
         var dir = GetArg(args, "--media-log-dir")
                   ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
+        _logDirectory = dir;
         // Operational defaults match RollingFileLoggerOptions: enough burst headroom without retaining tens of
         // megabytes of formatted strings when a native backend floods logs (LOG-01).
         var queueCapacity = GetIntArg(args, "--media-log-queue", fallback: 2_048, min: 64);
@@ -96,20 +142,14 @@ sealed class Program
         MediaDiagnostics.LoggerFactory = factory;
         DesktopCrashDiagnostics.Install(dir, fileProvider.FilePath, args);
 
-        if (HasArg(args, "--media-live-uyvy-passthrough"))
-        {
-            //PlaybackVideoPipeline.CliRequestedUyvyPassthrough = true;
-            //PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = true;
-            MediaDiagnostics.LogInformation("HaPlay: live video using native pixel format (UYVY passthrough when source delivers UYVY)");
-        }
-
         MediaDiagnostics.LogInformation(
-            "HaPlay.Desktop logging configured: minLevel={Level} fileSink={FilePath} crashSink={CrashPath} queueCapacity={QueueCapacity} retainCount={RetainCount}",
+            "HaPlay.Desktop logging configured: minLevel={Level} fileSink={FilePath} crashSink={CrashPath} queueCapacity={QueueCapacity} retainCount={RetainCount} safeSoftwareUi={SafeSoftwareUi}",
             level,
             fileProvider.FilePath,
             DesktopCrashDiagnostics.CrashFilePath ?? "<none>",
             queueCapacity,
-            retainCount);
+            retainCount,
+            _safeSoftwareUi);
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
@@ -127,6 +167,12 @@ sealed class Program
 
         return false;
     }
+
+    private static bool IsTruthy(string? value) =>
+        value is not null && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                              || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                              || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                              || value.Equals("on", StringComparison.OrdinalIgnoreCase));
 
     private static string? GetArg(string[] args, string name)
     {

@@ -44,12 +44,6 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
     void ReleaseFromPlayback();
 
     /// <summary>
-    /// Optional preview-window size override while a hold image is engaged.
-    /// Current policy keeps windowed preview dimensions stable, so runtimes may ignore this call.
-    /// </summary>
-    void ApplyHoldImageWindowSize(int? width, int? height);
-
-    /// <summary>
     /// Phase A (§9.6) - applies a new <see cref="LocalVideoOutputDefinition"/> in place. Window size,
     /// screen index, and surface mode are honoured live. <see cref="LocalVideoOutputDefinition.Engine"/>
     /// must not change (engine switches go through Remove + Add at the management layer).
@@ -62,14 +56,9 @@ internal static class PreviewVideoFrames
     public static VideoFrame CreateBlackBgra(VideoFormat format, TimeSpan presentationTime = default)
     {
         var stride = format.Width * 4;
-        var bytes = new byte[stride * format.Height];
-        for (var i = 0; i < bytes.Length; i += 4)
-        {
-            bytes[i] = 0;
-            bytes[i + 1] = 0;
-            bytes[i + 2] = 0;
-            bytes[i + 3] = 255;
-        }
+        var bytes = new byte[stride * format.Height]; // BGR already zero - only alpha needs setting
+        for (var i = 3; i < bytes.Length; i += 4)
+            bytes[i] = 255;
 
         return new VideoFrame(presentationTime, format, bytes, stride);
     }
@@ -204,13 +193,6 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 fullscreen,
                 fullscreen ? null : _definition.WindowWidth ?? 1280,
                 fullscreen ? null : _definition.WindowHeight ?? 720);
-    }
-
-    public void ApplyHoldImageWindowSize(int? width, int? height)
-    {
-        // Keep windowed local outputs stable while source/hold image sizes change.
-        _ = width;
-        _ = height;
     }
 
     public void Dispose()
@@ -378,8 +360,9 @@ internal sealed class SDLLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     private void OnSDLResized(object? sender, (int Width, int Height) size)
     {
-        if (!TryRecordWindowedResize(size.Width, size.Height))
+        if (size.Width < 320 || size.Height < 240)
             return;
+        TryRecordWindowedResize(size.Width, size.Height);
         Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewResized(_line, size.Width, size.Height),
             DispatcherPriority.Background);
     }
@@ -460,14 +443,6 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             if (_window is null)
                 return;
             LocalVideoWindowPlacement.Apply(_window, _definition, _screenReference, fullscreen);
-        }, DispatcherPriority.Normal);
-
-    public void ApplyHoldImageWindowSize(int? width, int? height) =>
-        Dispatcher.UIThread.Post(() =>
-        {
-            // Keep windowed local outputs stable while source/hold image sizes change.
-            _ = width;
-            _ = height;
         }, DispatcherPriority.Normal);
 
     public void Dispose()
@@ -587,8 +562,9 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
     {
         var width = (int)Math.Round(e.NewSize.Width);
         var height = (int)Math.Round(e.NewSize.Height);
-        if (!TryRecordWindowedResize(width, height))
+        if (width < 320 || height < 240)
             return;
+        TryRecordWindowedResize(width, height);
         _owner.NotifyLocalPreviewResized(_line, width, height);
     }
 

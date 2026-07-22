@@ -47,8 +47,11 @@ public sealed class OSCClientReceiveTests
         using var peer = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         var peerPort = ((IPEndPoint)peer.Client.LocalEndPoint!).Port;
 
-        var localPort = GetFreeUdpPort();
-        await using var client = new OSCClient(new IPEndPoint(IPAddress.Loopback, peerPort), localPort: localPort);
+        // No free-port probe/handoff: releasing a probe socket and re-binding its number is a
+        // time-of-check/time-of-use race under a loaded full-suite run (review P2-1). Instead let the
+        // component itself claim a port, retrying a few times if another process wins a candidate.
+        var (client, localPort) = await BindClientWithFixedLocalPortAsync(peerPort);
+        await using var _ = client;
         client.RegisterHandler("//", (_, _) => ValueTask.CompletedTask); // start the receive loop
 
         await client.SendMessageAsync("/probe");
@@ -57,9 +60,28 @@ public sealed class OSCClientReceiveTests
         Assert.Equal(localPort, query.RemoteEndPoint.Port);
     }
 
-    private static int GetFreeUdpPort()
+    private static async Task<(OSCClient Client, int LocalPort)> BindClientWithFixedLocalPortAsync(int peerPort)
     {
-        using var probe = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        return ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
+        SocketException? last = null;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            // Pick a candidate the OS considers free RIGHT NOW; the retry loop covers the gap
+            // between releasing this probe and OSCClient binding the same number.
+            int candidate;
+            using (var probe = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+                candidate = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
+
+            try
+            {
+                return (new OSCClient(new IPEndPoint(IPAddress.Loopback, peerPort), localPort: candidate), candidate);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                last = ex;
+                await Task.Delay(10);
+            }
+        }
+
+        throw new InvalidOperationException("could not bind any candidate local port after 10 attempts", last);
     }
 }
