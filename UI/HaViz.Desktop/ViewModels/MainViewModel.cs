@@ -87,6 +87,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 };
                 _player.PlaybackEnded += OnTrackEnded;
                 _player.PlaybackError += OnPlaybackError;
+                // The property default (off) never fires the changed hook - sync it explicitly.
+                _player.SetLocalOutputEnabled(PlayOnDevice);
             }
             else
             {
@@ -135,6 +137,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _playlistSummary = "no folder selected";
     [ObservableProperty] private string _playerStatus = "";
     [ObservableProperty] private OutputDeviceChoice? _selectedOutputDevice;
+    [ObservableProperty] private bool _playOnDevice; // default off: the box only feeds NDI (Android parity)
 
     // --- line-in capture ---
     [ObservableProperty] private bool _isCapturing;
@@ -371,6 +374,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedOutputDeviceChanged(OutputDeviceChoice? value) =>
         _player?.SetOutputDevice(value?.Id); // applies from the next track
+
+    partial void OnPlayOnDeviceChanged(bool value) => _player?.SetLocalOutputEnabled(value);
 
     // --- line-in capture ---
     private void RefreshInputDevices()

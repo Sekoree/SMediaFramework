@@ -67,6 +67,8 @@
                 <ComboBox Width="280" ItemsSource="{Binding OutputDevices}"
                           SelectedItem="{Binding SelectedOutputDevice}"
                           ToolTip.Tip="Applies from the next track" />
+                <CheckBox Content="Play on device" IsChecked="{Binding PlayOnDevice}"
+                          ToolTip.Tip="Off: audio goes only to the visualizer and NDI out — the local device stays silent" />
             </StackPanel>
             <TextBlock Text="{Binding PlayerStatus}" TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
 

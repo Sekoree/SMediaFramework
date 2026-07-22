@@ -35,11 +35,17 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend bac
     // without a grace window Poll() would declare the track over before it started.
     private const long StartGraceMs = 2000;
 
+    // The audible output OpenAudio attaches; also the playback clock, so "local output off" must
+    // MUTE its route (click-free gain ramp), never detach it - without a clocked output decode
+    // pacing dies and the viz/NDI tap starves too.
+    private const string MasterOutputId = "_master";
+
     private MediaPlayer? _player;
     private bool _paused;
     private bool _endedRaised;
     private long _startedAtMs;
     private string? _deviceId;
+    private bool _localOutputEnabled = true;
 
     public event Action<TrackInfo>? TrackStarted;
     public event Action? PlaybackEnded;
@@ -65,6 +71,29 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend bac
     /// its already-opened hardware stream).</summary>
     public void SetOutputDevice(string? deviceId) => _deviceId = deviceId;
 
+    /// <summary>False = decode keeps running and the viz/NDI tap keeps full-level audio, but the
+    /// local device plays silence (the box only feeds NDI - the Android head's PlayOnDevice).
+    /// Applies immediately to the current track and to every following one.</summary>
+    public void SetLocalOutputEnabled(bool enabled)
+    {
+        _localOutputEnabled = enabled;
+        ApplyLocalOutputGain();
+    }
+
+    private void ApplyLocalOutputGain()
+    {
+        if (_player is not { AudioRouter: { } router, AudioSourceId: { } sourceId })
+            return;
+        try
+        {
+            router.SetRouteGain(sourceId, MasterOutputId, _localOutputEnabled ? 1f : 0f);
+        }
+        catch (InvalidOperationException)
+        {
+            // No audible route on this track - nothing to mute.
+        }
+    }
+
     public void Play(TrackInfo track)
     {
         Stop();
@@ -74,8 +103,9 @@ public sealed class DesktopMiniPlayer(IMediaRegistry registry, IAudioBackend bac
             player = MediaPlayer.OpenAudio(registry, backend, track.Uri, _deviceId);
             var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
             player.AttachAudioOutput(new VizTapAudioOutput(new AudioFormat(rate, 2), sink), "viz-tap");
-            player.Play();
             _player = player;
+            ApplyLocalOutputGain(); // before Play() so a muted box never blips the first chunk
+            player.Play();
             _paused = false;
             _endedRaised = false;
             _startedAtMs = Environment.TickCount64;
