@@ -54,8 +54,13 @@
         <!-- NDI native runtime from the vendored Android SDK (arm64 only per target device).
              Conditional so the app still builds on machines without the vendored SDK - NDI send
              then fails at engine start instead of at packaging time. -->
+        <!-- The vendored NDI SDK is deliberately NOT tracked in git (NDI license: the runtime ships
+             inside application packages, not in source repos), so CI/dev checkouts without
+             Reference/ must still build - the Exists() guard makes packaging skip it and NDI then
+             fails loudly at engine start. Local/release builds with the SDK present package it. -->
         <AndroidNativeLibrary Include="../../Reference/NDI SDK for Android/lib/arm64-v8a/libndi.so"
-                              Abi="arm64-v8a" />
+                              Abi="arm64-v8a"
+                              Condition="Exists('../../Reference/NDI SDK for Android/lib/arm64-v8a/libndi.so')" />
         <!-- projectM GLES build (produced by scripts/build-projectm.sh android-arm64). Conditional so
              the app still builds before the native build ran - the visualizer then reports unavailable. -->
         <AndroidNativeLibrary Include="../../External/projectm/android-arm64/lib/libprojectM-4.so"

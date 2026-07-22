@@ -33,6 +33,25 @@ jobs:
         with:
           global-json-file: global.json
 
+      # HaViz.Android (net10.0-android) is in the solution, so `dotnet build MFPlayer.sln` needs the
+      # android workload (NETSDK1147 otherwise). The windows-2025/VS2026 image happens to ship it, but
+      # install explicitly on both legs so the build doesn't depend on image contents. Runners preinstall
+      # ANDROID_HOME + JDK. The vendored NDI SDK (Reference/) is deliberately untracked (NDI license), so
+      # APK packaging skips libndi.so in CI via the Exists() guard in HaViz.Android.csproj.
+      - name: Install Android workload
+        run: dotnet workload install android --skip-manifest-update
+
+      # The runner image preinstalls ANDROID_HOME but its platform/build-tools set drifts; let the
+      # android SDK resolve + install exactly what HaViz.Android targets (API 36). Windows skips this:
+      # the VS2026 image ships a matching Android SDK (proven by CI reaching the packaging stage).
+      - name: Install Android SDK components (Linux)
+        if: runner.os == 'Linux'
+        run: >
+          dotnet build UI/HaViz.Android/HaViz.Android.csproj -f net10.0-android -c Release
+          -t:InstallAndroidDependencies
+          "-p:AndroidSdkDirectory=$ANDROID_HOME"
+          -p:AcceptAndroidSDKLicenses=true
+
       # NativeAOT links with the platform toolchain. Windows runners ship MSVC; Linux needs clang + zlib.
       - name: Install Linux AOT prerequisites
         if: runner.os == 'Linux'
@@ -732,4 +751,124 @@ jobs:
           name: HaPlay.Desktop-${{ matrix.rid }}-debug-symbols
           path: debug-symbols
           if-no-files-found: warn
+          retention-days: 14
+
+  # ─── HaViz artifacts ─────────────────────────────────────────────────────────────────────────
+  # The visualizer→NDI box app. Desktop is a self-contained publish; on Linux the pinned projectM
+  # is built from source first so the csproj stages libprojectM + presets + textures into the
+  # publish (same recipe as the HaPlay full tier). Windows has no projectM build recipe yet, so the
+  # win artifact runs but reports "visualizer unavailable" unless the host provides projectM.
+  # The NDI runtime is proprietary and staged best-effort on both OSes — without it the app starts
+  # and fails loudly at engine start, same policy as HaPlay.
+  haviz-desktop:
+    name: haviz-${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: linux-x64, os: ubuntu-latest,  rid: linux-x64 }
+          - { label: win-x64,   os: windows-latest, rid: win-x64 }
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # External/projectm is git-ignored (build output), so CI must produce it before publish for
+      # the csproj's preset/texture/libprojectM bundling globs to match anything.
+      - name: Build projectM 4.1.6 from source (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libgl1-mesa-dev
+          scripts/build-projectm.sh
+          test -d External/projectm/linux-x64/presets
+
+      - name: Publish HaViz.Desktop
+        shell: bash
+        run: dotnet publish UI/HaViz.Desktop -c Release -r ${{ matrix.rid }} --self-contained -o haviz-publish
+
+      # NDI v6 runtime via the DistroAV helper (accepts the NDI license non-interactively).
+      # Best-effort: a flaky fetch degrades to "NDI absent" instead of failing the artifact.
+      - name: Stage NDI runtime (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          RETRY="--retry 3 --retry-delay 5"
+          curl -fsSL $RETRY https://raw.githubusercontent.com/DistroAV/DistroAV/master/CI/libndi-get.sh -o libndi-get.sh
+          chmod +x libndi-get.sh
+          sudo ./libndi-get.sh install || echo "WARN: DistroAV NDI install failed (optional native — continuing)"
+          p="$(find /usr /usr/local -name 'libndi.so.6' 2>/dev/null | head -1)"
+          if [ -n "$p" ]; then cp -vL "$p" haviz-publish/; else echo "WARN: libndi.so.6 not found"; fi
+
+      - name: Stage NDI runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          curl.exe -fsSL https://ndi.link/NDIRedistV6 -o ndi.exe
+          if ($LASTEXITCODE -ne 0) { Write-Host 'WARN: NDI redist download failed (optional native — continuing)'; exit 0 }
+          Start-Process -FilePath .\ndi.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $dll = Get-ChildItem 'C:\Program Files\NDI' -Recurse -Filter 'Processing.NDI.Lib.x64.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName haviz-publish\ -Verbose } else { Write-Host 'WARN: NDI DLL not found' }
+
+      - name: Upload HaViz.Desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaViz.Desktop-${{ matrix.rid }}
+          path: haviz-publish
+          if-no-files-found: error
+          retention-days: 14
+
+  # The vendored NDI SDK (Reference/NDI SDK for Android) is deliberately untracked (NDI license:
+  # the runtime ships inside application packages, not source repos), so CI-built APKs package
+  # WITHOUT libndi.so — the app installs and runs but NDI fails loudly at engine start. For an
+  # NDI-capable APK, build from a checkout that has Reference/ (the csproj packages it when present).
+  haviz-android:
+    name: haviz-android
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Android workload
+        run: dotnet workload install android --skip-manifest-update
+
+      - name: Install Android SDK components
+        run: >
+          dotnet build UI/HaViz.Android/HaViz.Android.csproj -f net10.0-android -c Release
+          -t:InstallAndroidDependencies
+          "-p:AndroidSdkDirectory=$ANDROID_HOME"
+          -p:AcceptAndroidSDKLicenses=true
+
+      - name: Publish HaViz.Android (APK)
+        run: dotnet publish UI/HaViz.Android/HaViz.Android.csproj -f net10.0-android -c Release
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p haviz-apk
+          find UI/HaViz.Android/bin/Release -name '*-Signed.apk' -exec cp -v {} haviz-apk/ \;
+          ls -la haviz-apk
+          echo "NOTE: this APK has NO libndi.so (untracked vendored SDK) — NDI fails at engine start." > haviz-apk/README-NDI.txt
+
+      - name: Upload HaViz.Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaViz.Android-apk
+          path: haviz-apk
+          if-no-files-found: error
           retention-days: 14
