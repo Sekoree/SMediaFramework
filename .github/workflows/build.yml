@@ -26,6 +26,12 @@ jobs:
     env:
       DOTNET_NOLOGO: true
       DOTNET_CLI_TELEMETRY_OPTOUT: true
+      # NDIVisualizer's first-build convenience target compiles libprojectM from source when
+      # External/projectm is absent (always, on CI) — a multi-minute C++ build needing GL/GLM dev
+      # headers this job doesn't install. Nothing in build-test consumes projectM natives (the
+      # GL-dependent visualizer paths are exercised via the artifacts job, which builds projectM
+      # explicitly), so skip the auto-build here. MSBuild picks the property up from the env.
+      SkipProjectMNativeBuild: true
     steps:
       - uses: actions/checkout@v4
 
@@ -787,7 +793,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libgl1-mesa-dev
+          # libgl1-mesa-dev + libglm-dev: the exact set the artifacts job's projectM build uses.
+          sudo apt-get install -y cmake build-essential libgl1-mesa-dev libglm-dev
           scripts/build-projectm.sh
           test -d External/projectm/linux-x64/presets
 

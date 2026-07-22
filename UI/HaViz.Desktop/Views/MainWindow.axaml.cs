@@ -21,4 +21,17 @@ public partial class MainWindow : Window
         if (picked.Count > 0 && picked[0].TryGetLocalPath() is { } path)
             vm.PresetDirectory = path;
     }
+
+    private async void OnBrowseMusic(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+            return;
+        var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose a music folder (scanned recursively)",
+            AllowMultiple = false,
+        });
+        if (picked.Count > 0 && picked[0].TryGetLocalPath() is { } path)
+            vm.LoadMusicFolder(path);
+    }
 }
