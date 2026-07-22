@@ -15,10 +15,10 @@
   </PropertyGroup>
 
   <PropertyGroup Label="Native Binding Versions">
-    <MFPlayerPMLibNativeVersion>2.0.7</MFPlayerPMLibNativeVersion>
+    <MFPlayerPMLibNativeVersion>2.0.8</MFPlayerPMLibNativeVersion>
     <MFPlayerPALibNativeVersion>19.7.0</MFPlayerPALibNativeVersion>
     <MFPlayerMALibNativeVersion>0.11.25</MFPlayerMALibNativeVersion>
-    <MFPlayerNDILibNativeVersion>6.3.2.0</MFPlayerNDILibNativeVersion>
+    <MFPlayerNDILibNativeVersion>6.3.2</MFPlayerNDILibNativeVersion>
     <MFPlayerLibAssLibNativeVersion>0.17.5</MFPlayerLibAssLibNativeVersion>
   </PropertyGroup>
 
