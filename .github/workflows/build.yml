@@ -760,12 +760,13 @@ jobs:
           retention-days: 14
 
   # ─── HaViz artifacts ─────────────────────────────────────────────────────────────────────────
-  # The visualizer→NDI box app. Desktop is a self-contained publish; on Linux the pinned projectM
-  # is built from source first so the csproj stages libprojectM + presets + textures into the
-  # publish (same recipe as the HaPlay full tier). Windows has no projectM build recipe yet, so the
-  # win artifact runs but reports "visualizer unavailable" unless the host provides projectM.
-  # The NDI runtime is proprietary and staged best-effort on both OSes — without it the app starts
-  # and fails loudly at engine start, same policy as HaPlay.
+  # The visualizer→NDI box app. Desktop is a NativeAOT publish (PublishAot in the csproj, same
+  # policy as HaPlay.Desktop); on Linux the pinned projectM is built from source first so the
+  # csproj stages libprojectM + presets + textures into the publish (same recipe as the HaPlay
+  # full tier). Windows has no projectM build recipe yet, so the win artifact runs but reports
+  # "visualizer unavailable" unless the host provides projectM. The NDI runtime is proprietary and
+  # staged best-effort on both OSes — without it the app starts and fails loudly at engine start,
+  # same policy as HaPlay.
   haviz-desktop:
     name: haviz-${{ matrix.label }}
     runs-on: ${{ matrix.os }}
@@ -785,6 +786,13 @@ jobs:
         with:
           global-json-file: global.json
 
+      # NativeAOT links with the platform toolchain: Windows runners ship MSVC, Linux needs clang + zlib.
+      - name: Install Linux AOT prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
       # External/projectm is git-ignored (build output), so CI must produce it before publish for
       # the csproj's preset/texture/libprojectM bundling globs to match anything.
       - name: Build projectM 4.1.6 from source (Linux)
@@ -792,15 +800,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
           # libgl1-mesa-dev + libglm-dev: the exact set the artifacts job's projectM build uses.
           sudo apt-get install -y cmake build-essential libgl1-mesa-dev libglm-dev
           scripts/build-projectm.sh
           test -d External/projectm/linux-x64/presets
 
-      - name: Publish HaViz.Desktop
+      - name: HaViz.Desktop AOT publish
         shell: bash
-        run: dotnet publish UI/HaViz.Desktop -c Release -r ${{ matrix.rid }} --self-contained -o haviz-publish
+        run: dotnet publish UI/HaViz.Desktop -c Release -r ${{ matrix.rid }} -o haviz-publish
+
+      # NativeAOT's standalone debug symbols dominate the bundle (HaVizBox.dbg ≈ 2.4x the 27 MB
+      # executable on linux-x64) and are not used at runtime — move them into their own artifact,
+      # matched to this build, same policy as HaPlay.Desktop.
+      - name: Collect debug symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p haviz-debug-symbols
+          find haviz-publish -maxdepth 1 \( -name '*.dbg' -o -name '*.pdb' \) \
+            -exec mv -v {} haviz-debug-symbols/ \;
 
       # NDI v6 runtime via the DistroAV helper (accepts the NDI license non-interactively).
       # Best-effort: a flaky fetch degrades to "NDI absent" instead of failing the artifact.
@@ -831,6 +849,15 @@ jobs:
           name: HaViz.Desktop-${{ matrix.rid }}
           path: haviz-publish
           if-no-files-found: error
+          retention-days: 14
+
+      # `warn` (not `error`): symbols are advisory, a build with none should not fail over it.
+      - name: Upload HaViz debug symbols artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaViz.Desktop-${{ matrix.rid }}-debug-symbols
+          path: haviz-debug-symbols
+          if-no-files-found: warn
           retention-days: 14
 
   # The vendored NDI SDK (Reference/NDI SDK for Android) is deliberately untracked (NDI license:

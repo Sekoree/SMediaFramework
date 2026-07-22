@@ -15,6 +15,17 @@
              an XDG desktop entry (same rationale as HaPlay.Desktop → HaPlayer). -->
         <AssemblyName>HaVizBox</AssemblyName>
         <RootNamespace>HaViz.Desktop</RootNamespace>
+
+        <!-- NativeAOT, same policy as HaPlay.Desktop: `dotnet run` stays JIT, only `dotnet publish`
+             pays the AOT compile. No warning demotions needed here - unlike HaPlay there is no Dock
+             (IL2104/IL3053 aggregates) or Mond (IL2026), and everything else in the graph is
+             IsAotCompatible/trim-annotated, so any ILC warning stays fatal (BUILD-03). -->
+        <PublishAot>true</PublishAot>
+        <!-- Real-time audio path (viz tap + line-in pump + NDI clock): background GC keeps gen2
+             pauses short so a collection is a brief recoverable underrun, not a drop; server GC
+             spreads collection across cores. Same rationale as HaPlay.Desktop. -->
+        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+        <ServerGarbageCollection>true</ServerGarbageCollection>
     </PropertyGroup>
 
     <ItemGroup>
