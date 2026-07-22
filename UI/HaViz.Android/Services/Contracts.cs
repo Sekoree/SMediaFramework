@@ -63,6 +63,10 @@ public interface ISystemAudioCapture : IDisposable
 {
     bool IsCapturing { get; }
 
+    /// <summary>Capture ended for any reason, including externally (system killed the service,
+    /// user revoked the projection). May fire on any thread; marshal to the UI thread.</summary>
+    event Action? Stopped;
+
     /// <summary>False when the user declined the consent dialog or the device cannot capture.</summary>
     Task<bool> StartAsync();
 

@@ -86,6 +86,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         // Clear to transparent black so empty regions stay see-through for downstream consumers.
         Array.Clear(buffer, 0, _outputByteCount);
 
+        var anyLayerDrawn = false;
         for (var i = 0; i < layersBackToFront.Count; i++)
         {
             var layer = layersBackToFront[i];
@@ -94,7 +95,8 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                     $"CpuVideoCompositor layer {i}: only BGRA32 accepted, got {layer.Frame.Format.PixelFormat}.");
             var opacity = Math.Clamp(layer.Opacity, 0f, 1f);
             if (opacity <= 0f) continue;
-            DrawLayer(buffer, layer, opacity);
+            DrawLayer(buffer, layer, opacity, dstUntouched: !anyLayerDrawn);
+            anyLayerDrawn = true;
         }
 
         var plane = new ReadOnlyMemory<byte>(buffer, 0, _outputByteCount);
@@ -108,7 +110,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
             metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied));
     }
 
-    private void DrawLayer(byte[] dst, CompositorLayer layer, float opacity)
+    private void DrawLayer(byte[] dst, CompositorLayer layer, float opacity, bool dstUntouched)
     {
         var src = layer.Frame;
         var srcStride = src.Strides[0];
@@ -165,8 +167,12 @@ public sealed class CpuVideoCompositor : IVideoCompositor
 
         // Fast path A - pure integer translate + Source + full opacity + premultiplied source:
         // the layer is a rectangular blit, one row CopyTo per line (the dominant single-layer
-        // scaler/passthrough case; ~40x faster than the generic per-pixel loop).
-        if (fxKernels.IsEmpty
+        // scaler/passthrough case; ~40x faster than the generic per-pixel loop). Gated to the
+        // FIRST drawn layer: the generic loop skips zero-alpha source pixels even under Source
+        // blend (destination shows through), while a row copy would overwrite them - identical
+        // over the cleared canvas, a punch-through divergence above earlier layers.
+        if (dstUntouched
+            && fxKernels.IsEmpty
             && mode == CompositorSamplingMode.Nearest
             && layer.BlendMode == BlendMode.Source
             && opacity >= 1f
@@ -181,8 +187,11 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         // Fast path B - nearest sampling without effects: the inverse affine is evaluated once per
         // row and stepped per pixel (removing 4 muls + 2 adds per pixel), and the crop gate
         // collapses to a per-row dx interval (each crop condition is linear in dx) instead of a
-        // per-pixel test. Boundary pixels are nudged with the exact per-pixel predicate so the
-        // output stays byte-identical to the generic loop.
+        // per-pixel test. Boundary pixels are nudged with the exact per-pixel predicate, so the
+        // drawn REGION matches the generic loop exactly; within it, the incremental sx/sy
+        // accumulation can differ from direct evaluation by one ulp, which may pick the adjacent
+        // source texel at exact texel boundaries on very long rows - visually equivalent, not
+        // guaranteed byte-identical.
         if (fxKernels.IsEmpty && mode == CompositorSamplingMode.Nearest)
         {
             DrawLayerNearestFast(dst, layer, opacity, alphaMode, inv, srcSpan, srcStride, srcW, srcH,

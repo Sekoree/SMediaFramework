@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using ProjectMLib;
 using S.Media.Compositor;
@@ -25,8 +26,13 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVi
     private readonly ProjectMOptions _options;
     private readonly float[] _pcmScratch = new float[4096];
     private string[] _presets = [];
-    private int _presetIndex = -1;
-    private readonly Random _random = new();
+    private PresetRotation? _rotation;
+    // Written by the native switch-failed callback, which fires synchronously inside
+    // projectm_load_preset_file on the compositor thread - the same thread that reads it.
+    private int _presetSwitchFailed;
+    private string? _lastFailureMessage;
+    private bool _allFailedLogged;
+    private GCHandle _failureCallbackHandle;
     private long _lastPresetSwitchTimestamp;
 
     private GL? _gl;
@@ -93,7 +99,19 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVi
             Native.projectm_set_aspect_correction(_projectM, true);
             Native.projectm_set_preset_locked(_projectM, true); // no self-switching; NextPreset drives rotation
 
+            // Same auto-skip contract as the continuous renderer: a preset that fails to load is
+            // blocklisted and rotation advances immediately instead of showing the stale scene.
+            _failureCallbackHandle = GCHandle.Alloc(this);
+            unsafe
+            {
+                Native.projectm_set_preset_switch_failed_event_callback(
+                    _projectM,
+                    (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&OnPresetSwitchFailed,
+                    GCHandle.ToIntPtr(_failureCallbackHandle));
+            }
+
             _presets = EnumeratePresets(_options.PresetDirectory);
+            _rotation = new PresetRotation(_presets, _options.Shuffle);
             _source.ReportLegacyPresets(_presets.Length);
             if (_presets.Length > 0)
                 LoadNextPreset(smooth: false);
@@ -188,32 +206,62 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVi
         gl.BindVertexArray(0);
     }
 
-    /// <summary>Advance to the next preset (shuffle or rotation). Also exposed for a UI "next" action later.</summary>
+    /// <summary>Advance to the next LOADABLE preset (shuffle or rotation): failed loads are
+    /// blocklisted and skipped in the same call, so a broken preset costs milliseconds instead of
+    /// an empty visualizer slot. Also exposed for a UI "next" action later.</summary>
     internal void LoadNextPreset(bool smooth)
     {
-        if (_projectM == 0 || _presets.Length == 0)
+        if (_projectM == 0 || _rotation is not { } rotation)
             return;
-        _presetIndex = _options.Shuffle && _presets.Length > 1
-            ? NextRandomIndex()
-            : (_presetIndex + 1) % _presets.Length;
-        var displayName = Path.GetFileNameWithoutExtension(_presets[_presetIndex]);
-        _source.ReportLegacyPresetName(displayName); // visible even if the native load stalls
-        try
+
+        while (rotation.TryAdvance(out var preset))
         {
-            Native.projectm_load_preset_file(_projectM, _presets[_presetIndex], smooth);
+            _source.ReportLegacyPresetName(Path.GetFileNameWithoutExtension(preset)); // visible even if the native load stalls
+            Volatile.Write(ref _presetSwitchFailed, 0);
+            var loadThrew = false;
+            try
+            {
+                Native.projectm_load_preset_file(_projectM, preset, smooth);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "preset load failed: {Preset}", preset);
+                loadThrew = true;
+            }
+
+            if (!loadThrew && Volatile.Read(ref _presetSwitchFailed) == 0)
+                return;
+
+            if (rotation.MarkFailed(preset))
+            {
+                Trace.LogWarning(
+                    "preset failed to load - skipping it from rotation ({Failed}/{Total}): '{Preset}' ({Message})",
+                    rotation.FailedCount, rotation.Count, preset, _lastFailureMessage ?? "load threw");
+            }
+
+            smooth = false; // a failed smooth switch can leave a half-started blend; cut hard on retry
         }
-        catch (Exception ex)
+
+        if (rotation.AllFailed && !_allFailedLogged)
         {
-            Trace.LogWarning(ex, "preset load failed: {Preset}", _presets[_presetIndex]);
+            _allFailedLogged = true;
+            Trace.LogError(
+                "every preset in the pack failed to load ({Total}) - staying on the projectM idle preset",
+                rotation.Count);
         }
     }
 
-    private int NextRandomIndex()
+    /// <summary>Native projectM switch-failed callback (compositor thread, inside the load call).
+    /// Must not call back into projectM - just records the failure for LoadNextPreset's loop.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    private static void OnPresetSwitchFailed(nint presetFilename, nint message, nint userData)
     {
-        var next = _random.Next(_presets.Length);
-        if (next == _presetIndex)
-            next = (next + 1) % _presets.Length;
-        return next;
+        _ = presetFilename;
+        if (GCHandle.FromIntPtr(userData).Target is ProjectMGlLayerSurface self)
+        {
+            self._lastFailureMessage = Marshal.PtrToStringUTF8(message);
+            Volatile.Write(ref self._presetSwitchFailed, 1);
+        }
     }
 
     internal static string[] EnumeratePresets(string? directory)
@@ -324,8 +372,11 @@ internal sealed class ProjectMGlLayerSurface : IVideoCompositorLayerSurface, IVi
         _disposed = true;
         if (_projectM != 0)
         {
+            Native.projectm_set_preset_switch_failed_event_callback(_projectM, 0, 0);
             Native.projectm_destroy(_projectM);
             _projectM = 0;
+            if (_failureCallbackHandle.IsAllocated)
+                _failureCallbackHandle.Free();
         }
         if (_fbo != 0) { gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_colorTex != 0) { gl.DeleteTexture(_colorTex); _colorTex = 0; }

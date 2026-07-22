@@ -122,6 +122,30 @@ public sealed class VideoLayerEffectTests
     }
 
     [Fact]
+    public void MidStackSourceBlendLayer_TransparentPixelsShowLowerLayer()
+    {
+        // Regression guard for the integer-translate blit fast path: the generic loop skips
+        // zero-alpha source pixels even under BlendMode.Source, so a mid-stack Source layer with
+        // transparent regions must NOT punch holes through the layer beneath it. (The blit is
+        // therefore gated to the first drawn layer, where destination = cleared canvas.)
+        var canvas = new VideoFormat(8, 8, PixelFormat.Bgra32, Fps);
+        using var compositor = new CpuVideoCompositor(canvas);
+        using var red = SolidBgra(8, 8, b: 0, g: 0, r: 255);
+        using var transparent = SolidBgra(8, 8, b: 0, g: 0, r: 0, a: 0);
+
+        using var result = compositor.Composite(
+            [
+                CompositorLayer.Default(red) with { BlendMode = BlendMode.Source },
+                CompositorLayer.Default(transparent) with { BlendMode = BlendMode.Source },
+            ],
+            TimeSpan.Zero);
+
+        var pixels = result.Planes[0].Span;
+        Assert.Equal(255, pixels[2]); // red survives under the transparent Source layer
+        Assert.Equal(255, pixels[3]);
+    }
+
+    [Fact]
     public void ShaderComposer_SplicesUniformsAndChainCalls()
     {
         var baseSrc = """

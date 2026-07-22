@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using ProjectMLib;
 using S.Media.Compositor;
@@ -41,8 +42,14 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
     private long _frameVersion; // under _frameGate; 0 = nothing rendered yet
 
     private string[] _presets = [];
-    private int _presetIndex = -1;
-    private readonly Random _random = new();
+    private PresetRotation? _rotation;
+    // Written by the native switch-failed callback, which fires SYNCHRONOUSLY inside
+    // projectm_load_preset_file on the render thread - same thread that reads it right after.
+    private int _presetSwitchFailed;
+    private string? _lastFailureMessage;
+    private volatile int _failedPresetCount;
+    private bool _allFailedLogged;
+    private GCHandle _failureCallbackHandle;
     private volatile int _presetCount = -1; // -1 = not enumerated yet
     private volatile string? _currentPresetName;
     private string? _lastSlowPresetLogged; // render thread only
@@ -71,6 +78,9 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
 
     /// <summary>Presets found in the configured directory (-1 until enumeration ran on the render thread).</summary>
     public int PresetCount => _presetCount;
+
+    /// <summary>Presets blocklisted after a projectM load failure (auto-skipped by rotation).</summary>
+    public int FailedPresetCount => _failedPresetCount;
 
     public string? CurrentPresetName => _currentPresetName;
 
@@ -138,7 +148,20 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             Native.projectm_set_aspect_correction(projectM, true);
             Native.projectm_set_preset_locked(projectM, true);
 
+            // Failed preset loads (parse/shader errors) fire this callback synchronously inside
+            // projectm_load_preset_file; LoadNextPreset checks the flag and auto-advances so a bad
+            // preset never leaves the output stuck on the previous/idle scene for a whole slot.
+            _failureCallbackHandle = GCHandle.Alloc(this);
+            unsafe
+            {
+                Native.projectm_set_preset_switch_failed_event_callback(
+                    projectM,
+                    (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&OnPresetSwitchFailed,
+                    GCHandle.ToIntPtr(_failureCallbackHandle));
+            }
+
             _presets = ProjectMGlLayerSurface.EnumeratePresets(_options.PresetDirectory);
+            _rotation = new PresetRotation(_presets, _options.Shuffle);
             _presetCount = _presets.Length;
             if (_presets.Length > 0)
                 LoadNextPreset(projectM, smooth: false);
@@ -390,9 +413,12 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
             try
             {
                 if (projectM != 0)
+                    Native.projectm_set_preset_switch_failed_event_callback(projectM, 0, 0);
                     Native.projectm_destroy(projectM);
             }
             catch (Exception ex) { Trace.LogWarning(ex, "projectm_destroy"); }
+            if (_failureCallbackHandle.IsAllocated)
+                _failureCallbackHandle.Free();
             try { context?.Dispose(); }
             catch (Exception ex) { Trace.LogWarning(ex, "offscreen context dispose"); }
             _completion.TrySetResult();
@@ -401,42 +427,75 @@ internal sealed class ProjectMOffscreenRenderer : IDisposable
 
     private void LoadNextPreset(nint projectM, bool smooth)
     {
-        if (_presets.Length == 0)
+        if (_rotation is not { } rotation)
             return;
-        _presetIndex = _options.Shuffle && _presets.Length > 1
-            ? NextRandomIndex()
-            : (_presetIndex + 1) % _presets.Length;
-        var preset = _presets[_presetIndex];
-        _currentPresetName = Path.GetFileNameWithoutExtension(preset);
-        try
+
+        // Advance until a preset LOADS: the switch-failed callback (or a managed load exception)
+        // blocklists the offender and the loop moves straight to the next candidate, so a broken
+        // preset costs milliseconds instead of an "empty" slot. Bounded by the pack size via
+        // TryAdvance's blocklist; fully-broken packs stop rotating (projectM idle stays up).
+        while (rotation.TryAdvance(out var preset))
         {
-            // Timed: a pathological preset's shader compile can take SECONDS and stalls the whole GPU
-            // driver process-wide (Mesa serializes compiles) - confirmed by a captured hang dump where a
-            // compile jammed Avalonia's render thread and, through a tooltip-close sync-wait, the UI
-            // thread. Loading here (our own thread) keeps the transport safe; the log names the offender
-            // so the operator can prune it from the pack.
-            var started = Stopwatch.GetTimestamp();
-            Native.projectm_load_preset_file(projectM, preset, smooth);
-            var elapsed = Stopwatch.GetElapsedTime(started);
-            if (elapsed.TotalMilliseconds > 250)
+            _currentPresetName = Path.GetFileNameWithoutExtension(preset);
+            Volatile.Write(ref _presetSwitchFailed, 0);
+            var loadThrew = false;
+            try
             {
-                Trace.LogWarning(
-                    "SLOW preset load: {Ms:0}ms for '{Preset}' - heavy shader compile; consider removing it from the pack",
-                    elapsed.TotalMilliseconds, preset);
+                // Timed: a pathological preset's shader compile can take SECONDS and stalls the whole GPU
+                // driver process-wide (Mesa serializes compiles) - confirmed by a captured hang dump where a
+                // compile jammed Avalonia's render thread and, through a tooltip-close sync-wait, the UI
+                // thread. Loading here (our own thread) keeps the transport safe; the log names the offender
+                // so the operator can prune it from the pack.
+                var started = Stopwatch.GetTimestamp();
+                Native.projectm_load_preset_file(projectM, preset, smooth);
+                var elapsed = Stopwatch.GetElapsedTime(started);
+                if (elapsed.TotalMilliseconds > 250)
+                {
+                    Trace.LogWarning(
+                        "SLOW preset load: {Ms:0}ms for '{Preset}' - heavy shader compile; consider removing it from the pack",
+                        elapsed.TotalMilliseconds, preset);
+                }
             }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "preset load failed: {Preset}", preset);
+                loadThrew = true;
+            }
+
+            if (!loadThrew && Volatile.Read(ref _presetSwitchFailed) == 0)
+                return; // loaded (or transitioning) - done
+
+            if (rotation.MarkFailed(preset))
+            {
+                _failedPresetCount = rotation.FailedCount;
+                Trace.LogWarning(
+                    "preset failed to load - skipping it from rotation ({Failed}/{Total}): '{Preset}' ({Message})",
+                    rotation.FailedCount, rotation.Count, preset, _lastFailureMessage ?? "load threw");
+            }
+
+            smooth = false; // a failed smooth switch can leave a half-started blend; cut hard on retry
         }
-        catch (Exception ex)
+
+        if (rotation.AllFailed && !_allFailedLogged)
         {
-            Trace.LogWarning(ex, "preset load failed: {Preset}", preset);
+            _allFailedLogged = true;
+            Trace.LogError(
+                "every preset in the pack failed to load ({Total}) - staying on the projectM idle preset",
+                rotation.Count);
         }
     }
 
-    private int NextRandomIndex()
+    /// <summary>Native projectM switch-failed callback (render thread, inside the load call).
+    /// Must not call back into projectM - just records the failure for LoadNextPreset's loop.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    private static void OnPresetSwitchFailed(nint presetFilename, nint message, nint userData)
     {
-        var next = _random.Next(_presets.Length);
-        if (next == _presetIndex)
-            next = (next + 1) % _presets.Length;
-        return next;
+        _ = presetFilename;
+        if (GCHandle.FromIntPtr(userData).Target is ProjectMOffscreenRenderer self)
+        {
+            self._lastFailureMessage = Marshal.PtrToStringUTF8(message);
+            Volatile.Write(ref self._presetSwitchFailed, 1);
+        }
     }
 
     public void Dispose()

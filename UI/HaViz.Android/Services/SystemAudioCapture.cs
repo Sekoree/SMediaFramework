@@ -26,6 +26,8 @@ public sealed class SystemAudioCapture : ISystemAudioCapture
 
     public bool IsCapturing { get; private set; }
 
+    public event Action? Stopped;
+
     public async Task<bool> StartAsync()
     {
         if (IsCapturing)
@@ -52,14 +54,19 @@ public sealed class SystemAudioCapture : ISystemAudioCapture
 
     public void Stop()
     {
-        if (!IsCapturing)
-            return;
         IsCapturing = false;
-        // The service's OnDestroy stops the thread and releases the record/projection.
+        // Unconditionally, even when IsCapturing never went true: a service that starts after the
+        // 5 s timeout has already consumed the handoff and captures regardless, so the stop must
+        // always reach it. The service's OnDestroy stops the thread and releases the
+        // record/projection; stopping a service that is not running is a no-op.
         _activity.StopService(new Intent(_activity, typeof(CaptureForegroundService)));
     }
 
-    private void OnServiceStopped() => IsCapturing = false;
+    private void OnServiceStopped()
+    {
+        IsCapturing = false;
+        Stopped?.Invoke();
+    }
 
     public void Dispose()
     {

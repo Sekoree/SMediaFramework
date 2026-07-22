@@ -22,6 +22,13 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
     private readonly ISystemAudioCapture _capture;
     private readonly DispatcherTimer _statusTimer;
     private VizNdiEngine? _engine;
+    // A session is loaded in the player (Resume is meaningful); false after Stop/playlist end.
+    private bool _hasLoadedTrack;
+    // Guard against a permanently broken playlist: error -> advance can loop forever.
+    private const int MaxConsecutivePlaybackErrors = 3;
+    private int _consecutivePlaybackErrors;
+    // True while RefreshOutputDevices preselects: see OnSelectedOutputDeviceChanged.
+    private bool _suppressOutputRouting;
 
     // --- NDI / visualizer settings (editable while stopped) ---
     [ObservableProperty] private string _ndiName = "HaViz";
@@ -60,14 +67,34 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
 
         _player.TrackStarted += track => Dispatcher.UIThread.Post(() =>
         {
+            // Extractor + codec opened, so the track is playable - the error streak is over.
+            _consecutivePlaybackErrors = 0;
             CurrentTrackName = track.DisplayName;
             IsPlaying = true;
         });
         _player.PlaybackEnded += () => Dispatcher.UIThread.Post(OnTrackEnded);
         _player.PlaybackError += message => Dispatcher.UIThread.Post(() =>
         {
+            if (++_consecutivePlaybackErrors >= MaxConsecutivePlaybackErrors)
+            {
+                // Loop One/All over broken files would error-skip forever - give up instead.
+                _consecutivePlaybackErrors = 0;
+                StopPlayback();
+                StatusText = "playback stopped after repeated errors";
+                return;
+            }
+
             StatusText = $"player: {message}";
             OnTrackEnded(); // error-skip so one broken file doesn't stall the playlist
+        });
+        _capture.Stopped += () => Dispatcher.UIThread.Post(() =>
+        {
+            // Externally ended capture (projection revoked, system kill) must reach the UI; our
+            // own Stop() paths update IsCapturing first, so this only fires for surprises.
+            if (!IsCapturing)
+                return;
+            IsCapturing = false;
+            CaptureStatus = "Capture stopped (projection revoked or service ended).";
         });
 
         RefreshOutputDevices();
@@ -108,6 +135,13 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
             };
             _platform.AcquireMulticastLock();
             _engine = new VizNdiEngine(settings, EglOffscreenGlContext.TryCreate, _platform.LoggerFactory);
+            // Raised on the pump thread; marshal to the UI thread. A faulted engine is a zombie
+            // (frames stop, IsRunning may still read true) - surface it instead of freezing the
+            // status line on stale counters.
+            _engine.Faulted += ex => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                StatusText = $"engine faulted: {ex.Message} — stop and start again";
+            });
             _engine.Start();
             IsEngineRunning = true;
             StatusText = $"sending '{settings.NdiName}' {settings.Width}x{settings.Height}@{settings.Fps}";
@@ -136,9 +170,14 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
         if (_engine is not { } engine || !IsEngineRunning)
             return;
         var preset = engine.CurrentPresetName;
+        // Mismatched-rate audio is dropped from the NDI stream (still drives visuals) - receivers
+        // hear silence with no other hint, so the counter must be visible.
+        var droppedAudio = engine.DroppedMismatchedRateFrames > 0
+            ? $" · NDI audio muted (rate mismatch, {engine.DroppedMismatchedRateFrames} frames)"
+            : "";
         PresetText = engine.VisualizerFailed
             ? "visualizer unavailable (GL/projectM failed)"
-            : $"{engine.ConnectionCount} rx · f{engine.FramesSent} miss{engine.PollsWithoutFrame} tx{engine.AverageSubmitMs}ms y{engine.LastFrameLuma} · {preset ?? "(loading)"}";
+            : $"{engine.ConnectionCount} rx · f{engine.FramesSent} miss{engine.PollsWithoutFrame} tx{engine.AverageSubmitMs}ms y{engine.LastFrameLuma} · {preset ?? "(loading)"}{droppedAudio}";
     }
 
     [RelayCommand]
@@ -166,15 +205,17 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
             return;
         }
 
-        if (_playlist.Current is not null)
+        if (_hasLoadedTrack)
         {
+            StopCaptureForPlayback();
             _player.Resume();
             IsPlaying = true;
+            return;
         }
-        else
-        {
-            PlayTrack(_playlist.Next());
-        }
+
+        // Nothing loaded (fresh start or after Stop): Resume() on a dead session would only flip
+        // the flag with no audio - start the current/first track instead.
+        PlayTrack(_playlist.Current ?? _playlist.Next());
     }
 
     [RelayCommand]
@@ -187,6 +228,7 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
     private void StopPlayback()
     {
         _player.Stop();
+        _hasLoadedTrack = false;
         IsPlaying = false;
         CurrentTrackName = "(no track)";
     }
@@ -208,6 +250,7 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
         var next = _playlist.AdvanceAfterTrackEnd();
         if (next is null)
         {
+            _hasLoadedTrack = false;
             IsPlaying = false;
             CurrentTrackName = "(no track)";
             return;
@@ -220,7 +263,9 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
     {
         if (track is null)
             return;
+        StopCaptureForPlayback();
         _player.Play(track);
+        _hasLoadedTrack = true;
         CurrentTrackName = track.DisplayName;
         IsPlaying = true;
     }
@@ -230,11 +275,18 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
         OutputDevices.Clear();
         foreach (var device in _player.GetOutputDevices())
             OutputDevices.Add(device);
+        // Display-only preselection: it must not call SetOutputDevice and override Android's
+        // default routing before the user explicitly picks a device.
+        _suppressOutputRouting = true;
         SelectedOutputDevice = OutputDevices.FirstOrDefault();
+        _suppressOutputRouting = false;
     }
 
-    partial void OnSelectedOutputDeviceChanged(AudioOutputDeviceInfo? value) =>
-        _player.SetOutputDevice(value?.Id);
+    partial void OnSelectedOutputDeviceChanged(AudioOutputDeviceInfo? value)
+    {
+        if (!_suppressOutputRouting)
+            _player.SetOutputDevice(value?.Id);
+    }
 
     partial void OnPlayOnDeviceChanged(bool value) => _player.SetLocalOutputEnabled(value);
 
@@ -250,12 +302,39 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
             return;
         }
 
+        // Capture and the player are mutually exclusive: both feed the same engine, and two
+        // unrelated PCM streams garble the visuals and overrun the NDI audio clock.
+        var playerStopped = IsPlaying || _hasLoadedTrack;
+        if (playerStopped)
+            StopPlayback();
+
         CaptureStatus = "requesting capture permission…";
         var started = await _capture.StartAsync();
+        if (started && IsPlaying)
+        {
+            // The player was restarted while the consent dialog was up - playback wins.
+            _capture.Stop();
+            CaptureStatus = "Capture stopped: the player took over the engine feed.";
+            return;
+        }
+
         IsCapturing = started;
         CaptureStatus = started
-            ? "Capturing system audio → visualizer + NDI."
+            ? playerStopped
+                ? "Capturing system audio → visualizer + NDI. Player stopped."
+                : "Capturing system audio → visualizer + NDI."
             : "Capture not started (denied or unsupported on this device).";
+    }
+
+    /// <summary>Capture and the player are mutually exclusive engine feeds (see
+    /// <see cref="ToggleCaptureAsync"/>); every playback start goes through here.</summary>
+    private void StopCaptureForPlayback()
+    {
+        if (!_capture.IsCapturing)
+            return;
+        _capture.Stop();
+        IsCapturing = false;
+        CaptureStatus = "Capture stopped: the player took over the engine feed.";
     }
 
     public void Dispose()

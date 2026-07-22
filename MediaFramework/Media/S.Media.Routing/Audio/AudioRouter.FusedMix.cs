@@ -139,8 +139,11 @@ public sealed partial class AudioRouter
             var f = slot.Current;
             var t = slot.Target;
             var index = group.CellGainIndex[i];
-            from[index] = f;
-            to[index] = t;
+            // ACCUMULATE, never assign: AddRoute documents that multiple routes (distinct ids) may
+            // target the same cell and their contributions sum additively - the per-route path
+            // applies each separately, so the fused gather must sum their gains (ramps included).
+            from[index] += f;
+            to[index] += t;
             anyRamp |= f != t;
             anyLive |= f != 0f || t != 0f;
         }

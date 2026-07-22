@@ -52,6 +52,14 @@ internal static unsafe partial class Native
     [LibraryImport(LibraryName)]
     internal static partial void projectm_set_beat_sensitivity(nint instance, float sensitivity);
 
+    /// <summary>projectM v4 preset-switch-failed callback:
+    /// <c>void (*)(const char* preset_filename, const char* message, void* user_data)</c>
+    /// (callbacks.h). Fires synchronously inside <c>projectm_load_preset_file</c> on parse/compile
+    /// failure; the handler must not call back into projectM. Pass 0 to unregister.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial void projectm_set_preset_switch_failed_event_callback(
+        nint instance, nint callback, nint userData);
+
     [LibraryImport(LibraryName)]
     internal static partial void projectm_set_aspect_correction(
         nint instance, [MarshalAs(UnmanagedType.I1)] bool enabled);

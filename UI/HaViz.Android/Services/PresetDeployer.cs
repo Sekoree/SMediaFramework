@@ -1,4 +1,5 @@
 using Android.Content;
+using Android.Content.PM;
 
 namespace HaViz.Android.Services;
 
@@ -16,21 +17,38 @@ internal static class PresetDeployer
                    ?? context.FilesDir!.AbsolutePath;
         var presets = Path.Combine(root, "presets");
         var textures = Path.Combine(root, "textures");
-        var marker = Path.Combine(root, ".presets-deployed-v1");
+        // Keyed on versionCode so an APK update redeploys its (possibly changed) bundled packs.
+        var marker = Path.Combine(root, $".presets-deployed-{GetVersionCode(context)}");
         if (File.Exists(marker))
             return (presets, textures);
+        foreach (var stale in Directory.EnumerateFiles(root, ".presets-deployed-*"))
+            File.Delete(stale);
 
         Directory.CreateDirectory(presets);
         Directory.CreateDirectory(textures);
         var assets = context.Assets!;
-        CopyAssetTree(assets, "presets", presets);
-        CopyAssetTree(assets, "textures", textures);
-        File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
+        var copied = CopyAssetTree(assets, "presets", presets)
+                     + CopyAssetTree(assets, "textures", textures);
+        // An APK built before the native/preset build ran carries no packs; without the marker a
+        // later install that does carry them still deploys.
+        if (copied > 0)
+            File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
         return (presets, textures);
     }
 
-    private static void CopyAssetTree(global::Android.Content.Res.AssetManager assets, string assetDir, string destDir)
+    private static long GetVersionCode(Context context)
     {
+        var manager = context.PackageManager!;
+        var name = context.PackageName!;
+        var info = OperatingSystem.IsAndroidVersionAtLeast(33)
+            ? manager.GetPackageInfo(name, PackageManager.PackageInfoFlags.Of(0L))!
+            : manager.GetPackageInfo(name, 0)!;
+        return info.LongVersionCode;
+    }
+
+    private static int CopyAssetTree(global::Android.Content.Res.AssetManager assets, string assetDir, string destDir)
+    {
+        var copied = 0;
         var entries = assets.List(assetDir) ?? [];
         foreach (var entry in entries)
         {
@@ -40,13 +58,16 @@ internal static class PresetDeployer
             {
                 var subDir = Path.Combine(destDir, entry);
                 Directory.CreateDirectory(subDir);
-                CopyAssetTree(assets, assetPath, subDir);
+                copied += CopyAssetTree(assets, assetPath, subDir);
                 continue;
             }
 
             using var source = assets.Open(assetPath);
             using var target = File.Create(Path.Combine(destDir, entry));
             source.CopyTo(target);
+            copied++;
         }
+
+        return copied;
     }
 }

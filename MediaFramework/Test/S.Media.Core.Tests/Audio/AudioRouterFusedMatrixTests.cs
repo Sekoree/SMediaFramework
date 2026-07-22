@@ -132,6 +132,41 @@ public class AudioRouterFusedMatrixTests
         Assert.InRange(output.MaxSample, 0.95f, 1.05f);
     }
 
+    [Fact]
+    public void DuplicateCellRoutes_SumAdditivelyThroughFusedPath()
+    {
+        using var router = new AudioRouter(48000);
+        var source = new ConstantSource(new AudioFormat(48000, 2));
+        var output = new CapturingOutput(new AudioFormat(48000, 2));
+        var srcId = router.AddSource(source);
+        var outId = router.AddOutput(output);
+
+        // Four single-cell routes (meets the fusion threshold) with TWO routes on the same cell
+        // (0→0). AddRoute documents additive per-cell contributions, so channel 0 must reach
+        // 0.3 + 0.4 + 0.2 (from 1→0) = 0.9 - a fused gather that ASSIGNS instead of summing
+        // regresses this to 0.6.
+        Span<int> cell00 = [0, ChannelMap.Silence];
+        Span<int> cell10 = [1, ChannelMap.Silence];
+        Span<int> cell11 = [ChannelMap.Silence, 1];
+        router.AddRoute(srcId, outId, "a", new ChannelMap(cell00), 0.3f);
+        router.AddRoute(srcId, outId, "b", new ChannelMap(cell00), 0.4f);
+        router.AddRoute(srcId, outId, "c", new ChannelMap(cell10), 0.2f);
+        router.AddRoute(srcId, outId, "d", new ChannelMap(cell11), 0.5f);
+        router.Play();
+        try
+        {
+            var deadline = Environment.TickCount64 + 5000;
+            while (Environment.TickCount64 < deadline && output.MaxSample < 0.85f)
+                Thread.Sleep(10);
+        }
+        finally
+        {
+            router.Stop();
+        }
+
+        Assert.InRange(output.MaxSample, 0.85f, 0.95f);
+    }
+
     private sealed class ConstantSource(AudioFormat fmt) : IAudioSource
     {
         public AudioFormat Format => fmt;

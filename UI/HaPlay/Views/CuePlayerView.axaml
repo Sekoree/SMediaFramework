@@ -768,7 +768,10 @@
                                    Value="{Binding SelectedVideoPlacement.ColorAdjustBrightness, Mode=TwoWay}" />
                     <TextBlock Text="{x:Static res:Strings.ColorAdjustContrastLabel}" VerticalAlignment="Center" Opacity="0.7"
                                ToolTip.Tip="{x:Static res:Strings.ColorAdjustContrastTooltip}" />
-                    <Slider Width="110" Minimum="0" Maximum="2" SmallChange="0.01" VerticalAlignment="Center"
+                    <!-- Slider and NumericUpDown MUST share one range: a slider capped below the
+                         model max coerces a persisted higher value on render and the TwoWay
+                         binding writes the clamp back, silently editing the cue. -->
+                    <Slider Width="110" Minimum="0" Maximum="4" SmallChange="0.01" VerticalAlignment="Center"
                             Value="{Binding SelectedVideoPlacement.ColorAdjustContrast, Mode=TwoWay}" />
                     <NumericUpDown Width="125" Minimum="0" Maximum="4" Increment="0.01" FormatString="0.00"
                                    VerticalAlignment="Center"

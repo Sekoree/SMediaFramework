@@ -19,6 +19,10 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
     private readonly AudioManager? _audioManager;
     private readonly object _lock = new();
     private Session? _session;
+    // Session hand-offs run chained on the thread pool: Shutdown() joins the decode thread and
+    // opening a content:// URI can block on a hung DocumentsProvider, so neither may run on the
+    // UI thread. The chain also serializes rapid Play/Stop calls in order.
+    private Task _transitions = Task.CompletedTask;
     private int? _preferredDeviceId;
     private volatile bool _localOutputEnabled; // default false: NDI/visualizer feed only
 
@@ -46,9 +50,14 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
     {
         lock (_lock)
         {
-            _session?.Shutdown();
-            _session = new Session(this, track);
-            _session.Start();
+            var previous = _session;
+            var session = new Session(this, track);
+            _session = session;
+            QueueTransition(() =>
+            {
+                previous?.Shutdown();
+                session.Start();
+            });
         }
     }
 
@@ -68,9 +77,28 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
     {
         lock (_lock)
         {
-            _session?.Shutdown();
+            var previous = _session;
             _session = null;
+            if (previous is not null)
+                QueueTransition(previous.Shutdown);
         }
+    }
+
+    /// <summary>Caller holds the lock. Continuations run even off a faulted antecedent, so one
+    /// failed hand-off cannot wedge the chain; failures surface as a playback error.</summary>
+    private void QueueTransition(Action action)
+    {
+        _transitions = _transitions.ContinueWith(_ =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                PlaybackError?.Invoke(ex.Message);
+            }
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
     public IReadOnlyList<AudioOutputDeviceInfo> GetOutputDevices()
@@ -196,8 +224,9 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
         /// write stays as the loop's clock and the tap keeps feeding NDI/visualizer regardless.</summary>
         public void ApplyLocalOutputVolume() => _audioTrack?.SetVolume(_owner._localOutputEnabled ? 1f : 0f);
 
-        /// <summary>Cancels and joins the decode thread. Called at most once (under the owner lock,
-        /// which also drops the reference), so no events fire after this returns.</summary>
+        /// <summary>Cancels and joins the decode thread. Called at most once, from the owner's
+        /// transition chain (the owner lock already dropped the reference before queueing), so no
+        /// events fire after this returns.</summary>
         public void Shutdown()
         {
             _cts.Cancel();
@@ -367,22 +396,60 @@ public sealed class MediaCodecMiniPlayer : IMiniPlayer
             buffer.Position(offset);
             buffer.Get(_byteScratch, 0, size);
 
+            // All integer layouts are little-endian (all Android ABIs are LE) -> normalized float.
             int samples;
-            if (_pcmEncoding == Encoding.PcmFloat)
+            // CA1416: Pcm24bitPacked/Pcm32bit are API 31+ enum *constants*; comparing against
+            // them on older releases is harmless (pre-31 decoders never emit these encodings,
+            // which then fall through to the unsupported-encoding error).
+#pragma warning disable CA1416
+            switch (_pcmEncoding)
             {
-                samples = size / sizeof(float);
-                EnsureFloatScratch(samples);
-                Buffer.BlockCopy(_byteScratch, 0, _floatScratch, 0, size);
+                case Encoding.PcmFloat:
+                    samples = size / sizeof(float);
+                    EnsureFloatScratch(samples);
+                    Buffer.BlockCopy(_byteScratch, 0, _floatScratch, 0, size);
+                    break;
+                case Encoding.Pcm16bit:
+                {
+                    samples = size / sizeof(short);
+                    EnsureFloatScratch(samples);
+                    var shorts = MemoryMarshal.Cast<byte, short>(_byteScratch.AsSpan(0, size));
+                    for (var i = 0; i < shorts.Length; i++)
+                        _floatScratch[i] = shorts[i] * (1f / 32768f);
+                    break;
+                }
+                case Encoding.Pcm24bitPacked:
+                {
+                    // 3 bytes/sample; assemble into the high bits so the shift sign-extends.
+                    samples = size / 3;
+                    EnsureFloatScratch(samples);
+                    for (var i = 0; i < samples; i++)
+                    {
+                        var b = i * 3;
+                        var value = (_byteScratch[b] << 8 | _byteScratch[b + 1] << 16
+                                                          | _byteScratch[b + 2] << 24) >> 8;
+                        _floatScratch[i] = value * (1f / 8388608f);
+                    }
+
+                    break;
+                }
+                case Encoding.Pcm32bit:
+                {
+                    samples = size / sizeof(int);
+                    EnsureFloatScratch(samples);
+                    var ints = MemoryMarshal.Cast<byte, int>(_byteScratch.AsSpan(0, size));
+                    for (var i = 0; i < ints.Length; i++)
+                        _floatScratch[i] = ints[i] * (1f / 2147483648f);
+                    break;
+                }
+                default:
+                    // Guessing the layout would emit full-scale noise; fail the track instead.
+                    // Thrown once per session - Run() turns it into a single PlaybackError.
+                    global::Android.Util.Log.Error("HaViz",
+                        $"unsupported decoder PCM encoding {_pcmEncoding} in '{_track.DisplayName}'");
+                    throw new NotSupportedException($"unsupported PCM encoding {_pcmEncoding}");
             }
-            else
-            {
-                // 16-bit little-endian (all Android ABIs are LE) -> normalized float.
-                samples = size / sizeof(short);
-                EnsureFloatScratch(samples);
-                var shorts = MemoryMarshal.Cast<byte, short>(_byteScratch.AsSpan(0, size));
-                for (var i = 0; i < shorts.Length; i++)
-                    _floatScratch[i] = shorts[i] * (1f / 32768f);
-            }
+#pragma warning restore CA1416
 
             // Same samples to the tap and the speaker; the blocking write paces the whole loop.
             _owner._sink.SubmitPcm(new ReadOnlySpan<float>(_floatScratch, 0, samples), _sampleRate, _channels);

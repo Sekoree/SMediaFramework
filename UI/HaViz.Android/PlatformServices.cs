@@ -25,6 +25,11 @@ public sealed class PlatformServices
 
     public string TextureDirectory { get; private set; } = string.Empty;
 
+    /// <summary>The live main view model, registered by <see cref="App"/> so
+    /// <see cref="MainActivity.OnDestroy"/> can dispose engine/player/capture on a real finish
+    /// (Android never disposes DataContexts on its own).</summary>
+    public IDisposable? MainViewModel { get; set; }
+
     public static void Initialize(MainActivity activity)
     {
         // Explicit resolver installs: the [ModuleInitializer]-based registration was observed NOT

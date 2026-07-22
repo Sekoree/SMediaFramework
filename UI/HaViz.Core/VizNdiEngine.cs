@@ -53,8 +53,28 @@ public sealed class VizNdiEngine : IDisposable
 
     public bool IsRunning => _pumpThread is { IsAlive: true };
 
-    /// <summary>True when GL/projectM failed to come up (frames stay black; NDI still runs).</summary>
-    public bool VisualizerFailed => _source?.IsContinuous != true;
+    /// <summary>True when GL/projectM failed to come up (frames stay black; NDI still runs).
+    /// Checks the renderer's actual failure flag - <c>IsContinuous</c> only says continuous mode
+    /// was configured, which is always true once the factory static is set, so it can never
+    /// observe a context/GL init failure.</summary>
+    public bool VisualizerFailed => _source is { } source
+        && (!source.IsContinuous || source.ContinuousRenderFailed);
+
+    /// <summary>Raised (on the pump thread) when the pump loop dies on an unhandled error; the
+    /// engine is then a zombie - hosts should surface it and dispose/recreate.</summary>
+    public event Action<Exception>? Faulted;
+
+    /// <summary>True after the pump loop died on an unhandled error (see <see cref="Faulted"/>).</summary>
+    public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
+
+    /// <summary>Stereo frames dropped from the NDI audio stream because their sample rate didn't
+    /// match the first-submit format the stream was created with (they still drive the visuals).
+    /// Non-zero = a receiver hears silence for one of the sources - surface it.</summary>
+    public long DroppedMismatchedRateFrames => Volatile.Read(ref _droppedMismatchedRateFrames);
+
+    private int _faulted;
+    private long _droppedMismatchedRateFrames;
+    private bool _rateMismatchLogged;
 
     public string? CurrentPresetName => _source?.CurrentPresetName;
 
@@ -137,6 +157,14 @@ public sealed class VizNdiEngine : IDisposable
 
         lock (_audioGate)
         {
+            // Re-check under the gate: Dispose sets _disposed FIRST and then takes this gate as a
+            // barrier before freeing the source/sender, so a submit that raced past the outer
+            // check must bail here instead of calling EnableAudio/Submit on disposed natives
+            // (which surfaced as a PlaybackError that skipped a track just because the operator
+            // stopped the engine mid-song).
+            if (_disposed != 0)
+                return;
+
             var frames = interleaved.Length / channels;
             var stereo = EnsureStereoScratch(frames * 2);
             DownmixToStereo(interleaved, channels, stereo, frames);
@@ -151,7 +179,20 @@ public sealed class VizNdiEngine : IDisposable
             }
 
             if (_ndiAudioFormat.SampleRate == sampleRate)
+            {
                 _ndiAudio.Submit(span);
+            }
+            else
+            {
+                Interlocked.Add(ref _droppedMismatchedRateFrames, frames);
+                if (!_rateMismatchLogged)
+                {
+                    _rateMismatchLogged = true;
+                    _log.LogWarning(
+                        "NDI audio stream is {StreamRate} Hz (latched from the first submit); dropping {Rate} Hz audio from the NDI stream (visuals still driven). Restart the engine to re-latch.",
+                        _ndiAudioFormat.SampleRate, sampleRate);
+                }
+            }
         }
     }
 
@@ -269,6 +310,15 @@ public sealed class VizNdiEngine : IDisposable
         catch (Exception ex)
         {
             _log.LogError(ex, "HaViz NDI pump faulted - output stopped");
+            Volatile.Write(ref _faulted, 1);
+            try
+            {
+                Faulted?.Invoke(ex);
+            }
+            catch (Exception handlerEx)
+            {
+                _log.LogError(handlerEx, "HaViz engine Faulted handler threw");
+            }
         }
     }
 
@@ -278,13 +328,29 @@ public sealed class VizNdiEngine : IDisposable
             return;
 
         _cts?.Cancel();
-        if (_pumpThread is { } pump && pump.IsAlive && !pump.Join(TimeSpan.FromSeconds(2)))
-            _log.LogWarning("HaViz NDI pump did not stop within 2 s");
+        // The pump can legitimately take a while to come off a 4K SpeedHQ encode; give it a
+        // generous window. If it STILL hasn't stopped, deliberately LEAK the native sender and
+        // source instead of freeing them under a live thread mid-Submit (native use-after-free
+        // crashed the process; a one-off leak on a wedged shutdown does not).
+        var pumpStopped = true;
+        if (_pumpThread is { } pump && pump.IsAlive)
+        {
+            pumpStopped = pump.Join(TimeSpan.FromSeconds(10));
+            if (!pumpStopped)
+                _log.LogError("HaViz NDI pump did not stop within 10 s - leaking NDI sender/visualizer to avoid a native use-after-free");
+        }
+
         _cts?.Dispose();
 
-        _source?.Dispose();
+        // Barrier: _disposed is already set, so no NEW SubmitPcm passes its in-gate re-check;
+        // taking the gate here waits out any submit currently inside it before natives go away.
         lock (_audioGate)
             _ndiAudio = null;
-        _ndi?.Dispose();
+
+        if (pumpStopped)
+        {
+            _source?.Dispose();
+            _ndi?.Dispose();
+        }
     }
 }

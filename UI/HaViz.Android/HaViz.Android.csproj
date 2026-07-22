@@ -51,8 +51,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <!-- NDI native runtime from the vendored Android SDK (arm64 only per target device). -->
-        <AndroidNativeLibrary Include="../../Reference/NDI SDK for Android/lib/arm64-v8a/libndi.so" Abi="arm64-v8a" />
+        <!-- NDI native runtime from the vendored Android SDK (arm64 only per target device).
+             Conditional so the app still builds on machines without the vendored SDK - NDI send
+             then fails at engine start instead of at packaging time. -->
+        <AndroidNativeLibrary Include="../../Reference/NDI SDK for Android/lib/arm64-v8a/libndi.so"
+                              Abi="arm64-v8a" />
         <!-- projectM GLES build (produced by scripts/build-projectm.sh android-arm64). Conditional so
              the app still builds before the native build ran - the visualizer then reports unavailable. -->
         <AndroidNativeLibrary Include="../../External/projectm/android-arm64/lib/libprojectM-4.so"

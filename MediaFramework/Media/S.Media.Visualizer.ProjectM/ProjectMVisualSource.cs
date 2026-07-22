@@ -82,6 +82,12 @@ public sealed class ProjectMVisualSource : IAudioVisualSource, ILayerSurfaceVide
     /// <summary>True when this source renders continuously on its own thread (survives track changes).</summary>
     public bool IsContinuous => _renderer is not null;
 
+    /// <summary>True when the continuous renderer came up but then FAILED (offscreen context
+    /// creation or GL/projectM init on the render thread). Distinct from <see cref="IsContinuous"/>,
+    /// which only says the continuous mode was configured - hosts that surface "visualizer
+    /// unavailable" must check this, not infer it from IsContinuous.</summary>
+    public bool ContinuousRenderFailed => _renderer?.Failed == true;
+
     internal void ReportLegacyPresets(int count) => _legacyPresetCount = count;
 
     internal void ReportLegacyPresetName(string? name) => _legacyPresetName = name;
