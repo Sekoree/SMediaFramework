@@ -17,10 +17,15 @@
         <RootNamespace>HaViz.Desktop</RootNamespace>
 
         <!-- NativeAOT, same policy as HaPlay.Desktop: `dotnet run` stays JIT, only `dotnet publish`
-             pays the AOT compile. No warning demotions needed here - unlike HaPlay there is no Dock
-             (IL2104/IL3053 aggregates) or Mond (IL2026), and everything else in the graph is
-             IsAotCompatible/trim-annotated, so any ILC warning stays fatal (BUILD-03). -->
+             pays the AOT compile. The linux-x64 publish is warning-clean with everything fatal. -->
         <PublishAot>true</PublishAot>
+        <!-- win-x64 only: SharpGen.Runtime (pulled transitively via Vortice.Direct3D11/DXGI, the
+             D3D11 hardware-decode interop in S.Media.Gpu / S.Media.Decode.FFmpeg) is a third-party
+             assembly that "produced trim warnings" - the same per-assembly IL2104/IL3053 aggregates
+             HaPlay.Desktop demotes for Dock. We can't annotate someone else's package; scope the
+             demotion to the RID that has it so linux keeps every ILC warning fatal, and detailed
+             IL2xxx/IL3xxx codes from first-party code stay fatal everywhere (BUILD-03). -->
+        <WarningsNotAsErrors Condition="'$(RuntimeIdentifier)' == 'win-x64'">$(WarningsNotAsErrors);IL2104;IL3053</WarningsNotAsErrors>
         <!-- Real-time audio path (viz tap + line-in pump + NDI clock): background GC keeps gen2
              pauses short so a collection is a brief recoverable underrun, not a drop; server GC
              spreads collection across cores. Same rationale as HaPlay.Desktop. -->
